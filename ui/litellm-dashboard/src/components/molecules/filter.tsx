@@ -7,6 +7,7 @@ export interface FilterOptionCustomComponentProps {
   value?: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  allFilters?: { [key: string]: string };
 }
 
 export interface FilterOption {
@@ -140,6 +141,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     "Error Message",
     "Key Hash",
     "Model",
+    "Public model / search tool",
   ];
 
   return (
@@ -209,6 +211,7 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
                         value={tempValues[option.name] || undefined}
                         onChange={(value) => handleFilterChange(option.name, value ?? "")}
                         placeholder={`Select ${option.label || option.name}...`}
+                        allFilters={tempValues}
                       />
                     );
                   })()

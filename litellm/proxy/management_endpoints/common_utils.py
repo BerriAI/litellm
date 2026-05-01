@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
@@ -41,6 +41,46 @@ def _is_user_team_admin(
     return False
 
 
+async def _is_user_org_admin_for_team(
+    user_api_key_dict: UserAPIKeyAuth, team_obj: LiteLLM_TeamTable
+) -> bool:
+    """
+    Check if user is an org admin for the team's organization.
+
+    Returns True if:
+    - The team belongs to an organization, AND
+    - The user has org_admin role in that organization
+    """
+    if not team_obj.organization_id or not user_api_key_dict.user_id:
+        return False
+
+    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    caller_user = await get_user_object(
+        user_id=user_api_key_dict.user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        user_id_upsert=False,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if caller_user is None:
+        return False
+
+    for m in caller_user.organization_memberships or []:
+        if (
+            m.organization_id == team_obj.organization_id
+            and m.user_role == LitellmUserRoles.ORG_ADMIN.value
+        ):
+            return True
+
+    return False
+
+
 def _team_member_has_permission(
     user_api_key_dict: UserAPIKeyAuth,
     team_obj: LiteLLM_TeamTable,
@@ -52,10 +92,7 @@ def _team_member_has_permission(
     if permission not in team_obj.team_member_permissions:
         return False
     for member in team_obj.members_with_roles:
-        if (
-            member.user_id is not None
-            and member.user_id == user_api_key_dict.user_id
-        ):
+        if member.user_id is not None and member.user_id == user_api_key_dict.user_id:
             return True
     return False
 
@@ -317,6 +354,8 @@ async def _upsert_budget_and_membership(
     user_api_key_dict: UserAPIKeyAuth,
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
+    allowed_models: Optional[List[str]] = None,
+    team_default_budget_id: Optional[str] = None,
 ):
     """
     Helper function to Create/Update or Delete the budget within the team membership
@@ -329,11 +368,22 @@ async def _upsert_budget_and_membership(
         user_api_key_dict: User API Key dictionary containing user information
         tpm_limit: Tokens per minute limit for the team member
         rpm_limit: Requests per minute limit for the team member
+        allowed_models: Per-member model scope. None = don't change. [] = remove restrictions. Non-empty list = enforce.
+        team_default_budget_id: The team's shared default member budget id (from
+            team metadata.team_member_budget_id), if any. When the membership's
+            existing_budget_id matches this, we clone-on-write so editing one
+            member's budget does not mutate the shared default (and therefore
+            every other member who still points at it).
 
-    If max_budget, tpm_limit, and rpm_limit are all None, the user's budget is removed from the team membership.
+    If max_budget, tpm_limit, rpm_limit, and allowed_models are all None, the user's budget is removed from the team membership.
     If any of these values exist, a budget is updated or created and linked to the team membership.
     """
-    if max_budget is None and tpm_limit is None and rpm_limit is None:
+    if (
+        max_budget is None
+        and tpm_limit is None
+        and rpm_limit is None
+        and allowed_models is None
+    ):
         # disconnect the budget since all limits are None
         await tx.litellm_teammembership.update(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
@@ -341,23 +391,79 @@ async def _upsert_budget_and_membership(
         )
         return
 
-    # create a new budget
+    is_shared_default = (
+        existing_budget_id is not None
+        and team_default_budget_id is not None
+        and existing_budget_id == team_default_budget_id
+    )
+
+    if existing_budget_id is not None and not is_shared_default:
+        # Update the existing budget in-place to preserve fields not being changed.
+        # Only write fields that the caller explicitly provided (non-None).
+        update_data: Dict[str, Any] = {
+            "updated_by": user_api_key_dict.user_id or "",
+        }
+        if max_budget is not None:
+            update_data["max_budget"] = max_budget
+        if tpm_limit is not None:
+            update_data["tpm_limit"] = tpm_limit
+        if rpm_limit is not None:
+            update_data["rpm_limit"] = rpm_limit
+        if allowed_models is not None:
+            update_data["allowed_models"] = allowed_models
+        await tx.litellm_budgettable.update(
+            where={"budget_id": existing_budget_id},
+            data=update_data,
+        )
+        return
+
+    # Either there is no existing budget, OR the membership is still pointing
+    # at the team's shared default member budget. In both cases we create a
+    # NEW private budget for this user and (re)link the membership to it.
     create_data: Dict[str, Any] = {
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
     }
+
+    # If we're forking off the shared default, seed the new row with the
+    # default's values so fields the caller did not change carry over.
+    if is_shared_default:
+        default_budget_row = await tx.litellm_budgettable.find_unique(
+            where={"budget_id": existing_budget_id}
+        )
+        if default_budget_row is not None:
+            default_budget_dict = default_budget_row.model_dump()
+            for field in (
+                "max_budget",
+                "soft_budget",
+                "max_parallel_requests",
+                "tpm_limit",
+                "rpm_limit",
+                "model_max_budget",
+                "budget_duration",
+                "allowed_models",
+            ):
+                value = default_budget_dict.get(field)
+                if value is None:
+                    continue
+                if isinstance(value, list) and len(value) == 0:
+                    continue
+                create_data[field] = value
+
+    # Caller-provided values take precedence over the cloned defaults.
     if max_budget is not None:
         create_data["max_budget"] = max_budget
     if tpm_limit is not None:
         create_data["tpm_limit"] = tpm_limit
     if rpm_limit is not None:
         create_data["rpm_limit"] = rpm_limit
+    if allowed_models is not None:
+        create_data["allowed_models"] = allowed_models
 
     new_budget = await tx.litellm_budgettable.create(
         data=create_data,
         include={"team_membership": True},
     )
-    # upsert the team membership with the new/updated budget
     await tx.litellm_teammembership.upsert(
         where={
             "user_id_team_id": {

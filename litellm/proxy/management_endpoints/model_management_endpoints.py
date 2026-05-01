@@ -13,13 +13,13 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from litellm._uuid import uuid
 from typing import Dict, List, Literal, Optional, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -32,7 +32,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
     TeamModelAddRequest,
-    UpdateTeamRequest,
+    TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -40,7 +40,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helpe
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     team_model_add,
-    update_team,
+    team_model_delete,
+)
+from litellm.proxy.management_endpoints.team_endpoints import (
+    update_team as _legacy_update_team,
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
@@ -56,6 +59,14 @@ from litellm.types.router import (
 from litellm.utils import get_utc_datetime
 
 router = APIRouter()
+
+
+async def update_team(*args, **kwargs):
+    """
+    Backward-compatible shim for tests/legacy call sites that patch this symbol.
+    Team model management now uses team_model_add/team_model_delete directly.
+    """
+    return await _legacy_update_team(*args, **kwargs)
 
 
 class UpdatePublicModelGroupsRequest(BaseModel):
@@ -324,17 +335,24 @@ async def _add_team_model_to_db(
 
     - generate a unique 'model_name' for the model (e.g. 'model_name_{team_id}_{uuid})
     - store the model in the db with the unique 'model_name'
-    - store a team model alias mapping {"model_name": "model_name_{team_id}_{uuid}"}
+    - add the public model name to the team's allowed models list
     """
     _team_id = model_params.model_info.team_id
     if _team_id is None:
         return None
+
+    # Capture the original public name FIRST, before any mutations
     original_model_name = model_params.model_name
+
+    # Set team_public_model_name in model_info using the captured original_model_name
+    # This must happen BEFORE mutating model_params.model_name so _add_model_to_db
+    # serializes the correct team_public_model_name (not the internal UUID name)
     if original_model_name:
         model_params.model_info.team_public_model_name = original_model_name
 
+    # Generate and assign unique internal model_name LAST
+    # (after team_public_model_name is safely stored)
     unique_model_name = f"model_name_{_team_id}_{uuid.uuid4()}"
-
     model_params.model_name = unique_model_name
 
     ## CREATE MODEL IN DB ##
@@ -344,25 +362,15 @@ async def _add_team_model_to_db(
         prisma_client=prisma_client,
     )
 
-    ## CREATE MODEL ALIAS IN DB ##
-    await update_team(
-        data=UpdateTeamRequest(
-            team_id=_team_id,
-            model_aliases={original_model_name: unique_model_name},
-        ),
-        user_api_key_dict=user_api_key_dict,
-        http_request=Request(scope={"type": "http"}),
-    )
-
-    # add model to team object
-    await team_model_add(
-        data=TeamModelAddRequest(
-            team_id=_team_id,
-            models=[original_model_name],
-        ),
-        http_request=Request(scope={"type": "http"}),
-        user_api_key_dict=user_api_key_dict,
-    )
+    if original_model_name:
+        await team_model_add(
+            data=TeamModelAddRequest(
+                team_id=_team_id,
+                models=[original_model_name],
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
+        )
 
     return model_response
 
@@ -375,7 +383,7 @@ async def _update_team_model_in_db(
 ) -> PrismaCompatibleUpdateDBModel:
     """
     Handle team model updates with proper alias management.
-    
+
     If patch_data contains a team_id:
     - Creates unique internal model_name and team alias
     - Adds model to team object
@@ -383,36 +391,37 @@ async def _update_team_model_in_db(
     """
     # Validate team_id if present in patch_data
     from litellm.proxy.proxy_server import premium_user
-    
+
     await ModelManagementAuthChecks.allow_team_model_action(
         model_params=patch_data,
         user_api_key_dict=user_api_key_dict,
         prisma_client=prisma_client,
         premium_user=premium_user,
     )
-    
+
     patch_team_id = patch_data.model_info.team_id if patch_data.model_info else None
-    
+
     # No team_id in patch, proceed with standard update
     if patch_team_id is None:
         return update_db_model(db_model=db_model, updated_patch=patch_data)
-    
+
     # Determine public model name
     public_model_name = _get_public_model_name(
         patch_data=patch_data,
         db_model=db_model,
     )
-    
+
     # Ensure model_info exists and set team_public_model_name
     if patch_data.model_info is None:
         from litellm.types.router import ModelInfo
+
         patch_data.model_info = ModelInfo()
     patch_data.model_info.team_public_model_name = public_model_name
-    
+
     # Check if team assignment is new or changed
     db_team_id = db_model.model_info.team_id if db_model.model_info else None
     is_new_team_assignment = db_team_id != patch_team_id
-    
+
     if is_new_team_assignment:
         await _setup_new_team_model_assignment(
             team_id=patch_team_id,
@@ -427,8 +436,9 @@ async def _update_team_model_in_db(
             db_model=db_model,
             patch_data=patch_data,
             user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
-    
+
     return update_db_model(db_model=db_model, updated_patch=patch_data)
 
 
@@ -439,10 +449,10 @@ def _get_public_model_name(
     """Determine the public model name from patch or existing model."""
     if patch_data.model_name:
         return patch_data.model_name
-    
+
     if db_model.model_info and db_model.model_info.team_public_model_name:
         return db_model.model_info.team_public_model_name
-    
+
     return db_model.model_name
 
 
@@ -452,19 +462,10 @@ async def _setup_new_team_model_assignment(
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    """Set up a new team model with unique name, alias, and team membership."""
+    """Set up a new team model with unique name and team membership."""
     unique_model_name = f"model_name_{team_id}_{uuid.uuid4()}"
     patch_data.model_name = unique_model_name
-    
-    await update_team(
-        data=UpdateTeamRequest(
-            team_id=team_id,
-            model_aliases={public_model_name: unique_model_name},
-        ),
-        user_api_key_dict=user_api_key_dict,
-        http_request=Request(scope={"type": "http"}),
-    )
-    
+
     await team_model_add(
         data=TeamModelAddRequest(
             team_id=team_id,
@@ -475,32 +476,132 @@ async def _setup_new_team_model_assignment(
     )
 
 
+async def _get_team_deployments(
+    team_id: str, prisma_client: PrismaClient
+) -> List[LiteLLM_ProxyModelTable]:
+    """
+    Fetch all deployments for a given team_id from the database.
+
+    Centralizes team deployment queries to ensure consistent filtering and error handling.
+    This is the established helper pattern for team deployment DB access in this module.
+
+    Note: prisma-client-py 0.11.0 does not support JSON path filtering, so we filter
+    by the model_name prefix (team models use "model_name_{team_id}_*") and confirm
+    team_id in model_info with Python-side filtering.
+    """
+    prefix = f"model_name_{team_id}_"
+    response = await prisma_client.db.litellm_proxymodeltable.find_many(
+        where={
+            "model_name": {"startswith": prefix},
+        }
+    )
+    if not response:
+        return []
+
+    # Confirm team_id in model_info (defensive check)
+    result = []
+    for row in response:
+        model_info = row.model_info
+        if isinstance(model_info, str):
+            try:
+                model_info = json.loads(model_info)
+            except (TypeError, ValueError):
+                continue
+        if isinstance(model_info, dict) and model_info.get("team_id") == team_id:
+            result.append(row)
+    return result
+
+
 async def _update_existing_team_model_assignment(
     team_id: str,
     public_model_name: str,
     db_model: Deployment,
     patch_data: updateDeployment,
     user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional[PrismaClient],
 ) -> None:
-    """Update an existing team model if the public name changed."""
+    """Update an existing team model if the public name changed.
+
+    Note on DB scan: Prisma's JSON filtering does not support compound AND conditions
+    across multiple JSON paths, so we fetch all deployments for the team and filter
+    team_public_model_name in Python. For teams with many deployments this scan grows
+    linearly; if team deployment counts become large this should be revisited.
+    """
+
+    def _get_team_public_model_name(
+        model_info: Optional[Union[dict, str]]
+    ) -> Optional[str]:
+        if isinstance(model_info, dict):
+            value = model_info.get("team_public_model_name")
+            return value if isinstance(value, str) else None
+        if isinstance(model_info, str):
+            try:
+                parsed = json.loads(model_info)
+            except (TypeError, ValueError):
+                return None
+            if isinstance(parsed, dict):
+                value = parsed.get("team_public_model_name")
+                return value if isinstance(value, str) else None
+        return None
+
     old_public_name = (
-        db_model.model_info.team_public_model_name
-        if db_model.model_info
-        else None
+        db_model.model_info.team_public_model_name if db_model.model_info else None
     )
-    
-    # Update alias only if public name changed
+
     if old_public_name and public_model_name != old_public_name:
-        await update_team(
-            data=UpdateTeamRequest(
+        # Clear user-supplied public name from patch before any early return so the
+        # caller does not overwrite the internal UUID-based model_name in the DB.
+        patch_data.model_name = None
+        if prisma_client is None:
+            verbose_proxy_logger.warning(
+                "prisma_client not initialized; skipping public name update entirely to avoid orphaned entries"
+            )
+            return
+
+        # Query DB for all team deployments to check for sibling deployments
+        team_deployments = await _get_team_deployments(team_id, prisma_client)
+        other_deployments_with_old_name = [
+            d
+            for d in team_deployments
+            if d.model_name != db_model.model_name
+            and _get_team_public_model_name(d.model_info) == old_public_name
+        ]
+
+        # Add new name first, then delete old name to prevent access loss on partial failure
+        await team_model_add(
+            data=TeamModelAddRequest(
                 team_id=team_id,
-                model_aliases={public_model_name: db_model.model_name},
+                models=[public_model_name],
             ),
-            user_api_key_dict=user_api_key_dict,
             http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
         )
-    
-    # Keep existing unique model_name
+
+        if not other_deployments_with_old_name:
+            await team_model_delete(
+                data=TeamModelDeleteRequest(
+                    team_id=team_id,
+                    models=[old_public_name],
+                ),
+                http_request=Request(scope={"type": "http"}),
+                user_api_key_dict=user_api_key_dict,
+            )
+    elif not old_public_name and public_model_name:
+        # First-time assignment of public name on an existing team deployment:
+        # ensure the team's models list is updated so team routing can resolve it.
+        await team_model_add(
+            data=TeamModelAddRequest(
+                team_id=team_id,
+                models=[public_model_name],
+            ),
+            http_request=Request(scope={"type": "http"}),
+            user_api_key_dict=user_api_key_dict,
+        )
+    # else: old_public_name == public_model_name (no rename needed)
+    # No team_model_add/delete calls required; public name is already registered
+
+    # Always clear patch_data.model_name to prevent caller from overwriting
+    # the internal UUID-based model_name in the DB with the user-supplied public name
     patch_data.model_name = None
 
 
@@ -1089,6 +1190,9 @@ async def update_model(
                 data=_data,  # type: ignore
             )
 
+            # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
+            await clear_cache()
+
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
                 create_object_audit_log(
@@ -1186,9 +1290,8 @@ async def update_public_model_groups(
                 },
             )
 
-        litellm.public_model_groups = request.model_groups
-
-        # Load existing config
+        # Load existing config first (this may overwrite in-memory litellm settings
+        # from DB values via _update_config_from_db), so set the in-memory value AFTER
         config = await proxy_config.get_config()
 
         # Update config with new settings
@@ -1199,6 +1302,10 @@ async def update_public_model_groups(
 
         # Save the updated config
         await proxy_config.save_config(new_config=config)
+
+        # Set in-memory value AFTER get_config() and save_config() to avoid
+        # get_config() overwriting with stale DB value
+        litellm.public_model_groups = request.model_groups
 
         verbose_proxy_logger.debug(
             f"Updated public model groups to: {request.model_groups} by user: {user_api_key_dict.user_id}"
@@ -1253,9 +1360,8 @@ async def update_useful_links(
                 },
             )
 
-        litellm.public_model_groups_links = request.useful_links
-
-        # Load existing config
+        # Load existing config first (this may overwrite in-memory litellm settings
+        # from DB values via _update_config_from_db), so set the in-memory value AFTER
         config = await proxy_config.get_config()
 
         # Update config with new settings
@@ -1266,6 +1372,10 @@ async def update_useful_links(
 
         # Save the updated config
         await proxy_config.save_config(new_config=config)
+
+        # Set in-memory value AFTER get_config() and save_config() to avoid
+        # get_config() overwriting with stale DB value
+        litellm.public_model_groups_links = request.useful_links
 
         verbose_proxy_logger.debug(
             f"Updated useful links to: {request.useful_links} by user: {user_api_key_dict.user_id}"
@@ -1330,16 +1440,15 @@ async def clear_cache():
         )
         return
 
-
     try:
         # Only clear DB models, preserve config models
         verbose_proxy_logger.debug("Clearing only DB models, preserving config models")
-        
+
         # Get current models and filter out DB models
         current_models = llm_router.model_list.copy()
         config_models = []
         db_model_ids = []
-        
+
         for model in current_models:
             model_info = model.get("model_info", {})
             if model_info.get("db_model", False):
@@ -1348,20 +1457,22 @@ async def clear_cache():
             else:
                 # This is a config model, preserve it
                 config_models.append(model)
-        
+
         # Clear only DB models
         for model_id in db_model_ids:
             llm_router.delete_deployment(id=model_id)
-        
+
         # Clear auto routers
         llm_router.auto_routers.clear()
-        
+
         # Reload only DB models
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
         )
-        
-        verbose_proxy_logger.debug(f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models")
+
+        verbose_proxy_logger.debug(
+            f"Cleared {len(db_model_ids)} DB models, preserved {len(config_models)} config models"
+        )
     except Exception as e:
         verbose_proxy_logger.exception(
             f"Failed to clear cache and reload models. Due to error - {str(e)}"

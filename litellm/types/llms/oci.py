@@ -112,6 +112,7 @@ class OCIServingMode(BaseModel):
     endpointId: Optional[str] = None
     modelId: Optional[str] = None
 
+
 class OCICompletionPayload(BaseModel):
     """Pydantic model for the complete OCI chat request body."""
 
@@ -194,6 +195,7 @@ class OCIStreamChunk(BaseModel):
 
 # --- Cohere-Specific Models ---
 
+
 class CohereStreamChunk(BaseModel):
     """Model for a single SSE event chunk from OCI Cohere API."""
 
@@ -203,6 +205,7 @@ class CohereStreamChunk(BaseModel):
     finishReason: Optional[str] = None
     pad: Optional[str] = None
     index: Optional[int] = None
+
 
 class CohereMessage(BaseModel):
     """Base model for Cohere messages."""
@@ -305,7 +308,13 @@ class CohereChatRequest(BaseModel):
     seed: Optional[int] = None
     tools: Optional[List[CohereTool]] = None
     toolChoice: Optional[Union[str, Dict[str, Any]]] = None
-    responseFormat: Optional[Union[CohereResponseTextFormat, CohereResponseJSONSchemaFormat, CohereResponseFormat]] = None
+    responseFormat: Optional[
+        Union[
+            CohereResponseTextFormat,
+            CohereResponseJSONSchemaFormat,
+            CohereResponseFormat,
+        ]
+    ] = None
     preambleOverride: Optional[str] = None
     documents: Optional[List[Dict[str, Any]]] = None
     searchQueriesOnly: Optional[bool] = None
@@ -355,7 +364,9 @@ class CohereChatResponse(BaseModel):
     # Required fields
     text: str
     apiFormat: Literal["COHERE"] = "COHERE"
-    finishReason: Literal["COMPLETE", "ERROR_TOXIC", "ERROR_LIMIT", "ERROR", "USER_CANCEL", "MAX_TOKENS"]
+    finishReason: Literal[
+        "COMPLETE", "ERROR_TOXIC", "ERROR_LIMIT", "ERROR", "USER_CANCEL", "MAX_TOKENS"
+    ]
 
     # Optional fields
     chatHistory: Optional[List[CohereMessage]] = None

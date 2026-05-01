@@ -1,7 +1,9 @@
 import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
+import { clearStoredReturnUrl } from "@/utils/returnUrlUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import { MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, SunOutlined } from "@ant-design/icons";
 import { Button, Switch, Tag } from "antd";
@@ -10,6 +12,7 @@ import React, { useEffect, useState } from "react";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
+import WorkerDropdown from "./Navbar/WorkerDropdown/WorkerDropdown";
 
 interface NavbarProps {
   userID: string | null;
@@ -45,6 +48,7 @@ const Navbar: React.FC<NavbarProps> = ({
   const { logoUrl } = useTheme();
   const { data: healthData } = useHealthReadiness();
   const version = healthData?.litellm_version;
+  const disableBouncingIcon = useDisableBouncingIcon();
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
@@ -69,7 +73,17 @@ const Navbar: React.FC<NavbarProps> = ({
 
   const handleLogout = () => {
     clearTokenCookies();
+    localStorage.removeItem("litellm_selected_worker_id");
+    localStorage.removeItem("litellm_worker_url");
     window.location.href = logoutUrl;
+  };
+
+  const handleWorkerSwitch = (workerId: string) => {
+    clearTokenCookies();
+    clearStoredReturnUrl();
+    localStorage.removeItem("litellm_selected_worker_id");
+    localStorage.removeItem("litellm_worker_url");
+    window.location.href = `/ui/login?worker=${encodeURIComponent(workerId)}`;
   };
 
   return (
@@ -101,13 +115,15 @@ const Navbar: React.FC<NavbarProps> = ({
               </Link>
               {version && (
                 <div className="relative">
-                  <span
-                    className="absolute -top-1 -left-2 text-lg animate-bounce"
-                    style={{ animationDuration: "2s" }}
-                    title="Thanks for using LiteLLM!"
-                  >
-                    🌑
-                  </span>
+                  {!disableBouncingIcon && (
+                    <span
+                      className="absolute -top-1 -left-2 text-lg animate-bounce"
+                      style={{ animationDuration: "2s" }}
+                      title="Thanks for using LiteLLM!"
+                    >
+                      🌑
+                    </span>
+                  )}
                   <Tag className="relative text-xs font-medium cursor-pointer z-10">
                     <a
                       href="https://docs.litellm.ai/release_notes"
@@ -124,6 +140,7 @@ const Navbar: React.FC<NavbarProps> = ({
           </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
+            <WorkerDropdown onWorkerSwitch={handleWorkerSwitch} />
             <CommunityEngagementButtons />
             {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
             Do not set this to true by default until all components are confirmed to support dark mode styles. */}

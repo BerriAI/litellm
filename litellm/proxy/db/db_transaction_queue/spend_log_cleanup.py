@@ -82,7 +82,7 @@ class SpendLogCleanup:
                 break
             # Step 1: Find logs and delete them in one go without fetching to application
             # Delete in batches, limited by self.batch_size
-            deleted_count = await prisma_client.db.execute_raw(
+            deleted_result = await prisma_client.db.execute_raw(
                 """
                 DELETE FROM "LiteLLM_SpendLogs"
                 WHERE "request_id" IN (
@@ -94,6 +94,17 @@ class SpendLogCleanup:
                 cutoff_date,
                 self.batch_size,
             )
+
+            deleted_count = 0
+            if isinstance(deleted_result, int):
+                deleted_count = deleted_result
+            else:
+                verbose_proxy_logger.error(
+                    f"Unexpected execute_raw return type for spend log cleanup: {type(deleted_result)}; "
+                    "aborting cleanup to avoid infinite loop"
+                )
+                break
+
             verbose_proxy_logger.info(f"Deleted {deleted_count} logs in this batch")
 
             if deleted_count == 0:
@@ -131,8 +142,11 @@ class SpendLogCleanup:
 
             # If we have a pod lock manager, try to acquire the lock
             if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
-                lock_acquired = await self.pod_lock_manager.acquire_lock(
-                    cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
+                lock_acquired = (
+                    await self.pod_lock_manager.acquire_lock(
+                        cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME,
+                    )
+                    or False
                 )
                 verbose_proxy_logger.info(
                     f"Lock acquisition attempt: {'successful' if lock_acquired else 'failed'}  at {datetime.now()}"
@@ -158,7 +172,11 @@ class SpendLogCleanup:
             return  # Return after error handling
         finally:
             # Only release the lock if it was actually acquired
-            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+            if (
+                lock_acquired
+                and self.pod_lock_manager
+                and self.pod_lock_manager.redis_cache
+            ):
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME
                 )

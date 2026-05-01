@@ -98,3 +98,7 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
+
+    def supports_native_websocket(self) -> bool:
+        """Databricks does not support native WebSocket for Responses API"""
+        return False

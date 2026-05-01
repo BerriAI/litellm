@@ -23,7 +23,6 @@ from ..embedding.transformation import VoyageError
 
 
 class VoyageRerankConfig(BaseRerankConfig):
-
     def get_supported_cohere_rerank_params(self, model: str) -> list:
         return ["query", "documents", "top_n", "return_documents"]
 
@@ -68,7 +67,11 @@ class VoyageRerankConfig(BaseRerankConfig):
         return api_base
 
     def transform_rerank_request(
-        self, model: str, optional_rerank_params: Dict, headers: Dict
+        self,
+        model: str,
+        optional_rerank_params: Dict,
+        headers: Dict,
+        litellm_params: Optional[dict] = None,
     ) -> Dict:
         return {"model": model, **optional_rerank_params}
 
@@ -137,12 +140,17 @@ class VoyageRerankConfig(BaseRerankConfig):
         optional_params: Optional[dict] = None,
     ) -> Dict:
         if api_key is None:
-            api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str("VOYAGE_AI_API_KEY")
+            api_key = get_secret_str("VOYAGE_API_KEY") or get_secret_str(
+                "VOYAGE_AI_API_KEY"
+            )
         if api_key is None:
             raise ValueError(
                 "Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var."
             )
-        return {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
+        return {
+            "Authorization": f"Bearer {api_key}",
+            "content-type": "application/json",
+        }
 
     def calculate_rerank_cost(
         self,
@@ -166,4 +174,6 @@ class VoyageRerankConfig(BaseRerankConfig):
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ):
-        return VoyageError(message=error_message, status_code=status_code, headers=headers)
+        return VoyageError(
+            message=error_message, status_code=status_code, headers=headers
+        )

@@ -38,7 +38,7 @@ _BETA_HEADERS_CONFIG: Optional[Dict] = None
 class GetAnthropicBetaHeadersConfig:
     """
     Handles fetching, validating, and loading the Anthropic beta headers configuration.
-    
+
     Similar to GetModelCostMap, this class manages the lifecycle of the beta headers
     configuration with support for remote fetching and local fallback.
     """
@@ -62,7 +62,7 @@ class GetAnthropicBetaHeadersConfig:
                 "bedrock": {},
                 "bedrock_converse": {},
                 "vertex_ai": {},
-                "provider_aliases": {}
+                "provider_aliases": {},
             }
 
     @staticmethod
@@ -84,9 +84,15 @@ class GetAnthropicBetaHeadersConfig:
             return False
 
         # Check for at least one provider key
-        provider_keys = ["anthropic", "azure_ai", "bedrock", "bedrock_converse", "vertex_ai"]
+        provider_keys = [
+            "anthropic",
+            "azure_ai",
+            "bedrock",
+            "bedrock_converse",
+            "vertex_ai",
+        ]
         has_provider = any(key in fetched_config for key in provider_keys)
-        
+
         if not has_provider:
             verbose_logger.warning(
                 "LiteLLM: Fetched beta headers config missing provider keys. "
@@ -100,7 +106,7 @@ class GetAnthropicBetaHeadersConfig:
     def validate_beta_headers_config(cls, fetched_config: dict) -> bool:
         """
         Validate the integrity of a fetched beta headers config.
-        
+
         Returns True if all checks pass, False otherwise.
         """
         return cls._check_is_valid_dict(fetched_config)
@@ -109,7 +115,7 @@ class GetAnthropicBetaHeadersConfig:
     def fetch_remote_beta_headers_config(url: str, timeout: int = 5) -> dict:
         """
         Fetch the beta headers config from a remote URL.
-        
+
         Returns the parsed JSON dict. Raises on network/parse errors
         (caller is expected to handle).
         """
@@ -121,14 +127,14 @@ class GetAnthropicBetaHeadersConfig:
 def get_beta_headers_config(url: str) -> dict:
     """
     Public entry point — returns the beta headers config dict.
-    
+
     1. If ``LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS`` is set, uses the local backup only.
     2. Otherwise fetches from ``url``, validates integrity, and falls back
        to the local backup on any failure.
-    
+
     Args:
         url: URL to fetch the remote beta headers configuration from
-        
+
     Returns:
         Dict containing the beta headers configuration
     """
@@ -149,7 +155,9 @@ def get_beta_headers_config(url: str) -> dict:
         return GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
 
     # Validate the fetched config
-    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(fetched_config=content):
+    if not GetAnthropicBetaHeadersConfig.validate_beta_headers_config(
+        fetched_config=content
+    ):
         verbose_logger.warning(
             "LiteLLM: Fetched beta headers config failed integrity check. "
             "Using local backup instead. url=%s",
@@ -164,23 +172,23 @@ def _load_beta_headers_config() -> Dict:
     """
     Load the beta headers configuration.
     Uses caching to avoid repeated fetches/file reads.
-    
+
     This function is called by all public API functions and manages the global cache.
-    
+
     Returns:
         Dict containing the beta headers configuration
     """
     global _BETA_HEADERS_CONFIG
-    
+
     if _BETA_HEADERS_CONFIG is not None:
         return _BETA_HEADERS_CONFIG
-    
+
     # Get the URL from environment or use default
     from litellm import anthropic_beta_headers_url
-    
+
     _BETA_HEADERS_CONFIG = get_beta_headers_config(url=anthropic_beta_headers_url)
     verbose_logger.debug("Loaded and cached beta headers config")
-    
+
     return _BETA_HEADERS_CONFIG
 
 
@@ -188,7 +196,7 @@ def reload_beta_headers_config() -> Dict:
     """
     Force reload the beta headers configuration from source (remote or local).
     Clears the cache and fetches fresh configuration.
-    
+
     Returns:
         Dict containing the newly loaded beta headers configuration
     """
@@ -201,10 +209,10 @@ def reload_beta_headers_config() -> Dict:
 def get_provider_name(provider: str) -> str:
     """
     Resolve provider aliases to canonical provider names.
-    
+
     Args:
         provider: Provider name (may be an alias)
-        
+
     Returns:
         Canonical provider name
     """
@@ -219,53 +227,53 @@ def filter_and_transform_beta_headers(
 ) -> List[str]:
     """
     Filter and transform beta headers based on provider's mapping configuration.
-    
+
     This function:
     1. Only allows headers that are present in the provider's mapping keys
     2. Filters out headers with null values (unsupported)
     3. Maps headers to provider-specific names (e.g., advanced-tool-use -> tool-search-tool)
-    
+
     Args:
         beta_headers: List of Anthropic beta header values
         provider: Provider name (e.g., "anthropic", "bedrock", "vertex_ai")
-        
+
     Returns:
         List of filtered and transformed beta headers for the provider
     """
     if not beta_headers:
         return []
-    
+
     config = _load_beta_headers_config()
     provider = get_provider_name(provider)
-    
+
     # Get the header mapping for this provider
     provider_mapping = config.get(provider, {})
-    
+
     filtered_headers: Set[str] = set()
-    
+
     for header in beta_headers:
         header = header.strip()
-        
+
         # Check if header is in the mapping
         if header not in provider_mapping:
             verbose_logger.debug(
                 f"Dropping unknown beta header '{header}' for provider '{provider}' (not in mapping)"
             )
             continue
-        
+
         # Get the mapped header value
         mapped_header = provider_mapping[header]
-        
+
         # Skip if header is unsupported (null value)
         if mapped_header is None:
             verbose_logger.debug(
                 f"Dropping unsupported beta header '{header}' for provider '{provider}'"
             )
             continue
-        
+
         # Add the mapped header
         filtered_headers.add(mapped_header)
-    
+
     return sorted(list(filtered_headers))
 
 
@@ -275,18 +283,18 @@ def is_beta_header_supported(
 ) -> bool:
     """
     Check if a specific beta header is supported by a provider.
-    
+
     Args:
         beta_header: The Anthropic beta header value
         provider: Provider name
-        
+
     Returns:
         True if the header is in the mapping with a non-null value, False otherwise
     """
     config = _load_beta_headers_config()
     provider = get_provider_name(provider)
     provider_mapping = config.get(provider, {})
-    
+
     # Header is supported if it's in the mapping and has a non-null value
     return beta_header in provider_mapping and provider_mapping[beta_header] is not None
 
@@ -297,26 +305,26 @@ def get_provider_beta_header(
 ) -> Optional[str]:
     """
     Get the provider-specific beta header name for a given Anthropic beta header.
-    
+
     This function handles header transformations/mappings (e.g., advanced-tool-use -> tool-search-tool).
-    
+
     Args:
         anthropic_beta_header: The Anthropic beta header value
         provider: Provider name
-        
+
     Returns:
         The provider-specific header name if supported, or None if unsupported/unknown
     """
     config = _load_beta_headers_config()
     provider = get_provider_name(provider)
-    
+
     # Get the header mapping for this provider
     provider_mapping = config.get(provider, {})
-    
+
     # Check if header is in the mapping
     if anthropic_beta_header not in provider_mapping:
         return None
-    
+
     # Return the mapped value (could be None if unsupported)
     return provider_mapping[anthropic_beta_header]
 
@@ -328,50 +336,86 @@ def update_headers_with_filtered_beta(
     """
     Update headers dict by filtering and transforming anthropic-beta header values.
     Modifies the headers dict in place and returns it.
-    
+
     Args:
         headers: Request headers dict (will be modified in place)
         provider: Provider name
-        
+
     Returns:
         Updated headers dict
     """
     existing_beta = headers.get("anthropic-beta")
     if not existing_beta:
         return headers
-    
+
     # Parse existing beta headers
     beta_values = [b.strip() for b in existing_beta.split(",") if b.strip()]
-    
+
     # Filter and transform based on provider
     filtered_beta_values = filter_and_transform_beta_headers(
         beta_headers=beta_values,
         provider=provider,
     )
-    
+
     # Update or remove the header
     if filtered_beta_values:
         headers["anthropic-beta"] = ",".join(filtered_beta_values)
     else:
         # Remove the header if no values remain
         headers.pop("anthropic-beta", None)
-    
+
     return headers
+
+
+def update_request_with_filtered_beta(
+    headers: dict,
+    request_data: dict,
+    provider: str,
+) -> tuple[dict, dict]:
+    """
+    Update both headers and request body beta fields based on provider support.
+    Modifies both dicts in place and returns them.
+
+    Args:
+        headers: Request headers dict (will be modified in place)
+        request_data: Request body dict (will be modified in place)
+        provider: Provider name
+
+    Returns:
+        Tuple of (updated headers, updated request_data)
+    """
+    headers = update_headers_with_filtered_beta(headers=headers, provider=provider)
+
+    existing_body_betas = request_data.get("anthropic_beta")
+    if not existing_body_betas:
+        return headers, request_data
+
+    filtered_body_betas = filter_and_transform_beta_headers(
+        beta_headers=existing_body_betas,
+        provider=provider,
+    )
+
+    if filtered_body_betas:
+        request_data["anthropic_beta"] = filtered_body_betas
+    else:
+        request_data.pop("anthropic_beta", None)
+
+    return headers, request_data
 
 
 def get_unsupported_headers(provider: str) -> List[str]:
     """
     Get all beta headers that are unsupported by a provider (have null values in mapping).
-    
+
     Args:
         provider: Provider name
-        
+
     Returns:
         List of unsupported Anthropic beta header names
     """
     config = _load_beta_headers_config()
     provider = get_provider_name(provider)
     provider_mapping = config.get(provider, {})
-    
+
     # Return headers with null values
     return [header for header, value in provider_mapping.items() if value is None]

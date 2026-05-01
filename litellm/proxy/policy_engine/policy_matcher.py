@@ -89,8 +89,7 @@ class PolicyMatcher:
                 return False
             # Match if ANY context tag matches ANY scope tag pattern
             if not any(
-                PolicyMatcher.matches_pattern(tag, scope_tags)
-                for tag in context.tags
+                PolicyMatcher.matches_pattern(tag, scope_tags) for tag in context.tags
             ):
                 return False
 

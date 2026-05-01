@@ -1,5 +1,7 @@
 import asyncio
+import inspect
 import os
+import socket
 import ssl
 import sys
 import time
@@ -29,8 +31,14 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
+    AIOHTTP_SO_KEEPALIVE,
+    AIOHTTP_TCP_KEEPCNT,
+    AIOHTTP_TCP_KEEPIDLE,
+    AIOHTTP_TCP_KEEPINTVL,
     AIOHTTP_TTL_DNS_CACHE,
+    COMPLETION_HTTP_FALLBACK_SECONDS,
     DEFAULT_SSL_CIPHERS,
+    HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.types.llms.custom_http import *
@@ -51,6 +59,58 @@ try:
 except Exception:
     version = "0.0.0"
 
+
+# aiohttp 3.10+ exposes a `socket_factory` kwarg on TCPConnector. Older
+# versions don't — detect once and skip the keep-alive wiring there.
+# https://docs.aiohttp.org/en/stable/client_reference.html#aiohttp.TCPConnector
+_AIOHTTP_SUPPORTS_SOCKET_FACTORY = (
+    "socket_factory" in inspect.signature(TCPConnector.__init__).parameters
+)
+
+
+def _build_aiohttp_keepalive_socket_factory() -> (
+    Optional[Callable[[Tuple[Any, ...]], socket.socket]]
+):
+    """
+    Build a socket_factory that enables SO_KEEPALIVE on aiohttp TCP sockets.
+
+    Why: by default, aiohttp creates sockets without SO_KEEPALIVE, so the kernel
+    sends nothing during a long idle TCP connection. NAT/LB hops (e.g. AWS NAT
+    Gateway, 350s idle timeout) reap the flow well before slow provider
+    responses (OpenAI/Azure: up to 600s) arrive. Enabling SO_KEEPALIVE makes
+    the kernel emit TCP probes that reset the NAT idle timer.
+
+    Returns None when AIOHTTP_SO_KEEPALIVE is disabled or aiohttp is too old.
+    """
+    if not AIOHTTP_SO_KEEPALIVE or not _AIOHTTP_SUPPORTS_SOCKET_FACTORY:
+        return None
+
+    def factory(addr_info: Tuple[Any, ...]) -> socket.socket:
+        family, type_, proto = addr_info[0], addr_info[1], addr_info[2]
+        sock = socket.socket(family=family, type=type_, proto=proto)
+        sock.setblocking(False)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        # Linux: TCP_KEEPIDLE is idle-before-first-probe.
+        # macOS/Darwin: TCP_KEEPALIVE is the equivalent.
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, AIOHTTP_TCP_KEEPIDLE
+            )
+        elif hasattr(socket, "TCP_KEEPALIVE"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, AIOHTTP_TCP_KEEPIDLE
+            )
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, AIOHTTP_TCP_KEEPINTVL
+            )
+        if hasattr(socket, "TCP_KEEPCNT"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, AIOHTTP_TCP_KEEPCNT)
+        return sock
+
+    return factory
+
+
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
@@ -64,11 +124,15 @@ def get_default_headers() -> dict:
 
     return {"User-Agent": f"litellm/{version}"}
 
+
 # Initialize headers (User-Agent)
 headers = get_default_headers()
 
 # https://www.python-httpx.org/advanced/timeouts
-_DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
+_DEFAULT_TIMEOUT = httpx.Timeout(
+    timeout=COMPLETION_HTTP_FALLBACK_SECONDS,
+    connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
+)
 
 
 def _prepare_request_data_and_content(
@@ -314,30 +378,95 @@ def mask_sensitive_info(error_message):
     return error_message
 
 
+def _safe_get_response_text(response: httpx.Response) -> str:
+    """Safely read response text, falling back to empty string on decoding errors."""
+    try:
+        return response.text
+    except Exception:
+        return ""
+
+
+async def _safe_aread_response(response: httpx.Response) -> bytes:
+    """Safely read async response body, falling back to empty bytes on errors."""
+    try:
+        return await response.aread()
+    except Exception:
+        return b""
+
+
+def _safe_read_response(response: httpx.Response) -> bytes:
+    """Safely read sync response body, falling back to empty bytes on errors."""
+    try:
+        return response.read()
+    except Exception:
+        return b""
+
+
+def _raise_masked_sync_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+    """Raise a MaskedHTTPStatusError for sync HTTP handlers."""
+    if stream:
+        _body = mask_sensitive_info(_safe_read_response(e.response))
+        raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
+    _text = mask_sensitive_info(_safe_get_response_text(e.response))
+    raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
+
+
+async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> None:
+    """Raise a MaskedHTTPStatusError for async HTTP handlers."""
+    if stream:
+        _body = mask_sensitive_info(await _safe_aread_response(e.response))
+        raise MaskedHTTPStatusError(e, message=_body, text=_body) from None
+    _text = mask_sensitive_info(_safe_get_response_text(e.response))
+    raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
+
+
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
     def __init__(
         self, original_error, message: Optional[str] = None, text: Optional[str] = None
     ):
         # Create a new error with the masked URL
         masked_url = mask_sensitive_info(str(original_error.request.url))
-        # Create a new error that looks like the original, but with a masked URL
+        # Mask the original exception message too (it contains the full URL)
+        masked_original_message = mask_sensitive_info(str(original_error))
+
+        # Safely access response content — decompression can fail (e.g. zlib error).
+        # `.content` returns already-decoded bytes, so we must strip transport
+        # encoding headers before rebuilding the Response (otherwise httpx will
+        # try to decode the bytes a second time and raise DecodingError).
+        try:
+            response_content = original_error.response.content
+        except Exception:
+            response_content = b""
+
+        response_headers = {
+            k: v
+            for k, v in original_error.response.headers.items()
+            if k.lower() not in ("content-encoding", "content-length")
+        }
+
+        masked_request = httpx.Request(
+            method=original_error.request.method,
+            url=masked_url,
+            headers=original_error.request.headers,
+            content=original_error.request.content,
+        )
 
         super().__init__(
-            message=original_error.message,
-            request=httpx.Request(
-                method=original_error.request.method,
-                url=masked_url,
-                headers=original_error.request.headers,
-                content=original_error.request.content,
-            ),
+            message=masked_original_message,
+            request=masked_request,
+            # Attach the masked request so `response.request` is set — otherwise
+            # downstream code that inspects err.response.request (e.g.
+            # exception_mapping_utils) hits `RuntimeError: .request not set`.
             response=httpx.Response(
                 status_code=original_error.response.status_code,
-                content=original_error.response.content,
-                headers=original_error.response.headers,
+                content=response_content,
+                headers=response_headers,
+                request=masked_request,
             ),
         )
         self.message = message
         self.text = text
+        self.status_code = original_error.response.status_code
 
 
 class AsyncHTTPHandler:
@@ -499,16 +628,7 @@ class AsyncHTTPHandler:
                 headers=headers,
             )
         except httpx.HTTPStatusError as e:
-            if stream is True:
-                setattr(e, "message", await e.response.aread())
-                setattr(e, "text", await e.response.aread())
-            else:
-                setattr(e, "message", mask_sensitive_info(e.response.text))
-                setattr(e, "text", mask_sensitive_info(e.response.text))
-
-            setattr(e, "status_code", e.response.status_code)
-
-            raise e
+            await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
 
@@ -569,12 +689,7 @@ class AsyncHTTPHandler:
                 headers=headers,
             )
         except httpx.HTTPStatusError as e:
-            setattr(e, "status_code", e.response.status_code)
-            if stream is True:
-                setattr(e, "message", await e.response.aread())
-            else:
-                setattr(e, "message", e.response.text)
-            raise e
+            await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
 
@@ -635,12 +750,7 @@ class AsyncHTTPHandler:
                 headers=headers,
             )
         except httpx.HTTPStatusError as e:
-            setattr(e, "status_code", e.response.status_code)
-            if stream is True:
-                setattr(e, "message", await e.response.aread())
-            else:
-                setattr(e, "message", e.response.text)
-            raise e
+            await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
 
@@ -688,12 +798,7 @@ class AsyncHTTPHandler:
             finally:
                 await new_client.aclose()
         except httpx.HTTPStatusError as e:
-            setattr(e, "status_code", e.response.status_code)
-            if stream is True:
-                setattr(e, "message", await e.response.aread())
-            else:
-                setattr(e, "message", e.response.text)
-            raise e
+            await _raise_masked_async_error(e, stream)
         except Exception as e:
             raise e
 
@@ -884,9 +989,14 @@ class AsyncHTTPHandler:
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            transport_connector_kwargs[
-                "limit_per_host"
-            ] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            transport_connector_kwargs["limit_per_host"] = (
+                AIOHTTP_CONNECTOR_LIMIT_PER_HOST
+            )
+        # Returns None when SO_KEEPALIVE is disabled or aiohttp is too old to
+        # accept socket_factory — version detection lives inside the builder.
+        socket_factory = _build_aiohttp_keepalive_socket_factory()
+        if socket_factory is not None:
+            transport_connector_kwargs["socket_factory"] = socket_factory
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
@@ -971,6 +1081,7 @@ class HTTPHandler:
             url,
             params=params,
             headers=headers,
+            follow_redirects=_follow_redirects,
         )
 
         return response
@@ -1033,16 +1144,7 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-            if stream is True:
-                setattr(e, "message", mask_sensitive_info(e.response.read()))
-                setattr(e, "text", mask_sensitive_info(e.response.read()))
-            else:
-                error_text = mask_sensitive_info(e.response.text)
-                setattr(e, "message", error_text)
-                setattr(e, "text", error_text)
-
-            setattr(e, "status_code", e.response.status_code)
-            raise e
+            _raise_masked_sync_error(e, stream)
         except Exception as e:
             raise e
 
@@ -1081,17 +1183,7 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-            if stream is True:
-                setattr(e, "message", mask_sensitive_info(e.response.read()))
-                setattr(e, "text", mask_sensitive_info(e.response.read()))
-            else:
-                error_text = mask_sensitive_info(e.response.text)
-                setattr(e, "message", error_text)
-                setattr(e, "text", error_text)
-
-            setattr(e, "status_code", e.response.status_code)
-
-            raise e
+            _raise_masked_sync_error(e, stream)
         except Exception as e:
             raise e
 
@@ -1128,6 +1220,8 @@ class HTTPHandler:
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
+        except httpx.HTTPStatusError as e:
+            _raise_masked_sync_error(e, stream)
         except Exception as e:
             raise e
 
@@ -1166,17 +1260,7 @@ class HTTPHandler:
                 llm_provider="litellm-httpx-handler",
             )
         except httpx.HTTPStatusError as e:
-            if stream is True:
-                setattr(e, "message", mask_sensitive_info(e.response.read()))
-                setattr(e, "text", mask_sensitive_info(e.response.read()))
-            else:
-                error_text = mask_sensitive_info(e.response.text)
-                setattr(e, "message", error_text)
-                setattr(e, "text", error_text)
-
-            setattr(e, "status_code", e.response.status_code)
-
-            raise e
+            _raise_masked_sync_error(e, stream)
         except Exception as e:
             raise e
 
@@ -1235,12 +1319,14 @@ def get_async_httpx_client(
 
     if params is not None:
         # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params = {
+            k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+        }
         handler_params["shared_session"] = shared_session
         _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
-            timeout=httpx.Timeout(timeout=600.0, connect=5.0),
+            timeout=_DEFAULT_TIMEOUT,
             shared_session=shared_session,
         )
 
@@ -1284,10 +1370,12 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
 
     if params is not None:
         # Filter out params that are only used for cache key, not for HTTPHandler.__init__
-        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params = {
+            k: v for k, v in params.items() if k != "disable_aiohttp_transport"
+        }
         _new_client = HTTPHandler(**handler_params)
     else:
-        _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
+        _new_client = HTTPHandler(timeout=_DEFAULT_TIMEOUT)
 
     cache.set_cache(
         key=_cache_key_name,

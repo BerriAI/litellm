@@ -1,3 +1,4 @@
+import re
 import traceback
 from datetime import datetime
 from typing import (
@@ -43,6 +44,13 @@ ToolParam = Any
 LITELLM_PROXY_MCP_SERVER_URL = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
 
+# Matches any URL whose path ends with /mcp/<server_name> — covers both root-path
+# (http://host:port/mcp/name) and sub-path (http://host/base/mcp/name) proxy deployments.
+# A false-positive match (e.g. an external URL that happens to end with /mcp/<name>) results
+# in a "server not found" error from the internal gateway, not a silent failure or data leak,
+# so this broad pattern is intentional and preferred over anchoring to localhost only.
+_PROXY_MCP_PATH_RE = re.compile(r"^https?://.+/mcp/([^/]+)$")
+
 
 class LiteLLM_Proxy_MCP_Handler:
     """
@@ -54,7 +62,8 @@ class LiteLLM_Proxy_MCP_Handler:
     @staticmethod
     def _should_use_litellm_mcp_gateway(tools: Optional[Iterable[ToolParam]]) -> bool:
         """
-        Returns True if the user passed a MCP tool with server_url="litellm_proxy"
+        Returns True if any MCP tool should be handled via the litellm proxy MCP gateway.
+        This includes tools with server_url="litellm_proxy" as well as URLs ending in /mcp/<name>.
         """
         if tools:
             for tool in tools:
@@ -62,6 +71,10 @@ class LiteLLM_Proxy_MCP_Handler:
                     server_url = tool.get("server_url", "")
                     if isinstance(server_url, str) and server_url.startswith(
                         LITELLM_PROXY_MCP_SERVER_URL
+                    ):
+                        return True
+                    if isinstance(server_url, str) and _PROXY_MCP_PATH_RE.match(
+                        server_url
                     ):
                         return True
         return False
@@ -87,12 +100,74 @@ class LiteLLM_Proxy_MCP_Handler:
                         LITELLM_PROXY_MCP_SERVER_URL
                     ):
                         mcp_tools_with_litellm_proxy.append(tool)
+                    elif isinstance(server_url, str):
+                        # Also intercept URLs like http://localhost:4000/mcp/atlassian_test
+                        # by rewriting them to the internal litellm_proxy format.
+                        m = _PROXY_MCP_PATH_RE.match(server_url)
+                        if m:
+                            rewritten = {
+                                **tool,
+                                "server_url": f"{LITELLM_PROXY_MCP_SERVER_URL_PREFIX}{m.group(1)}",
+                            }
+                            mcp_tools_with_litellm_proxy.append(rewritten)
+                        else:
+                            other_tools.append(tool)
                     else:
                         other_tools.append(tool)
                 else:
                     other_tools.append(tool)
 
         return mcp_tools_with_litellm_proxy, other_tools
+
+    @staticmethod
+    async def _apply_toolset_permissions(
+        resolved_toolset_ids: List[str],
+        resolved_mcp_servers: List[str],
+        user_api_key_auth: Any,
+    ) -> Any:
+        """Apply resolved toolset permissions to user_api_key_auth and return updated auth."""
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            tool_permissions = (
+                await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                    toolset_ids=resolved_toolset_ids
+                )
+            )
+            all_server_ids = list(
+                set(tool_permissions.keys()) | set(resolved_mcp_servers)
+            )
+            existing_op = user_api_key_auth.object_permission
+            if existing_op is not None:
+                merged_tool_perms = dict(existing_op.mcp_tool_permissions or {})
+                for server_id, tool_names in tool_permissions.items():
+                    existing_tools = merged_tool_perms.get(server_id, [])
+                    merged_tool_perms[server_id] = list(
+                        set(existing_tools) | set(tool_names)
+                    )
+                updated_op = existing_op.model_copy(
+                    update={
+                        "mcp_servers": all_server_ids,
+                        "mcp_tool_permissions": merged_tool_perms,
+                        "mcp_toolsets": [],
+                    }
+                )
+            else:
+                updated_op = LiteLLM_ObjectPermissionTable(
+                    object_permission_id="toolset-scope",
+                    mcp_servers=all_server_ids,
+                    mcp_tool_permissions=tool_permissions,
+                )
+            return user_api_key_auth.model_copy(
+                update={"object_permission": updated_op}
+            )
+        except Exception as _e:
+            verbose_logger.debug(f"Could not apply toolset permissions: {_e}")
+            return user_api_key_auth
 
     @staticmethod
     async def _get_mcp_tools_from_manager(
@@ -135,10 +210,77 @@ class LiteLLM_Proxy_MCP_Handler:
                 ):
                     mcp_servers.append(server_url.split("/")[-1])
 
+        # Resolve toolset names: collect all toolset IDs first, then apply their
+        # combined permissions in a single pass so multiple toolsets are unioned
+        # rather than the last one overwriting the others.
+        resolved_mcp_servers: List[str] = []
+        resolved_toolset_ids: List[str] = []
+        for name in mcp_servers:
+            if not global_mcp_server_manager.get_mcp_server_by_name(name):
+                try:
+                    from litellm.proxy.proxy_server import prisma_client
+
+                    if prisma_client is not None:
+                        toolset = (
+                            await global_mcp_server_manager.get_toolset_by_name_cached(
+                                prisma_client, name
+                            )
+                        )
+                        if toolset is not None:
+                            # Access control: only allow if the key explicitly grants this toolset.
+                            if user_api_key_auth is not None:
+                                from litellm.proxy.management_endpoints.common_utils import (
+                                    _user_has_admin_view,
+                                )
+
+                                is_admin = _user_has_admin_view(user_api_key_auth)
+                                if not is_admin:
+                                    op = user_api_key_auth.object_permission
+                                    granted = (
+                                        getattr(op, "mcp_toolsets", None)
+                                        if op
+                                        else None
+                                    )
+                                    # None means no grants configured → deny (consistent with
+                                    # fetch_mcp_toolsets which returns [] for unconfigured keys)
+                                    if (
+                                        granted is None
+                                        or toolset.toolset_id not in granted
+                                    ):
+                                        verbose_logger.debug(
+                                            f"Key does not have access to toolset '{name}', skipping."
+                                        )
+                                        continue
+                            resolved_toolset_ids.append(toolset.toolset_id)
+                            # Don't add to resolved_mcp_servers — toolset scope
+                            # restricts via object_permission, not server name filter.
+                            continue
+                except Exception as _e:
+                    verbose_logger.debug(f"Could not resolve '{name}' as toolset: {_e}")
+            resolved_mcp_servers.append(name)
+
+        # Apply all resolved toolsets at once (union), avoiding permission overwrite.
+        if resolved_toolset_ids and user_api_key_auth is not None:
+            user_api_key_auth = (
+                await LiteLLM_Proxy_MCP_Handler._apply_toolset_permissions(
+                    resolved_toolset_ids=resolved_toolset_ids,
+                    resolved_mcp_servers=resolved_mcp_servers,
+                    user_api_key_auth=user_api_key_auth,
+                )
+            )
+
+        # When toolsets were resolved we updated object_permission.mcp_servers to the
+        # full union (toolset server IDs + direct server names).  Passing a name-based
+        # filter here would exclude those toolset server IDs (which are UUIDs, not
+        # names), so use None and let the auth object's mcp_servers do the filtering.
+        effective_server_filter = (
+            None if resolved_toolset_ids else (resolved_mcp_servers or None)
+        )
+
         tools = await _get_tools_from_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
-            mcp_servers=mcp_servers,
+            mcp_servers=effective_server_filter,
             mcp_server_auth_headers=mcp_server_auth_headers,
             log_list_tools_to_spendlogs=True,
             list_tools_log_source="responses",
@@ -153,7 +295,7 @@ class LiteLLM_Proxy_MCP_Handler:
         )
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
-            mcp_servers=mcp_servers,
+            mcp_servers=effective_server_filter,
             allowed_mcp_servers=allowed_mcp_servers,
         )
 
@@ -657,14 +799,14 @@ class LiteLLM_Proxy_MCP_Handler:
                         standard_logging_mcp_tool_call["mcp_server_logo_url"] = logo_url
                     cost_info = mcp_info.get("mcp_server_cost_info")
                     if cost_info:
-                        standard_logging_mcp_tool_call[
-                            "mcp_server_cost_info"
-                        ] = cost_info
+                        standard_logging_mcp_tool_call["mcp_server_cost_info"] = (
+                            cost_info
+                        )
 
                 if litellm_logging_obj:
-                    litellm_logging_obj.model_call_details[
-                        "mcp_tool_call_metadata"
-                    ] = standard_logging_mcp_tool_call
+                    litellm_logging_obj.model_call_details["mcp_tool_call_metadata"] = (
+                        standard_logging_mcp_tool_call
+                    )
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 

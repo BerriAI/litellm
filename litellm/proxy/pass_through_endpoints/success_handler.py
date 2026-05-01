@@ -46,6 +46,8 @@ class PassThroughEndpointLogging:
             "search",
             "batchPredictionJobs",
             "predictLongRunning",
+            "embedContent",
+            "batchEmbedContents",
         ]
 
         # Anthropic
@@ -61,10 +63,19 @@ class PassThroughEndpointLogging:
         self.TRACKED_LANGFUSE_ROUTES = ["/langfuse/"]
 
         # Gemini
-        self.TRACKED_GEMINI_ROUTES = ["generateContent", "streamGenerateContent", "predictLongRunning"]
+        self.TRACKED_GEMINI_ROUTES = [
+            "generateContent",
+            "streamGenerateContent",
+            "predictLongRunning",
+        ]
 
         # Cursor Cloud Agents
-        self.TRACKED_CURSOR_ROUTES = ["/v0/agents", "/v0/me", "/v0/models", "/v0/repositories"]
+        self.TRACKED_CURSOR_ROUTES = [
+            "/v0/agents",
+            "/v0/me",
+            "/v0/models",
+            "/v0/repositories",
+        ]
 
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]

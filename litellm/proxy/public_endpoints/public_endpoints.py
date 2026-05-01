@@ -40,8 +40,14 @@ _ENDPOINT_METADATA: Dict[str, Dict[str, str]] = {
     "messages": {"label": "Messages", "endpoint": "/messages"},
     "responses": {"label": "Responses", "endpoint": "/responses"},
     "embeddings": {"label": "Embeddings", "endpoint": "/embeddings"},
-    "image_generations": {"label": "Image Generations", "endpoint": "/images/generations"},
-    "audio_transcriptions": {"label": "Audio Transcriptions", "endpoint": "/audio/transcriptions"},
+    "image_generations": {
+        "label": "Image Generations",
+        "endpoint": "/images/generations",
+    },
+    "audio_transcriptions": {
+        "label": "Audio Transcriptions",
+        "endpoint": "/audio/transcriptions",
+    },
     "audio_speech": {"label": "Audio Speech", "endpoint": "/audio/speech"},
     "moderations": {"label": "Moderations", "endpoint": "/moderations"},
     "batches": {"label": "Batches", "endpoint": "/batches"},
@@ -52,14 +58,29 @@ _ENDPOINT_METADATA: Dict[str, Dict[str, str]] = {
     "interactions": {"label": "Interactions", "endpoint": "/interactions"},
     "a2a": {"label": "A2A (Agent Gateway)", "endpoint": "/a2a/{agent}/message/send"},
     "container": {"label": "Containers", "endpoint": "/containers"},
-    "container_files": {"label": "Container Files", "endpoint": "/containers/{id}/files"},
+    "container_files": {
+        "label": "Container Files",
+        "endpoint": "/containers/{id}/files",
+    },
     "compact": {"label": "Compact", "endpoint": "/responses/compact"},
     "files": {"label": "Files", "endpoint": "/files"},
     "image_edits": {"label": "Image Edits", "endpoint": "/images/edits"},
-    "vector_stores_create": {"label": "Vector Stores (Create)", "endpoint": "/vector_stores"},
-    "vector_stores_search": {"label": "Vector Stores (Search)", "endpoint": "/vector_stores/{id}/search"},
-    "vector_store_files": {"label": "Vector Store Files", "endpoint": "/vector_stores/{id}/files"},
-    "video_generations": {"label": "Video Generations", "endpoint": "/videos/generations"},
+    "vector_stores_create": {
+        "label": "Vector Stores (Create)",
+        "endpoint": "/vector_stores",
+    },
+    "vector_stores_search": {
+        "label": "Vector Stores (Search)",
+        "endpoint": "/vector_stores/{id}/search",
+    },
+    "vector_store_files": {
+        "label": "Vector Store Files",
+        "endpoint": "/vector_stores/{id}/files",
+    },
+    "video_generations": {
+        "label": "Video Generations",
+        "endpoint": "/videos/generations",
+    },
     "assistants": {"label": "Assistants", "endpoint": "/assistants"},
     "fine_tuning": {"label": "Fine Tuning", "endpoint": "/fine_tuning/jobs"},
     "text_completion": {"label": "Text Completion", "endpoint": "/completions"},
@@ -110,7 +131,9 @@ def _build_endpoints(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             for slug, pd in providers.items()
             if pd.get("endpoints", {}).get(key)
         ]
-        result.append({"key": key, "label": label, "endpoint": path, "providers": supporting})
+        result.append(
+            {"key": key, "label": label, "endpoint": path, "providers": supporting}
+        )
 
     return result
 
@@ -135,8 +158,14 @@ def _load_endpoints() -> List[Dict[str, Any]]:
 )
 async def public_model_hub():
     import litellm
-    from litellm.proxy.proxy_server import _get_model_group_info, llm_router, prisma_client
-    from litellm.proxy.health_endpoints._health_endpoints import _convert_health_check_to_dict
+    from litellm.proxy.proxy_server import (
+        _get_model_group_info,
+        llm_router,
+        prisma_client,
+    )
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _convert_health_check_to_dict,
+    )
 
     if llm_router is None:
         raise HTTPException(
@@ -219,6 +248,52 @@ async def get_mcp_servers():
 
 
 @router.get(
+    "/public/skill_hub",
+    tags=["public", "Claude Code Marketplace"],
+)
+async def public_skill_hub():
+    """Return enabled (public) Claude Code skills — no auth required."""
+    from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
+        _get_prisma_client,
+    )
+    from litellm.types.proxy.claude_code_endpoints import (
+        ListPluginsResponse,
+        PluginListItem,
+    )
+
+    try:
+        prisma_client = await _get_prisma_client()
+        plugins = await prisma_client.db.litellm_claudecodeplugintable.find_many(
+            where={"enabled": True}
+        )
+        items = []
+        for plugin in plugins:
+            raw = plugin.manifest_json or {}
+            manifest = json.loads(raw) if isinstance(raw, str) else raw
+            items.append(
+                PluginListItem(
+                    id=plugin.id,
+                    name=plugin.name,
+                    enabled=plugin.enabled,
+                    created_at=str(plugin.created_at) if plugin.created_at else None,
+                    updated_at=str(plugin.updated_at) if plugin.updated_at else None,
+                    source=manifest.get("source", {}),
+                    description=manifest.get("description"),
+                    version=manifest.get("version"),
+                    category=manifest.get("category"),
+                    keywords=manifest.get("keywords"),
+                    author=manifest.get("author"),
+                    homepage=manifest.get("homepage"),
+                    domain=manifest.get("domain"),
+                    namespace=manifest.get("namespace"),
+                )
+            )
+        return ListPluginsResponse(plugins=items, count=len(items))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
     "/public/model_hub/info",
     tags=["public", "model management"],
     response_model=PublicModelHubInfo,
@@ -269,7 +344,7 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
         os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
         "proxy",
         "public_endpoints",
-        "provider_create_fields.json"
+        "provider_create_fields.json",
     )
 
     with open(provider_create_fields_path, "r") as f:
@@ -383,7 +458,9 @@ async def get_agent_fields() -> List[AgentCreateInfo]:
                 field_copy["include_in_litellm_params"] = True
                 inherited_fields.append(field_copy)
             # Append provider credential fields after agent's own fields
-            agent["credential_fields"] = agent.get("credential_fields", []) + inherited_fields
+            agent["credential_fields"] = (
+                agent.get("credential_fields", []) + inherited_fields
+            )
         # Remove the inherit field from response (not needed by frontend)
         agent.pop("inherit_credentials_from_provider", None)
 

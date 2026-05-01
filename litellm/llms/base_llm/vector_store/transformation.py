@@ -27,7 +27,6 @@ else:
 
 
 class BaseVectorStoreConfig:
-
     def get_supported_openai_params(
         self, model: str
     ) -> List[VECTOR_STORE_OPENAI_PARAMS]:
@@ -60,8 +59,8 @@ class BaseVectorStoreConfig:
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-
         pass
 
     async def atransform_search_vector_store_request(
@@ -72,6 +71,7 @@ class BaseVectorStoreConfig:
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """
         Optional async version of transform_search_vector_store_request.
@@ -86,6 +86,7 @@ class BaseVectorStoreConfig:
             api_base=api_base,
             litellm_logging_obj=litellm_logging_obj,
             litellm_params=litellm_params,
+            extra_body=extra_body,
         )
 
     @abstractmethod

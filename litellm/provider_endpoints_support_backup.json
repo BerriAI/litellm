@@ -1950,7 +1950,7 @@
         "responses": true,
         "embeddings": false,
         "image_generations": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,
@@ -2057,6 +2057,13 @@
     "tavily": {
       "display_name": "Tavily (`tavily`)",
       "url": "https://docs.litellm.ai/docs/search/tavily",
+      "endpoints": {
+        "search": true
+      }
+    },
+    "serper": {
+      "display_name": "Serper (`serper`)",
+      "url": "https://docs.litellm.ai/docs/search/serper",
       "endpoints": {
         "search": true
       }

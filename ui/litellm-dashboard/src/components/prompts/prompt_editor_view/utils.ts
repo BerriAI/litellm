@@ -246,6 +246,7 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
       parsedBody.messages.length > 0
         ? parsedBody.messages
         : [{ role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" }],
+    environment: apiResponse?.prompt_spec?.environment || apiResponse?.prompt_spec?.prompt_info?.environment || "development",
   };
 };
 

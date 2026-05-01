@@ -126,7 +126,9 @@ async def test_router_provider_wildcard_routing():
     print("response 3 = ", response3)
 
     response4 = await router.acompletion(
-        model=os.environ.get("CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+        model=os.environ.get(
+            "CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"
+        ),
         messages=[{"role": "user", "content": "hello"}],
     )
 
@@ -356,51 +358,6 @@ async def test_router_retries(sync_mode):
         print(response.choices[0].message)
 
 
-@pytest.mark.parametrize(
-    "mistral_api_base",
-    [
-        "os.environ/AZURE_MISTRAL_API_BASE",
-        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/v1/",
-        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/v1",
-        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com/",
-        "https://Mistral-large-nmefg-serverless.eastus2.inference.ai.azure.com",
-    ],
-)
-@pytest.mark.skip(
-    reason="Router no longer creates clients, this is delegated to the provider integration."
-)
-def test_router_azure_ai_studio_init(mistral_api_base):
-    router = Router(
-        model_list=[
-            {
-                "model_name": "test-model",
-                "litellm_params": {
-                    "model": "azure/mistral-large-latest",
-                    "api_key": "os.environ/AZURE_MISTRAL_API_KEY",
-                    "api_base": mistral_api_base,
-                },
-                "model_info": {"id": 1234},
-            }
-        ]
-    )
-
-    # model_client = router._get_client(
-    #     deployment={"model_info": {"id": 1234}}, client_type="sync_client", kwargs={}
-    # )
-    # url = getattr(model_client, "_base_url")
-    # uri_reference = str(getattr(url, "_uri_reference"))
-
-    # print(f"uri_reference: {uri_reference}")
-
-    # assert "/v1/" in uri_reference
-    # assert uri_reference.count("v1") == 1
-    response = router.completion(
-        model="azure/mistral-large-latest",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
-    )
-    assert response is not None
-
-
 def test_exception_raising():
     # this tests if the router raises an exception when invalid params are set
     # in this test both deployments have bad keys - Keep this test. It validates if the router raises the most recent exception
@@ -409,8 +366,8 @@ def test_exception_raising():
 
     try:
         print("testing if router raises an exception")
-        old_api_key = os.environ["AZURE_API_KEY"]
-        os.environ["AZURE_API_KEY"] = ""
+        old_api_key = os.environ["AZURE_AI_API_KEY"]
+        os.environ["AZURE_AI_API_KEY"] = ""
         model_list = [
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
@@ -418,7 +375,7 @@ def test_exception_raising():
                     "model": "azure/gpt-4.1-mini",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -446,16 +403,16 @@ def test_exception_raising():
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "hello this request will fail"}],
         )
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
         pytest.fail(f"Should have raised an Auth Error")
     except openai.AuthenticationError:
         print(
             "Test Passed: Caught an OPENAI AUTH Error, Good job. This is what we needed!"
         )
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
         router.reset()
     except Exception as e:
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
         print("Got unexpected exception on router!", e)
 
 
@@ -530,7 +487,7 @@ def test_call_one_endpoint():
     # this test makes a completion calls azure/gpt-4.1-mini, it should work
     try:
         print("Testing calling a specific deployment")
-        old_api_key = os.environ["AZURE_API_KEY"]
+        old_api_key = os.environ["AZURE_AI_API_KEY"]
 
         model_list = [
             {
@@ -539,7 +496,7 @@ def test_call_one_endpoint():
                     "model": "azure/gpt-4.1-mini",
                     "api_key": old_api_key,
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                 },
                 "tpm": 240000,
                 "rpm": 1800,
@@ -548,8 +505,8 @@ def test_call_one_endpoint():
                 "model_name": "text-embedding-ada-002",
                 "litellm_params": {
                     "model": "azure/text-embedding-ada-002",
-                    "api_key": os.environ["AZURE_API_KEY"],
-                    "api_base": os.environ["AZURE_API_BASE"],
+                    "api_key": os.environ["AZURE_AI_API_KEY"],
+                    "api_base": os.environ["AZURE_AI_API_BASE"],
                 },
                 "tpm": 100000,
                 "rpm": 10000,
@@ -562,7 +519,7 @@ def test_call_one_endpoint():
             set_verbose=True,
             num_retries=1,
         )  # type: ignore
-        old_api_base = os.environ.pop("AZURE_API_BASE", None)
+        old_api_base = os.environ.pop("AZURE_AI_API_BASE", None)
 
         async def call_azure_completion():
             response = await router.acompletion(
@@ -584,15 +541,14 @@ def test_call_one_endpoint():
         asyncio.run(call_azure_completion())
         asyncio.run(call_azure_embedding())
 
-        os.environ["AZURE_API_BASE"] = old_api_base
-        os.environ["AZURE_API_KEY"] = old_api_key
+        os.environ["AZURE_AI_API_BASE"] = old_api_base
+        os.environ["AZURE_AI_API_KEY"] = old_api_key
     except Exception as e:
         print(f"FAILED TEST")
         pytest.fail(f"Got unexpected exception on router! - {e}")
 
 
 # test_call_one_endpoint()
-
 
 
 @pytest.mark.asyncio
@@ -708,9 +664,9 @@ def test_router_context_window_check_pre_call_check_in_group_custom_model_info()
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
                     "mock_response": "Hello world 1!",
                 },
@@ -762,9 +718,9 @@ def test_router_context_window_check_pre_call_check():
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
                     "mock_response": "Hello world 1!",
                 },
@@ -816,17 +772,18 @@ def test_router_context_window_check_pre_call_check_out_group():
                 "model_name": "gpt-3.5-turbo-small",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
                     "model": "azure/gpt-4.1-mini",
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
                     "base_model": "azure/gpt-35-turbo",
                 },
             },
             {
                 "model_name": "gpt-3.5-turbo-large",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "gpt-3.5-turbo-1106",
+                    "model": "gpt-4.1-mini",
                     "api_key": os.getenv("OPENAI_API_KEY"),
+                    "mock_response": "Alexander was a great conqueror.",
                 },
             },
         ]
@@ -895,9 +852,9 @@ def test_router_region_pre_call_check(allowed_model_region):
             "model_name": "gpt-3.5-turbo",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
                 "model": "azure/gpt-4.1-mini",
-                "api_key": os.getenv("AZURE_API_KEY"),
+                "api_key": os.getenv("AZURE_AI_API_KEY"),
                 "api_version": os.getenv("AZURE_API_VERSION"),
-                "api_base": os.getenv("AZURE_API_BASE"),
+                "api_base": os.getenv("AZURE_AI_API_BASE"),
                 "base_model": "azure/gpt-35-turbo",
                 "region_name": allowed_model_region,
             },
@@ -906,8 +863,9 @@ def test_router_region_pre_call_check(allowed_model_region):
         {
             "model_name": "gpt-3.5-turbo-large",  # openai model name
             "litellm_params": {  # params for litellm completion/embedding call
-                "model": "gpt-3.5-turbo-1106",
+                "model": "gpt-4.1-mini",
                 "api_key": os.getenv("OPENAI_API_KEY"),
+                "mock_response": "This is a mock response.",
             },
             "model_info": {"id": "2"},
         },
@@ -1171,8 +1129,8 @@ def test_azure_embedding_on_router():
                 "model_name": "text-embedding-ada-002",
                 "litellm_params": {
                     "model": "azure/text-embedding-ada-002",
-                    "api_key": os.environ["AZURE_API_KEY"],
-                    "api_base": os.environ["AZURE_API_BASE"],
+                    "api_key": os.environ["AZURE_AI_API_KEY"],
+                    "api_base": os.environ["AZURE_AI_API_BASE"],
                 },
                 "tpm": 100000,
                 "rpm": 10000,
@@ -1379,8 +1337,8 @@ def test_reading_keys_os_environ():
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
                     "model": "gpt-3.5-turbo",
-                    "api_key": "os.environ/AZURE_API_KEY",
-                    "api_base": "os.environ/AZURE_API_BASE",
+                    "api_key": "os.environ/AZURE_AI_API_KEY",
+                    "api_base": "os.environ/AZURE_AI_API_BASE",
                     "api_version": "os.environ/AZURE_API_VERSION",
                     "timeout": "os.environ/AZURE_TIMEOUT",
                     "stream_timeout": "os.environ/AZURE_STREAM_TIMEOUT",
@@ -1392,11 +1350,11 @@ def test_reading_keys_os_environ():
         router = Router(model_list=model_list)
         for model in router.model_list:
             assert (
-                model["litellm_params"]["api_key"] == os.environ["AZURE_API_KEY"]
-            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_API_KEY']}"
+                model["litellm_params"]["api_key"] == os.environ["AZURE_AI_API_KEY"]
+            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_AI_API_KEY']}"
             assert (
-                model["litellm_params"]["api_base"] == os.environ["AZURE_API_BASE"]
-            ), f"{model['litellm_params']['api_base']} vs {os.environ['AZURE_API_BASE']}"
+                model["litellm_params"]["api_base"] == os.environ["AZURE_AI_API_BASE"]
+            ), f"{model['litellm_params']['api_base']} vs {os.environ['AZURE_AI_API_BASE']}"
             assert (
                 model["litellm_params"]["api_version"]
                 == os.environ["AZURE_API_VERSION"]
@@ -1413,8 +1371,8 @@ def test_reading_keys_os_environ():
             print("passed testing of reading keys from os.environ")
             model_id = model["model_info"]["id"]
             async_client: openai.AsyncAzureOpenAI = router.cache.get_cache(f"{model_id}_async_client")  # type: ignore
-            assert async_client.api_key == os.environ["AZURE_API_KEY"]
-            assert async_client.base_url == os.environ["AZURE_API_BASE"]
+            assert async_client.api_key == os.environ["AZURE_AI_API_KEY"]
+            assert async_client.base_url == os.environ["AZURE_AI_API_BASE"]
             assert async_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
@@ -1426,8 +1384,8 @@ def test_reading_keys_os_environ():
             print("\n Testing async streaming client")
 
             stream_async_client: openai.AsyncAzureOpenAI = router.cache.get_cache(f"{model_id}_stream_async_client")  # type: ignore
-            assert stream_async_client.api_key == os.environ["AZURE_API_KEY"]
-            assert stream_async_client.base_url == os.environ["AZURE_API_BASE"]
+            assert stream_async_client.api_key == os.environ["AZURE_AI_API_KEY"]
+            assert stream_async_client.base_url == os.environ["AZURE_AI_API_BASE"]
             assert stream_async_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{stream_async_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
@@ -1438,8 +1396,8 @@ def test_reading_keys_os_environ():
 
             print("\n Testing sync client")
             client: openai.AzureOpenAI = router.cache.get_cache(f"{model_id}_client")  # type: ignore
-            assert client.api_key == os.environ["AZURE_API_KEY"]
-            assert client.base_url == os.environ["AZURE_API_BASE"]
+            assert client.api_key == os.environ["AZURE_AI_API_KEY"]
+            assert client.base_url == os.environ["AZURE_AI_API_BASE"]
             assert client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
@@ -1450,8 +1408,8 @@ def test_reading_keys_os_environ():
 
             print("\n Testing sync stream client")
             stream_client: openai.AzureOpenAI = router.cache.get_cache(f"{model_id}_stream_client")  # type: ignore
-            assert stream_client.api_key == os.environ["AZURE_API_KEY"]
-            assert stream_client.base_url == os.environ["AZURE_API_BASE"]
+            assert stream_client.api_key == os.environ["AZURE_AI_API_KEY"]
+            assert stream_client.base_url == os.environ["AZURE_AI_API_BASE"]
             assert stream_client.max_retries == int(
                 os.environ["AZURE_MAX_RETRIES"]
             ), f"{stream_client.max_retries} vs {os.environ['AZURE_MAX_RETRIES']}"
@@ -1501,7 +1459,7 @@ def test_reading_openai_keys_os_environ():
         for model in router.model_list:
             assert (
                 model["litellm_params"]["api_key"] == os.environ["OPENAI_API_KEY"]
-            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_API_KEY']}"
+            ), f"{model['litellm_params']['api_key']} vs {os.environ['AZURE_AI_API_KEY']}"
             assert float(model["litellm_params"]["timeout"]) == float(
                 os.environ["AZURE_TIMEOUT"]
             ), f"{model['litellm_params']['timeout']} vs {os.environ['AZURE_TIMEOUT']}"
@@ -1572,7 +1530,9 @@ def test_router_anthropic_key_dynamic():
         {
             "model_name": "anthropic-claude",
             "litellm_params": {
-                "model": os.environ.get("CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
+                "model": os.environ.get(
+                    "CI_CD_DEFAULT_ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"
+                ),
                 "api_key": anthropic_api_key,
             },
         }
@@ -2107,11 +2067,13 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
     User feedback: litellm says "No deployments available for selected model, Try again in 60 seconds"
     but Azure says to retry in at most 9s
 
-    ```
-    {"message": "litellm.proxy.proxy_server.embeddings(): Exception occured - No deployments available for selected model, Try again in 60 seconds. Passed model=text-embedding-ada-002. pre-call-checks=False, allowed_model_region=n/a, cooldown_list=[('b49cbc9314273db7181fe69b1b19993f04efb88f2c1819947c538bac08097e4c', {'Exception Received': 'litellm.RateLimitError: AzureException RateLimitError - Requests to the Embeddings_Create Operation under Azure OpenAI API version 2023-09-01-preview have exceeded call rate limit of your current OpenAI S0 pricing tier. Please retry after 9 seconds. Please go here: https://aka.ms/oai/quotaincrease if you would like to further increase the default rate limit.', 'Status Code': '429'})]", "level": "ERROR", "timestamp": "2024-08-22T03:25:36.900476"}
-    ```
+    Tests that:
+    1. deployment_callback_on_failure reads retry-after header and uses it as cooldown time
+    2. Cooled-down deployments appear in get_cooldown_deployments
+    3. RouterRateLimitError is raised with the correct cooldown_time when all deployments are cooled down
     """
-    litellm.set_verbose = True
+    from httpx import Headers, Request, Response
+
     cooldown_time = 30.0
     router = Router(
         model_list=[
@@ -2128,104 +2090,75 @@ async def test_aaarouter_dynamic_cooldown_message_retry_time(sync_mode):
                 },
             },
         ],
-        set_verbose=True,
-        debug_level="DEBUG",
         cooldown_time=cooldown_time,
     )
 
-    openai_client = openai.OpenAI(api_key="")
-
-    def _return_exception(*args, **kwargs):
-        from httpx import Headers, Request, Response
-
-        kwargs = {
-            "request": Request("POST", "https://www.google.com"),
-            "message": "Error code: 429 - Rate Limit Error!",
-            "body": {"detail": "Rate Limit Error!"},
-            "code": None,
-            "param": None,
-            "type": None,
-            "response": Response(
-                status_code=429,
-                headers=Headers(
-                    {
-                        "date": "Sat, 21 Sep 2024 22:56:53 GMT",
-                        "server": "uvicorn",
-                        "retry-after": f"{cooldown_time}",
-                        "content-length": "30",
-                        "content-type": "application/json",
-                    }
-                ),
-                request=Request("POST", "http://0.0.0.0:9000/chat/completions"),
+    # Build a 429 exception with retry-after header, matching what the OpenAI SDK raises
+    mock_exception = litellm.RateLimitError(
+        message="Rate Limit Error!",
+        llm_provider="openai",
+        model="text-embedding-ada-002",
+        response=Response(
+            status_code=429,
+            headers=Headers(
+                {
+                    "retry-after": f"{cooldown_time}",
+                    "content-type": "application/json",
+                }
             ),
-            "status_code": 429,
-            "request_id": None,
+            request=Request("POST", "https://api.openai.com/v1/embeddings"),
+        ),
+    )
+
+    # Directly invoke the Router's failure callback for each deployment,
+    # simulating what the logging framework would do on failure.
+    # This tests the cooldown logic without depending on the global customLogger state.
+    model_ids = router.get_model_ids()
+    for model_id in model_ids:
+        deployment_kwargs = {
+            "exception": mock_exception,
+            "litellm_params": {
+                "model_info": {"id": model_id},
+            },
         }
-
-        exception = Exception()
-        for k, v in kwargs.items():
-            setattr(exception, k, v)
-        raise exception
-
-    with patch.object(
-        openai_client.embeddings.with_raw_response,
-        "create",
-        side_effect=_return_exception,
-    ):
-        for _ in range(1):
-            try:
-                if sync_mode:
-                    router.embedding(
-                        model="text-embedding-ada-002",
-                        input="Hello world!",
-                        client=openai_client,
-                    )
-                else:
-                    await router.aembedding(
-                        model="text-embedding-ada-002",
-                        input="Hello world!",
-                        client=openai_client,
-                    )
-            except litellm.RateLimitError:
-                pass
-
-        await asyncio.sleep(5)
-
-        if sync_mode:
-            cooldown_deployments = _get_cooldown_deployments(
-                litellm_router_instance=router, parent_otel_span=None
-            )
-        else:
-            cooldown_deployments = await _async_get_cooldown_deployments(
-                litellm_router_instance=router, parent_otel_span=None
-            )
-        print(
-            "Cooldown deployments - {}\n{}".format(
-                cooldown_deployments, len(cooldown_deployments)
-            )
+        router.deployment_callback_on_failure(
+            kwargs=deployment_kwargs,
+            completion_response=None,
+            start_time=None,
+            end_time=None,
         )
 
-        assert len(cooldown_deployments) > 0
-        exception_raised = False
-        try:
-            if sync_mode:
-                router.embedding(
-                    model="text-embedding-ada-002",
-                    input="Hello world!",
-                    client=openai_client,
-                )
-            else:
-                await router.aembedding(
-                    model="text-embedding-ada-002",
-                    input="Hello world!",
-                    client=openai_client,
-                )
-        except litellm.types.router.RouterRateLimitError as e:
-            print(e)
-            exception_raised = True
-            assert e.cooldown_time == cooldown_time
+    if sync_mode:
+        cooldown_deployments = _get_cooldown_deployments(
+            litellm_router_instance=router, parent_otel_span=None
+        )
+    else:
+        cooldown_deployments = await _async_get_cooldown_deployments(
+            litellm_router_instance=router, parent_otel_span=None
+        )
 
-        assert exception_raised
+    assert len(cooldown_deployments) > 0
+
+    # Verify that a subsequent call raises RouterRateLimitError with correct cooldown_time
+    exception_raised = False
+    try:
+        if sync_mode:
+            router.embedding(
+                model="text-embedding-ada-002",
+                input="Hello world!",
+                mock_response=[0.1, 0.2, 0.3],
+            )
+        else:
+            await router.aembedding(
+                model="text-embedding-ada-002",
+                input="Hello world!",
+                mock_response=[0.1, 0.2, 0.3],
+            )
+    except litellm.types.router.RouterRateLimitError as e:
+        exception_raised = True
+        assert e.cooldown_time == cooldown_time
+
+    assert exception_raised
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
@@ -2298,8 +2231,8 @@ async def test_router_batch_endpoints(provider):
                 "model_name": "my-custom-name",
                 "litellm_params": {
                     "model": "azure/gpt-4o-mini",
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                    "api_key": os.getenv("AZURE_API_KEY"),
+                    "api_base": os.getenv("AZURE_AI_API_BASE"),
+                    "api_key": os.getenv("AZURE_AI_API_KEY"),
                 },
             },
         ]
@@ -2477,8 +2410,8 @@ def test_is_team_specific_model():
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
-#                     "api_base": os.getenv("AZURE_API_BASE"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
+#                     "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                     "tpm": 100000,
 #                     "rpm": 100000,
 #                 },
@@ -2487,8 +2420,8 @@ def test_is_team_specific_model():
 #                 "model_name": "gpt-3.5-turbo",
 #                 "litellm_params": {
 #                     "model": "azure/gpt-4.1-mini",
-#                     "api_key": os.getenv("AZURE_API_KEY"),
-#                     "api_base": os.getenv("AZURE_API_BASE"),
+#                     "api_key": os.getenv("AZURE_AI_API_KEY"),
+#                     "api_base": os.getenv("AZURE_AI_API_BASE"),
 #                     "tpm": 500,
 #                     "rpm": 500,
 #                 },

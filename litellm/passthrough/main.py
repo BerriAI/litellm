@@ -21,6 +21,7 @@ import httpx
 from httpx._types import CookieTypes, QueryParamTypes, RequestFiles
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -113,7 +114,7 @@ async def allm_passthrough_route(
             # Only call raise_for_status if it's a Response object (not a generator)
             if isinstance(response, httpx.Response):
                 response.raise_for_status()
-            
+
             return response
         else:
             # This shouldn't happen when allm_passthrough_route=True, but handle it for type safety
@@ -216,11 +217,11 @@ def llm_passthrough_route(
     )
 
     litellm_params_dict = get_litellm_params(**kwargs)
-    
+
     # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
     if "model_id" in kwargs:
         litellm_params_dict["model_id"] = kwargs["model_id"]
-    
+
     litellm_logging_obj.update_environment_variables(
         model=model,
         litellm_params=litellm_params_dict,
@@ -289,10 +290,10 @@ def llm_passthrough_route(
     request = client.client.build_request(
         method=method,
         url=updated_url,
-        content=signed_json_body,
-        data=data if signed_json_body is None else None,
+        content=signed_json_body if signed_json_body is not None else content,
+        data=data if (signed_json_body is None and content is None) else None,
         files=files,
-        json=json if signed_json_body is None else None,
+        json=json if (signed_json_body is None and content is None) else None,
         params=params,
         headers=headers,
         cookies=cookies,
@@ -363,7 +364,7 @@ async def _async_passthrough_request(
     """
     # client.client.send returns a coroutine for async clients
     response_result = client.client.send(request=request, stream=is_streaming_request)
-    
+
     # Check if it's a coroutine and await it
     if asyncio.iscoroutine(response_result):
         if is_streaming_request:
@@ -390,19 +391,28 @@ def _sync_streaming(
 ):
     from litellm.utils import executor
 
+    raw_bytes: List[bytes] = []
+    flush_scheduled = False
     try:
-        raw_bytes: List[bytes] = []
         for chunk in response.iter_bytes():  # type: ignore
             raw_bytes.append(chunk)
             yield chunk
-
-        executor.submit(
-            litellm_logging_obj.flush_passthrough_collected_chunks,
-            raw_bytes=raw_bytes,
-            provider_config=provider_config,
-        )
-    except Exception as e:
-        raise e
+    finally:
+        if not flush_scheduled and raw_bytes:
+            flush_scheduled = True
+            try:
+                executor.submit(
+                    litellm_logging_obj.flush_passthrough_collected_chunks,
+                    raw_bytes=raw_bytes,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to schedule passthrough spend-tracking flush "
+                    "in _sync_streaming; %d buffered chunks dropped: %s",
+                    len(raw_bytes),
+                    e,
+                )
 
 
 async def _async_streaming(
@@ -410,20 +420,46 @@ async def _async_streaming(
     litellm_logging_obj: "LiteLLMLoggingObj",
     provider_config: "BasePassthroughConfig",
 ):
+    iter_response = await response
+
     try:
-        iter_response = await response
-        raw_bytes: List[bytes] = []
+        iter_response.raise_for_status()
+    except Exception:
+        try:
+            await iter_response.aclose()
+        except Exception:
+            pass
+        raise
 
+    raw_bytes: List[bytes] = []
+    flush_scheduled = False
+    try:
         async for chunk in iter_response.aiter_bytes():  # type: ignore
-
             raw_bytes.append(chunk)
             yield chunk
-
-        asyncio.create_task(
-            litellm_logging_obj.async_flush_passthrough_collected_chunks(
-                raw_bytes=raw_bytes,
-                provider_config=provider_config,
-            )
-        )
-    except Exception as e:
-        raise e
+    except Exception:
+        try:
+            await iter_response.aclose()
+        except Exception:
+            pass
+        raise
+    finally:
+        # GeneratorExit (raised on client disconnect) is not caught by
+        # `except Exception`; the finally block ensures partial usage
+        # still gets flushed for spend tracking. See LIT-2642.
+        if not flush_scheduled and raw_bytes:
+            flush_scheduled = True
+            try:
+                asyncio.create_task(
+                    litellm_logging_obj.async_flush_passthrough_collected_chunks(
+                        raw_bytes=raw_bytes,
+                        provider_config=provider_config,
+                    )
+                )
+            except Exception as e:
+                verbose_logger.exception(
+                    "Failed to schedule passthrough spend-tracking flush "
+                    "in _async_streaming; %d buffered chunks dropped: %s",
+                    len(raw_bytes),
+                    e,
+                )

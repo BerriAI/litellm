@@ -1,0 +1,27 @@
+name: "Unit Tests: Integrations (Callbacks & Logging)"
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integrations:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: "tests/test_litellm/integrations"
+      workers: 2
+      reruns: 3
+      artifact-name: integrations

@@ -43,7 +43,11 @@ def _build_responses_kwargs(
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
     # Build a typed AnthropicMessagesRequest for the adapter
-    request_data: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+    request_data: Dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+    }
     if context_management:
         request_data["context_management"] = context_management
     if output_config:
@@ -68,6 +72,23 @@ def _build_responses_kwargs(
     anthropic_request = AnthropicMessagesRequest(**request_data)  # type: ignore[typeddict-item]
     responses_kwargs = _ADAPTER.translate_request(anthropic_request)
 
+    # Normalize reasoning effort based on model capabilities
+    # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
+    reasoning = responses_kwargs.get("reasoning")
+    if isinstance(reasoning, dict) and "effort" in reasoning:
+        from litellm.llms.anthropic.experimental_pass_through.utils import (
+            normalize_reasoning_effort_value,
+        )
+
+        effort = reasoning["effort"]
+        normalized = normalize_reasoning_effort_value(
+            effort,
+            model=model,
+            custom_llm_provider=(extra_kwargs or {}).get("custom_llm_provider"),
+        )
+        if normalized != effort:
+            responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}
+
     if stream:
         responses_kwargs["stream"] = True
 
@@ -84,7 +105,7 @@ def _build_responses_kwargs(
                 # Reclassify as acompletion so the success handler doesn't try to
                 # validate the Responses API event as an AnthropicResponse.
                 # (Mirrors the pattern used in LiteLLMMessagesToCompletionTransformationHandler.)
-                setattr(value, "call_type", CallTypes.acompletion.value)
+                setattr(value, "call_type", CallTypes.anthropic_messages.value)
             responses_kwargs[key] = value
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
@@ -142,7 +163,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         result = await litellm.aresponses(**responses_kwargs)
 
         if stream:
-            wrapper = AnthropicResponsesStreamWrapper(responses_stream=result, model=model)
+            wrapper = AnthropicResponsesStreamWrapper(
+                responses_stream=result, model=model
+            )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
@@ -176,24 +199,26 @@ class LiteLLMMessagesToResponsesAPIHandler:
         Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
     ]:
         if _is_async:
-            return LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
-                max_tokens=max_tokens,
-                messages=messages,
-                model=model,
-                context_management=context_management,
-                metadata=metadata,
-                output_config=output_config,
-                stop_sequences=stop_sequences,
-                stream=stream,
-                system=system,
-                temperature=temperature,
-                thinking=thinking,
-                tool_choice=tool_choice,
-                tools=tools,
-                top_k=top_k,
-                top_p=top_p,
-                output_format=output_format,
-                **kwargs,
+            return (
+                LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+                    max_tokens=max_tokens,
+                    messages=messages,
+                    model=model,
+                    context_management=context_management,
+                    metadata=metadata,
+                    output_config=output_config,
+                    stop_sequences=stop_sequences,
+                    stream=stream,
+                    system=system,
+                    temperature=temperature,
+                    thinking=thinking,
+                    tool_choice=tool_choice,
+                    tools=tools,
+                    top_k=top_k,
+                    top_p=top_p,
+                    output_format=output_format,
+                    **kwargs,
+                )
             )
 
         # Sync path
@@ -220,7 +245,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         result = litellm.responses(**responses_kwargs)
 
         if stream:
-            wrapper = AnthropicResponsesStreamWrapper(responses_stream=result, model=model)
+            wrapper = AnthropicResponsesStreamWrapper(
+                responses_stream=result, model=model
+            )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):

@@ -1,5 +1,5 @@
 -- CreateTable
-CREATE TABLE "LiteLLM_DeletedTeamTable" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DeletedTeamTable" (
     "id" TEXT NOT NULL,
     "team_id" TEXT NOT NULL,
     "team_alias" TEXT,
@@ -33,7 +33,7 @@ CREATE TABLE "LiteLLM_DeletedTeamTable" (
 );
 
 -- CreateTable
-CREATE TABLE "LiteLLM_DeletedVerificationToken" (
+CREATE TABLE IF NOT EXISTS "LiteLLM_DeletedVerificationToken" (
     "id" TEXT NOT NULL,
     "token" TEXT NOT NULL,
     "key_name" TEXT,
@@ -80,38 +80,38 @@ CREATE TABLE "LiteLLM_DeletedVerificationToken" (
 );
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedTeamTable_team_id_idx" ON "LiteLLM_DeletedTeamTable"("team_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedTeamTable_team_id_idx" ON "LiteLLM_DeletedTeamTable"("team_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedTeamTable_deleted_at_idx" ON "LiteLLM_DeletedTeamTable"("deleted_at");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedTeamTable_deleted_at_idx" ON "LiteLLM_DeletedTeamTable"("deleted_at");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedTeamTable_organization_id_idx" ON "LiteLLM_DeletedTeamTable"("organization_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedTeamTable_organization_id_idx" ON "LiteLLM_DeletedTeamTable"("organization_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedTeamTable_team_alias_idx" ON "LiteLLM_DeletedTeamTable"("team_alias");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedTeamTable_team_alias_idx" ON "LiteLLM_DeletedTeamTable"("team_alias");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedTeamTable_created_at_idx" ON "LiteLLM_DeletedTeamTable"("created_at");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedTeamTable_created_at_idx" ON "LiteLLM_DeletedTeamTable"("created_at");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedVerificationToken_token_idx" ON "LiteLLM_DeletedVerificationToken"("token");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedVerificationToken_token_idx" ON "LiteLLM_DeletedVerificationToken"("token");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedVerificationToken_deleted_at_idx" ON "LiteLLM_DeletedVerificationToken"("deleted_at");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedVerificationToken_deleted_at_idx" ON "LiteLLM_DeletedVerificationToken"("deleted_at");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedVerificationToken_user_id_idx" ON "LiteLLM_DeletedVerificationToken"("user_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedVerificationToken_user_id_idx" ON "LiteLLM_DeletedVerificationToken"("user_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedVerificationToken_team_id_idx" ON "LiteLLM_DeletedVerificationToken"("team_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedVerificationToken_team_id_idx" ON "LiteLLM_DeletedVerificationToken"("team_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedVerificationToken_organization_id_idx" ON "LiteLLM_DeletedVerificationToken"("organization_id");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedVerificationToken_organization_id_idx" ON "LiteLLM_DeletedVerificationToken"("organization_id");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedVerificationToken_key_alias_idx" ON "LiteLLM_DeletedVerificationToken"("key_alias");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedVerificationToken_key_alias_idx" ON "LiteLLM_DeletedVerificationToken"("key_alias");
 
 -- CreateIndex
-CREATE INDEX "LiteLLM_DeletedVerificationToken_created_at_idx" ON "LiteLLM_DeletedVerificationToken"("created_at");
+CREATE INDEX IF NOT EXISTS "LiteLLM_DeletedVerificationToken_created_at_idx" ON "LiteLLM_DeletedVerificationToken"("created_at");
 

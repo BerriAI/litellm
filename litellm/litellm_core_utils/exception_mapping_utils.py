@@ -6,7 +6,7 @@ from typing import Any, Optional
 import httpx
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import _redact_string, verbose_logger
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -73,7 +73,10 @@ class ExceptionCheckers:
         # Exclude param validation errors (e.g. OpenAI "user" param max 64 chars)
         if "string_above_max_length" in _error_str_lowercase:
             return False
-        if "invalid 'user'" in _error_str_lowercase and "string too long" in _error_str_lowercase:
+        if (
+            "invalid 'user'" in _error_str_lowercase
+            and "string too long" in _error_str_lowercase
+        ):
             return False
         known_exception_substrings = [
             "exceed context limit",
@@ -97,7 +100,7 @@ class ExceptionCheckers:
             return True
 
         return False
-    
+
     @staticmethod
     def is_azure_content_policy_violation_error(error_str: str) -> bool:
         """
@@ -443,7 +446,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
                     )
-                elif "invalid_encrypted_content" in error_str or "could not be verified" in error_str:
+                elif (
+                    "invalid_encrypted_content" in error_str
+                    or "could not be verified" in error_str
+                ):
                     exception_mapping_worked = True
                     helpful_message = (
                         f"{exception_provider} - {message}\n\n"
@@ -2093,13 +2099,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             # content policy violation even when the top-level
                             # code is generic (e.g. "invalid_request_error").
                             if azure_error_code != "content_policy_violation":
-                                _inner = (
-                                    body_dict["error"].get("inner_error")  # type: ignore[index]
-                                    or body_dict["error"].get("innererror")  # type: ignore[index]
-                                )
-                                if isinstance(_inner, dict) and _inner.get(
-                                    "code"
-                                ) == "ResponsibleAIPolicyViolation":
+                                _inner = body_dict["error"].get(
+                                    "inner_error"
+                                ) or body_dict[  # type: ignore[index]
+                                    "error"
+                                ].get(
+                                    "innererror"
+                                )  # type: ignore[index]
+                                if (
+                                    isinstance(_inner, dict)
+                                    and _inner.get("code")
+                                    == "ResponsibleAIPolicyViolation"
+                                ):
                                     azure_error_code = "content_policy_violation"
                         else:
                             azure_error_code = body_dict.get("code")
@@ -2135,19 +2146,25 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     )
                 elif (
                     azure_error_code == "content_policy_violation"
-                    or ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+                    or ExceptionCheckers.is_azure_content_policy_violation_error(
+                        error_str
+                    )
                 ):
                     exception_mapping_worked = True
                     from litellm.llms.azure.exception_mapping import (
                         AzureOpenAIExceptionMapping,
                     )
+
                     raise AzureOpenAIExceptionMapping.create_content_policy_violation_error(
                         message=message,
                         model=model,
                         extra_information=extra_information,
                         original_exception=original_exception,
                     )
-                elif azure_error_code == "invalid_encrypted_content" or "could not be verified" in error_str:
+                elif (
+                    azure_error_code == "invalid_encrypted_content"
+                    or "could not be verified" in error_str
+                ):
                     exception_mapping_worked = True
                     helpful_message = (
                         f"AzureException - {message}\n\n"
@@ -2287,7 +2304,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 else:
                     # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
                     raise APIConnectionError(
-                        message=f"{exception_provider} APIConnectionError - {message}\n{traceback.format_exc()}",
+                        message=f"{exception_provider} APIConnectionError - {message}\n{_redact_string(traceback.format_exc())}",
                         llm_provider="azure",
                         model=model,
                         litellm_debug_info=extra_information,
@@ -2414,7 +2431,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             else:
                 raise APIConnectionError(
                     message="{}\n{}".format(
-                        str(original_exception), traceback.format_exc()
+                        str(original_exception), _redact_string(traceback.format_exc())
                     ),
                     llm_provider=custom_llm_provider,
                     model=model,
@@ -2443,7 +2460,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     setattr(e, "litellm_response_headers", litellm_response_headers)
                     raise e  # it's already mapped
             raised_exc = APIConnectionError(
-                message="{}\n{}".format(original_exception, traceback.format_exc()),
+                message="{}\n{}".format(
+                    original_exception, _redact_string(traceback.format_exc())
+                ),
                 llm_provider="",
                 model="",
             )

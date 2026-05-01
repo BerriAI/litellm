@@ -75,6 +75,7 @@ def filter_team_based_models(
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
 
+
 def _deployment_supports_web_search(deployment: Dict) -> bool:
     """
     Check if a deployment supports web search.
@@ -112,7 +113,7 @@ def filter_web_search_deployments(
     is_web_search_request = False
     tools = request_kwargs.get("tools") or []
     for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure. 
+        # These are the two websearch tools for OpenAI / Azure.
         if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
             is_web_search_request = True
             break
@@ -121,7 +122,9 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     # Filter out deployments that don't support web search
-    final_deployments = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
+    final_deployments = [
+        d for d in healthy_deployments if _deployment_supports_web_search(d)
+    ]
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments

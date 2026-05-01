@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
     AnthropicStreamWrapper,
 )
-from litellm.types.utils import Delta, ModelResponse, StreamingChoices, Usage
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices, Usage
 
 
 class MockCompletionStreamWithContentAfterStopReason:
@@ -32,16 +32,14 @@ class MockCompletionStreamWithContentAfterStopReason:
     def __init__(self):
         self.responses = [
             # Initial text content
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(content="Hello"), index=0, finish_reason=None
                     )
                 ],
             ),
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(content=" world"), index=0, finish_reason=None
@@ -49,8 +47,7 @@ class MockCompletionStreamWithContentAfterStopReason:
                 ],
             ),
             # Message delta with stop_reason AND usage (this is how it actually comes from the API)
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(content=""), index=0, finish_reason="stop"
@@ -60,8 +57,7 @@ class MockCompletionStreamWithContentAfterStopReason:
             ),
             # Additional content after the stop_reason - this simulates the scenario
             # where there might be additional content blocks after the main response
-            ModelResponse(
-                stream=True,
+            ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         delta=Delta(content=" Additional content"),

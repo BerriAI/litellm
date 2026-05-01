@@ -60,19 +60,30 @@ def _build_url(
     path_params: Dict[str, str],
 ) -> str:
     """Build the full URL by substituting path parameters.
-    
-    The api_base from get_complete_url already includes /containers,
-    so we need to strip that prefix from the path_template.
+
+    The api_base from get_complete_url already includes /containers and may include
+    query parameters. We need to parse the URL, append the path, then preserve the
+    query parameters.
     """
     # api_base ends with /containers, path_template starts with /containers
     # So we need to strip /containers from the path
     if path_template.startswith("/containers"):
-        path_template = path_template[len("/containers"):]
-    
-    url = f"{api_base.rstrip('/')}{path_template}"
+        path_template = path_template[len("/containers") :]
+
+    # Substitute path parameters
     for param, value in path_params.items():
-        url = url.replace(f"{{{param}}}", value)
-    return url
+        path_template = path_template.replace(f"{{{param}}}", value)
+
+    # Parse the api_base to extract existing query params
+    parsed_base = httpx.URL(api_base)
+
+    # Append the path to the existing path (before query params)
+    new_path = f"{parsed_base.path.rstrip('/')}{path_template}"
+
+    # Rebuild URL with new path, preserving query params
+    final_url = parsed_base.copy_with(path=new_path)
+
+    return str(final_url)
 
 
 def _build_query_params(
@@ -94,36 +105,36 @@ def _prepare_multipart_file_upload(
 ) -> tuple:
     """
     Prepare file and headers for multipart upload.
-    
+
     Returns:
         Tuple of (files_dict, headers_without_content_type)
     """
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         extract_file_data,
     )
-    
+
     extracted = extract_file_data(file)
     filename = extracted.get("filename") or "file"
     content = extracted.get("content") or b""
     content_type = extracted.get("content_type") or "application/octet-stream"
     files = {"file": (filename, content, content_type)}
-    
+
     # Remove content-type header - httpx will set it automatically for multipart
     headers_copy = headers.copy()
     headers_copy.pop("content-type", None)
     headers_copy.pop("Content-Type", None)
-    
+
     return files, headers_copy
 
 
 class GenericContainerHandler:
     """
     Generic handler for container file API endpoints.
-    
+
     This single handler can process any endpoint defined in endpoints.json,
     eliminating the need for individual handler methods per endpoint.
     """
-    
+
     def handle(
         self,
         endpoint_name: str,
@@ -139,7 +150,7 @@ class GenericContainerHandler:
     ) -> Union[Any, Coroutine[Any, Any, Any]]:
         """
         Generic handler for any container file endpoint.
-        
+
         Args:
             endpoint_name: Name of the endpoint (e.g., "list_container_files")
             container_provider_config: Provider-specific configuration
@@ -164,7 +175,7 @@ class GenericContainerHandler:
                 client=client,
                 **kwargs,
             )
-        
+
         return self._sync_handle(
             endpoint_name=endpoint_name,
             container_provider_config=container_provider_config,
@@ -176,7 +187,7 @@ class GenericContainerHandler:
             client=client,
             **kwargs,
         )
-    
+
     def _sync_handle(
         self,
         endpoint_name: str,
@@ -193,7 +204,7 @@ class GenericContainerHandler:
         endpoint_config = _get_endpoint_config(endpoint_name)
         if not endpoint_config:
             raise ValueError(f"Unknown endpoint: {endpoint_name}")
-        
+
         # Get HTTP client
         if client is None or not isinstance(client, HTTPHandler):
             http_client = _get_httpx_client(
@@ -201,7 +212,7 @@ class GenericContainerHandler:
             )
         else:
             http_client = client
-        
+
         # Build request
         headers = container_provider_config.validate_environment(
             headers=extra_headers or {},
@@ -209,21 +220,25 @@ class GenericContainerHandler:
         )
         if extra_headers:
             headers.update(extra_headers)
-        
+
         api_base = container_provider_config.get_complete_url(
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
-        
+
         # Build URL with path params
-        path_params = {p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])}
+        path_params = {
+            p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])
+        }
         url = _build_url(api_base, endpoint_config["path"], path_params)
-        
+
         # Build query params
-        query_params = _build_query_params(endpoint_config.get("query_params", []), kwargs)
+        query_params = _build_query_params(
+            endpoint_config.get("query_params", []), kwargs
+        )
         if extra_query:
             query_params.update(extra_query)
-        
+
         # Log request
         logging_obj.pre_call(
             input="",
@@ -234,50 +249,63 @@ class GenericContainerHandler:
                 "params": query_params,
             },
         )
-        
+
         # Make request
         method = endpoint_config["method"].upper()
         returns_binary = endpoint_config.get("returns_binary", False)
         is_multipart = endpoint_config.get("is_multipart", False)
-        
+
         try:
             if method == "GET":
-                response = http_client.get(url=url, headers=headers, params=query_params)
+                response = http_client.get(
+                    url=url, headers=headers, params=query_params
+                )
             elif method == "DELETE":
-                response = http_client.delete(url=url, headers=headers, params=query_params)
+                response = http_client.delete(
+                    url=url, headers=headers, params=query_params
+                )
             elif method == "POST":
                 if is_multipart and "file" in kwargs:
-                    files, headers = _prepare_multipart_file_upload(kwargs["file"], headers)
-                    response = http_client.post(url=url, headers=headers, params=query_params, files=files)
+                    files, headers = _prepare_multipart_file_upload(
+                        kwargs["file"], headers
+                    )
+                    response = http_client.post(
+                        url=url, headers=headers, params=query_params, files=files
+                    )
                 else:
-                    response = http_client.post(url=url, headers=headers, params=query_params)
+                    response = http_client.post(
+                        url=url, headers=headers, params=query_params
+                    )
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
-            
+
             # For binary responses, return raw content
             if returns_binary:
                 return response.content
-            
+
             # Check for error response
             response_json = response.json()
             if "error" in response_json:
                 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-                error_msg = response_json.get("error", {}).get("message", str(response_json))
+
+                error_msg = response_json.get("error", {}).get(
+                    "message", str(response_json)
+                )
                 raise BaseLLMException(
                     status_code=response.status_code,
                     message=error_msg,
                     headers=dict(response.headers),
                 )
-            
+
             # Parse response
             response_type = RESPONSE_TYPES.get(endpoint_config["response_type"])
             if response_type:
                 return response_type(**response_json)
             return response_json
-            
+
         except Exception as e:
             raise e
-    
+
     async def _async_handle(
         self,
         endpoint_name: str,
@@ -294,7 +322,7 @@ class GenericContainerHandler:
         endpoint_config = _get_endpoint_config(endpoint_name)
         if not endpoint_config:
             raise ValueError(f"Unknown endpoint: {endpoint_name}")
-        
+
         # Get HTTP client
         if client is None or not isinstance(client, AsyncHTTPHandler):
             http_client = get_async_httpx_client(
@@ -303,7 +331,7 @@ class GenericContainerHandler:
             )
         else:
             http_client = client
-        
+
         # Build request
         headers = container_provider_config.validate_environment(
             headers=extra_headers or {},
@@ -311,21 +339,25 @@ class GenericContainerHandler:
         )
         if extra_headers:
             headers.update(extra_headers)
-        
+
         api_base = container_provider_config.get_complete_url(
             api_base=litellm_params.get("api_base", None),
             litellm_params=dict(litellm_params),
         )
-        
+
         # Build URL with path params
-        path_params = {p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])}
+        path_params = {
+            p: kwargs.get(p, "") for p in endpoint_config.get("path_params", [])
+        }
         url = _build_url(api_base, endpoint_config["path"], path_params)
-        
+
         # Build query params
-        query_params = _build_query_params(endpoint_config.get("query_params", []), kwargs)
+        query_params = _build_query_params(
+            endpoint_config.get("query_params", []), kwargs
+        )
         if extra_query:
             query_params.update(extra_query)
-        
+
         # Log request
         logging_obj.pre_call(
             input="",
@@ -336,51 +368,63 @@ class GenericContainerHandler:
                 "params": query_params,
             },
         )
-        
+
         # Make request
         method = endpoint_config["method"].upper()
         returns_binary = endpoint_config.get("returns_binary", False)
         is_multipart = endpoint_config.get("is_multipart", False)
-        
+
         try:
             if method == "GET":
-                response = await http_client.get(url=url, headers=headers, params=query_params)
+                response = await http_client.get(
+                    url=url, headers=headers, params=query_params
+                )
             elif method == "DELETE":
-                response = await http_client.delete(url=url, headers=headers, params=query_params)
+                response = await http_client.delete(
+                    url=url, headers=headers, params=query_params
+                )
             elif method == "POST":
                 if is_multipart and "file" in kwargs:
-                    files, headers = _prepare_multipart_file_upload(kwargs["file"], headers)
-                    response = await http_client.post(url=url, headers=headers, params=query_params, files=files)
+                    files, headers = _prepare_multipart_file_upload(
+                        kwargs["file"], headers
+                    )
+                    response = await http_client.post(
+                        url=url, headers=headers, params=query_params, files=files
+                    )
                 else:
-                    response = await http_client.post(url=url, headers=headers, params=query_params)
+                    response = await http_client.post(
+                        url=url, headers=headers, params=query_params
+                    )
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
-            
+
             # For binary responses, return raw content
             if returns_binary:
                 return response.content
-            
+
             # Check for error response
             response_json = response.json()
             if "error" in response_json:
                 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-                error_msg = response_json.get("error", {}).get("message", str(response_json))
+
+                error_msg = response_json.get("error", {}).get(
+                    "message", str(response_json)
+                )
                 raise BaseLLMException(
                     status_code=response.status_code,
                     message=error_msg,
                     headers=dict(response.headers),
                 )
-            
+
             # Parse response
             response_type = RESPONSE_TYPES.get(endpoint_config["response_type"])
             if response_type:
                 return response_type(**response_json)
             return response_json
-            
+
         except Exception as e:
             raise e
 
 
 # Singleton instance
 generic_container_handler = GenericContainerHandler()
-

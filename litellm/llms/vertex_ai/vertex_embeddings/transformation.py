@@ -3,6 +3,7 @@ from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
+from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from .types import *
@@ -100,23 +101,38 @@ class VertexAITextEmbeddingConfig(BaseModel):
         return optional_params
 
     def transform_openai_request_to_vertex_embedding_request(
-        self, input: Union[list, str], optional_params: dict, model: str
+        self,
+        input: Union[list, str],
+        optional_params: dict,
+        model: str,
+        litellm_params: Optional[dict] = None,
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex embedding request.
         """
         # Import here to avoid circular import issues with litellm.__init__
         from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
+
+        labels = pop_vertex_request_labels(optional_params, litellm_params)
+
         if model.isdigit():
-            return self._transform_openai_request_to_fine_tuned_embedding_request(
-                input, optional_params, model
+            vertex_request = (
+                self._transform_openai_request_to_fine_tuned_embedding_request(
+                    input, optional_params, model
+                )
             )
+            if labels:
+                vertex_request["labels"] = labels
+            return vertex_request
         if VertexBGEConfig.is_bge_model(model):
-            return VertexBGEConfig.transform_request(
+            vertex_request = VertexBGEConfig.transform_request(
                 input=input, optional_params=optional_params, model=model
             )
+            if labels:
+                vertex_request["labels"] = labels
+            return vertex_request
 
-        vertex_request: VertexEmbeddingRequest = VertexEmbeddingRequest()
+        vertex_request = VertexEmbeddingRequest()
         vertex_text_embedding_input_list: List[TextEmbeddingInput] = []
         task_type: Optional[TaskType] = optional_params.get("task_type")
         title = optional_params.get("title")
@@ -132,6 +148,8 @@ class VertexAITextEmbeddingConfig(BaseModel):
 
         vertex_request["instances"] = vertex_text_embedding_input_list
         vertex_request["parameters"] = EmbeddingParameters(**optional_params)
+        if labels:
+            vertex_request["labels"] = labels
 
         return vertex_request
 
@@ -174,7 +192,10 @@ class VertexAITextEmbeddingConfig(BaseModel):
             **optional_params
         )
         # Remove 'shared_session' from parameters if present
-        if vertex_request["parameters"] is not None and "shared_session" in vertex_request["parameters"]:
+        if (
+            vertex_request["parameters"] is not None
+            and "shared_session" in vertex_request["parameters"]
+        ):
             del vertex_request["parameters"]["shared_session"]  # type: ignore[typeddict-item]
 
         return vertex_request
@@ -215,10 +236,10 @@ class VertexAITextEmbeddingConfig(BaseModel):
             return self._transform_vertex_response_to_openai_for_fine_tuned_models(
                 response, model, model_response
             )
-        
+
         # Import here to avoid circular import issues with litellm.__init__
         from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
-        
+
         if VertexBGEConfig.is_bge_model(model):
             return VertexBGEConfig.transform_response(
                 response=response, model=model, model_response=model_response

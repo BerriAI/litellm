@@ -59,6 +59,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import PromptTokensDetailsWrapper
 else:
     LiteLLMLoggingObj = Any
 
@@ -159,7 +160,7 @@ class LLMCachingHandler:
             #########################################################
             parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             kwargs["parent_otel_span"] = parent_otel_span
-            
+
             if litellm.cache is not None and self._is_call_type_supported_by_cache(
                 original_function=original_function
             ):
@@ -181,7 +182,9 @@ class LLMCachingHandler:
                         api_base=kwargs.get("api_base", None),
                         api_key=kwargs.get("api_key", None),
                     )
-                    cache_duration_ms = (cache_check_end_time - cache_check_start_time) * 1000
+                    cache_duration_ms = (
+                        cache_check_end_time - cache_check_start_time
+                    ) * 1000
                     self._update_litellm_logging_obj_environment(
                         logging_obj=logging_obj,
                         model=model,
@@ -194,7 +197,6 @@ class LLMCachingHandler:
 
                     call_type = original_function.__name__
 
-      
                     cached_result = self._convert_cached_result_to_model_response(
                         cached_result=cached_result,
                         call_type=call_type,
@@ -244,7 +246,7 @@ class LLMCachingHandler:
                         final_embedding_cached_response=final_embedding_cached_response,
                         embedding_all_elements_cache_hit=embedding_all_elements_cache_hit,
                     )
-        
+
             verbose_logger.debug(f"CACHE RESULT: {cached_result}")
             return CachingHandlerResponse(
                 cached_result=cached_result,
@@ -265,9 +267,8 @@ class LLMCachingHandler:
     ) -> CachingHandlerResponse:
         from litellm.utils import CustomStreamWrapper
 
-
         cached_result: Optional[Any] = None
-        
+
         # Check if caching should be performed BEFORE doing expensive kwargs copy
         if litellm.cache is not None and self._is_call_type_supported_by_cache(
             original_function=original_function
@@ -325,7 +326,7 @@ class LLMCachingHandler:
                         result=cached_result,
                         start_time=start_time,
                         end_time=end_time,
-                        cache_hit=cache_hit
+                        cache_hit=cache_hit,
                     )
                     cache_key = litellm.cache.get_cache_key(**kwargs)
                     if (
@@ -415,6 +416,7 @@ class LLMCachingHandler:
             final_embedding_cached_response._hidden_params["cache_hit"] = True
 
             prompt_tokens = 0
+            aggregated_details: Optional[dict] = None
             for val in non_null_list:
                 idx, cr = val  # (idx, cr) tuple
                 if cr is not None:
@@ -431,11 +433,35 @@ class LLMCachingHandler:
                         prompt_tokens += token_counter(
                             text=kwargs_input_as_list[idx], count_response_tokens=True
                         )
+                    # Aggregate prompt_tokens_details from cached items
+                    item_details = cr.get("prompt_tokens_details")
+                    if item_details:
+                        if aggregated_details is None:
+                            aggregated_details = {}
+                        for key, value in item_details.items():
+                            if isinstance(value, (int, float)):
+                                aggregated_details[key] = (
+                                    aggregated_details.get(key, 0) + value
+                                )
+                            else:
+                                aggregated_details[key] = value
+
             ## USAGE
+            prompt_tokens_details: Optional["PromptTokensDetailsWrapper"] = None
+            if aggregated_details:
+                from litellm.types.utils import PromptTokensDetailsWrapper
+
+                try:
+                    prompt_tokens_details = PromptTokensDetailsWrapper(
+                        **aggregated_details
+                    )
+                except Exception:
+                    prompt_tokens_details = None
             usage = Usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
                 total_tokens=prompt_tokens,
+                prompt_tokens_details=prompt_tokens_details,
             )
             final_embedding_cached_response.usage = usage
         if len(remaining_list) == 0:
@@ -478,7 +504,69 @@ class LLMCachingHandler:
             prompt_tokens=usage1.prompt_tokens + usage2.prompt_tokens,
             completion_tokens=usage1.completion_tokens + usage2.completion_tokens,
             total_tokens=usage1.total_tokens + usage2.total_tokens,
+            prompt_tokens_details=self._merge_prompt_tokens_details(
+                usage1.prompt_tokens_details,
+                usage2.prompt_tokens_details,
+            ),
         )
+
+    def _merge_prompt_tokens_details(
+        self,
+        details1: Optional["PromptTokensDetailsWrapper"],
+        details2: Optional["PromptTokensDetailsWrapper"],
+    ) -> Optional["PromptTokensDetailsWrapper"]:
+        """Merge two PromptTokensDetailsWrapper objects by summing numeric fields."""
+        if details1 is None and details2 is None:
+            return None
+        if details1 is None:
+            return details2
+        if details2 is None:
+            return details1
+
+        dict1 = (
+            details1.model_dump(exclude_none=True)
+            if hasattr(details1, "model_dump")
+            else {}
+        )
+        dict2 = (
+            details2.model_dump(exclude_none=True)
+            if hasattr(details2, "model_dump")
+            else {}
+        )
+
+        merged: dict = {}
+        for key in set(dict1.keys()) | set(dict2.keys()):
+            v1 = dict1.get(key, 0)
+            v2 = dict2.get(key, 0)
+            if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
+                merged[key] = v1 + v2
+            elif isinstance(v1, dict) and isinstance(v2, dict):
+                # Recursively merge nested dicts (e.g. cache_creation_token_details)
+                nested: dict = {}
+                for nk in set(v1.keys()) | set(v2.keys()):
+                    nv1 = v1.get(nk, 0)
+                    nv2 = v2.get(nk, 0)
+                    if isinstance(nv1, (int, float)) and isinstance(nv2, (int, float)):
+                        nested[nk] = nv1 + nv2
+                    elif nv1:
+                        nested[nk] = nv1
+                    else:
+                        nested[nk] = nv2
+                merged[key] = nested
+            elif v1:
+                merged[key] = v1
+            else:
+                merged[key] = v2
+
+        if not merged:
+            return None
+
+        from litellm.types.utils import PromptTokensDetailsWrapper
+
+        try:
+            return PromptTokensDetailsWrapper(**merged)
+        except Exception:
+            return None
 
     def _combine_cached_embedding_response_with_api_result(
         self,
@@ -554,12 +642,18 @@ class LLMCachingHandler:
 
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=logging_obj.async_success_handler(
-                result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+                result=cached_result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
             )
         )
 
         logging_obj.handle_sync_success_callbacks_for_async_calls(
-            result=cached_result, start_time=start_time, end_time=end_time, cache_hit=cache_hit
+            result=cached_result,
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=cache_hit,
         )
 
     async def _retrieve_from_cache(
@@ -728,10 +822,9 @@ class LLMCachingHandler:
                 response_type="audio_transcription",
                 hidden_params=hidden_params,
             )
-        elif (
-            call_type == "aresponses"
-            or call_type == "responses"
-        ) and isinstance(cached_result, dict):
+        elif (call_type == "aresponses" or call_type == "responses") and isinstance(
+            cached_result, dict
+        ):
             # Convert cached dict back to ResponsesAPIResponse object
             cached_result = ResponsesAPIResponse(**cached_result)
 
@@ -741,7 +834,7 @@ class LLMCachingHandler:
             and isinstance(cached_result._hidden_params, dict)
         ):
             cached_result._hidden_params["cache_hit"] = True
-        
+
         #########################################################
         # Add final timing metrics to the cached result
         #########################################################

@@ -61,9 +61,7 @@ class ResponsesToCompletionBridgeHandler:
                     existing.setdefault(key, value)
         return response
 
-    def _collect_response_from_stream(
-        self, stream_iter: Any
-    ) -> "ResponsesAPIResponse":
+    def _collect_response_from_stream(self, stream_iter: Any) -> "ResponsesAPIResponse":
         for _ in stream_iter:
             pass
 

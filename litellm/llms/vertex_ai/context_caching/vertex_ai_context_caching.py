@@ -4,13 +4,16 @@ import httpx
 
 import litellm
 from litellm.caching.caching import Cache, LiteLLMCacheType
+from litellm.constants import MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
     get_async_httpx_client,
 )
+from litellm._logging import verbose_logger
 from litellm.llms.openai.openai import AllMessageValues
+from litellm.utils import is_prompt_caching_valid_prompt
 from litellm.types.llms.vertex_ai import (
     CachedContentListAllResponseBody,
     VertexAICachedContentResponseObject,
@@ -48,6 +51,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_auth_header: Optional[str],
+        model: Optional[str] = None,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -57,12 +61,11 @@ class ContextCachingEndpoints(VertexBase):
         Returns
             token, url
         """
+        auth_header: Optional[str]
         if custom_llm_provider == "gemini":
-            auth_header = None
+            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
             endpoint = "cachedContents"
-            url = "https://generativelanguage.googleapis.com/v1beta/{}?key={}".format(
-                endpoint, gemini_api_key
-            )
+            url = "https://generativelanguage.googleapis.com/v1beta/{}".format(endpoint)
         elif custom_llm_provider == "vertex_ai":
             auth_header = vertex_auth_header
             endpoint = "cachedContents"
@@ -78,7 +81,6 @@ class ContextCachingEndpoints(VertexBase):
             else:
                 url = f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
 
-
         return self._check_custom_proxy(
             api_base=api_base,
             custom_llm_provider=custom_llm_provider,
@@ -87,10 +89,12 @@ class ContextCachingEndpoints(VertexBase):
             stream=None,
             auth_header=auth_header,
             url=url,
-            model=None,
+            model=model,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_api_version="v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1",
+            vertex_api_version=(
+                "v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1"
+            ),
         )
 
     def check_cache(
@@ -105,6 +109,7 @@ class ContextCachingEndpoints(VertexBase):
         vertex_project: Optional[str],
         vertex_location: Optional[str],
         vertex_auth_header: Optional[str],
+        model: Optional[str] = None,
     ) -> Optional[str]:
         """
         Checks if content already cached.
@@ -123,7 +128,8 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         page_token: Optional[str] = None
@@ -196,7 +202,8 @@ class ContextCachingEndpoints(VertexBase):
         custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         vertex_project: Optional[str],
         vertex_location: Optional[str],
-        vertex_auth_header: Optional[str]
+        vertex_auth_header: Optional[str],
+        model: Optional[str] = None,
     ) -> Optional[str]:
         """
         Checks if content already cached.
@@ -215,7 +222,8 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         page_token: Optional[str] = None
@@ -314,6 +322,20 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
+        # Gemini requires a minimum of 1024 tokens for context caching.
+        # Skip caching if the cached content is too small to avoid API errors.
+        if not is_prompt_caching_valid_prompt(
+            model=model,
+            messages=cached_messages,
+            custom_llm_provider=custom_llm_provider,
+        ):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached content is below minimum token "
+                "count (%d). Skipping context caching.",
+                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+            )
+            return messages, optional_params, None
+
         tools = optional_params.pop("tools", None)
 
         ## AUTHORIZATION ##
@@ -323,13 +345,16 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         headers = {
             "Content-Type": "application/json",
         }
-        if token is not None:
+        if isinstance(token, dict):
+            headers.update(token)
+        elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
         if extra_headers is not None:
             headers.update(extra_headers)
@@ -358,7 +383,8 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
         if google_cache_name:
             return non_cached_messages, optional_params, google_cache_name
@@ -446,6 +472,20 @@ class ContextCachingEndpoints(VertexBase):
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
+        # Gemini requires a minimum of 1024 tokens for context caching.
+        # Skip caching if the cached content is too small to avoid API errors.
+        if not is_prompt_caching_valid_prompt(
+            model=model,
+            messages=cached_messages,
+            custom_llm_provider=custom_llm_provider,
+        ):
+            verbose_logger.debug(
+                "Vertex AI context caching: cached content is below minimum token "
+                "count (%d). Skipping context caching.",
+                MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
+            )
+            return messages, optional_params, None
+
         tools = optional_params.pop("tools", None)
 
         ## AUTHORIZATION ##
@@ -455,13 +495,16 @@ class ContextCachingEndpoints(VertexBase):
             api_base=api_base,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         headers = {
             "Content-Type": "application/json",
         }
-        if token is not None:
+        if isinstance(token, dict):
+            headers.update(token)
+        elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
         if extra_headers is not None:
             headers.update(extra_headers)
@@ -487,7 +530,8 @@ class ContextCachingEndpoints(VertexBase):
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
-            vertex_auth_header=vertex_auth_header
+            vertex_auth_header=vertex_auth_header,
+            model=model,
         )
 
         if google_cache_name:

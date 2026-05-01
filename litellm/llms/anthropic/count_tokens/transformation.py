@@ -73,14 +73,10 @@ class AnthropicCountTokensConfig:
             "anthropic-version": "2023-06-01",
             "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
         }
-        headers, _ = optionally_handle_anthropic_oauth(
-            headers=headers, api_key=api_key
-        )
+        headers, _ = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         return headers
 
-    def validate_request(
-        self, model: str, messages: List[Dict[str, Any]]
-    ) -> None:
+    def validate_request(self, model: str, messages: List[Dict[str, Any]]) -> None:
         """
         Validate the incoming count tokens request.
 

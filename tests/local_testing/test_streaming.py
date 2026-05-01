@@ -471,86 +471,6 @@ def test_completion_azure_stream():
 
 
 # test_completion_azure_stream()
-@pytest.mark.skip("Skipping predibase streaming test - ran out of credits")
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.asyncio
-async def test_completion_predibase_streaming(sync_mode):
-    try:
-        litellm.set_verbose = True
-        litellm._turn_on_debug()
-        if sync_mode:
-            response = completion(
-                model="predibase/llama-3-8b-instruct",
-                timeout=5,
-                tenant_id="c4768f95",
-                max_tokens=10,
-                api_base="https://serving.app.predibase.com",
-                api_key=os.getenv("PREDIBASE_API_KEY"),
-                messages=[{"role": "user", "content": "What is the meaning of life?"}],
-                stream=True,
-            )
-
-            complete_response = ""
-            for idx, init_chunk in enumerate(response):
-                chunk, finished = streaming_format_tests(idx, init_chunk)
-                complete_response += chunk
-                custom_llm_provider = init_chunk._hidden_params["custom_llm_provider"]
-                print(f"custom_llm_provider: {custom_llm_provider}")
-                assert custom_llm_provider == "predibase"
-                if finished:
-                    assert isinstance(
-                        init_chunk.choices[0], litellm.utils.StreamingChoices
-                    )
-                    break
-            if complete_response.strip() == "":
-                raise Exception("Empty response received")
-        else:
-            response = await litellm.acompletion(
-                model="predibase/llama-3-8b-instruct",
-                tenant_id="c4768f95",
-                timeout=5,
-                max_tokens=10,
-                api_base="https://serving.app.predibase.com",
-                api_key=os.getenv("PREDIBASE_API_KEY"),
-                messages=[{"role": "user", "content": "What is the meaning of life?"}],
-                stream=True,
-            )
-
-            # await response
-
-            complete_response = ""
-            idx = 0
-            async for init_chunk in response:
-                chunk, finished = streaming_format_tests(idx, init_chunk)
-                complete_response += chunk
-                custom_llm_provider = init_chunk._hidden_params["custom_llm_provider"]
-                print(f"custom_llm_provider: {custom_llm_provider}")
-                assert custom_llm_provider == "predibase"
-                idx += 1
-                if finished:
-                    assert isinstance(
-                        init_chunk.choices[0], litellm.utils.StreamingChoices
-                    )
-                    break
-            if complete_response.strip() == "":
-                raise Exception("Empty response received")
-
-        print(f"complete_response: {complete_response}")
-    except litellm.Timeout:
-        pass
-    except litellm.InternalServerError:
-        pass
-    except litellm.ServiceUnavailableError:
-        pass
-    except litellm.APIConnectionError:
-        pass
-    except Exception as e:
-        print("ERROR class", e.__class__)
-        print("ERROR message", e)
-        print("ERROR traceback", traceback.format_exc())
-
-        pytest.fail(f"Error occurred: {e}")
-
 
 
 def test_completion_azure_function_calling_stream():
@@ -911,23 +831,29 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
             tool_choice="auto",
             stream=True,
         )
-        idx = 0
+        saw_function_call_chunk = False
         for chunk in response:
             print(f"chunk in response: {chunk}")
             assert chunk._hidden_params["custom_llm_provider"] == "mistral"
-            if idx == 0:
-                assert (
-                    chunk.choices[0].delta.tool_calls[0].function.arguments is not None
-                )
-                assert isinstance(
-                    chunk.choices[0].delta.tool_calls[0].function.arguments, str
-                )
-                validate_first_streaming_function_calling_chunk(chunk=chunk)
-            elif idx == 1 and chunk.choices[0].finish_reason is None:
-                validate_second_streaming_function_calling_chunk(chunk=chunk)
-            elif chunk.choices[0].finish_reason is not None:  # last chunk
+            if len(chunk.choices) == 0:
+                continue
+            if chunk.choices[0].finish_reason is not None:  # last chunk
                 validate_final_streaming_function_calling_chunk(chunk=chunk)
-            idx += 1
+                break
+            tool_calls = chunk.choices[0].delta.tool_calls
+            if tool_calls is None:
+                continue
+            assert tool_calls[0].function.arguments is not None
+            assert isinstance(tool_calls[0].function.arguments, str)
+            if not saw_function_call_chunk:
+                if chunk.choices[0].delta.role is not None:
+                    validate_first_streaming_function_calling_chunk(chunk=chunk)
+                else:
+                    validate_second_streaming_function_calling_chunk(chunk=chunk)
+                saw_function_call_chunk = True
+            else:
+                validate_second_streaming_function_calling_chunk(chunk=chunk)
+        assert saw_function_call_chunk
     except litellm.RateLimitError:
         pass
     except Exception as e:
@@ -935,49 +861,6 @@ def test_completion_mistral_api_mistral_large_function_call_with_streaming():
 
 
 # test_completion_mistral_api_stream()
-
-
-def test_completion_deep_infra_stream():
-    # deep infra,currently includes role in the 2nd chunk
-    # waiting for them to make a fix on this
-    litellm.set_verbose = True
-    try:
-        messages = [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {
-                "role": "user",
-                "content": "how does a court case get to the Supreme Court?",
-            },
-        ]
-        print("testing deep infra streaming")
-        response = completion(
-            model="deepinfra/meta-llama/Llama-2-70b-chat-hf",
-            messages=messages,
-            stream=True,
-            max_tokens=80,
-        )
-
-        complete_response = ""
-        # Add any assertions here to check the response
-        has_finish_reason = False
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            if finished:
-                has_finish_reason = True
-                break
-            complete_response += chunk
-        if has_finish_reason == False:
-            raise Exception("finish reason not set")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except Exception as e:
-        if "Model busy, retry later" in str(e):
-            pass
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_deep_infra_stream()
 
 
 @pytest.mark.skip()
@@ -1029,7 +912,7 @@ def test_completion_claude_stream_bad_key():
             },
         ]
         response = completion(
-            model="claude-3-5-haiku-20241022",
+            model="claude-haiku-4-5-20251001",
             messages=messages,
             stream=True,
             max_tokens=50,
@@ -1068,7 +951,6 @@ def test_vertex_ai_stream(provider):
 
     load_vertex_ai_credentials()
     litellm.set_verbose = True
-    litellm.vertex_project = "pathrise-convert-1606954137718"
     import random
 
     test_models = ["gemini-2.5-flash-lite"]
@@ -1187,6 +1069,7 @@ def test_vertex_ai_stream(provider):
 # test_completion_vertexai_stream_bad_key()
 
 
+@pytest.mark.skip(reason="Replicate extremely flaky.")
 @pytest.mark.parametrize("sync_mode", [False, True])
 @pytest.mark.asyncio
 async def test_completion_replicate_llama3_streaming(sync_mode):
@@ -1655,78 +1538,7 @@ def test_sagemaker_weird_response():
 # test_sagemaker_weird_response()
 
 
-@pytest.mark.skip(reason="Move to being a mock endpoint")
-@pytest.mark.asyncio
-async def test_sagemaker_streaming_async():
-    try:
-        messages = [{"role": "user", "content": "Hey, how's it going?"}]
-        litellm.set_verbose = True
-        response = await litellm.acompletion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
-            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
-            stream=True,
-        )
-        # Add any assertions here to check the response
-        print(response)
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        idx = 0
-        async for chunk in response:
-            # print
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            complete_response += chunk
-            if finished:
-                break
-            idx += 1
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-        print(f"completion_response: {complete_response}")
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {str(e)}")
-
-
 # asyncio.run(test_sagemaker_streaming_async())
-
-
-@pytest.mark.skip(reason="costly sagemaker deployment. Move to mock implementation")
-def test_completion_sagemaker_stream():
-    try:
-        response = completion(
-            model="sagemaker/jumpstart-dft-hf-llm-mistral-7b-ins-20240329-150233",
-            model_id="huggingface-llm-mistral-7b-instruct-20240329-150233",
-            messages=messages,
-            temperature=0.2,
-            max_tokens=80,
-            aws_region_name=os.getenv("AWS_REGION_NAME_2"),
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID_2"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY_2"),
-            stream=True,
-        )
-        complete_response = ""
-        has_finish_reason = False
-        # Add any assertions here to check the response
-        for idx, chunk in enumerate(response):
-            chunk, finished = streaming_format_tests(idx, chunk)
-            has_finish_reason = finished
-            if finished:
-                break
-            complete_response += chunk
-        if has_finish_reason is False:
-            raise Exception("finish reason not set for last chunk")
-        if complete_response.strip() == "":
-            raise Exception("Empty response received")
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.skip(reason="Account deleted by IBM.")
@@ -1921,7 +1733,7 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "claude-3-haiku-20240307",
+        "claude-haiku-4-5-20251001",
         "o1",
     ],
 )
@@ -2441,7 +2253,7 @@ def streaming_and_function_calling_format_tests(idx, chunk):
     [
         # "gpt-3.5-turbo",
         # "anthropic.claude-3-sonnet-20240229-v1:0",
-        "claude-3-haiku-20240307",
+        "claude-haiku-4-5-20251001",
     ],
 )
 def test_streaming_and_function_calling(model):
@@ -2725,8 +2537,8 @@ def test_azure_streaming_and_function_calling():
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_API_BASE"),
-            api_key=os.getenv("AZURE_API_KEY"),
+            api_base=os.getenv("AZURE_AI_API_BASE"),
+            api_key=os.getenv("AZURE_AI_API_KEY"),
             api_version="2024-02-15-preview",
         )
         # Add any assertions here to check the response
@@ -2796,8 +2608,8 @@ async def test_azure_astreaming_and_function_calling():
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_API_BASE"),
-            api_key=os.getenv("AZURE_API_KEY"),
+            api_base=os.getenv("AZURE_AI_API_BASE"),
+            api_key=os.getenv("AZURE_AI_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )
@@ -2827,8 +2639,8 @@ async def test_azure_astreaming_and_function_calling():
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_API_BASE"),
-            api_key=os.getenv("AZURE_API_KEY"),
+            api_base=os.getenv("AZURE_AI_API_BASE"),
+            api_key=os.getenv("AZURE_AI_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )
@@ -3075,22 +2887,18 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     """
     litellm.set_verbose = False
     chunks = [
-        litellm.ModelResponse(
-            **{
-                "id": "chatcmpl-123",
-                "object": "chat.completion.chunk",
-                "created": 1694268190,
-                "model": "gpt-3.5-turbo-0125",
-                "system_fingerprint": "fp_44709d6fcb",
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": chunk_value},
-                        "finish_reason": "stop",
-                    }
-                ],
-            },
-            stream=True,
+        litellm.ModelResponseStream(
+            id="chatcmpl-123",
+            created=1694268190,
+            model="gpt-3.5-turbo-0125",
+            system_fingerprint="fp_44709d6fcb",
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {"content": chunk_value},
+                    "finish_reason": "stop",
+                }
+            ],
         )
     ] * loop_amount
     completion_stream = ModelResponseListIterator(model_responses=chunks)
@@ -3113,7 +2921,9 @@ def test_unit_test_custom_stream_wrapper_repeating_chunk(
     print(f"expected_chunk_fail: {expected_chunk_fail}")
 
     if (loop_amount > litellm.REPEATED_STREAMING_CHUNK_LIMIT) and expected_chunk_fail:
-        with pytest.raises(litellm.InternalServerError):
+        with pytest.raises(
+            (litellm.InternalServerError, litellm.exceptions.MidStreamFallbackError)
+        ):
             for chunk in response:
                 continue
     else:

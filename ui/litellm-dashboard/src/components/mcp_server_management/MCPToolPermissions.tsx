@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import { listMCPTools } from "../networking";
 import { MCPTool, MCPServer } from "../mcp_tools/types";
 import { Text } from "@tremor/react";
-import { Spin, Checkbox } from "antd";
-import { XIcon } from "lucide-react";
+import { Spin, Radio } from "antd";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
+import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
+import { classifyToolOp } from "../../utils/mcpToolCrudClassification";
 
 interface MCPToolPermissionsProps {
   accessToken: string;
@@ -25,6 +26,15 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   const [serverTools, setServerTools] = useState<Record<string, MCPTool[]>>({});
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
+  const [viewModes, setViewModes] = useState<Record<string, "crud" | "flat">>({});
+
+  // Keep a ref to the latest toolPermissions so async fetch callbacks always
+  // read the current value and do not overwrite sibling servers' results when
+  // multiple fetches complete out-of-order (stale-closure race condition).
+  const toolPermissionsRef = useRef(toolPermissions);
+  useEffect(() => {
+    toolPermissionsRef.current = toolPermissions;
+  }, [toolPermissions]);
 
   // Filter servers based on selectedServers
   const servers = useMemo(() => {
@@ -32,19 +42,31 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     return allServers.filter((server: MCPServer) => selectedServers.includes(server.server_id));
   }, [allServers, selectedServers]);
 
-  // Fetch tools for a specific server
-  const fetchToolsForServer = async (serverId: string) => {
+  // Fetch tools for a specific server; applies delete-blocked-by-default for new servers.
+  // `token` is passed explicitly so the closure never captures a stale accessToken.
+  const fetchToolsForServer = async (serverId: string, token: string) => {
     setLoadingTools((prev) => ({ ...prev, [serverId]: true }));
     setToolErrors((prev) => ({ ...prev, [serverId]: "" }));
 
     try {
-      const response = await listMCPTools(accessToken, serverId);
+      const response = await listMCPTools(token, serverId);
 
       if (response.error) {
         setToolErrors((prev) => ({ ...prev, [serverId]: response.message || "Failed to fetch tools" }));
         setServerTools((prev) => ({ ...prev, [serverId]: [] }));
       } else {
-        setServerTools((prev) => ({ ...prev, [serverId]: response.tools || [] }));
+        const fetchedTools: MCPTool[] = response.tools || [];
+        setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
+
+        // For servers that have no permissions stored yet, block delete tools by default.
+        // Read latest permissions from the ref to avoid clobbering concurrent results.
+        const latestPermissions = toolPermissionsRef.current;
+        if (!latestPermissions[serverId] && fetchedTools.length > 0) {
+          const nonDeleteTools = fetchedTools
+            .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
+            .map((t) => t.name);
+          onChange({ ...latestPermissions, [serverId]: nonDeleteTools });
+        }
       }
     } catch (err) {
       console.error(`Error fetching tools for server ${serverId}:`, err);
@@ -55,44 +77,29 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
     }
   };
 
-  // Auto-fetch tools when servers change
+  // Auto-fetch tools when servers or accessToken change
   useEffect(() => {
     servers.forEach((server) => {
       if (!serverTools[server.server_id] && !loadingTools[server.server_id]) {
-        fetchToolsForServer(server.server_id);
+        fetchToolsForServer(server.server_id, accessToken);
       }
     });
-  }, [servers]);
+    // fetchToolsForServer is defined in this render scope but receives `accessToken`
+    // as an explicit argument, so it is safe to omit from deps here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [servers, accessToken]);
 
-  // Handle tool selection
-  const handleToolToggle = (serverId: string, toolName: string) => {
-    const currentTools = toolPermissions[serverId] || [];
-    const newTools = currentTools.includes(toolName)
-      ? currentTools.filter((name) => name !== toolName)
-      : [...currentTools, toolName];
-
-    const updatedPermissions = {
-      ...toolPermissions,
-      [serverId]: newTools,
-    };
-    onChange(updatedPermissions);
+  const handleCrudPanelChange = (serverId: string, allowed: string[]) => {
+    onChange({ ...toolPermissions, [serverId]: allowed });
   };
 
   const handleSelectAll = (serverId: string) => {
     const tools = serverTools[serverId] || [];
-    const newPermissions = {
-      ...toolPermissions,
-      [serverId]: tools.map((t) => t.name),
-    };
-    onChange(newPermissions);
+    onChange({ ...toolPermissions, [serverId]: tools.map((t) => t.name) });
   };
 
   const handleDeselectAll = (serverId: string) => {
-    const newPermissions = {
-      ...toolPermissions,
-      [serverId]: [],
-    };
-    onChange(newPermissions);
+    onChange({ ...toolPermissions, [serverId]: [] });
   };
 
   if (selectedServers.length === 0) {
@@ -107,6 +114,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const selectedTools = toolPermissions[server.server_id] || [];
         const isLoading = loadingTools[server.server_id];
         const error = toolErrors[server.server_id];
+        const viewMode = viewModes[server.server_id] ?? "crud";
 
         return (
           <div key={server.server_id} className="border rounded-lg bg-gray-50">
@@ -117,38 +125,46 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                 {server.description && <Text className="text-sm text-gray-500">{server.description}</Text>}
               </div>
               <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                  onClick={() => handleSelectAll(server.server_id)}
-                  disabled={disabled || isLoading}
-                >
-                  Select All
-                </button>
-                <button
-                  type="button"
-                  className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                  onClick={() => handleDeselectAll(server.server_id)}
-                  disabled={disabled || isLoading}
-                >
-                  Deselect All
-                </button>
-                <button
-                  type="button"
-                  className="text-gray-400 hover:text-gray-600"
-                  onClick={() => {
-                    // Handle remove server if needed
-                  }}
-                >
-                  <XIcon className="w-4 h-4" />
-                </button>
+                {!disabled && tools.length > 0 && (
+                  <Radio.Group
+                    value={viewMode}
+                    onChange={(e) =>
+                      setViewModes((prev) => ({ ...prev, [server.server_id]: e.target.value }))
+                    }
+                    size="small"
+                    optionType="button"
+                    buttonStyle="solid"
+                    options={[
+                      { label: "Risk Groups", value: "crud" },
+                      { label: "Flat List", value: "flat" },
+                    ]}
+                  />
+                )}
+                {!disabled && (
+                  <>
+                    <button
+                      type="button"
+                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      onClick={() => handleSelectAll(server.server_id)}
+                      disabled={isLoading}
+                    >
+                      Select All
+                    </button>
+                    <button
+                      type="button"
+                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                      onClick={() => handleDeselectAll(server.server_id)}
+                      disabled={isLoading}
+                    >
+                      Deselect All
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
             {/* Tools */}
             <div className="p-4">
-              <Text className="text-sm font-medium text-gray-700 mb-3">Available Tools</Text>
-
               {/* Loading */}
               {isLoading && (
                 <div className="flex items-center justify-center py-8">
@@ -165,23 +181,42 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                 </div>
               )}
 
-              {/* Tool List - Compact */}
-              {!isLoading && !error && tools.length > 0 && (
+              {/* CRUD grouped view */}
+              {!isLoading && !error && tools.length > 0 && viewMode === "crud" && (
+                <McpCrudPermissionPanel
+                  tools={tools}
+                  value={!toolPermissions[server.server_id] ? undefined : selectedTools}
+                  onChange={(allowed) => handleCrudPanelChange(server.server_id, allowed)}
+                  readOnly={disabled}
+                />
+              )}
+
+              {/* Flat list view */}
+              {!isLoading && !error && tools.length > 0 && viewMode === "flat" && (
                 <div className="space-y-2">
                   {tools.map((tool) => {
                     const isSelected = selectedTools.includes(tool.name);
-
                     return (
                       <div key={tool.name} className="flex items-start gap-2">
-                        <Checkbox
+                        <input
+                          type="checkbox"
                           checked={isSelected}
-                          onChange={() => handleToolToggle(server.server_id, tool.name)}
+                          onChange={() => {
+                            if (disabled) return;
+                            const next = isSelected
+                              ? selectedTools.filter((n) => n !== tool.name)
+                              : [...selectedTools, tool.name];
+                            handleCrudPanelChange(server.server_id, next);
+                          }}
                           disabled={disabled}
+                          className="mt-0.5"
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <Text className="font-medium text-gray-900">{tool.name}</Text>
-                            <Text className="text-sm text-gray-500">- {tool.description || "No description"}</Text>
+                            <Text className="text-sm text-gray-500">
+                              - {tool.description || "No description"}
+                            </Text>
                           </div>
                         </div>
                       </div>

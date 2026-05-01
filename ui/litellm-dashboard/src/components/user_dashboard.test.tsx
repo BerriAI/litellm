@@ -21,7 +21,14 @@ vi.mock("./networking", async (importOriginal) => {
     getProxyUISettings: vi.fn().mockResolvedValue({}),
     keyInfoCall: vi.fn().mockResolvedValue({}),
     modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
-    userInfoCall: vi.fn().mockResolvedValue({ user_info: {}, keys: [], teams: [] }),
+    userGetInfoV2: vi.fn().mockResolvedValue({
+      user_id: "user-1",
+      user_email: "test@example.com",
+      spend: 0,
+      max_budget: null,
+      models: [],
+      teams: [],
+    }),
   };
 });
 
@@ -38,6 +45,7 @@ vi.mock("jwt-decode", () => ({
 // Mock cookie utility
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
+  getCookie: vi.fn().mockReturnValue("fake-jwt-token"),
 }));
 
 // Mock fetchTeams

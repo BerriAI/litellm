@@ -1,6 +1,7 @@
 """
 Main OCR function for LiteLLM.
 """
+
 import asyncio
 import base64
 import contextvars
@@ -262,11 +263,11 @@ def ocr(
             api_base = dynamic_api_base
 
         # Get provider config
-        ocr_provider_config: Optional[
-            BaseOCRConfig
-        ] = ProviderConfigManager.get_provider_ocr_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+        ocr_provider_config: Optional[BaseOCRConfig] = (
+            ProviderConfigManager.get_provider_ocr_config(
+                model=model,
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
         )
 
         if ocr_provider_config is None:
@@ -298,7 +299,8 @@ def ocr(
         verbose_logger.debug(f"OCR optional_params after mapping: {optional_params}")
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             optional_params=optional_params,
             litellm_params={

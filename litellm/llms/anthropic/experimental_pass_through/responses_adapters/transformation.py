@@ -8,6 +8,9 @@ path used for OpenAI and Azure models.
 import json
 from typing import Any, Dict, List, Optional, Union, cast
 
+from litellm.llms.anthropic.experimental_pass_through.utils import (
+    is_reasoning_auto_summary_enabled,
+)
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
@@ -75,11 +78,13 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
             if role == "user":
                 if isinstance(content, str):
-                    input_items.append({
-                        "type": "message",
-                        "role": "user",
-                        "content": [{"type": "input_text", "text": content}],
-                    })
+                    input_items.append(
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": content}],
+                        }
+                    )
                 elif isinstance(content, list):
                     user_parts: List[Dict[str, Any]] = []
                     for block in content:
@@ -87,11 +92,17 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             continue
                         btype = block.get("type")
                         if btype == "text":
-                            user_parts.append({"type": "input_text", "text": block.get("text", "")})
+                            user_parts.append(
+                                {"type": "input_text", "text": block.get("text", "")}
+                            )
                         elif btype == "image":
-                            url = self._translate_anthropic_image_source_to_url(block.get("source", {}))
+                            url = self._translate_anthropic_image_source_to_url(
+                                cast(dict, block.get("source", {}))
+                            )
                             if url:
-                                user_parts.append({"type": "input_image", "image_url": url})
+                                user_parts.append(
+                                    {"type": "input_image", "image_url": url}
+                                )
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
@@ -109,25 +120,31 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             else:
                                 output_text = str(inner)
                             # tool_result is a top-level item, not inside the message
-                            input_items.append({
-                                "type": "function_call_output",
-                                "call_id": tool_use_id,
-                                "output": output_text,
-                            })
+                            input_items.append(
+                                {
+                                    "type": "function_call_output",
+                                    "call_id": tool_use_id,
+                                    "output": output_text,
+                                }
+                            )
                     if user_parts:
-                        input_items.append({
-                            "type": "message",
-                            "role": "user",
-                            "content": user_parts,
-                        })
+                        input_items.append(
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": user_parts,
+                            }
+                        )
 
             elif role == "assistant":
                 if isinstance(content, str):
-                    input_items.append({
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": content}],
-                    })
+                    input_items.append(
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": content}],
+                        }
+                    )
                 elif isinstance(content, list):
                     asst_parts: List[Dict[str, Any]] = []
                     for block in content:
@@ -135,25 +152,33 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             continue
                         btype = block.get("type")
                         if btype == "text":
-                            asst_parts.append({"type": "output_text", "text": block.get("text", "")})
+                            asst_parts.append(
+                                {"type": "output_text", "text": block.get("text", "")}
+                            )
                         elif btype == "tool_use":
                             # tool_use becomes a top-level function_call item
-                            input_items.append({
-                                "type": "function_call",
-                                "call_id": block.get("id", ""),
-                                "name": block.get("name", ""),
-                                "arguments": json.dumps(block.get("input", {})),
-                            })
+                            input_items.append(
+                                {
+                                    "type": "function_call",
+                                    "call_id": block.get("id", ""),
+                                    "name": block.get("name", ""),
+                                    "arguments": json.dumps(block.get("input", {})),
+                                }
+                            )
                         elif btype == "thinking":
                             thinking_text = block.get("thinking", "")
                             if thinking_text:
-                                asst_parts.append({"type": "output_text", "text": thinking_text})
+                                asst_parts.append(
+                                    {"type": "output_text", "text": thinking_text}
+                                )
                     if asst_parts:
-                        input_items.append({
-                            "type": "message",
-                            "role": "assistant",
-                            "content": asst_parts,
-                        })
+                        input_items.append(
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": asst_parts,
+                            }
+                        )
 
         return input_items
 
@@ -168,7 +193,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             tool_type = tool_dict.get("type", "")
             tool_name = tool_dict.get("name", "")
             # web_search tool
-            if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
+            if (
+                isinstance(tool_type, str) and tool_type.startswith("web_search")
+            ) or tool_name == "web_search":
                 result.append({"type": "web_search_preview"})
                 continue
             func_tool: Dict[str, Any] = {"type": "function", "name": tool_name}
@@ -223,25 +250,50 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return result if result else None
 
     @staticmethod
-    def translate_thinking_to_reasoning(thinking: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def translate_thinking_to_reasoning(
+        thinking: Dict[str, Any],
+        output_config: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Convert Anthropic thinking param to Responses API reasoning param.
 
         thinking.budget_tokens maps to reasoning effort:
           >= 10000 -> high, >= 5000 -> medium, >= 2000 -> low, < 2000 -> minimal
+
+        For adaptive thinking, uses output_config.effort if available,
+        otherwise defaults to medium.
         """
-        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+        if not isinstance(thinking, dict):
             return None
-        budget = thinking.get("budget_tokens", 0)
-        if budget >= 10000:
-            effort = "high"
-        elif budget >= 5000:
+
+        thinking_type = thinking.get("type")
+
+        if thinking_type == "adaptive":
+            # Use output_config.effort if available
             effort = "medium"
-        elif budget >= 2000:
-            effort = "low"
+            if isinstance(output_config, dict) and output_config.get("effort"):
+                effort = output_config["effort"]
+        elif thinking_type == "enabled":
+            budget = thinking.get("budget_tokens", 0)
+            if budget >= 10000:
+                effort = "high"
+            elif budget >= 5000:
+                effort = "medium"
+            elif budget >= 2000:
+                effort = "low"
+            else:
+                effort = "minimal"
         else:
-            effort = "minimal"
-        return {"effort": effort, "summary": "detailed"}
+            return None
+
+        auto_summary = is_reasoning_auto_summary_enabled()
+        result: Dict[str, Any] = {"effort": effort}
+        summary = thinking.get("summary")
+        if summary:
+            result["summary"] = summary
+        elif auto_summary:
+            result["summary"] = "detailed"
+        return result
 
     def translate_request(
         self,
@@ -253,7 +305,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """
         model: str = anthropic_request["model"]
         messages_list = cast(
-            List[Union[AnthropicMessagesUserMessageParam, AnthopicMessagesAssistantMessageParam]],
+            List[
+                Union[
+                    AnthropicMessagesUserMessageParam,
+                    AnthopicMessagesAssistantMessageParam,
+                ]
+            ],
             anthropic_request["messages"],
         )
 
@@ -296,14 +353,20 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # tool_choice
         tool_choice = anthropic_request.get("tool_choice")
         if tool_choice:
-            responses_kwargs["tool_choice"] = self.translate_tool_choice_to_responses_api(
-                cast(AnthropicMessagesToolChoice, tool_choice)
+            responses_kwargs["tool_choice"] = (
+                self.translate_tool_choice_to_responses_api(
+                    cast(AnthropicMessagesToolChoice, tool_choice)
+                )
             )
 
         # thinking -> reasoning
         thinking = anthropic_request.get("thinking")
         if isinstance(thinking, dict):
-            reasoning = self.translate_thinking_to_reasoning(thinking)
+            output_config = anthropic_request.get("output_config")
+            reasoning = self.translate_thinking_to_reasoning(
+                thinking,
+                output_config=cast(Optional[Dict[str, Any]], output_config),
+            )
             if reasoning:
                 responses_kwargs["reasoning"] = reasoning
 
@@ -314,7 +377,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         output_config = anthropic_request.get("output_config")
         if not isinstance(output_format, dict) and isinstance(output_config, dict):
             output_format = output_config.get("format")  # type: ignore[assignment]
-        if isinstance(output_format, dict) and output_format.get("type") == "json_schema":
+        if (
+            isinstance(output_format, dict)
+            and output_format.get("type") == "json_schema"
+        ):
             schema = output_format.get("schema")
             if schema:
                 responses_kwargs["text"] = {
@@ -329,7 +395,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         # context_management: Anthropic dict -> OpenAI array
         context_management = anthropic_request.get("context_management")
         if isinstance(context_management, dict):
-            openai_cm = self.translate_context_management_to_responses_api(context_management)
+            openai_cm = self.translate_context_management_to_responses_api(
+                context_management
+            )
             if openai_cm is not None:
                 responses_kwargs["context_management"] = openai_cm
 

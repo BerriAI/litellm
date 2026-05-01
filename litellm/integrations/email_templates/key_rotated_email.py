@@ -222,4 +222,3 @@ response = client.chat.completions.create(<br>
 </body>
 </html>
 """
-

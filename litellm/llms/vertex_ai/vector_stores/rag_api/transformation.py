@@ -100,6 +100,7 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Transform search request for Vertex AI RAG API
@@ -162,7 +163,6 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         Transform Vertex AI RAG API response to standard vector store search response
         """
         try:
-
             response_json = response.json()
             # Extract contexts from Vertex AI response - handle nested structure
             contexts = response_json.get("contexts", {}).get("contexts", [])

@@ -38,7 +38,7 @@ async def acreate(
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
     container: Optional[Dict] = None,
-    **kwargs
+    **kwargs,
 ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
     Async wrapper for Anthropic's messages API
@@ -97,7 +97,7 @@ def create(
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
     container: Optional[Dict] = None,
-    **kwargs
+    **kwargs,
 ) -> Union[
     AnthropicMessagesResponse,
     AsyncIterator[Any],

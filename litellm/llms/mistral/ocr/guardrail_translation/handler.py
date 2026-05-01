@@ -91,6 +91,7 @@ class OCRHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional[Any] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process OCR output by applying guardrails to extracted page text.
@@ -108,9 +109,7 @@ class OCRHandler(BaseTranslation):
             Modified OCRResponse with guardrailed page text
         """
         if not hasattr(response, "pages") or not response.pages:
-            verbose_proxy_logger.debug(
-                "OCR guardrail: No pages found in OCR response"
-            )
+            verbose_proxy_logger.debug("OCR guardrail: No pages found in OCR response")
             return response
 
         # Extract markdown text from all pages
@@ -129,14 +128,27 @@ class OCRHandler(BaseTranslation):
         if model:
             inputs["model"] = model
 
+        # Use the real request_data if provided (proxy path), otherwise
+        # create a standalone dict (SDK / direct-call path).
+        if request_data is None:
+            request_data = {}
+
         # Add user metadata if available
         if user_api_key_dict is not None:
-            metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-            inputs.update(metadata)  # type: ignore
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                # Preserve original behavior: inject metadata into inputs for
+                # third-party guardrail providers that read it from there
+                inputs.update(user_metadata)  # type: ignore
+                # Also store in request_data for the logging pipeline
+                if "litellm_metadata" not in request_data:
+                    request_data["litellm_metadata"] = user_metadata
 
         guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
-            request_data={},
+            request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
         )

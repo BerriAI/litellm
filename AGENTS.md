@@ -23,9 +23,10 @@ LiteLLM is a unified interface for 100+ LLMs that:
 
 ### Key Directories
 - `tests/` - Comprehensive test suites
-- `docs/my-website/` - Documentation website
 - `ui/litellm-dashboard/` - Admin dashboard UI
 - `enterprise/` - Enterprise-specific features
+
+Documentation lives in the separate [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs) repository and is served at [docs.litellm.ai](https://docs.litellm.ai).
 
 ## DEVELOPMENT GUIDELINES
 
@@ -51,7 +52,9 @@ LiteLLM is a unified interface for 100+ LLMs that:
 
 ### MAKING CODE CHANGES FOR THE UI (IGNORE FOR BACKEND)
 
-1. **Tremor is DEPRECATED, do not use Tremor components in new features/changes**
+1. **Always use `antd` for new UI components — Tremor is DEPRECATED**
+   - We are migrating off of `@tremor/react`. Do not introduce new `Badge`, `Text`, `Card`, `Grid`, `Title`, or other imports from `@tremor/react` in any new or modified file.
+   - Use `antd` equivalents: `Tag` for labels, plain `<span>`/`<div>` with Tailwind classes (or `Typography.Text`) for text, `Card` from `antd`, etc. Note that `antd` has no `"yellow"` Tag color — use `"gold"` for amber/yellow.
    - The only exception is the Tremor Table component and its required Tremor Table sub components.
 
 2. **Use Common Components as much as possible**:
@@ -109,6 +112,8 @@ Key files:
 - `litellm/proxy/auth/` - Authentication logic
 - `litellm/proxy/management_endpoints/` - Admin API endpoints
 
+**Database (proxy)**: Use Prisma model methods (`prisma_client.db.<model>.upsert`, `.find_many`, `.find_unique`, etc.), not raw SQL (`execute_raw`/`query_raw`). See COMMON PITFALLS for details.
+
 ## MCP (MODEL CONTEXT PROTOCOL) SUPPORT
 
 LiteLLM supports MCP for agent workflows:
@@ -119,7 +124,7 @@ LiteLLM supports MCP for agent workflows:
 
 ## RUNNING SCRIPTS
 
-Use `poetry run python script.py` to run Python scripts in the project environment (for non-test files).
+Use `uv run python script.py` to run Python scripts in the project environment (for non-test files).
 
 ## GITHUB TEMPLATES
 
@@ -176,6 +181,7 @@ When opening issues or pull requests, follow these templates:
 5. **Dependencies**: Keep dependencies minimal and well-justified
 6. **UI/Backend Contract Mismatch**: When adding a new entity type to the UI, always check whether the backend endpoint accepts a single value or an array. Match the UI control accordingly (single-select vs. multi-select) to avoid silently dropping user selections
 7. **Missing Tests for New Entity Types**: When adding a new entity type (e.g., in `EntityUsage`, `UsageViewSelect`), always add corresponding tests in the existing test files and update any icon/component mocks
+8. **Raw SQL in proxy DB code**: Do not use `execute_raw` or `query_raw` for proxy database access. Use Prisma model methods (e.g. `prisma_client.db.litellm_tooltable.upsert()`, `.find_many()`, `.find_unique()`) so behavior stays consistent with the schema, the client stays mockable in tests, and you avoid the pitfalls of hand-written SQL (parameter ordering, type casting, schema drift)
 
 8. **Do not hardcode model-specific flags**: Put model-specific capability flags in `model_prices_and_context_window.json` and read them via `get_model_info` (or existing helpers like `supports_reasoning`). This prevents users from needing to upgrade LiteLLM each time a new model supports a feature.
 
@@ -209,10 +215,12 @@ When opening issues or pull requests, follow these templates:
 
    Using helpers like `supports_reasoning` (which read from `model_prices_and_context_window.json` / `get_model_info`) allows future model updates to "just work" without code changes.
 
+9. **Never close HTTP/SDK clients on cache eviction**: Do not add `close()`, `aclose()`, or `create_task(close_fn())` inside `LLMClientCache._remove_key()` or any cache eviction path. Evicted clients may still be held by in-flight requests; closing them causes `RuntimeError: Cannot send a request, as the client has been closed.` in production after the cache TTL (1 hour) expires. Connection cleanup is handled at shutdown by `close_litellm_async_clients()`. See PR #22247 for the full incident history.
+
 ## HELPFUL RESOURCES
 
-- Main documentation: https://docs.litellm.ai/
-- Provider-specific docs in `docs/my-website/docs/providers/`
+- Main documentation: https://docs.litellm.ai/ (source: [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs))
+- Provider-specific docs: https://docs.litellm.ai/docs/providers/
 - Admin UI for testing proxy features
 
 ## WHEN IN DOUBT
@@ -227,16 +235,16 @@ When opening issues or pull requests, follow these templates:
 
 ### Environment
 
-- Poetry is installed in `~/.local/bin`; the update script ensures it is on `PATH`.
+- uv is installed in `~/.local/bin`; the update script ensures it is on `PATH`.
 - Python 3.12, Node 22 are pre-installed.
-- The virtual environment lives under `~/.cache/pypoetry/virtualenvs/`.
+- The project virtual environment lives under `.venv/`.
 
 ### Running the proxy server
 
 Start the proxy with a config file:
 
 ```bash
-poetry run litellm --config dev_config.yaml --port 4000
+uv run litellm --config dev_config.yaml --port 4000
 ```
 
 The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot). Wait for `/health` to return before sending requests. Without a PostgreSQL `DATABASE_URL`, the proxy connects to a default Neon dev database embedded in the `litellm-proxy-extras` package.
@@ -245,15 +253,16 @@ The proxy takes ~15-20 seconds to fully start (it runs Prisma migrations on boot
 
 See `CLAUDE.md` and the `Makefile` for standard commands. Key notes:
 
-- `psycopg-binary` must be installed (`poetry run pip install psycopg-binary`) because the pytest-postgresql plugin requires it and the lock file only includes `psycopg` (no binary).
+- `uv sync --group proxy-dev --extra proxy` installs the Prisma and proxy-side test dependencies used by the standard local workflow.
 - The `--timeout` pytest flag is NOT available; don't pass it.
-- Unit tests: `poetry run pytest tests/test_litellm/ -x -vv -n 4`
-- Black `--check` may report pre-existing formatting issues; this does not block test runs.
+- Unit tests: `uv run pytest tests/test_litellm/ -x -vv -n 4`
+- **Before committing, always run `uv run black .` to format your code.** Black formatting is enforced in CI.
+- If `uv sync` fails because the lockfile is outdated, run `uv lock` and retry.
 
 ### Lint
 
 ```bash
-cd litellm && poetry run ruff check .
+cd litellm && uv run ruff check .
 ```
 
 Ruff is the primary fast linter. For the full lint suite (including mypy, black, circular imports), run `make lint` per `CLAUDE.md`.

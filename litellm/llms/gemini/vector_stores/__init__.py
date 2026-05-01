@@ -3,4 +3,3 @@
 from .transformation import GeminiVectorStoreConfig
 
 __all__ = ["GeminiVectorStoreConfig"]
-

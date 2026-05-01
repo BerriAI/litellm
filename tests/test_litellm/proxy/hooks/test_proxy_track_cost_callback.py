@@ -170,6 +170,68 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj():
+    """
+    When an LLM call fails, the proxy calls post_call_failure_hook with
+    request_data that doesn't contain standard_logging_object. But the
+    litellm_logging_obj (set by function_setup) is in request_data and
+    holds the standard_logging_object with the correct trace_id.
+
+    The failure hook should propagate this so the DB spend log's session_id
+    matches the Langfuse trace_id.
+    """
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id="test_team_id",
+    )
+
+    # Simulate a litellm_logging_obj with model_call_details containing
+    # the standard_logging_object (as set by _failure_handler_helper_fn)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.litellm_trace_id = "trace-id-from-logging-obj"
+    mock_logging_obj.model_call_details = {
+        "standard_logging_object": {
+            "trace_id": "trace-id-from-logging-obj",
+            "error_str": "InternalServerError",
+        }
+    }
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "litellm_params": {},
+        "litellm_logging_obj": mock_logging_obj,
+        # Note: no "standard_logging_object" and no "litellm_trace_id"
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Provider error"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+        call_kwargs = mock_update_database.call_args[1]["kwargs"]
+
+        # standard_logging_object should have been propagated from logging obj
+        assert call_kwargs.get("standard_logging_object") is not None
+        assert (
+            call_kwargs["standard_logging_object"]["trace_id"]
+            == "trace-id-from-logging-obj"
+        )
+        # litellm_trace_id should also be propagated as a fallback
+        assert call_kwargs.get("litellm_trace_id") == "trace-id-from-logging-obj"
+
+
+@pytest.mark.asyncio
 async def test_enrich_failure_metadata_with_team_alias():
     """
     When team_id is set but team_alias is missing (and key_alias is present),
@@ -210,14 +272,17 @@ async def test_enrich_failure_metadata_with_full_key_lookup():
     mock_team_obj = MagicMock()
     mock_team_obj.team_alias = "fetched-team-alias"
 
-    with patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
-        new_callable=AsyncMock,
-        return_value=mock_key_obj,
-    ), patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
-        new_callable=AsyncMock,
-        return_value=mock_team_obj,
+    with (
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+            return_value=mock_key_obj,
+        ),
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ),
     ):
         metadata = {
             "user_api_key": "hashed_key",
@@ -241,13 +306,16 @@ async def test_enrich_failure_metadata_skips_when_team_alias_present():
     When team_alias is already populated, _enrich_failure_metadata_with_key_info
     should not perform a team cache lookup.
     """
-    with patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
-        new_callable=AsyncMock,
-    ) as mock_get_key, patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
-        new_callable=AsyncMock,
-    ) as mock_get_team:
+    with (
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+        ) as mock_get_key,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team,
+    ):
         metadata = {
             "user_api_key": "hashed_key",
             "user_api_key_alias": "existing-alias",
@@ -311,17 +379,21 @@ async def test_async_post_call_failure_hook_enriches_auth_error_metadata():
     mock_team_obj = MagicMock()
     mock_team_obj.team_alias = "my-team-alias"
 
-    with patch(
-        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
-        new_callable=AsyncMock,
-    ) as mock_update_database, patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
-        new_callable=AsyncMock,
-        return_value=mock_key_obj,
-    ), patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
-        new_callable=AsyncMock,
-        return_value=mock_team_obj,
+    with (
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+            return_value=mock_key_obj,
+        ),
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ),
     ):
         await logger.async_post_call_failure_hook(
             request_data=request_data,
@@ -365,13 +437,16 @@ async def test_async_post_call_failure_hook_enriches_missing_team_alias():
     mock_team_obj = MagicMock()
     mock_team_obj.team_alias = "enriched-team-alias"
 
-    with patch(
-        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
-        new_callable=AsyncMock,
-    ) as mock_update_database, patch(
-        "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
-        new_callable=AsyncMock,
-        return_value=mock_team_obj,
+    with (
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ),
     ):
         await logger.async_post_call_failure_hook(
             request_data=request_data,
@@ -417,3 +492,67 @@ async def test_track_cost_callback_skips_for_falsy_model_and_no_slo(model_value)
         )
 
         mock_proxy_logging.failed_tracking_alert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_uses_actual_start_time():
+    """
+    Verify that failed requests record the actual request start time
+    instead of datetime.now(), so the spend log shows the real duration.
+
+    Previously both start_time and end_time were set to datetime.now()
+    at failure-logging time, resulting in duration=0 for all failures.
+    """
+    from datetime import timedelta
+
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id="test_team_id",
+        org_id="test_org_id",
+        end_user_id="test_end_user_id",
+    )
+
+    # Simulate a request that started 60 seconds ago
+    simulated_start = datetime.now() - timedelta(seconds=60)
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.start_time = simulated_start
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.litellm_trace_id = None
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "proxy_server_request": {},
+        "litellm_logging_obj": mock_logging_obj,
+    }
+
+    original_exception = Exception("Timeout error")
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+        call_args = mock_update_database.call_args[1]
+
+        # start_time should be the simulated start, not datetime.now()
+        assert call_args["start_time"] == simulated_start
+
+        # end_time should be close to now (within a few seconds)
+        time_diff = (datetime.now() - call_args["end_time"]).total_seconds()
+        assert time_diff < 5, f"end_time should be close to now, was {time_diff}s ago"
+
+        # Duration should be approximately 60 seconds, not 0
+        duration = (call_args["end_time"] - call_args["start_time"]).total_seconds()
+        assert duration >= 55, f"Duration should be ~60s, got {duration}s"

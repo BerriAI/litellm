@@ -211,6 +211,23 @@
         "a2a": false
       }
     },
+    "aihubmix": {
+      "display_name": "AIHubMix (`aihubmix`)",
+      "url": "https://docs.litellm.ai/docs/providers/aihubmix",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": true,
+        "audio_speech": true,
+        "moderations": true,
+        "batches": false,
+        "rerank": true,
+        "a2a": false
+      }
+    },
     "assemblyai": {
       "display_name": "AssemblyAI (`assemblyai`)",
       "url": "https://docs.litellm.ai/docs/pass_through/assembly_ai",
@@ -474,6 +491,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "charity_engine": {
+      "display_name": "Charity Engine (`charity_engine`)",
+      "url": "https://docs.litellm.ai/docs/providers/charity_engine",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "chutes": {
@@ -1968,7 +2003,7 @@
         "responses": true,
         "embeddings": false,
         "image_generations": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,
@@ -2075,6 +2110,13 @@
     "tavily": {
       "display_name": "Tavily (`tavily`)",
       "url": "https://docs.litellm.ai/docs/search/tavily",
+      "endpoints": {
+        "search": true
+      }
+    },
+    "serper": {
+      "display_name": "Serper (`serper`)",
+      "url": "https://docs.litellm.ai/docs/search/serper",
       "endpoints": {
         "search": true
       }
@@ -2493,6 +2535,74 @@
         "chat_completions": true,
         "messages": true,
         "responses": true
+      }
+    },
+    "bedrock_mantle": {
+      "display_name": "Bedrock Mantle (`bedrock_mantle`)",
+      "url": "https://docs.litellm.ai/docs/providers/bedrock",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
+    "searchapi": {
+      "display_name": "SearchAPI (`searchapi`)",
+      "url": "https://docs.litellm.ai/docs/providers/searchapi",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true,
+        "a2a": false
+      }
+    },
+    "black_forest_labs": {
+      "display_name": "Black Forest Labs (`black_forest_labs`)",
+      "url": "https://docs.litellm.ai/docs/providers/black_forest_labs",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": true,
+        "image_edits": true,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
+    "charity_engine": {
+      "display_name": "Charity Engine (`charity_engine`)",
+      "url": "https://docs.litellm.ai/docs/providers/charity_engine",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
       }
     }
   },

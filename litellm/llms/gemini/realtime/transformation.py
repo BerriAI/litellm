@@ -85,6 +85,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             raise ValueError("api_key is required for Gemini API calls")
         api_base = api_base.replace("https://", "wss://")
         api_base = api_base.replace("http://", "ws://")
+        # WebSocket connections do not support custom HTTP headers in all clients,
+        # so the API key must remain as a query parameter here. This is an accepted
+        # limitation; httpx is not used for WebSocket so MaskedHTTPStatusError
+        # already covers the main leak vector.
         return f"{api_base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
 
     def map_model_turn_event(
@@ -235,9 +239,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 optional_params={}, non_default_params=json_message["session"]
             )
             client_session_configuration_request["model"] = f"models/{model}"
-            messages.append(
-                json.dumps({"setup": client_session_configuration_request})
-            )
+            messages.append(json.dumps({"setup": client_session_configuration_request}))
             return messages
 
         ## HANDLE response.create — Gemini responds automatically; nothing to forward ##
@@ -320,7 +322,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             if "/models/" in _model:
                 session["model"] = _model.split("/models/")[-1]
             elif _model.startswith("models/"):
-                session["model"] = _model[len("models/"):]
+                session["model"] = _model[len("models/") :]
             else:
                 session["model"] = _model
 
@@ -779,8 +781,12 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
             # Use IDs from the done event — transform_content_done_event may have
             # generated UUID fallbacks when the originals were None.
-            resolved_item_id = transformed_content_done_event.get("item_id") or current_output_item_id
-            resolved_response_id = transformed_content_done_event.get("response_id") or current_response_id
+            resolved_item_id = (
+                transformed_content_done_event.get("item_id") or current_output_item_id
+            )
+            resolved_response_id = (
+                transformed_content_done_event.get("response_id") or current_response_id
+            )
 
             additional_items = self.return_additional_content_done_events(
                 current_output_item_id=resolved_item_id,
@@ -875,32 +881,45 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             input_tx = server_content.get("inputTranscription")
             if isinstance(input_tx, dict) and input_tx.get("text"):
                 returned_message.append(
-                    cast(OpenAIRealtimeEvents, {
-                        "type": "conversation.item.input_audio_transcription.completed",
-                        "event_id": "event_{}".format(uuid.uuid4()),
-                        "transcript": input_tx["text"],
-                        "item_id": "item_{}".format(uuid.uuid4()),
-                        "content_index": 0,
-                    })
+                    cast(
+                        OpenAIRealtimeEvents,
+                        {
+                            "type": "conversation.item.input_audio_transcription.completed",
+                            "event_id": "event_{}".format(uuid.uuid4()),
+                            "transcript": input_tx["text"],
+                            "item_id": "item_{}".format(uuid.uuid4()),
+                            "content_index": 0,
+                        },
+                    )
                 )
 
             output_tx = server_content.get("outputTranscription")
             if isinstance(output_tx, dict) and output_tx.get("text"):
                 returned_message.append(
-                    cast(OpenAIRealtimeEvents, {
-                        "type": "response.audio_transcript.delta",
-                        "event_id": "event_{}".format(uuid.uuid4()),
-                        "delta": output_tx["text"],
-                        "item_id": current_output_item_id or "item_{}".format(uuid.uuid4()),
-                        "response_id": current_response_id or "resp_{}".format(uuid.uuid4()),
-                        "output_index": 0,
-                        "content_index": 0,
-                    })
+                    cast(
+                        OpenAIRealtimeEvents,
+                        {
+                            "type": "response.audio_transcript.delta",
+                            "event_id": "event_{}".format(uuid.uuid4()),
+                            "delta": output_tx["text"],
+                            "item_id": current_output_item_id
+                            or "item_{}".format(uuid.uuid4()),
+                            "response_id": current_response_id
+                            or "resp_{}".format(uuid.uuid4()),
+                            "output_index": 0,
+                            "content_index": 0,
+                        },
+                    )
                 )
 
             # If serverContent only contained transcription(s) and no model
             # content, return early — the main loop would fail on unknown keys.
-            _model_content_keys = {"modelTurn", "turnComplete", "interrupted", "generationComplete"}
+            _model_content_keys = {
+                "modelTurn",
+                "turnComplete",
+                "interrupted",
+                "generationComplete",
+            }
             if not any(k in server_content for k in _model_content_keys):
                 return {
                     "response": returned_message,

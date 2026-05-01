@@ -593,6 +593,7 @@ async def cancel_eval(
             version=version,
         )
 
+
 # ===================================
 # Run API Endpoints
 # ===================================
@@ -659,7 +660,11 @@ async def create_run(
         request.headers.get("x-litellm-model")
         or request.query_params.get("model")
         or data.get("model")
-        or (data.get("completion", {}).get("model") if isinstance(data.get("completion"), dict) else None)
+        or (
+            data.get("completion", {}).get("model")
+            if isinstance(data.get("completion"), dict)
+            else None
+        )
     )
     if model:
         data["model"] = model
@@ -753,9 +758,7 @@ async def list_runs(
     }
 
     # Extract model for routing (header > query)
-    model = request.headers.get("x-litellm-model") or request.query_params.get(
-        "model"
-    )
+    model = request.headers.get("x-litellm-model") or request.query_params.get("model")
     if model:
         data["model"] = model
 
@@ -842,9 +845,7 @@ async def get_run(
     }
 
     # Extract model for routing (header > query)
-    model = request.headers.get("x-litellm-model") or request.query_params.get(
-        "model"
-    )
+    model = request.headers.get("x-litellm-model") or request.query_params.get("model")
     if model:
         data["model"] = model
 

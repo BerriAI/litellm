@@ -1,7 +1,8 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AgentsPanel from "./agents";
+import * as networking from "./networking";
 
 vi.mock("./networking", () => ({
   getAgentsList: vi.fn().mockResolvedValue({ agents: [] }),
@@ -18,6 +19,8 @@ vi.mock("./agents/agent_card_grid", () => ({
     <div data-testid="agent-card-grid" data-is-admin={String(isAdmin)} />
   ),
 }));
+
+// Note: agents.tsx no longer uses AgentCardGrid — it renders a Table directly.
 
 vi.mock("./agents/agent_info", () => ({
   default: () => <div data-testid="agent-info" />,
@@ -53,19 +56,52 @@ describe("AgentsPanel", () => {
     expect(screen.queryByText("+ Add New Agent")).not.toBeInTheDocument();
   });
 
-  it("should pass isAdmin=true to AgentCardGrid for admin role", async () => {
+  it("should show Actions column header for admin role", async () => {
     render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
     await waitFor(() => {
-      const grid = screen.getByTestId("agent-card-grid");
-      expect(grid).toHaveAttribute("data-is-admin", "true");
+      expect(screen.getByRole("columnheader", { name: /actions/i })).toBeInTheDocument();
     });
   });
 
-  it("should pass isAdmin=false to AgentCardGrid for internal user role", async () => {
+  it("should not show Actions column header for internal user role", async () => {
     render(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
     await waitFor(() => {
-      const grid = screen.getByTestId("agent-card-grid");
-      expect(grid).toHaveAttribute("data-is-admin", "false");
+      expect(screen.queryByRole("columnheader", { name: /actions/i })).not.toBeInTheDocument();
+      // confirm table is rendered (not still loading)
+      expect(screen.getByRole("table")).toBeInTheDocument();
+    });
+  });
+
+  it("should render the Health Check toggle", async () => {
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    expect(screen.getByText("Health Check")).toBeInTheDocument();
+  });
+
+  it("should render the Health Check toggle for non-admin users too", async () => {
+    render(<AgentsPanel accessToken="test-token" userRole="Internal User" />);
+    expect(screen.getByText("Health Check")).toBeInTheDocument();
+  });
+
+  it("should call getAgentsList with health_check=false on initial load", async () => {
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    await waitFor(() => {
+      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false);
+    });
+  });
+
+  it("should call getAgentsList with health_check=true when toggle is enabled", async () => {
+    render(<AgentsPanel accessToken="test-token" userRole="Admin" />);
+    await waitFor(() => {
+      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", false);
+    });
+
+    const toggle = screen.getByRole("switch");
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    await waitFor(() => {
+      expect(networking.getAgentsList).toHaveBeenCalledWith("test-token", true);
     });
   });
 });

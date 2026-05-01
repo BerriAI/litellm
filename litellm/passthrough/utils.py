@@ -3,7 +3,25 @@ from urllib.parse import parse_qs
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
+
+# Headers that must not be overwritten via the x-pass- forwarding mechanism.
+# Includes standard credential/auth headers and protocol-level headers that
+# affect routing or message framing.
+_PASS_THROUGH_PROTECTED_HEADERS: frozenset = frozenset(
+    {
+        "authorization",
+        "api-key",
+        "x-api-key",
+        "x-goog-api-key",
+        "host",
+        "content-length",
+    }
+)
+
+# Header name prefix used to block AWS SigV4 signing headers from being overridden.
+_PASS_THROUGH_PROTECTED_HEADER_PREFIXES: tuple = ("x-amz-",)
 
 
 class BasePassthroughUtils:
@@ -11,7 +29,7 @@ class BasePassthroughUtils:
     def get_merged_query_parameters(
         existing_url: httpx.URL,
         request_query_params: Mapping[str, Union[str, list]],
-        default_query_params: Optional[Dict[str, Union[str, list]]] = None
+        default_query_params: Optional[Dict[str, Union[str, list]]] = None,
     ) -> Dict[str, Union[str, List[str]]]:
         # Get the existing query params from the target URL
         existing_query_string = existing_url.query.decode("utf-8")
@@ -56,14 +74,27 @@ class BasePassthroughUtils:
             # Combine request headers with custom headers
             headers = {**request_headers, **headers}
 
-        # Always process x-pass- prefixed headers (strip prefix and forward)
+        # Process x-pass- prefixed headers (strip prefix and forward)
+        # Credential and protocol-level headers are excluded from this mechanism.
         for header_name, header_value in request_headers.items():
             if header_name.lower().startswith(PASS_THROUGH_HEADER_PREFIX):
-                # Strip the 'x-pass-' prefix to get the actual header name
-                actual_header_name = header_name[len(PASS_THROUGH_HEADER_PREFIX) :]
+                # Strip the 'x-pass-' prefix and normalize to lowercase
+                actual_header_name = header_name[
+                    len(PASS_THROUGH_HEADER_PREFIX) :
+                ].lower()
+                if actual_header_name in _PASS_THROUGH_PROTECTED_HEADERS or any(
+                    actual_header_name.startswith(p)
+                    for p in _PASS_THROUGH_PROTECTED_HEADER_PREFIXES
+                ):
+                    verbose_logger.debug(
+                        "x-pass- header %s maps to a protected header name; skipping",
+                        header_name,
+                    )
+                    continue
                 headers[actual_header_name] = header_value
 
         return headers
+
 
 class CommonUtils:
     @staticmethod
@@ -77,37 +108,36 @@ class CommonUtils:
             arn:aws:bedrock:ap-southeast-1:123456789012:application-inference-profile%2Fabdefg12334
         so that it is treated as one part of the path.
         Otherwise, the encoded endpoint will return 500 error when passed to Bedrock endpoint.
-            
+
         See the apis in https://docs.aws.amazon.com/bedrock/latest/APIReference/API_Operations_Amazon_Bedrock_Runtime.html
         for more details on the regex patterns of modelId which we use in the regex logic below.
-        
+
         Args:
             endpoint (str): The original endpoint string which may contain ARNs that contain slashes.
-            
+
         Returns:
             str: The endpoint with properly encoded ARN slashes
         """
         import re
 
         # Early exit: if no ARN detected, return unchanged
-        if 'arn:aws:' not in endpoint:
+        if "arn:aws:" not in endpoint:
             return endpoint
 
         # Handle all patterns in one go - more efficient and cleaner
         patterns = [
             # Custom model with 2 slashes (order matters - do this first)
-            (r'(custom-model)/([a-z0-9.-]+)/([a-z0-9]+)', r'\1%2F\2%2F\3'),
-
+            (r"(custom-model)/([a-z0-9.-]+)/([a-z0-9]+)", r"\1%2F\2%2F\3"),
             # All other resource types with 1 slash
-            (r'(:application-inference-profile)/', r'\1%2F'),
-            (r'(:inference-profile)/', r'\1%2F'),
-            (r'(:foundation-model)/', r'\1%2F'),
-            (r'(:imported-model)/', r'\1%2F'),
-            (r'(:provisioned-model)/', r'\1%2F'),
-            (r'(:prompt)/', r'\1%2F'),
-            (r'(:endpoint)/', r'\1%2F'),
-            (r'(:prompt-router)/', r'\1%2F'),
-            (r'(:default-prompt-router)/', r'\1%2F'),
+            (r"(:application-inference-profile)/", r"\1%2F"),
+            (r"(:inference-profile)/", r"\1%2F"),
+            (r"(:foundation-model)/", r"\1%2F"),
+            (r"(:imported-model)/", r"\1%2F"),
+            (r"(:provisioned-model)/", r"\1%2F"),
+            (r"(:prompt)/", r"\1%2F"),
+            (r"(:endpoint)/", r"\1%2F"),
+            (r"(:prompt-router)/", r"\1%2F"),
+            (r"(:default-prompt-router)/", r"\1%2F"),
         ]
 
         for pattern, replacement in patterns:
