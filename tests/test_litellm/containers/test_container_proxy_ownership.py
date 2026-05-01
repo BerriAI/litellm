@@ -391,3 +391,111 @@ async def test_should_preserve_managed_container_id_for_multipart_upload(monkeyp
     assert result["container_id"] == encoded_id
     assert result["custom_llm_provider"] == "azure"
     assert result["file"] == "file-data"
+
+
+@pytest.mark.asyncio
+async def test_should_preserve_managed_container_id_for_proxy_retrieve(monkeypatch):
+    from litellm.proxy.container_endpoints import endpoints
+
+    proxy_server_stub = SimpleNamespace(
+        general_settings={},
+        llm_router=None,
+        proxy_config=None,
+        proxy_logging_obj=None,
+        select_data_generator=None,
+        user_api_base=None,
+        user_max_tokens=None,
+        user_model=None,
+        user_request_timeout=None,
+        user_temperature=None,
+        version="test",
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_stub)
+
+    captured = {}
+
+    class FakeProcessor:
+        def __init__(self, data):
+            captured["data"] = data
+
+        async def base_process_llm_request(self, **kwargs):
+            return captured["data"]
+
+        async def _handle_llm_api_exception(self, **kwargs):
+            raise kwargs["e"]
+
+    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
+    monkeypatch.setattr(
+        endpoints,
+        "assert_user_can_access_container",
+        AsyncMock(return_value=("cntr_provider", "azure")),
+    )
+    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="router-gpt",
+        container_id="cntr_provider",
+    )
+
+    result = await endpoints.retrieve_container(
+        request=SimpleNamespace(query_params={}, headers={}),
+        container_id=encoded_id,
+        fastapi_response=SimpleNamespace(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    assert result["container_id"] == encoded_id
+    assert result["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_should_preserve_managed_container_id_for_proxy_delete(monkeypatch):
+    from litellm.proxy.container_endpoints import endpoints
+
+    proxy_server_stub = SimpleNamespace(
+        general_settings={},
+        llm_router=None,
+        proxy_config=None,
+        proxy_logging_obj=None,
+        select_data_generator=None,
+        user_api_base=None,
+        user_max_tokens=None,
+        user_model=None,
+        user_request_timeout=None,
+        user_temperature=None,
+        version="test",
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_stub)
+
+    captured = {}
+
+    class FakeProcessor:
+        def __init__(self, data):
+            captured["data"] = data
+
+        async def base_process_llm_request(self, **kwargs):
+            return captured["data"]
+
+        async def _handle_llm_api_exception(self, **kwargs):
+            raise kwargs["e"]
+
+    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
+    monkeypatch.setattr(
+        endpoints,
+        "assert_user_can_access_container",
+        AsyncMock(return_value=("cntr_provider", "azure")),
+    )
+    encoded_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="router-gpt",
+        container_id="cntr_provider",
+    )
+
+    result = await endpoints.delete_container(
+        request=SimpleNamespace(query_params={}, headers={}),
+        container_id=encoded_id,
+        fastapi_response=SimpleNamespace(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    assert result["container_id"] == encoded_id
+    assert result["custom_llm_provider"] == "azure"
