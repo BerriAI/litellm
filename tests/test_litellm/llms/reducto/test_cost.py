@@ -1,4 +1,5 @@
 import litellm
+import pytest
 
 from litellm.cost_calculator import completion_cost
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUsageInfo
@@ -97,3 +98,25 @@ def test_ocr_cost_returns_zero_when_no_pricing_and_no_pages(monkeypatch):
     )
 
     assert cost == 0.0
+
+
+def test_ocr_cost_raises_when_pages_processed_missing_for_page_pricing(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "get_model_info",
+        lambda model, custom_llm_provider=None: {"ocr_cost_per_page": 0.5},
+    )
+
+    response = OCRResponse(
+        pages=[OCRPage(index=0, markdown="missing pages")],
+        model="mistral-ocr-latest",
+        usage_info=OCRUsageInfo(pages_processed=None),
+    )
+
+    with pytest.raises(ValueError, match="OCR response pages_processed is None"):
+        completion_cost(
+            completion_response=response,
+            model="mistral/mistral-ocr-latest",
+            custom_llm_provider="mistral",
+            call_type="ocr",
+        )

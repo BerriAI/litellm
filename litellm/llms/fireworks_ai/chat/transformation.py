@@ -282,7 +282,7 @@ class FireworksAIConfig(OpenAIGPTConfig):
             )
 
         # Only include supports_reasoning if True
-        if supports_reasoning_value is not None:
+        if supports_reasoning_value:
             provider_specific_model_info["supports_reasoning"] = (
                 supports_reasoning_value
             )

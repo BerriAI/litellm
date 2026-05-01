@@ -1817,7 +1817,9 @@ def ocr_cost(
 
     pages_processed = response.usage_info.pages_processed
     if pages_processed is None:
-        return 0.0, 0.0
+        if custom_llm_provider == "reducto" or model.startswith("reducto/"):
+            return 0.0, 0.0
+        raise ValueError("OCR response pages_processed is None")
 
     ocr_cost_per_page: float = 0.0
     if model_info is not None:
