@@ -68,7 +68,7 @@ class TestVertexBase:
                     project_id="different-project",
                     custom_llm_provider="vertex_ai",
                 )
-            assert result == ("fake-token-1", "project-1")
+            assert result == ("fake-token-1", "different-project")
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
     @pytest.mark.asyncio
