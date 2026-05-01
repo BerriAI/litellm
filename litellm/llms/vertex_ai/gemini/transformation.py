@@ -598,7 +598,10 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 and messages[msg_i]["role"] in tool_call_message_roles
             ):
                 tool_result_message = messages[msg_i]
-                tool_call_id = tool_result_message.get("tool_call_id")
+                tool_call_id_value = tool_result_message.get("tool_call_id")
+                tool_call_id = (
+                    tool_call_id_value if isinstance(tool_call_id_value, str) else None
+                )
                 message_with_tool_call = (
                     message_by_tool_call_id.get(
                         tool_call_id, last_message_with_tool_calls
