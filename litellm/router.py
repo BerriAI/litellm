@@ -9312,6 +9312,55 @@ class Router:
         """
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
 
+    def _try_early_resolve_deployments_for_model_not_in_names(
+        self, model: str, request_team_id: Optional[str]
+    ) -> Optional[Tuple[str, Union[List, Dict]]]:
+        """
+        When ``model`` is not in ``self.model_names``, try team routes, pattern routes,
+        team pattern routers, then default deployment. Returns None if none apply.
+        """
+        if model in self.model_names:
+            return None
+        # Check for team-specific deployments by team_public_model_name.
+        # This intentionally takes priority over team pattern routers below,
+        # so that named team deployments shadow wildcard/pattern routes.
+        if request_team_id is not None:
+            team_deployments = self._get_all_deployments(
+                model_name=model, team_id=request_team_id
+            )
+            if team_deployments:
+                return model, team_deployments
+
+        pattern_deployments = self.pattern_router.get_deployments_by_pattern(
+            model=model,
+        )
+
+        if pattern_deployments:
+            return model, pattern_deployments
+
+        if (
+            request_team_id is not None
+            and request_team_id in self.team_pattern_routers
+        ):
+            pattern_deployments = self.team_pattern_routers[
+                request_team_id
+            ].get_deployments_by_pattern(
+                model=model,
+            )
+            if pattern_deployments:
+                return model, pattern_deployments
+
+        if self.default_deployment is not None:
+            # Shallow copy with nested litellm_params copy (100x+ faster than deepcopy)
+            updated_deployment = self.default_deployment.copy()
+            updated_deployment["litellm_params"] = self.default_deployment[
+                "litellm_params"
+            ].copy()
+            updated_deployment["litellm_params"]["model"] = model
+            return model, updated_deployment
+
+        return None
+
     def _common_checks_available_deployment(
         self,
         model: str,
@@ -9354,46 +9403,11 @@ class Router:
         if _model_from_alias is not None:
             model = _model_from_alias
 
-        if model not in self.model_names:
-            # Check for team-specific deployments by team_public_model_name.
-            # This intentionally takes priority over team pattern routers below,
-            # so that named team deployments shadow wildcard/pattern routes.
-            if request_team_id is not None:
-                team_deployments = self._get_all_deployments(
-                    model_name=model, team_id=request_team_id
-                )
-                if team_deployments:
-                    return model, team_deployments
-
-            # check if provider/ specific wildcard routing use pattern matching
-            pattern_deployments = self.pattern_router.get_deployments_by_pattern(
-                model=model,
-            )
-
-            if pattern_deployments:
-                return model, pattern_deployments
-
-            if (
-                request_team_id is not None
-                and request_team_id in self.team_pattern_routers
-            ):
-                pattern_deployments = self.team_pattern_routers[
-                    request_team_id
-                ].get_deployments_by_pattern(
-                    model=model,
-                )
-                if pattern_deployments:
-                    return model, pattern_deployments
-
-            # check if default deployment is set
-            if self.default_deployment is not None:
-                # Shallow copy with nested litellm_params copy (100x+ faster than deepcopy)
-                updated_deployment = self.default_deployment.copy()
-                updated_deployment["litellm_params"] = self.default_deployment[
-                    "litellm_params"
-                ].copy()
-                updated_deployment["litellm_params"]["model"] = model
-                return model, updated_deployment
+        early = self._try_early_resolve_deployments_for_model_not_in_names(
+            model=model, request_team_id=request_team_id
+        )
+        if early is not None:
+            return early
 
         ## get healthy deployments
         ### get all deployments
@@ -9406,6 +9420,9 @@ class Router:
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
             request_team_id=request_team_id,
+        )
+        _access_group_filter_emptied_candidates = (
+            _pre_model_access_group_filter_len > 0 and len(healthy_deployments) == 0
         )
 
         if len(healthy_deployments) == 0:
@@ -9422,7 +9439,13 @@ class Router:
 
         if len(healthy_deployments) == 0:
             # Check for default fallbacks if no deployments are found for the requested model
-            if self._has_default_fallbacks():
+            # Do not fall back to another model when access-group filtering removed every
+            # candidate for the requested name: re-filtering the fallback model can be a
+            # no-op when it has no access_groups, incorrectly serving a different model.
+            if (
+                self._has_default_fallbacks()
+                and not _access_group_filter_emptied_candidates
+            ):
                 fallback_model = self._get_first_default_fallback()
                 if fallback_model:
                     verbose_router_logger.info(
