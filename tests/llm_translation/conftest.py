@@ -47,6 +47,38 @@ _VCR_AUTO_MARKER_SKIP_FILES = _RESPX_CONFLICTING_FILES | frozenset(
     {"test_vcr_redis_persister.py"}
 )
 
+# Tests that observe live cross-call provider state (e.g. prompt-cache
+# warm-up between two consecutive calls) cannot benefit from cassette
+# replay: the second call's "expected" state depends on what the *live*
+# provider does between the two calls, not on what was recorded earlier.
+# Auto-marking them with @pytest.mark.vcr just wastes cycles and (before
+# the outcome gate) used to poison the cache. They go live with their
+# existing @pytest.mark.flaky retry logic.
+#
+# Match by suffix on the pytest nodeid so subclassed/parametrized variants
+# are covered: e.g. "::test_prompt_caching" matches all subclasses that
+# inherit the base test.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES = frozenset(
+    {
+        # Provider prompt-cache propagation isn't deterministic between two
+        # back-to-back calls; the test is flaky against the live provider.
+        "::test_prompt_caching",
+        # Wikipedia URL fetch through Anthropic Files API is flaky upstream.
+        "::test_async_pdf_handling_with_file_id",
+        # Bedrock Nova returns tool_call vs JSON nondeterministically; the
+        # base assertion expects JSON. Other providers' versions of this
+        # test are healthy, so we narrow with a class-name guard below.
+        "TestBedrockInvokeNovaJson::test_json_response_pydantic_obj",
+        # Bedrock streaming response_cost calc returns None intermittently.
+        "::test_bedrock_converse__streaming_passthrough",
+    }
+)
+
+
+def _is_vcr_incompatible(nodeid: str) -> bool:
+    return any(nodeid.endswith(suffix) for suffix in _VCR_INCOMPATIBLE_NODEID_SUFFIXES)
+
+
 _FILTERED_REQUEST_HEADERS = (
     "authorization",
     "x-api-key",
@@ -254,6 +286,8 @@ def pytest_collection_modifyitems(config, items):
         for item in items:
             filename = os.path.basename(str(item.fspath))
             if filename in _VCR_AUTO_MARKER_SKIP_FILES:
+                continue
+            if _is_vcr_incompatible(item.nodeid):
                 continue
             if item.get_closest_marker("vcr") is not None:
                 continue
