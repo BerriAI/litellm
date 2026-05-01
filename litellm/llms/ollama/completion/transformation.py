@@ -236,12 +236,20 @@ class OllamaConfig(BaseConfig):
         api_base = (
             api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
         )
+        # Strip provider-specific suffixes that may have been appended to
+        # api_base before this method is called (e.g. /api/chat, /api/generate).
+        # Without this, the URL becomes /api/chat/api/show → 404.
+        _base = api_base.rstrip("/")
+        for _suffix in ("/api/chat", "/api/generate"):
+            if _base.endswith(_suffix):
+                _base = _base[: -len(_suffix)]
+                break
         api_key = self.get_api_key()
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         try:
             response = litellm.module_level_client.post(
-                url=f"{api_base}/api/show",
+                url=f"{_base}/api/show",
                 json={"name": model},
                 headers=headers,
             )
