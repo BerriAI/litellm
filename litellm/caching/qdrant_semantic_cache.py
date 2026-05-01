@@ -349,6 +349,7 @@ class QdrantSemanticCache(BaseCache):
         payload = results[0]["payload"]
         if not self._payload_matches_cache_key(payload=payload, key=key):
             print_verbose("Qdrant semantic-cache hit did not match cache key scope")
+            kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
             return None
 
         cached_prompt = payload["text"]

@@ -197,11 +197,15 @@ def test_qdrant_semantic_cache_rejects_unscoped_cache_hit():
         with patch(
             "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
         ):
+            metadata = {}
             result = qdrant_cache.get_cache(
-                key="test_key", messages=[{"content": "What is the capital of France?"}]
+                key="test_key",
+                messages=[{"content": "What is the capital of France?"}],
+                metadata=metadata,
             )
 
         assert result is None
+        assert metadata["semantic-similarity"] == 0.0
 
 
 def test_qdrant_semantic_cache_payload_index_failure_is_non_blocking():
