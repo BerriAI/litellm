@@ -1560,6 +1560,44 @@ class TestVertexBase:
             assert mock_refresh.called, "Background refresh should have been triggered"
 
     @pytest.mark.asyncio
+    async def test_stale_malformed_token_blocks_on_refresh(self):
+        """Malformed STALE tokens should refresh instead of failing validation."""
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = None
+        mock_creds.token_state = TokenState.STALE
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+                creds.token_state = TokenState.FRESH
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            token, project = await vertex_base._ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+            assert mock_refresh.called
+            assert token == "refreshed-token"
+            assert project == "project-1"
+
+    @pytest.mark.asyncio
     async def test_fresh_token_skips_refresh(self):
         """Credentials not marked expired by google-auth should not trigger refresh."""
         vertex_base = VertexBase()

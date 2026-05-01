@@ -892,9 +892,9 @@ class VertexBase:
                     raise ValueError("Could not resolve project_id")
                 current_token = _credentials.token
                 if current_token is None or not isinstance(current_token, str):
-                    # Token is malformed despite STALE state — fall through
-                    # to INVALID path which will block on a full refresh.
-                    pass
+                    # Token is malformed despite STALE state — block on a full
+                    # refresh using the same path as INVALID credentials.
+                    token_state = TokenState.INVALID
                 else:
                     # Schedule a single background refresh — skip if one is
                     # already in flight for this credential key.
