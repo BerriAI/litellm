@@ -401,10 +401,17 @@ class BaseLLMChatTest(ABC):
             {
                 "type": "file",
                 "file": {
-                    # GitHub-hosted fixture (small, deterministic, reliably
-                    # fetchable from Anthropic's egress) instead of a Wikipedia
-                    # URL that intermittently returns 400 "Unable to download".
-                    "file_id": "https://raw.githubusercontent.com/BerriAI/litellm/main/tests/llm_translation/fixtures/dummy.pdf"
+                    # jsDelivr serves the repo's tests/llm_translation/fixtures/dummy.pdf
+                    # with `Content-Type: application/pdf`. Two reasons we don't
+                    # use raw.githubusercontent.com or upload.wikimedia.org:
+                    # - raw GitHub returns Content-Type: application/octet-stream,
+                    #   which OpenAI/Gemini reject when LiteLLM fetches the URL
+                    #   client-side and forwards the bytes.
+                    # - Wikimedia URLs intermittently return 400 from Anthropic's
+                    #   server-side URL fetcher.
+                    # The URL is pinned to a specific commit SHA so jsDelivr can
+                    # serve it as immutable (cache-control: immutable, max-age=1y).
+                    "file_id": "https://cdn.jsdelivr.net/gh/BerriAI/litellm@aab3ef8988b12d166b20356a81c53127480f1125/tests/llm_translation/fixtures/dummy.pdf"
                 },
             },
         ]
