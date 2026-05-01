@@ -6,6 +6,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from fastapi import Request
+from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
 import litellm
@@ -103,6 +104,112 @@ LITELLM_METADATA_ROUTES = (
     "responses",
     "files",
 )
+
+_UNTRUSTED_ROOT_CONTROL_FIELDS = (
+    "proxy_server_request",
+    "standard_logging_object",
+    "secret_fields",
+    "mock_response",
+    "mock_tool_calls",
+    "disable_global_guardrails",
+    "disable_global_guardrail",
+    "opted_out_global_guardrails",
+    "applied_guardrails",
+    "applied_policies",
+    "policy_sources",
+    "pillar_response_headers",
+    "_guardrail_pipelines",
+    "_pipeline_managed_guardrails",
+)
+
+_UNTRUSTED_METADATA_CONTROL_FIELDS = (
+    "disable_global_guardrails",
+    "disable_global_guardrail",
+    "opted_out_global_guardrails",
+    "pillar_response_headers",
+    "_pillar_response_headers_trusted",
+    "pillar_flagged",
+    "pillar_scanners",
+    "pillar_evidence",
+    "pillar_evidence_truncated",
+    "pillar_session_id_response",
+    "applied_guardrails",
+    "applied_policies",
+    "policy_sources",
+    "standard_logging_object",
+    "proxy_server_request",
+    "secret_fields",
+    "_guardrail_pipelines",
+    "_pipeline_managed_guardrails",
+)
+
+_UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
+    {
+        "litellm-disable-message-redaction",
+    }
+)
+_CLIENT_MOCK_CONTROL_FIELDS = frozenset({"mock_response", "mock_tool_calls"})
+_ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY = "allow_client_mock_response"
+_ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY = (
+    "allow_client_message_redaction_opt_out"
+)
+
+
+def _strip_untrusted_request_header_controls(
+    headers: Any,
+    *,
+    allow_client_message_redaction_opt_out: bool = False,
+) -> None:
+    if not isinstance(headers, dict):
+        return
+
+    for header_name in list(headers.keys()):
+        if (
+            isinstance(header_name, str)
+            and header_name.lower() in _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
+        ):
+            if allow_client_message_redaction_opt_out:
+                continue
+            headers.pop(header_name, None)
+
+
+def _is_false_like(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value is False
+    if isinstance(value, str):
+        return value.strip().lower() in {"false", "0", "no", "off"}
+    return False
+
+
+def _key_or_team_metadata_flag_is_true(
+    user_api_key_dict: UserAPIKeyAuth,
+    metadata_key: str,
+) -> bool:
+    for admin_metadata in (user_api_key_dict.metadata, user_api_key_dict.team_metadata):
+        if (
+            isinstance(admin_metadata, dict)
+            and admin_metadata.get(metadata_key) is True
+        ):
+            return True
+    return False
+
+
+def _key_or_team_allows_client_mock_response(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    return _key_or_team_metadata_flag_is_true(
+        user_api_key_dict=user_api_key_dict,
+        metadata_key=_ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY,
+    )
+
+
+def _key_or_team_allows_client_message_redaction_opt_out(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    return _key_or_team_metadata_flag_is_true(
+        user_api_key_dict=user_api_key_dict,
+        metadata_key=_ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY,
+    )
 
 
 def _get_metadata_variable_name(request: Request) -> str:
@@ -228,11 +335,23 @@ def convert_key_logging_metadata_to_callback(
     for var, value in data.callback_vars.items():
         if team_callback_settings_obj.callback_vars is None:
             team_callback_settings_obj.callback_vars = {}
-        team_callback_settings_obj.callback_vars[var] = str(
-            litellm.utils.get_secret(value, default_value=value) or value
-        )
+        team_callback_settings_obj.callback_vars[var] = str(value)
 
     return team_callback_settings_obj
+
+
+def _get_validated_callback_metadata(
+    item: dict, *, source: str
+) -> Optional[AddTeamCallback]:
+    try:
+        return AddTeamCallback(**item)
+    except (PydanticValidationError, ValueError) as e:
+        verbose_proxy_logger.warning(
+            "Ignoring invalid %s callback metadata: %s",
+            source,
+            _sanitize_for_log(str(e)),
+        )
+        return None
 
 
 class KeyAndTeamLoggingSettings:
@@ -274,8 +393,11 @@ def _get_dynamic_logging_metadata(
     #########################################################################################
     if key_dynamic_logging_settings is not None:
         for item in key_dynamic_logging_settings:
+            callback = _get_validated_callback_metadata(item=item, source="key-level")
+            if callback is None:
+                continue
             callback_settings_obj = convert_key_logging_metadata_to_callback(
-                data=AddTeamCallback(**item),
+                data=callback,
                 team_callback_settings_obj=callback_settings_obj,
             )
     #########################################################################################
@@ -283,8 +405,11 @@ def _get_dynamic_logging_metadata(
     #########################################################################################
     elif team_dynamic_logging_settings is not None:
         for item in team_dynamic_logging_settings:
+            callback = _get_validated_callback_metadata(item=item, source="team-level")
+            if callback is None:
+                continue
             callback_settings_obj = convert_key_logging_metadata_to_callback(
-                data=AddTeamCallback(**item),
+                data=callback,
                 team_callback_settings_obj=callback_settings_obj,
             )
     #########################################################################################
@@ -904,6 +1029,14 @@ class LiteLLMProxyRequestSetup:
         callback_vars_dict.pop("team_id", None)
         callback_vars_dict.pop("success_callback", None)
         callback_vars_dict.pop("failure_callback", None)
+        callback_vars_dict = {
+            key: (
+                litellm.utils.get_secret(value, default_value=value) or value
+                if isinstance(value, str)
+                else value
+            )
+            for key, value in callback_vars_dict.items()
+        }
 
         return TeamCallbackMetadata(
             success_callback=team_config.get("success_callback", None),
@@ -962,11 +1095,15 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # Strip internal-only keys from user input before the proxy sets its own.
     # These keys are injected by the proxy itself below — user-supplied values
     # must not be trusted.
-    for _internal_key in (
-        "proxy_server_request",
-        "standard_logging_object",
-        "secret_fields",
-    ):
+    _allow_client_mock_response = _key_or_team_allows_client_mock_response(
+        user_api_key_dict
+    )
+    _allow_client_message_redaction_opt_out = (
+        _key_or_team_allows_client_message_redaction_opt_out(user_api_key_dict)
+    )
+    for _internal_key in _UNTRUSTED_ROOT_CONTROL_FIELDS:
+        if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
+            continue
         data.pop(_internal_key, None)
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")
@@ -1007,6 +1144,17 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         forward_llm_provider_auth_headers=forward_llm_auth,
         authenticated_with_header=authenticated_with_header,
     )
+    _strip_untrusted_request_header_controls(
+        _headers,
+        allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
+    )
+    if (
+        not _allow_client_message_redaction_opt_out
+        and litellm.turn_off_message_logging is True
+        and "turn_off_message_logging" in data
+        and _is_false_like(data["turn_off_message_logging"])
+    ):
+        data.pop("turn_off_message_logging", None)
     verbose_proxy_logger.debug(f"Request Headers: {_headers}")
     verbose_proxy_logger.debug(f"Raw Headers: {_raw_headers}")
 
@@ -1144,8 +1292,18 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     for _meta_key in ("metadata", "litellm_metadata"):
         _user_meta = data.get(_meta_key)
         if isinstance(_user_meta, dict):
-            _user_meta.pop("_pipeline_managed_guardrails", None)
-            for _k in [k for k in _user_meta if k.startswith("user_api_key_")]:
+            _strip_untrusted_request_header_controls(
+                _user_meta.get("headers"),
+                allow_client_message_redaction_opt_out=(
+                    _allow_client_message_redaction_opt_out
+                ),
+            )
+            for _k in [
+                k
+                for k in _user_meta
+                if k.startswith("user_api_key_")
+                or k in _UNTRUSTED_METADATA_CONTROL_FIELDS
+            ]:
                 _user_meta.pop(_k, None)
 
     # Strip caller-supplied routing/budget tags unless the admin has opted

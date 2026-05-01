@@ -473,7 +473,12 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
                 ## IF AUTH DISABLED
-                if endpoint.get("auth") is not True:
+                # Default to True: a config dict with no ``auth`` key
+                # otherwise produced an unauthenticated forwarder. The
+                # Pydantic ``PassThroughGenericEndpoint.auth`` default
+                # is also True, but raw config dicts skip that path —
+                # so this runtime check has to default to True too.
+                if endpoint.get("auth", True) is not True:
                     return UserAPIKeyAuth()
                 ## IF AUTH ENABLED
                 ### IF CUSTOM PARSER REQUIRED
