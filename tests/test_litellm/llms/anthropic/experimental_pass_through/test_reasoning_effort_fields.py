@@ -261,6 +261,30 @@ class TestAdapterAdaptiveThinking:
         else:
             assert re == "high"
 
+    def test_messages_handler_does_not_forward_output_config_to_azure(self):
+        """Adaptive thinking should translate output_config for Azure without leaking it."""
+        from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
+            LiteLLMMessagesToCompletionTransformationHandler,
+        )
+
+        completion_kwargs, _ = (
+            LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+                max_tokens=1024,
+                messages=[{"role": "user", "content": "hello"}],
+                model="azure/gpt-5.2-chat",
+                thinking={"type": "adaptive"},
+                extra_kwargs={
+                    "api_version": "2025-01-01-preview",
+                    "drop_params": True,
+                    "output_config": {"effort": "high"},
+                },
+            )
+        )
+
+        assert completion_kwargs["reasoning_effort"] == "high"
+        assert completion_kwargs["api_version"] == "2025-01-01-preview"
+        assert "output_config" not in completion_kwargs
+
     def test_responses_adapter_adaptive_with_output_config(self):
         """Responses adapter: adaptive thinking + output_config.effort."""
         from litellm.llms.anthropic.experimental_pass_through.responses_adapters.transformation import (
