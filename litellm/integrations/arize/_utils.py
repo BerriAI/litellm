@@ -244,6 +244,36 @@ def _set_usage_outputs(span: "Span", response_obj, span_attrs):
             reasoning_tokens,
         )
 
+    # Prompt-caching tokens. LiteLLM normalizes provider-specific fields
+    # (Anthropic `cache_read_input_tokens`, DeepSeek `prompt_cache_hit_tokens`,
+    # OpenAI native `cached_tokens`) onto `prompt_tokens_details.cached_tokens`,
+    # so reading from there is provider-agnostic. `cache_creation_tokens` is
+    # Anthropic-specific but lives on the same object (None for others).
+    # The OpenInference SpanAttributes constants for these were defined but
+    # never populated, leaving observability backends (e.g. Langfuse) unable
+    # to display the cache breakdown.
+    prompt_tokens_details = usage.get("prompt_tokens_details") or {}
+    if hasattr(prompt_tokens_details, "get"):
+        cached_tokens = prompt_tokens_details.get("cached_tokens")
+        cache_creation_tokens = prompt_tokens_details.get("cache_creation_tokens")
+    else:
+        cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
+        cache_creation_tokens = getattr(
+            prompt_tokens_details, "cache_creation_tokens", None
+        )
+    if cached_tokens:
+        safe_set_attribute(
+            span,
+            span_attrs.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ,
+            cached_tokens,
+        )
+    if cache_creation_tokens:
+        safe_set_attribute(
+            span,
+            span_attrs.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE,
+            cache_creation_tokens,
+        )
+
 
 def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
     """
