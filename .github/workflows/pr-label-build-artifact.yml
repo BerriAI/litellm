@@ -1,3 +1,9 @@
+# Builds and pushes the LiteLLM database image to ECR when a maintainer applies a
+# label that pins the exact PR head commit SHA.
+#
+# Maintainer usage: add label `build-ecr-artifact-<full40CharCommitSha>` to the PR
+# (use the PR tip SHA shown in the UI). This ties the build to the commit you
+# reviewed and fails if the branch was force-pushed afterward (TOCTOU mitigation).
 name: PR Build Artifact
 
 on:
@@ -5,10 +11,8 @@ on:
     types:
       - labeled
 
-permissions:
-  contents: read
-  id-token: write
-  pull-requests: read
+# Default deny: token permissions are set on the job (zizmor: avoid workflow-scoped
+# id-token; auditor finding excessive-permissions).
 
 concurrency:
   group: pr-build-artifact-${{ github.event.pull_request.number }}
@@ -18,9 +22,21 @@ jobs:
   build-and-push-image:
     name: Build and push LiteLLM PR artifact
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+
+    # Least privilege for this job only (HIGH fix: job-scoped id-token, not workflow).
+    # - contents: read — checkout + collaborator permission API for the actor check
+    # - id-token: write — mint OIDC JWT for AWS role assumption (no long-lived keys)
+    permissions:
+      contents: read
+      id-token: write
+
     if: >
       github.event.action == 'labeled' &&
-      github.event.label.name == 'build-ecr-artifact' &&
+      startsWith(github.event.label.name, 'build-ecr-artifact-') &&
       github.event.pull_request.head.repo.full_name == github.repository
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -28,6 +44,32 @@ jobs:
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
 
     steps:
+      - name: Verify label pins PR head SHA (mitigates force-push / label race)
+        env:
+          LABEL_NAME: ${{ github.event.label.name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          prefix="build-ecr-artifact-"
+          suffix="${LABEL_NAME#"${prefix}"}"
+          if [[ "${LABEL_NAME}" == "${suffix}" ]]; then
+            echo "::error::Label must be ${prefix}<full-40-char-commit-sha> matching the PR tip you reviewed."
+            exit 1
+          fi
+          if [[ "${#suffix}" -ne 40 ]]; then
+            echo "::error::Expected a 40-character commit SHA after '${prefix}', got length ${#suffix}."
+            exit 1
+          fi
+          lc_suffix="$(printf '%s' "${suffix}" | tr '[:upper:]' '[:lower:]')"
+          if [[ ! "${lc_suffix}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::SHA suffix must be hexadecimal."
+            exit 1
+          fi
+          lc_head="$(printf '%s' "${HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
+          if [[ "${lc_suffix}" != "${lc_head}" ]]; then
+            echo "::error::Label SHA does not match current PR head (${HEAD_SHA}). Remove the label and add ${prefix}${lc_head} after verifying the tip."
+            exit 1
+          fi
+
       - name: Verify label actor has write access
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,6 +105,8 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
+          role-session-name: litellm-pr-ecr-${{ github.event.pull_request.number }}
+          role-duration-seconds: 1200
 
       - name: Login to Amazon ECR
         id: ecr-login
@@ -75,16 +119,13 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
-          short_sha="${PR_HEAD_SHA::7}"
-          image_tag="litellm-pr-${PR_NUMBER}"
+          short_sha="$(printf '%s' "${PR_HEAD_SHA}" | tr '[:upper:]' '[:lower:]' | cut -c1-7)"
           trace_tag="litellm-pr-${PR_NUMBER}-${short_sha}"
 
           {
-            echo "image_uri=${ECR_REGISTRY}/${ECR_REPOSITORY}:${image_tag}"
             echo "trace_uri=${ECR_REGISTRY}/${ECR_REPOSITORY}:${trace_tag}"
-            echo "image_tag=${image_tag}"
             echo "trace_tag=${trace_tag}"
-          } >> "$GITHUB_OUTPUT"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12
@@ -96,18 +137,16 @@ jobs:
           file: ./docker/Dockerfile.database
           push: true
           provenance: false
-          tags: |
-            ${{ steps.image-tags.outputs.image_uri }}
-            ${{ steps.image-tags.outputs.trace_uri }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.image-tags.outputs.trace_uri }}
+          # Isolate GHA cache per PR so PR-controlled Dockerfiles cannot poison sibling workflows.
+          cache-from: type=gha,scope=pr-${{ github.event.pull_request.number }}
+          cache-to: type=gha,mode=max,scope=pr-${{ github.event.pull_request.number }}
 
       - name: Write workflow summary
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          IMAGE_URI: ${{ steps.image-tags.outputs.image_uri }}
           TRACE_URI: ${{ steps.image-tags.outputs.trace_uri }}
         run: |
           {
@@ -116,6 +155,7 @@ jobs:
             echo "- PR: \`#${PR_NUMBER}\`"
             echo "- Head ref: \`${PR_HEAD_REF}\`"
             echo "- Head SHA: \`${PR_HEAD_SHA}\`"
-            echo "- Updater image URI: \`${IMAGE_URI}\`"
-            echo "- Trace image URI: \`${TRACE_URI}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Immutable** image URI (pin by digest in production): \`${TRACE_URI}\`"
+            echo
+            echo "Label format: \`build-ecr-artifact-<40-char-sha>\` must match the PR tip when labeled."
+          } >> "${GITHUB_STEP_SUMMARY}"
