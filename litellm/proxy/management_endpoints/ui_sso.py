@@ -674,6 +674,7 @@ async def google_login(
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
             state=cli_state,
+            request=request,
         )
         if return_to is not None and sso_redirect is not None:
             if SSOAuthenticationHandler._validate_return_to(return_to):
@@ -2170,6 +2171,7 @@ class SSOAuthenticationHandler:
         microsoft_client_id: Optional[str] = None,
         generic_client_id: Optional[str] = None,
         state: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Step 1. Call Get Login Redirect for the SSO provider. Send the redirect response to `redirect_url`
@@ -2179,6 +2181,8 @@ class SSOAuthenticationHandler:
             google_client_id (Optional[str], optional): The Google Client ID. Defaults to None.
             microsoft_client_id (Optional[str], optional): The Microsoft Client ID. Defaults to None.
             generic_client_id (Optional[str], optional): The Generic Client ID. Defaults to None.
+            request: Optional FastAPI request, used to drive the ``Secure``
+                attribute on the ``litellm_oauth_state`` CSRF cookie.
 
         Returns:
             RedirectResponse: The redirect response from the SSO provider.
@@ -2289,6 +2293,7 @@ class SSOAuthenticationHandler:
                 generic_sso=generic_sso,
                 state=state,
                 generic_authorization_endpoint=generic_authorization_endpoint,
+                request=request,
             )
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -2299,6 +2304,7 @@ class SSOAuthenticationHandler:
         generic_sso: Any,
         state: Optional[str] = None,
         generic_authorization_endpoint: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Get the redirect response for Generic SSO
@@ -2382,19 +2388,30 @@ class SSOAuthenticationHandler:
                     # Update the redirect response
                     redirect_response.headers["location"] = new_url
 
-            # Bind state to the user's browser session.  The /callback handler
-            # validates the URL ``state`` against this cookie via
-            # ``secrets.compare_digest`` before exchanging the PKCE
-            # code_verifier.
-            state_value = redirect_params.get("state")
-            if state_value and redirect_response is not None:
-                redirect_response.set_cookie(
-                    key="litellm_oauth_state",
-                    value=state_value,
-                    max_age=600,
-                    httponly=True,
-                    samesite="lax",
-                )
+                # Bind state to the user's browser session.  The /callback
+                # handler validates the URL ``state`` against this cookie via
+                # ``secrets.compare_digest`` before exchanging the PKCE
+                # code_verifier.  Only set the cookie when PKCE is in use
+                # (i.e. inside this ``code_verifier`` branch) so two
+                # concurrent SSO sessions — one PKCE, one plain — cannot
+                # overwrite each other's state cookie.
+                state_value = redirect_params.get("state")
+                if state_value and redirect_response is not None:
+                    # Production-safe default: require HTTPS for the
+                    # CSRF-protection cookie unless we can prove the
+                    # incoming request is HTTP (local dev).  Without
+                    # ``Secure`` the cookie is sent over plain HTTP,
+                    # letting a network observer read and replay the
+                    # state value and bypass this protection.
+                    secure_flag = request is None or request.url.scheme == "https"
+                    redirect_response.set_cookie(
+                        key="litellm_oauth_state",
+                        value=state_value,
+                        max_age=600,
+                        httponly=True,
+                        samesite="lax",
+                        secure=secure_flag,
+                    )
             return redirect_response
 
     @staticmethod
@@ -4012,6 +4029,7 @@ async def debug_sso_login(request: Request):
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
+            request=request,
         )
 
 

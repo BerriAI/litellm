@@ -5782,17 +5782,18 @@ class TestPKCEStateCookieBinding:
     the PKCE token exchange."""
 
     @pytest.mark.asyncio
-    async def test_redirect_response_sets_oauth_state_cookie(self):
+    async def test_redirect_response_sets_oauth_state_cookie_when_pkce_enabled(self):
         """``get_generic_sso_redirect_response`` must set
-        ``litellm_oauth_state`` on the redirect response so the callback
-        can verify it later."""
+        ``litellm_oauth_state`` on the redirect response when PKCE is on so
+        the callback can verify it later.  The cookie must carry HttpOnly,
+        SameSite=Lax, and (because no http request was supplied to the
+        helper) the production-safe ``Secure`` default."""
         from fastapi.responses import RedirectResponse
 
         from litellm.proxy.management_endpoints.ui_sso import (
             SSOAuthenticationHandler,
         )
 
-        # generic_sso is a context manager + redirect-response factory.
         mock_redirect = RedirectResponse(
             url="https://idp.example.com/authorize?state=test-state-xyz"
         )
@@ -5801,7 +5802,13 @@ class TestPKCEStateCookieBinding:
         mock_generic_sso.__exit__ = MagicMock(return_value=None)
         mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
 
-        with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": "test-state-xyz"}):
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "test-state-xyz",
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
             response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
                 generic_sso=mock_generic_sso,
                 state=None,
@@ -5819,6 +5826,93 @@ class TestPKCEStateCookieBinding:
         assert "test-state-xyz" in cookie_str
         assert "HttpOnly" in cookie_str
         assert "SameSite=lax" in cookie_str
+        # No incoming Request supplied → ``Secure`` defaults to True so a
+        # network observer on plain HTTP cannot read the state value.
+        assert "Secure" in cookie_str
+
+    @pytest.mark.asyncio
+    async def test_redirect_response_omits_oauth_state_cookie_when_pkce_disabled(
+        self,
+    ):
+        """Non-PKCE flows delegate to fastapi-sso's own session-cookie
+        binding; we do not set our cookie there because it would never be
+        validated (and could collide with a concurrent PKCE session in
+        the same browser)."""
+        from fastapi.responses import RedirectResponse
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_redirect = RedirectResponse(
+            url="https://idp.example.com/authorize?state=test-state-xyz"
+        )
+        mock_generic_sso = MagicMock()
+        mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
+        mock_generic_sso.__exit__ = MagicMock(return_value=None)
+        mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
+
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "test-state-xyz",
+                "GENERIC_CLIENT_USE_PKCE": "false",
+            },
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=mock_generic_sso,
+                state=None,
+                generic_authorization_endpoint="https://idp.example.com/authorize",
+            )
+
+        assert response is not None
+        cookie_headers = response.headers.getlist("set-cookie")
+        assert not any(
+            "litellm_oauth_state=" in c for c in cookie_headers
+        ), f"litellm_oauth_state cookie set on non-PKCE flow; got: {cookie_headers}"
+
+    @pytest.mark.asyncio
+    async def test_redirect_response_drops_secure_flag_for_http_dev(self):
+        """When the incoming request is plain HTTP (local dev), ``Secure``
+        must be dropped so the browser will actually attach the cookie on
+        the callback hop."""
+        from fastapi.responses import RedirectResponse
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_redirect = RedirectResponse(
+            url="http://idp.local/authorize?state=local-dev-state"
+        )
+        mock_generic_sso = MagicMock()
+        mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
+        mock_generic_sso.__exit__ = MagicMock(return_value=None)
+        mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
+
+        http_request = MagicMock(spec=Request)
+        http_request.url.scheme = "http"
+
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "local-dev-state",
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=mock_generic_sso,
+                state=None,
+                generic_authorization_endpoint="http://idp.local/authorize",
+                request=http_request,
+            )
+
+        cookie_headers = response.headers.getlist("set-cookie")
+        cookie_str = next(
+            (c for c in cookie_headers if "litellm_oauth_state=" in c), None
+        )
+        assert cookie_str is not None
+        assert "Secure" not in cookie_str
 
     @pytest.mark.asyncio
     async def test_pkce_callback_rejects_missing_cookie(self):
