@@ -31,7 +31,6 @@ class _BudgetCounter:
     source_cache_key: Optional[str] = None
     spend_log_entity_id: Optional[str] = None
     window_start: Optional[datetime] = None
-    parent_counter_key: Optional[str] = None
 
 
 def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
@@ -495,16 +494,23 @@ def _get_budget_limit_counters(
         if not budget_duration or max_budget is None or max_budget <= 0:
             continue
         window_start = get_budget_window_start(window_dict)
+        if window_start is None:
+            verbose_proxy_logger.warning(
+                "Skipping budget window with invalid duration for %s=%s: %s",
+                entity_type,
+                entity_id,
+                budget_duration,
+            )
+            continue
         counters.append(
             _BudgetCounter(
                 counter_key=f"{entity_prefix}:window:{budget_duration}",
                 max_budget=float(max_budget),
-                fallback_spend=fallback_spend if window_start is None else 0.0,
+                fallback_spend=0.0,
                 entity_type=entity_type,
                 entity_id=f"{entity_id}:{budget_duration}",
                 spend_log_entity_id=entity_id,
                 window_start=window_start,
-                parent_counter_key=entity_prefix if window_start is None else None,
             )
         )
     return counters
@@ -572,8 +578,6 @@ async def _reserve_counter(
             entity_id=counter.spend_log_entity_id,
             window_start=counter.window_start,
         )
-    elif counter.parent_counter_key is not None:
-        await _ensure_malformed_window_counter_initialized(counter=counter)
 
     reserved_value = await _increment_spend_counter_cache(
         counter_key=counter.counter_key,
@@ -585,46 +589,10 @@ async def _reserve_counter(
 async def _get_current_counter_value(counter: _BudgetCounter) -> float:
     from litellm.proxy.proxy_server import get_current_spend
 
-    if counter.parent_counter_key is not None:
-        await _ensure_malformed_window_counter_initialized(counter=counter)
-
     return await get_current_spend(
         counter_key=counter.counter_key,
         fallback_spend=counter.fallback_spend,
     )
-
-
-async def _ensure_malformed_window_counter_initialized(
-    counter: _BudgetCounter,
-) -> None:
-    if counter.parent_counter_key is None:
-        return
-
-    from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
-    from litellm.proxy.proxy_server import (
-        _increment_spend_counter_cache,
-        get_current_spend,
-        spend_counter_cache,
-    )
-
-    current = await spend_counter_cache.async_get_cache(key=counter.counter_key)
-    if current is not None:
-        return
-
-    lock = await SpendCounterReseed._get_lock(counter.counter_key)
-    async with lock:
-        current = await spend_counter_cache.async_get_cache(key=counter.counter_key)
-        if current is not None:
-            return
-
-        parent_spend = await get_current_spend(
-            counter_key=counter.parent_counter_key,
-            fallback_spend=counter.fallback_spend,
-        )
-        await _increment_spend_counter_cache(
-            counter_key=counter.counter_key,
-            increment=parent_spend,
-        )
 
 
 async def _set_reserved_entries_actual_cost(
