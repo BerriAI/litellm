@@ -90,12 +90,10 @@ class BedrockFilesHandler(BaseAWSLLM):
         )
 
     def _get_configured_s3_bucket_name(self, optional_params: dict) -> str:
-        bucket_name = optional_params.get("s3_bucket_name") or os.getenv(
-            "AWS_S3_BUCKET_NAME"
-        )
+        bucket_name = os.getenv("AWS_S3_BUCKET_NAME")
         if not bucket_name:
             raise ValueError(
-                "S3 bucket_name is required. Set 's3_bucket_name' or AWS_S3_BUCKET_NAME."
+                "S3 bucket_name is required. Set AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
             )
         return bucket_name
 

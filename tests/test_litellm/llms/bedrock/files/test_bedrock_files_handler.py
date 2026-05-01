@@ -1,4 +1,6 @@
 import base64
+import os
+from unittest.mock import patch
 
 import pytest
 
@@ -60,6 +62,13 @@ class TestBedrockFilesHandler:
                 configured_bucket_name="safe-bucket",
             )
 
+    def test_should_reject_empty_middle_path_segment(self):
+        with pytest.raises(ValueError, match="invalid path segment"):
+            self.handler._parse_s3_uri(
+                s3_uri="s3://safe-bucket/litellm-bedrock-files//secret.jsonl",
+                configured_bucket_name="safe-bucket",
+            )
+
     def test_should_extract_unified_managed_s3_uri(self):
         file_id = _encode_unified_file_id(
             "s3://safe-bucket/litellm-batch-outputs/job/output.jsonl"
@@ -83,3 +92,19 @@ class TestBedrockFilesHandler:
                 s3_uri=s3_uri,
                 configured_bucket_name="safe-bucket",
             )
+
+    def test_should_not_trust_request_s3_bucket_name_for_expected_bucket(self):
+        with patch.dict(os.environ, {"AWS_S3_BUCKET_NAME": "safe-bucket"}):
+            assert (
+                self.handler._get_configured_s3_bucket_name(
+                    {"s3_bucket_name": "attacker-bucket"}
+                )
+                == "safe-bucket"
+            )
+
+    def test_should_require_server_s3_bucket_name(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(ValueError, match="AWS_S3_BUCKET_NAME"):
+                self.handler._get_configured_s3_bucket_name(
+                    {"s3_bucket_name": "attacker-bucket"}
+                )
