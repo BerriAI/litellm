@@ -927,8 +927,14 @@ async def test_health_endpoint_filters_background_cache_by_user_access():
     ):
         from fastapi import Response
 
+        # Pass model=None, model_id=None explicitly: direct calls to the
+        # handler skip FastAPI's Query() resolution, so unspecified params
+        # would otherwise carry the Query() sentinel (which is truthy).
         result = await health_endpoint(
-            response=Response(), user_api_key_dict=user_api_key_dict
+            response=Response(),
+            user_api_key_dict=user_api_key_dict,
+            model=None,
+            model_id=None,
         )
 
     # Sanity: the source cache had two entries before scoping; the scoping
@@ -1016,10 +1022,16 @@ async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
         admin_response = Response()
         non_admin_response = Response()
         admin_result = await health_endpoint(
-            response=admin_response, user_api_key_dict=admin_key
+            response=admin_response,
+            user_api_key_dict=admin_key,
+            model=None,
+            model_id=None,
         )
         non_admin_result = await health_endpoint(
-            response=non_admin_response, user_api_key_dict=non_admin_key
+            response=non_admin_response,
+            user_api_key_dict=non_admin_key,
+            model=None,
+            model_id=None,
         )
     finally:
         for p in common_patches:
@@ -1113,7 +1125,10 @@ async def test_health_endpoint_warns_when_scoped_models_lack_model_id():
         patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
     ):
         result = await health_endpoint(
-            response=Response(), user_api_key_dict=user_api_key_dict
+            response=Response(),
+            user_api_key_dict=user_api_key_dict,
+            model=None,
+            model_id=None,
         )
 
     assert result["healthy_count"] == 0
@@ -1123,6 +1138,74 @@ async def test_health_endpoint_warns_when_scoped_models_lack_model_id():
         "can distinguish 'no deployments' from 'deployments excluded'"
     )
     assert any("model_info.id" in w for w in result["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_503_for_targeted_unhealthy_model_under_background_cache_admin():
+    """
+    With background_health_checks enabled, an admin calling /health?model=foo
+    must get 503 when foo specifically has zero healthy endpoints — even if
+    other unrelated models in the cache are healthy. Without the cache-path
+    filter, the global healthy_count would mask the targeted failure.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",  # the unhealthy target
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",  # an unrelated healthy model
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    cached_results = {
+        "healthy_endpoints": [
+            {"model": "openai/gpt-4o", "model_id": "id-b"},
+        ],
+        "unhealthy_endpoints": [
+            {"model": "openai/gpt-4o", "model_id": "id-a", "error": "boom"},
+        ],
+        "healthy_count": 1,
+        "unhealthy_count": 1,
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ):
+        result = await health_endpoint(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            model="model-a",
+            model_id=None,
+        )
+
+    assert response.status_code == 503
+    # Body must be scoped to the targeted model — not the global cache.
+    assert result["healthy_count"] == 0
+    assert result["unhealthy_count"] == 1
+    returned_ids = {ep["model_id"] for ep in result.get("unhealthy_endpoints", [])}
+    assert returned_ids == {"id-a"}
 
 
 @pytest.mark.asyncio
