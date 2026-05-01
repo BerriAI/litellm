@@ -384,7 +384,13 @@ def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch)
     )
 
     try:
-        event = iterator._process_chunk(json.dumps({"type": "response.completed"}))
+        # Chunk must include a top-level "response" key so BaseResponsesAPIStreamingIterator
+        # runs _update_responses_api_response_id_with_model_id (see streaming_iterator.py).
+        event = iterator._process_chunk(
+            json.dumps(
+                {"type": "response.completed", "response": {"id": "resp_live"}}
+            )
+        )
     finally:
         litellm.include_cost_in_streaming_usage = original_include_cost
 
