@@ -43,10 +43,16 @@ BedrockDocumentTypes = Literal[
 ]
 
 
-class DocumentBlock(TypedDict):
-    format: Union[BedrockDocumentTypes, str]
-    source: SourceBlock
-    name: str
+class CitationsConfig(TypedDict, total=False):
+    enabled: bool
+
+
+class DocumentBlock(TypedDict, total=False):
+    format: Required[Union[BedrockDocumentTypes, str]]
+    source: Required[SourceBlock]
+    name: Required[str]
+    citations: CitationsConfig
+    context: str
 
 
 class ToolResultContentBlock(TypedDict, total=False):
