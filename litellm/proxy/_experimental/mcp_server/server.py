@@ -41,6 +41,7 @@ from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
+    _mcp_request_scoped_to_single_server,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -1314,11 +1315,19 @@ if MCP_AVAILABLE:
                     )
 
                 try:
+                    # For scoped /mcp/{server_name} requests the client has already
+                    # disambiguated by URL, so tool names should NOT be prefixed
+                    # (see issue #22670).  Otherwise keep the default behaviour of
+                    # prefixing tool names with the server name for the aggregated
+                    # /mcp endpoint.
+                    add_prefix_for_server = (
+                        not _mcp_request_scoped_to_single_server.get()
+                    )
                     tools = await global_mcp_server_manager._get_tools_from_server(
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=True,  # Always add server prefix
+                        add_prefix=add_prefix_for_server,
                         raw_headers=raw_headers,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -1455,11 +1464,14 @@ if MCP_AVAILABLE:
             )
 
             try:
+                # Honour scoped /mcp/{server_name} requests — no prefix when
+                # the URL already disambiguates the server (see issue #22670).
+                add_prefix_for_server = not _mcp_request_scoped_to_single_server.get()
                 prompts = await global_mcp_server_manager.get_prompts_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=True,  # Always add server prefix
+                    add_prefix=add_prefix_for_server,
                     raw_headers=raw_headers,
                 )
 
@@ -1512,11 +1524,14 @@ if MCP_AVAILABLE:
             )
 
             try:
+                # Honour scoped /mcp/{server_name} requests — no prefix when
+                # the URL already disambiguates the server (see issue #22670).
+                add_prefix_for_server = not _mcp_request_scoped_to_single_server.get()
                 resources = await global_mcp_server_manager.get_resources_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
                     extra_headers=extra_headers,
-                    add_prefix=True,  # Always add server prefix
+                    add_prefix=add_prefix_for_server,
                     raw_headers=raw_headers,
                 )
                 all_resources.extend(resources)
@@ -1567,12 +1582,15 @@ if MCP_AVAILABLE:
             )
 
             try:
+                # Honour scoped /mcp/{server_name} requests — no prefix when
+                # the URL already disambiguates the server (see issue #22670).
+                add_prefix_for_server = not _mcp_request_scoped_to_single_server.get()
                 resource_templates = (
                     await global_mcp_server_manager.get_resource_templates_from_server(
                         server=server,
                         mcp_auth_header=server_auth_header,
                         extra_headers=extra_headers,
-                        add_prefix=True,  # Always add server prefix
+                        add_prefix=add_prefix_for_server,
                         raw_headers=raw_headers,
                     )
                 )
@@ -2486,6 +2504,14 @@ if MCP_AVAILABLE:
                 raw_headers,
             ) = await MCPRequestHandler.process_mcp_request(scope)
             mcp_servers = mcp_servers_from_path
+            # When the client disambiguates the MCP server via URL path
+            # (e.g. /mcp/github_onprem), downstream list_* handlers should return
+            # tool / prompt / resource names WITHOUT the server-name prefix, since
+            # there is no ambiguity to resolve.  Setting this ContextVar is
+            # transport-agnostic so stdio, SSE and HTTP-streamable servers behave
+            # consistently for scoped requests.  See issue #22670.
+            if len(mcp_servers_from_path) == 1:
+                _mcp_request_scoped_to_single_server.set(True)
         else:
             (
                 user_api_key_auth,
