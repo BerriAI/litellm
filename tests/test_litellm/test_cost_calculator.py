@@ -81,6 +81,36 @@ def test_completion_cost_custom_pricing_uses_cache_read_rate():
     assert cost == pytest.approx(0.011684)
 
 
+def test_completion_cost_custom_pricing_uses_top_level_cache_read_tokens():
+    usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        cache_read_input_tokens=80,
+    )
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="anthropic/claude-sonnet-4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="anthropic/claude-sonnet-4",
+        custom_llm_provider="anthropic",
+        custom_cost_per_token={
+            "input_cost_per_token": 1.0,
+            "output_cost_per_token": 2.0,
+            "cache_read_input_token_cost": 0.25,
+        },
+    )
+
+    assert cost == pytest.approx(60.0)
+
+
 def test_completion_cost_custom_pricing_without_cache_read_rate_preserves_input_rate():
     usage = Usage(
         prompt_tokens=6074,
