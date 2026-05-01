@@ -264,6 +264,22 @@ def test_rag_payload_scan_accepts_vector_store_id_at_depth_limit():
     assert _collect_vector_store_ids_from_payload(payload) == {"vs_at_limit"}
 
 
+def test_rag_payload_scan_ignores_primitive_list_beyond_depth_limit():
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+    from litellm.proxy.rag_endpoints.endpoints import (
+        _collect_vector_store_ids_from_payload,
+    )
+
+    payload = {}
+    current = payload
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH):
+        current["nested"] = {}
+        current = current["nested"]
+    current["labels"] = ["alpha", "beta"]
+
+    assert _collect_vector_store_ids_from_payload(payload) == set()
+
+
 @pytest.mark.asyncio
 async def test_responses_file_search_denies_other_team_vector_store():
     from litellm.proxy.common_request_processing import (
