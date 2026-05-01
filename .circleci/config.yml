@@ -1470,7 +1470,7 @@ jobs:
               -e ANTHROPIC_BASE_URL="http://localhost:4000" \
               -e ANTHROPIC_AUTH_TOKEN="sk-1234" \
               litellm-claude-code:ci \
-              claude -p "Reply with exactly: gateway-ok" --model gpt-3.5-turbo-end-user-test 2>&1)
+              claude -p "Reply with exactly: gateway-ok" --model anthropic/claude-haiku-4-5 2>&1)
             EXIT_CODE=$?
             set -e
 
