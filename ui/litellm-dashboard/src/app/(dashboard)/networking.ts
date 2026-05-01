@@ -7,7 +7,7 @@ export const fetchTeams = async (
   currentOrg: Organization | null,
 ) => {
   let givenTeams;
-  if (userRole != "Admin" && userRole != "Admin Viewer") {
+  if (userRole !== "Admin" && userRole !== "Admin Viewer") {
     givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || null, userID);
   } else {
     givenTeams = await teamListCall(accessToken, currentOrg?.organization_id || null);

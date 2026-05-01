@@ -169,7 +169,7 @@ const CreateTeamModal = ({
   const handleCreate = async (formValues: Record<string, any>) => {
     try {
       console.log(`formValues: ${JSON.stringify(formValues)}`);
-      if (accessToken != null) {
+      if (accessToken !== null) {
         const newTeamAlias = formValues?.team_alias;
         const existingTeamAliases = teams?.map((t) => t.team_alias) ?? [];
         let organizationId = formValues?.organization_id || currentOrg?.organization_id;

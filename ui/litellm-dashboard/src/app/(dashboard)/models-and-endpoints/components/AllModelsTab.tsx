@@ -113,7 +113,7 @@ const AllModelsTab = ({
 
   const getProviderFromModel = (model: string) => {
     if (modelCostMapData !== null && modelCostMapData !== undefined) {
-      if (typeof modelCostMapData == "object" && model in modelCostMapData) {
+      if (typeof modelCostMapData === "object" && model in modelCostMapData) {
         return modelCostMapData[model]["litellm_provider"];
       }
     }

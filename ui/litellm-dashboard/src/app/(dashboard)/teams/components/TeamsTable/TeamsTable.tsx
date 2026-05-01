@@ -141,7 +141,7 @@ const TeamsTable = ({
                     </Text>
                   </TableCell>
                   <TableCell>
-                    {userRole == "Admin" ? (
+                    {userRole === "Admin" ? (
                       <>
                         <Icon
                           icon={PencilAltIcon}

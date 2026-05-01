@@ -249,7 +249,7 @@ const TeamsView: React.FC<TeamProps> = ({
     <div className="w-full mx-4 h-[75vh]">
       <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
         <Col numColSpan={1} className="flex flex-col gap-2">
-          {(userRole == "Admin" || userRole == "Org Admin") && (
+          {(userRole === "Admin" || userRole === "Org Admin") && (
             <Button className="w-fit" onClick={() => setIsTeamModalVisible(true)}>
               + Create New Team
             </Button>
@@ -281,7 +281,7 @@ const TeamsView: React.FC<TeamProps> = ({
               }}
               accessToken={accessToken}
               is_team_admin={is_team_admin(teams?.find((team) => team.team_id === selectedTeamId))}
-              is_proxy_admin={userRole == "Admin"}
+              is_proxy_admin={userRole === "Admin"}
               is_org_admin={(() => {
                 const team = teams?.find((t) => t.team_id === selectedTeamId);
                 if (!team?.organization_id || !organizations || !userID) return false;
@@ -345,7 +345,7 @@ const TeamsView: React.FC<TeamProps> = ({
               )}
             </TeamsHeaderTabs>
           )}
-          {(userRole == "Admin" || userRole == "Org Admin") && (
+          {(userRole === "Admin" || userRole === "Org Admin") && (
             <CreateTeamModal
               isTeamModalVisible={isTeamModalVisible}
               handleOk={handleOk}
