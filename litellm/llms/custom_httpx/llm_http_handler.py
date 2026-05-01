@@ -1992,7 +1992,9 @@ class BaseLLMHTTPHandler:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Apply additional_drop_params for nested field removal
+        # Apply additional_drop_params — top-level and nested fields.
+        # Unlike /v1/chat/completions, this path has no prior top-level drop
+        # step, so we must handle both here. See issue #25931.
         additional_drop_params = litellm_params.get("additional_drop_params")
         if additional_drop_params:
             from litellm.litellm_core_utils.dot_notation_indexing import (
@@ -2000,11 +2002,13 @@ class BaseLLMHTTPHandler:
                 is_nested_path,
             )
 
-            nested_paths = [p for p in additional_drop_params if is_nested_path(p)]
-            for path in nested_paths:
-                anthropic_messages_optional_request_params = delete_nested_value(
-                    anthropic_messages_optional_request_params, path
-                )
+            for path in additional_drop_params:
+                if is_nested_path(path):
+                    anthropic_messages_optional_request_params = delete_nested_value(
+                        anthropic_messages_optional_request_params, path
+                    )
+                else:
+                    anthropic_messages_optional_request_params.pop(path, None)
 
         # Prepare request body
         request_body = anthropic_messages_provider_config.transform_anthropic_messages_request(
