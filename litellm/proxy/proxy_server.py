@@ -1854,22 +1854,14 @@ async def increment_spend_counters(
     Awaited (not create_task) in the cost callback, so the counter is
     updated before the next request's auth check runs.
     """
-    reserved_counter_keys: Set[str] = set()
-    if budget_reservation is not None:
-        from litellm.proxy.spend_tracking.budget_reservation import (
-            get_reserved_counter_keys,
-            reconcile_budget_reservation,
-        )
-
-        reserved_counter_keys = get_reserved_counter_keys(
-            budget_reservation=budget_reservation
-        )
-        await reconcile_budget_reservation(
-            budget_reservation=budget_reservation,
-            actual_cost=response_cost or 0.0,
-        )
+    reserved_counter_keys = await _reconcile_budget_reservation_for_counter_update(
+        budget_reservation=budget_reservation,
+        response_cost=response_cost,
+    )
 
     if response_cost is None or response_cost == 0:
+        if budget_reservation is not None:
+            budget_reservation["finalized"] = True
         return
 
     if token is not None:
@@ -1989,6 +1981,31 @@ async def increment_spend_counters(
         response_cost=response_cost,
         reserved_counter_keys=reserved_counter_keys,
     )
+    if budget_reservation is not None:
+        budget_reservation["finalized"] = True
+
+
+async def _reconcile_budget_reservation_for_counter_update(
+    budget_reservation: Optional[dict],
+    response_cost: Optional[float],
+) -> Set[str]:
+    if budget_reservation is None:
+        return set()
+
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        get_reserved_counter_keys,
+        reconcile_budget_reservation,
+    )
+
+    reserved_counter_keys = get_reserved_counter_keys(
+        budget_reservation=budget_reservation
+    )
+    await reconcile_budget_reservation(
+        budget_reservation=budget_reservation,
+        actual_cost=response_cost or 0.0,
+        finalize=False,
+    )
+    return reserved_counter_keys
 
 
 async def _increment_end_user_and_tag_spend_counters(

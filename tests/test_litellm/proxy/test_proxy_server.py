@@ -5325,6 +5325,108 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
 
 
 @pytest.mark.asyncio
+async def test_increment_spend_counters_finalizes_after_unreserved_increments():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    counter_cache = DualCache()
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-finalize-after-increments",
+        value=0.5,
+    )
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [
+            {
+                "counter_key": "spend:key:key-finalize-after-increments",
+                "entity_type": "Key",
+                "entity_id": "key-finalize-after-increments",
+                "reserved_cost": 0.5,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+    incremented_counters = []
+
+    async def assert_reservation_not_finalized_yet(**kwargs):
+        assert budget_reservation["finalized"] is False
+        incremented_counters.append(kwargs["counter_key"])
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_user = ps.spend_counter_cache, ps.user_api_key_cache
+    ps.spend_counter_cache = counter_cache
+    ps.user_api_key_cache = DualCache()
+    try:
+        with patch(
+            "litellm.proxy.proxy_server._init_and_increment_spend_counter",
+            new=AsyncMock(side_effect=assert_reservation_not_finalized_yet),
+        ):
+            await increment_spend_counters(
+                token="key-finalize-after-increments",
+                team_id="team-finalize-after-increments",
+                user_id=None,
+                response_cost=0.25,
+                budget_reservation=budget_reservation,
+            )
+
+        assert incremented_counters == ["spend:team:team-finalize-after-increments"]
+        assert budget_reservation["finalized"] is True
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-finalize-after-increments"
+        ) == pytest.approx(0.25)
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.user_api_key_cache = orig_user
+
+
+@pytest.mark.asyncio
+async def test_increment_spend_counters_finalizes_none_cost_reservation():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    counter_cache = DualCache()
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-finalize-none-cost",
+        value=0.5,
+    )
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [
+            {
+                "counter_key": "spend:key:key-finalize-none-cost",
+                "entity_type": "Key",
+                "entity_id": "key-finalize-none-cost",
+                "reserved_cost": 0.5,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    try:
+        await increment_spend_counters(
+            token="key-finalize-none-cost",
+            team_id=None,
+            user_id=None,
+            response_cost=None,
+            budget_reservation=budget_reservation,
+        )
+
+        assert budget_reservation["finalized"] is True
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-finalize-none-cost"
+        ) == pytest.approx(0.0)
+    finally:
+        ps.spend_counter_cache = orig_counter
+
+
+@pytest.mark.asyncio
 async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure():
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import _increment_spend_counter_cache
