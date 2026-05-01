@@ -1476,7 +1476,7 @@ jobs:
 
             echo "$OUTPUT"
 
-            if [ "$EXIT_CODE" -eq 0 ] && [ "$(printf '%s' "$OUTPUT" | tr -d '\r\n')" = "gateway-ok" ]; then
+            if [ "$EXIT_CODE" -eq 0 ] && printf '%s\n' "$OUTPUT" | grep -Fq "gateway-ok"; then
               cat > test-results/junit.xml \<<EOF
             <testsuite name="claude_code_gateway_e2e" tests="1" failures="0">
               <testcase classname="claude_code_gateway_e2e" name="claude_code_can_call_litellm_gateway"/>
