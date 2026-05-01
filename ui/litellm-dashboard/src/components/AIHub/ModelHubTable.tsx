@@ -22,7 +22,7 @@ import {
   modelHubPublicModelsCall,
 } from "@/components/networking";
 import PublicModelHub from "@/components/public_model_hub";
-import { isAdminRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { CopyOutlined } from "@ant-design/icons";
 import { Badge, Button, Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Modal } from "antd";
@@ -61,6 +61,10 @@ interface ModelGroupInfo {
 }
 
 const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, premiumUser, userRole }) => {
+  // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
+  // cannot toggle public visibility (write).
+  const canModify = isProxyAdminRole(userRole || "");
+
   const [publicPageAllowed, setPublicPageAllowed] = useState<boolean>(false);
   const [modelHubData, setModelHubData] = useState<ModelGroupInfo[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -420,7 +424,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
           </div>
 
           {/* Useful Links Management Section for Admins */}
-          {isAdminRole(userRole || "") && (
+          {canModify && (
             <div className="mt-8 mb-2">
               <UsefulLinksManagement accessToken={accessToken} userRole={userRole} />
             </div>
@@ -441,7 +445,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                 {/* Model Filters and Table */}
                 <Card>
                   {/* Header with Make Public Button */}
-                  {publicPage == false && isAdminRole(userRole || "") && (
+                  {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
                       <Button onClick={() => handleMakePublicPage()}>Select Models to Make Public</Button>
                     </div>
@@ -470,7 +474,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <TabPanel>
                 <Card>
                   {/* Header with Make Public Button */}
-                  {publicPage == false && isAdminRole(userRole || "") && (
+                  {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
                       <Button onClick={() => handleMakeAgentPublicPage()}>Select Agents to Make Public</Button>
                     </div>
@@ -496,7 +500,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <TabPanel>
                 <Card>
                   {/* Header with Make Public Button */}
-                  {publicPage == false && isAdminRole(userRole || "") && (
+                  {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
                       <Button onClick={() => handleMakeMcpPublicPage()}>Select MCP Servers to Make Public</Button>
                     </div>
@@ -520,7 +524,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
 
               {/* Skill Hub Tab */}
               <TabPanel>
-                {publicPage == false && isAdminRole(userRole || "") && (
+                {publicPage == false && canModify && (
                   <div className="flex justify-end mb-4">
                     <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>
                       Select Skills to Make Public
@@ -530,7 +534,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                 <SkillHubDashboard
                   skills={skillHubData}
                   isLoading={skillLoading}
-                  isAdmin={isAdminRole(userRole || "")}
+                  isAdmin={canModify}
                   accessToken={accessToken}
                   publicPage={publicPage}
                   onPublishSuccess={async () => {
