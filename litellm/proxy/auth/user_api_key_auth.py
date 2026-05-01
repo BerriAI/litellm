@@ -11,7 +11,7 @@ import asyncio
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple, cast
+from typing import Any, List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -63,6 +63,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
+    _safe_get_request_query_params,
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
@@ -116,6 +117,29 @@ azure_apim_header = APIKeyHeader(
     auto_error=False,
     description="The default name of the subscription key header of Azure",
 )
+
+
+def _get_model_from_request_context(
+    request_data: dict,
+    route: str,
+    request: Optional[Request],
+) -> Optional[Union[str, List[str]]]:
+    return get_model_from_request(
+        request_data=request_data,
+        route=route,
+        request_headers=_safe_get_request_headers(request=request),
+        request_query_params=_safe_get_request_query_params(request=request),
+    )
+
+
+def _get_model_names_for_budget_checks(
+    model: Optional[Union[str, List[str]]],
+) -> List[str]:
+    if model is None:
+        return []
+    if isinstance(model, str):
+        return [model]
+    return model
 
 
 def _get_bearer_token_or_received_api_key(api_key: str) -> str:
@@ -884,7 +908,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
 
                     # Check if model has zero cost - if so, skip all budget checks
-                    model = get_model_from_request(request_data, route)
+                    model = _get_model_from_request_context(
+                        request_data=request_data,
+                        route=route,
+                        request=request,
+                    )
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
                         from litellm.proxy.auth.auth_checks import _is_model_cost_zero
@@ -1254,6 +1282,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token=valid_token,
                 request_data=request_data,
                 route=route,
+                request=request,
                 llm_model_list=llm_model_list,
                 llm_router=llm_router,
             )
@@ -1279,7 +1308,11 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     user_obj = None
 
             # Check 2a. Check if model has zero cost - if so, skip all budget checks
-            model = get_model_from_request(request_data, route)
+            model = _get_model_from_request_context(
+                request_data=request_data,
+                route=route,
+                request=request,
+            )
             skip_budget_checks = False
             if model is not None and llm_router is not None:
                 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
@@ -1403,21 +1436,29 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
                     # Check 5. Token Model Spend is under Model budget
                     max_budget_per_model = valid_token.model_max_budget
-                    current_model = request_data.get("model", None)
+                    current_model = _get_model_from_request_context(
+                        request_data=request_data,
+                        route=route,
+                        request=request,
+                    )
+                    current_models = _get_model_names_for_budget_checks(
+                        model=current_model
+                    )
 
                     if (
                         max_budget_per_model is not None
                         and isinstance(max_budget_per_model, dict)
                         and len(max_budget_per_model) > 0
                         and prisma_client is not None
-                        and current_model is not None
+                        and current_models
                         and valid_token.token is not None
                     ):
                         ## GET THE SPEND FOR THIS MODEL
-                        await model_max_budget_limiter.is_key_within_model_budget(
-                            user_api_key_dict=valid_token,
-                            model=current_model,
-                        )
+                        for model_name in current_models:
+                            await model_max_budget_limiter.is_key_within_model_budget(
+                                user_api_key_dict=valid_token,
+                                model=model_name,
+                            )
 
                     # Check 5b. End-user model max budget
                     end_user_mmb = valid_token.end_user_model_max_budget
@@ -1425,14 +1466,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         end_user_mmb is not None
                         and isinstance(end_user_mmb, dict)
                         and len(end_user_mmb) > 0
-                        and current_model is not None
+                        and current_models
                         and valid_token.end_user_id is not None
                     ):
-                        await model_max_budget_limiter.is_end_user_within_model_budget(
-                            end_user_id=valid_token.end_user_id,
-                            end_user_model_max_budget=end_user_mmb,
-                            model=current_model,
-                        )
+                        for model_name in current_models:
+                            await model_max_budget_limiter.is_end_user_within_model_budget(
+                                end_user_id=valid_token.end_user_id,
+                                end_user_model_max_budget=end_user_mmb,
+                                model=model_name,
+                            )
 
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
@@ -1862,10 +1904,12 @@ async def _run_centralized_common_checks(
         user_api_key_auth_obj.project_metadata = project_object.metadata
         user_api_key_auth_obj.project_alias = project_object.project_alias
 
-    skip_budget_checks = False
-    model = get_model_from_request(request_data, route)
-    if model is not None and llm_router is not None:
-        skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
+    skip_budget_checks = _should_skip_budget_checks(
+        request_data=request_data,
+        route=route,
+        request=request,
+        llm_router=llm_router,
+    )
 
     _ = await common_checks(
         request=request,
@@ -1883,11 +1927,79 @@ async def _run_centralized_common_checks(
         project_object=project_object,
     )
 
+    await _reserve_budget_after_common_checks(
+        user_api_key_auth_obj=user_api_key_auth_obj,
+        request_data=request_data,
+        route=route,
+        llm_router=llm_router,
+        team_object=team_object,
+        user_object=user_object,
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        skip_budget_checks=skip_budget_checks,
+    )
+
 
 async def _noop_none() -> None:
     """Sentinel coroutine for asyncio.gather when a fetch is unnecessary
     (e.g. token has no team_id). Keeps the result tuple positional."""
     return None
+
+
+async def _reserve_budget_after_common_checks(
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    request_data: dict,
+    route: str,
+    llm_router: Optional[Any],
+    team_object: Optional[LiteLLM_TeamTableCachedObj],
+    user_object: Optional[LiteLLM_UserTable],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    skip_budget_checks: bool,
+    end_user_id: Optional[str] = None,
+    end_user_object: Optional[LiteLLM_EndUserTable] = None,
+) -> None:
+    user_api_key_auth_obj.budget_reservation = None
+    if skip_budget_checks:
+        return
+
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        reserve_budget_for_request,
+    )
+
+    user_api_key_auth_obj.budget_reservation = await reserve_budget_for_request(
+        request_body=request_data,
+        route=route,
+        llm_router=llm_router,
+        valid_token=user_api_key_auth_obj,
+        team_object=team_object,
+        user_object=user_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        end_user_id=end_user_id,
+        end_user_object=end_user_object,
+    )
+
+
+def _should_skip_budget_checks(
+    request_data: dict,
+    route: str,
+    request: Optional[Request],
+    llm_router: Optional[Any],
+) -> bool:
+    model = _get_model_from_request_context(
+        request_data=request_data,
+        route=route,
+        request=request,
+    )
+    if model is not None and llm_router is not None:
+        return _is_model_cost_zero(model=model, llm_router=llm_router)
+    return False
 
 
 @tracer.wrap()
@@ -1927,6 +2039,7 @@ async def user_api_key_auth(
         request_data=request_data,
         custom_litellm_key_header=custom_litellm_key_header,
     )
+    user_api_key_auth_obj.budget_reservation = None
 
     ## ENSURE DISABLE ROUTE WORKS ACROSS ALL USER AUTH FLOWS ##
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj)
@@ -2134,6 +2247,7 @@ async def _enforce_key_and_fallback_model_access(
     valid_token: UserAPIKeyAuth,
     request_data: dict,
     route: str,
+    request: Optional[Request],
     llm_model_list: Optional[list],
     llm_router: Optional[Any],
 ) -> None:
@@ -2152,7 +2266,11 @@ async def _enforce_key_and_fallback_model_access(
     ):
         pass
     else:
-        model = get_model_from_request(request_data, route)
+        model = _get_model_from_request_context(
+            request_data=request_data,
+            route=route,
+            request=request,
+        )
         fallback_models = cast(
             Optional[List[ALL_FALLBACK_MODEL_VALUES]],
             request_data.get("fallbacks", None),
@@ -2239,11 +2357,17 @@ async def _run_post_custom_auth_checks(
             valid_token=valid_token,
             request_data=request_data,
             route=route,
+            request=request,
             llm_model_list=llm_model_list,
             llm_router=llm_router,
         )
 
-    current_model = request_data.get("model", None)
+    current_model = _get_model_from_request_context(
+        request_data=request_data,
+        route=route,
+        request=request,
+    )
+    current_models = _get_model_names_for_budget_checks(model=current_model)
 
     # 3. Check key-level model_max_budget
     max_budget_per_model = valid_token.model_max_budget
@@ -2251,13 +2375,14 @@ async def _run_post_custom_auth_checks(
         max_budget_per_model is not None
         and isinstance(max_budget_per_model, dict)
         and len(max_budget_per_model) > 0
-        and current_model is not None
+        and current_models
         and valid_token.token is not None
     ):
-        await model_max_budget_limiter.is_key_within_model_budget(
-            user_api_key_dict=valid_token,
-            model=current_model,
-        )
+        for model_name in current_models:
+            await model_max_budget_limiter.is_key_within_model_budget(
+                user_api_key_dict=valid_token,
+                model=model_name,
+            )
 
     # 4. Check end-user model_max_budget
     end_user_mmb = valid_token.end_user_model_max_budget
@@ -2265,14 +2390,15 @@ async def _run_post_custom_auth_checks(
         end_user_mmb is not None
         and isinstance(end_user_mmb, dict)
         and len(end_user_mmb) > 0
-        and current_model is not None
+        and current_models
         and valid_token.end_user_id is not None
     ):
-        await model_max_budget_limiter.is_end_user_within_model_budget(
-            end_user_id=valid_token.end_user_id,
-            end_user_model_max_budget=end_user_mmb,
-            model=current_model,
-        )
+        for model_name in current_models:
+            await model_max_budget_limiter.is_end_user_within_model_budget(
+                end_user_id=valid_token.end_user_id,
+                end_user_model_max_budget=end_user_mmb,
+                model=model_name,
+            )
 
     # team / user / end_user / project context objects are fetched by
     # the centralized common_checks gate in user_api_key_auth after
