@@ -1,9 +1,19 @@
 # What is this?
 ## Translates OpenAI call to Anthropic `/v1/messages` format
+import copy
 import json
 import traceback
 from collections import deque
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Literal, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+)
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
@@ -12,6 +22,65 @@ from litellm.types.utils import AdapterCompletionStreamWrapper
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelResponseStream
+
+
+class _MultiToolCallSplitter:
+    """Wraps an upstream OpenAI-format streaming iterator and splits any chunk
+    whose ``delta.tool_calls`` contains more than one entry into multiple
+    chunks (one tool_call each).
+
+    Supports both sync (``__iter__`` / ``__next__``) and async (``__aiter__``
+    / ``__anext__``) consumption transparently, deciding which protocol to
+    use based on which one is invoked first. This is necessary because some
+    upstream stream wrappers expose both protocols, and consumers
+    (``AnthropicStreamWrapper.__next__`` vs ``__anext__``) pick the matching
+    one — wrapping the upstream stream with a sync-only or async-only
+    generator at construction time would break whichever protocol is unused.
+
+    Without this splitting, the downstream converter in
+    ``AnthropicStreamWrapper`` (which indexes ``tool_calls[0]`` in
+    ``_translate_streaming_openai_chunk_to_anthropic_content_block``)
+    silently drops every tool_call beyond the first when a provider emits
+    multiple parallel tool_calls in one OpenAI delta (e.g. mlx_lm.server).
+    """
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+        self._buffer: deque = deque()
+        # Lazily set the first time __iter__ / __aiter__ is called. Typed
+        # ``Any`` (rather than ``Optional[Any]``) so mypy doesn't ask us to
+        # narrow the None case at every call site — Python's iteration
+        # protocol contract already guarantees __iter__ runs before __next__.
+        self._sync_iter_obj: Any = None
+        self._async_iter_obj: Any = None
+
+    def __iter__(self) -> "Iterator[Any]":
+        if self._sync_iter_obj is None:
+            self._sync_iter_obj = iter(self._stream)
+        return self
+
+    def __next__(self) -> Any:
+        if self._buffer:
+            return self._buffer.popleft()
+        chunk = next(self._sync_iter_obj)  # raises StopIteration at EOF
+        splits = AnthropicStreamWrapper._split_chunk_by_tool_calls(chunk)
+        if len(splits) > 1:
+            self._buffer.extend(splits[1:])
+        return splits[0]
+
+    def __aiter__(self) -> "AsyncIterator[Any]":
+        if self._async_iter_obj is None:
+            self._async_iter_obj = self._stream.__aiter__()
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._buffer:
+            return self._buffer.popleft()
+        chunk = await self._async_iter_obj.__anext__()
+        splits = AnthropicStreamWrapper._split_chunk_by_tool_calls(chunk)
+        if len(splits) > 1:
+            self._buffer.extend(splits[1:])
+        return splits[0]
 
 
 class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
@@ -53,6 +122,52 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self.model = model
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
+
+        # Wrap upstream stream so chunks containing multiple tool_calls in a
+        # single delta are split into one tool_call per chunk before reaching
+        # the downstream converter. The converter assumes one tool_call per
+        # chunk (it indexes ``tool_calls[0]`` in
+        # ``_translate_streaming_openai_chunk_to_anthropic_content_block``),
+        # so without this split, providers that emit parallel tool_calls in
+        # one OpenAI delta (e.g. mlx_lm.server) lose all but the first call.
+        # The wrapper supports both sync and async iteration; whichever
+        # ``AnthropicStreamWrapper.__next__`` / ``__anext__`` invokes is
+        # served from the underlying stream's matching protocol.
+        #
+        # Stored under a separate attribute (rather than overwriting
+        # ``self.completion_stream`` from the superclass) so consumers that
+        # rely on the original stream still see it, and to keep static
+        # analyzers happy about subclass attribute shadowing.
+        self._completion_stream_splitter = _MultiToolCallSplitter(completion_stream)
+
+    @staticmethod
+    def _split_chunk_by_tool_calls(chunk: Any) -> List[Any]:
+        """Split one streaming chunk into N chunks if its delta contains
+        multiple tool_calls. Returns a list of chunks (length 1 for normal
+        chunks, N for multi-tool-call chunks).
+        """
+        if chunk is None or chunk == "None":
+            return [chunk]
+        try:
+            tcs = (
+                chunk.choices[0].delta.tool_calls
+                if chunk.choices and chunk.choices[0].delta is not None
+                else None
+            )
+        except (AttributeError, IndexError):
+            return [chunk]
+        if tcs is None or len(tcs) <= 1:
+            return [chunk]
+        out: List[Any] = []
+        for one_tc in tcs:
+            sub = copy.deepcopy(chunk)
+            # Deep-copy the tool_call too so each split chunk has fully
+            # independent state — without this, mutations downstream on
+            # ``one_tc`` (e.g. argument deltas) would leak into the original
+            # chunk's tool_calls list and into peer split chunks.
+            sub.choices[0].delta.tool_calls = [copy.deepcopy(one_tc)]
+            out.append(sub)
+        return out
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
@@ -114,7 +229,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            for chunk in self.completion_stream:
+            for chunk in self._completion_stream_splitter:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
@@ -254,7 +369,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 )
                 return self.chunk_queue.popleft()
 
-            async for chunk in self.completion_stream:
+            async for chunk in self._completion_stream_splitter:
                 if chunk == "None" or chunk is None:
                     raise Exception
 
