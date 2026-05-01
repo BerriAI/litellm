@@ -14,6 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import (
+    apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
 )
@@ -251,11 +252,15 @@ class LakeraAIGuardrail(CustomGuardrail):
                 self._is_only_pii_violation(lakera_guardrail_response)
                 and not is_multimodal_input
             ):
-                data["messages"] = self._mask_pii_in_messages(
+                redacted_messages = self._mask_pii_in_messages(
                     messages=new_messages,  # type: ignore[arg-type]
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
                 )
+                # Write back to ``messages`` AND ``input``. The Responses-API
+                # backend reads ``input``; writing only to ``messages``
+                # would let unredacted PII reach the LLM for /v1/responses.
+                apply_redacted_messages_back(data, list(redacted_messages))  # type: ignore[arg-type]
                 verbose_proxy_logger.debug(
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
@@ -325,11 +330,15 @@ class LakeraAIGuardrail(CustomGuardrail):
                 self._is_only_pii_violation(lakera_guardrail_response)
                 and not is_multimodal_input
             ):
-                data["messages"] = self._mask_pii_in_messages(
+                redacted_messages = self._mask_pii_in_messages(
                     messages=new_messages,  # type: ignore[arg-type]
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
                 )
+                # Write back to ``messages`` AND ``input``. The Responses-API
+                # backend reads ``input``; writing only to ``messages``
+                # would let unredacted PII reach the LLM for /v1/responses.
+                apply_redacted_messages_back(data, list(redacted_messages))  # type: ignore[arg-type]
                 verbose_proxy_logger.debug(
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
