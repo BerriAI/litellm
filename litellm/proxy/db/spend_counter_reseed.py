@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, ClassVar, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
@@ -72,9 +73,10 @@ class SpendCounterReseed:
         """
         if prisma_client is None:
             return None
-        # Per-window counters share prefixes with primary counters but
-        # don't correspond to a DB row.
-        if ":window:" in counter_key:
+        # Per-window key/team counters share prefixes with primary counters
+        # but don't correspond to a DB row. Do not reject arbitrary entity IDs
+        # or tag names that merely contain ":window:".
+        if SpendCounterReseed._is_key_or_team_window_counter(counter_key):
             return None
         try:
             if counter_key.startswith("spend:key:"):
@@ -125,6 +127,21 @@ class SpendCounterReseed:
         if row is None:
             return None
         return float(getattr(row, "spend", 0.0) or 0.0)
+
+    @staticmethod
+    def _is_key_or_team_window_counter(counter_key: str) -> bool:
+        for prefix in ("spend:key:", "spend:team:"):
+            if not counter_key.startswith(prefix):
+                continue
+            _, separator, duration = counter_key.rpartition(":window:")
+            if not separator or not duration:
+                return False
+            try:
+                duration_in_seconds(duration)
+            except Exception:
+                return False
+            return True
+        return False
 
     @staticmethod
     async def coalesced(

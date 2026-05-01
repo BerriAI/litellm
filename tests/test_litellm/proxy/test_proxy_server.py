@@ -5088,9 +5088,28 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
         where={"user_id": "customer-1"}
     )
 
+    fake_prisma.db.litellm_endusertable.find_unique.reset_mock()
+    assert (
+        await SpendCounterReseed.from_db(
+            fake_prisma, "spend:end_user:customer:window:1h"
+        )
+        == 21.0
+    )
+    fake_prisma.db.litellm_endusertable.find_unique.assert_awaited_once_with(
+        where={"user_id": "customer:window:1h"}
+    )
+
     assert await SpendCounterReseed.from_db(fake_prisma, "spend:tag:paid-tag") == 8.0
     fake_prisma.db.litellm_tagtable.find_unique.assert_awaited_once_with(
         where={"tag_name": "paid-tag"}
+    )
+
+    fake_prisma.db.litellm_tagtable.find_unique.reset_mock()
+    assert (
+        await SpendCounterReseed.from_db(fake_prisma, "spend:tag:paid:window:1h") == 8.0
+    )
+    fake_prisma.db.litellm_tagtable.find_unique.assert_awaited_once_with(
+        where={"tag_name": "paid:window:1h"}
     )
 
     assert await SpendCounterReseed.from_db(fake_prisma, "spend:org:acme") == 305.0
