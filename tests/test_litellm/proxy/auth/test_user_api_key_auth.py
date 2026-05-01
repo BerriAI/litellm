@@ -1752,7 +1752,11 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
     from starlette.datastructures import URL
     from starlette.requests import Request
 
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        LiteLLM_TeamTableCachedObj,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
 
     api_key = "sk-test-team-metadata-refresh"
@@ -1833,16 +1837,17 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
                 request_data={},
             )
 
-        assert result.team_metadata == {"guardrails": ["test-guardrail-333"]}, (
-            f"team_metadata was not updated from fresh team object. Got: {result.team_metadata}"
-        )
+        assert result.team_metadata == {
+            "guardrails": ["test-guardrail-333"]
+        }, f"team_metadata was not updated from fresh team object. Got: {result.team_metadata}"
 
     finally:
         for k, v in _originals.items():
             setattr(_proxy_server_mod, k, v)
-            
+
+
 # ---------------------------------------------------------------------------
-            
+
 # _run_centralized_common_checks — centralized authz gate
 # ---------------------------------------------------------------------------
 

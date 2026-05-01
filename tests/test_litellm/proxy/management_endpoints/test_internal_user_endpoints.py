@@ -1949,11 +1949,13 @@ async def test_delete_user_rejects_org_admin_deleting_outside_scope(mocker):
     assert exc.value.status_code == 403
 
     # Critical: no delete_many calls should have executed.
-    assert not hasattr(
-        mock_prisma_client.db.litellm_verificationtoken.delete_many, "mock_calls"
-    ) or len(
-        mock_prisma_client.db.litellm_verificationtoken.delete_many.mock_calls
-    ) == 0
+    assert (
+        not hasattr(
+            mock_prisma_client.db.litellm_verificationtoken.delete_many, "mock_calls"
+        )
+        or len(mock_prisma_client.db.litellm_verificationtoken.delete_many.mock_calls)
+        == 0
+    )
 
 
 @pytest.mark.asyncio

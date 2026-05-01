@@ -546,9 +546,9 @@ def test_bedrock_converse_sorts_text_before_tooluse_sync():
     tool_indices = [i for i, b in enumerate(content) if "toolUse" in b]
 
     # All text blocks must come before all toolUse blocks
-    assert max(text_indices) < min(tool_indices), (
-        f"text blocks at {text_indices} should all precede toolUse blocks at {tool_indices}"
-    )
+    assert max(text_indices) < min(
+        tool_indices
+    ), f"text blocks at {text_indices} should all precede toolUse blocks at {tool_indices}"
 
 
 @pytest.mark.asyncio
@@ -567,9 +567,9 @@ async def test_bedrock_converse_sorts_text_before_tooluse_async():
     text_indices = [i for i, b in enumerate(content) if "text" in b]
     tool_indices = [i for i, b in enumerate(content) if "toolUse" in b]
 
-    assert max(text_indices) < min(tool_indices), (
-        f"text blocks at {text_indices} should all precede toolUse blocks at {tool_indices}"
-    )
+    assert max(text_indices) < min(
+        tool_indices
+    ), f"text blocks at {text_indices} should all precede toolUse blocks at {tool_indices}"
 
 
 @pytest.mark.asyncio
@@ -577,7 +577,9 @@ async def test_bedrock_converse_content_ordering_sync_async_parity():
     """Sync and async paths should produce identical content block ordering."""
     messages = _make_tooluse_before_text_messages()
     sync_result = _bedrock_converse_messages_pt(messages, MODEL, PROVIDER)
-    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-        messages, MODEL, PROVIDER
+    async_result = (
+        await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+            messages, MODEL, PROVIDER
+        )
     )
     assert sync_result == async_result

@@ -22,7 +22,7 @@ from litellm.types.integrations.prometheus import (
         # Escapes per Prometheus text format
         ('he said "hi"', 'he said \\"hi\\"'),
         (r"path\to\file", r"path\\to\\file"),
-        (r'quote\"slash\\', r'quote\\\"slash\\\\'),
+        (r"quote\"slash\\", r"quote\\\"slash\\\\"),
         # Non-string inputs get coerced to str first
         (123, "123"),
         (True, "True"),
@@ -31,4 +31,3 @@ from litellm.types.integrations.prometheus import (
 )
 def test_sanitize_prometheus_label_value_expected_outputs(value, expected):
     assert _sanitize_prometheus_label_value(value) == expected
-

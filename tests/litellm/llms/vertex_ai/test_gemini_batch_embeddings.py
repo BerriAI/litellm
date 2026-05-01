@@ -581,17 +581,21 @@ def test_vertex_ai_text_only_embedding_uses_embed_content():
 
 def test_filter_embed_params_drops_unsupported():
     """Unsupported params like max_tokens should be filtered out."""
-    result = _filter_embed_params({"dimensions": 768, "max_tokens": 256, "temperature": 0.5})
+    result = _filter_embed_params(
+        {"dimensions": 768, "max_tokens": 256, "temperature": 0.5}
+    )
     assert result == {"outputDimensionality": 768}
 
 
 def test_filter_embed_params_keeps_supported():
     """All supported Gemini embedding params should pass through."""
-    result = _filter_embed_params({
-        "dimensions": 768,
-        "task_type": "RETRIEVAL_DOCUMENT",
-        "title": "My doc",
-    })
+    result = _filter_embed_params(
+        {
+            "dimensions": 768,
+            "task_type": "RETRIEVAL_DOCUMENT",
+            "title": "My doc",
+        }
+    )
     assert result == {
         "outputDimensionality": 768,
         "taskType": "RETRIEVAL_DOCUMENT",

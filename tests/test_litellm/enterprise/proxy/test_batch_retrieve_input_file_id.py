@@ -18,11 +18,17 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 
 
 DECODED_UNIFIED_INPUT_FILE_ID = "litellm_proxy:application/octet-stream;unified_id,test-uuid;target_model_names,azure-gpt-4"
-B64_UNIFIED_INPUT_FILE_ID = base64.urlsafe_b64encode(DECODED_UNIFIED_INPUT_FILE_ID.encode()).decode().rstrip("=")
+B64_UNIFIED_INPUT_FILE_ID = (
+    base64.urlsafe_b64encode(DECODED_UNIFIED_INPUT_FILE_ID.encode())
+    .decode()
+    .rstrip("=")
+)
 RAW_INPUT_FILE_ID = "file-raw-provider-abc123"
 
 DECODED_UNIFIED_BATCH_ID = "litellm_proxy;model_id:model-xyz;llm_batch_id:batch-123"
-B64_UNIFIED_BATCH_ID = base64.urlsafe_b64encode(DECODED_UNIFIED_BATCH_ID.encode()).decode().rstrip("=")
+B64_UNIFIED_BATCH_ID = (
+    base64.urlsafe_b64encode(DECODED_UNIFIED_BATCH_ID.encode()).decode().rstrip("=")
+)
 
 
 @pytest.mark.asyncio
@@ -55,10 +61,16 @@ async def test_should_resolve_raw_input_file_id_to_unified():
     mock_managed_file.unified_file_id = B64_UNIFIED_INPUT_FILE_ID
 
     mock_prisma = MagicMock()
-    mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(return_value=mock_db_object)
-    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=mock_managed_file)
+    mock_prisma.db.litellm_managedobjecttable.find_first = AsyncMock(
+        return_value=mock_db_object
+    )
+    mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(
+        return_value=mock_managed_file
+    )
 
-    from litellm.proxy.openai_files_endpoints.common_utils import get_batch_from_database
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        get_batch_from_database,
+    )
 
     _, response = await get_batch_from_database(
         batch_id=B64_UNIFIED_BATCH_ID,

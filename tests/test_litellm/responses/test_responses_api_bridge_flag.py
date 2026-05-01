@@ -151,9 +151,7 @@ class TestUseResponsesApiBridgeFlag:
             output=[
                 {"type": "message", "content": [{"type": "text", "text": "Answer"}]}
             ],
-            usage=ResponseAPIUsage(
-                input_tokens=10, output_tokens=5, total_tokens=15
-            ),
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
         )
         mock_call_aresponses.return_value = mock_response
 
@@ -202,9 +200,7 @@ class TestUseResponsesApiBridgeFlag:
                     "arguments": '{"queries": ["test query"]}',
                 }
             ],
-            usage=ResponseAPIUsage(
-                input_tokens=10, output_tokens=5, total_tokens=15
-            ),
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
         )
         second_response = ResponsesAPIResponse(
             id="resp_second",
@@ -216,9 +212,7 @@ class TestUseResponsesApiBridgeFlag:
                     "content": [{"type": "text", "text": "Final answer"}],
                 }
             ],
-            usage=ResponseAPIUsage(
-                input_tokens=20, output_tokens=10, total_tokens=30
-            ),
+            usage=ResponseAPIUsage(input_tokens=20, output_tokens=10, total_tokens=30),
         )
         mock_bridge_handler.side_effect = [first_response, second_response]
 
@@ -267,9 +261,7 @@ class TestUseResponsesApiBridgeFlag:
                     "content": [{"type": "text", "text": "Native response"}],
                 }
             ],
-            usage=ResponseAPIUsage(
-                input_tokens=10, output_tokens=5, total_tokens=15
-            ),
+            usage=ResponseAPIUsage(input_tokens=10, output_tokens=5, total_tokens=15),
         )
 
         result = await litellm.aresponses(
