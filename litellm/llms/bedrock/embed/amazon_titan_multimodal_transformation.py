@@ -93,9 +93,9 @@ class AmazonTitanMultimodalEmbeddingG1Config:
             )
 
         usage = Usage(
-            prompt_tokens=total_prompt_tokens,
+            prompt_tokens=total_prompt_tokens + image_count,
             completion_tokens=0,
-            total_tokens=total_prompt_tokens,
+            total_tokens=total_prompt_tokens + image_count,
             prompt_tokens_details=prompt_tokens_details,
         )
         return EmbeddingResponse(model=model, usage=usage, data=transformed_responses)

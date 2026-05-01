@@ -867,6 +867,8 @@ def test_titan_multimodal_embedding_image_cost_tracking():
     )
 
     assert result.usage is not None
+    assert result.usage.prompt_tokens == 1  # image_count included in prompt_tokens
+    assert result.usage.total_tokens == 1
     assert result.usage.prompt_tokens_details is not None
     assert result.usage.prompt_tokens_details.image_count == 1
 
