@@ -1155,6 +1155,30 @@ async def get_generic_sso_response(
         authorization_code = request.query_params.get("code")
 
         if code_verifier:
+            # State-to-session-cookie binding.  The non-PKCE branch below
+            # delegates to fastapi-sso's ``verify_and_process``, which
+            # performs its own session-cookie check.  The PKCE branch
+            # bypasses that helper, so we validate the URL ``state``
+            # against the ``litellm_oauth_state`` cookie set on the
+            # redirect response — without this an attacker can pre-mint
+            # a state + cached PKCE verifier and hijack a victim's auth
+            # code (Login-CSRF / token theft).
+            url_state = request.query_params.get("state")
+            cookie_state = request.cookies.get("litellm_oauth_state")
+            if (
+                not url_state
+                or not cookie_state
+                or not secrets.compare_digest(url_state, cookie_state)
+            ):
+                raise ProxyException(
+                    message=(
+                        "Invalid OAuth state parameter — does not match "
+                        "the browser-bound state cookie."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="state",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
             if not authorization_code:
                 raise ProxyException(
                     message="Missing authorization code in callback",
@@ -2284,10 +2308,13 @@ class SSOAuthenticationHandler:
         from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
         with generic_sso:
-            # TODO: state should be a random string and added to the user session with cookie
-            # or a cryptographicly signed state that we can verify stateless
-            # For simplification we are using a static state, this is not perfect but some
-            # SSO providers do not allow stateless verification
+            # State is bound to the caller's browser via a ``litellm_oauth_state``
+            # HttpOnly cookie set on the redirect response below; the SSO
+            # callback validates the URL ``state`` against that cookie before
+            # completing the PKCE token exchange.  Without this binding, an
+            # attacker who pre-mints a state + a cached PKCE verifier can hand
+            # the link to a victim and capture the resulting access token
+            # (Login CSRF / token theft).
             (
                 redirect_params,
                 code_verifier,
@@ -2354,6 +2381,20 @@ class SSOAuthenticationHandler:
 
                     # Update the redirect response
                     redirect_response.headers["location"] = new_url
+
+            # Bind state to the user's browser session.  The /callback handler
+            # validates the URL ``state`` against this cookie via
+            # ``secrets.compare_digest`` before exchanging the PKCE
+            # code_verifier.
+            state_value = redirect_params.get("state")
+            if state_value and redirect_response is not None:
+                redirect_response.set_cookie(
+                    key="litellm_oauth_state",
+                    value=state_value,
+                    max_age=600,
+                    httponly=True,
+                    samesite="lax",
+                )
             return redirect_response
 
     @staticmethod
