@@ -401,7 +401,7 @@ class BaseLLMChatTest(ABC):
             {
                 "type": "file",
                 "file": {
-                    "file_id": "https://raw.githubusercontent.com/BerriAI/litellm/main/tests/llm_translation/fixtures/dummy.pdf"
+                    "file_id": "https://cdn.jsdelivr.net/gh/BerriAI/litellm@main/tests/llm_translation/fixtures/dummy.pdf"
                 },
             },
         ]
