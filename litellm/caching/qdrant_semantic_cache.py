@@ -120,6 +120,7 @@ class QdrantSemanticCache(BaseCache):
             print_verbose(
                 f"Collection already exists.\nCollection details:{self.collection_info}"
             )
+            self._ensure_cache_key_payload_index()
         else:
             if quantization_config is None or quantization_config == "binary":
                 quantization_params = {
@@ -161,6 +162,7 @@ class QdrantSemanticCache(BaseCache):
                 print_verbose(
                     f"New collection created.\nCollection details:{self.collection_info}"
                 )
+                self._ensure_cache_key_payload_index()
             else:
                 raise Exception("Error while creating new collection")
 
@@ -185,7 +187,31 @@ class QdrantSemanticCache(BaseCache):
             ]
         }
 
+    def _ensure_cache_key_payload_index(self) -> None:
+        try:
+            response = self.sync_client.put(
+                url=f"{self.qdrant_api_base}/collections/{self.collection_name}/index",
+                headers=self.headers,
+                json={
+                    "field_name": self.CACHE_KEY_FIELD_NAME,
+                    "field_schema": "keyword",
+                },
+            )
+            if response.status_code not in (200, 201):
+                print_verbose(
+                    "Qdrant semantic-cache could not create cache-key payload index: "
+                    f"{response.text}"
+                )
+        except Exception as exc:
+            print_verbose(
+                "Qdrant semantic-cache could not create cache-key payload index: "
+                f"{str(exc)}"
+            )
+
     def _payload_matches_cache_key(self, payload: dict, key: str) -> bool:
+        # Legacy Qdrant semantic-cache points stored only prompt text and
+        # response. They cannot be reassigned to the generated LiteLLM cache key
+        # without risking cross-scope hits, so they must be treated as misses.
         cached_key = payload.get(self.CACHE_KEY_FIELD_NAME)
         return cached_key is not None and str(cached_key) == str(key)
 
