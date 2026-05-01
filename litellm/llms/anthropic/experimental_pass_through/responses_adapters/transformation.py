@@ -11,6 +11,12 @@ from typing import Any, Dict, List, Optional, Union, cast
 from litellm.llms.anthropic.experimental_pass_through.utils import (
     is_reasoning_auto_summary_enabled,
 )
+
+from .utils import (
+    build_text_blocks_with_citations,
+    build_web_tool_use,
+    build_web_search_results_from_annotations,
+)
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
@@ -421,6 +427,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         """
         from openai.types.responses import (
             ResponseFunctionToolCall,
+            ResponseFunctionWebSearch,
             ResponseOutputMessage,
             ResponseReasoningItem,
         )
@@ -429,6 +436,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         content: List[Dict[str, Any]] = []
         stop_reason: AnthropicFinishReason = "end_turn"
+        web_tool_uses: List[Dict[str, Any]] = []
 
         for item in response.output:
             if isinstance(item, ResponseReasoningItem):
@@ -442,6 +450,25 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 signature=None,
                             ).model_dump()
                         )
+
+            elif isinstance(item, ResponseFunctionWebSearch):
+                block, input_dict = build_web_tool_use(item)
+                web_tool_uses.append(block)
+                content.append({**block, "input": input_dict})
+
+            elif isinstance(item, ResponseOutputMessage) and web_tool_uses:
+                for part in item.content:
+                    if getattr(part, "type", None) == "output_text":
+                        blocks, citations = build_web_search_results_from_annotations(
+                            web_tool_uses, getattr(part, "annotations", []) or []
+                        )
+                        content.extend(blocks)
+                        content.extend(
+                            build_text_blocks_with_citations(
+                                getattr(part, "text", ""), citations
+                            )
+                        )
+                        break
 
             elif isinstance(item, ResponseOutputMessage):
                 for part in item.content:
@@ -469,7 +496,26 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
             elif isinstance(item, dict):
                 item_type = item.get("type")
-                if item_type == "message":
+                if item_type == "web_search_call":
+                    block, input_dict = build_web_tool_use(item)
+                    web_tool_uses.append(block)
+                    content.append({**block, "input": input_dict})
+                elif item_type == "message" and web_tool_uses:
+                    for part in item.get("content", []):
+                        if isinstance(part, dict) and part.get("type") == "output_text":
+                            blocks, citations = (
+                                build_web_search_results_from_annotations(
+                                    web_tool_uses, part.get("annotations") or []
+                                )
+                            )
+                            content.extend(blocks)
+                            content.extend(
+                                build_text_blocks_with_citations(
+                                    part.get("text", ""), citations
+                                )
+                            )
+                            break
+                elif item_type == "message":
                     for part in item.get("content", []):
                         if isinstance(part, dict) and part.get("type") == "output_text":
                             content.append(
@@ -505,6 +551,16 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
+
+        if web_tool_uses:
+            anthropic_usage["server_tool_use"] = {  # type: ignore[typeddict-unknown-key]
+                "web_search_requests": sum(
+                    c["name"] == "web_search" for c in web_tool_uses
+                ),
+                "web_fetch_requests": sum(
+                    c["name"] == "web_fetch" for c in web_tool_uses
+                ),
+            }
 
         return AnthropicMessagesResponse(
             id=response.id,
