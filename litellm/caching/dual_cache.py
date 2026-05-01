@@ -92,6 +92,25 @@ class DualCache(BaseCache):
         if default_redis_ttl is not None:
             self.default_redis_ttl = default_redis_ttl
 
+    def attach_redis_cache(
+        self,
+        redis_cache: Optional[RedisCache] = None,
+        *,
+        default_redis_ttl: Optional[float] = None,
+    ) -> None:
+        """
+        Attach a Redis backend if this DualCache does not already have one.
+
+        No-op when ``redis_cache`` is None or when Redis was already set (constructor
+        or a prior attach). Use this for lazy wiring after a shared Redis client exists.
+        Does not backfill in-memory-only keys to Redis.
+        """
+        if redis_cache is None or self.redis_cache is not None:
+            return
+        self.redis_cache = redis_cache
+        if default_redis_ttl is not None:
+            self.default_redis_ttl = default_redis_ttl
+
     def set_cache(self, key, value, local_only: bool = False, **kwargs):
         # Update both Redis and in-memory cache
         try:
