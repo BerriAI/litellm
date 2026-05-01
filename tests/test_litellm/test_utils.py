@@ -3983,3 +3983,60 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+class TestFunctionSetupMissingRequiredField:
+    """
+    Regression tests: function_setup() must raise BadRequestError (status 400)
+    instead of a raw KeyError when the caller omits the required input field
+    for text-completion, image-generation, or moderation.
+    """
+
+    def _call_function_setup(self, original_function: str, **kwargs):
+        import uuid
+        from datetime import datetime
+
+        from litellm.utils import Rules, function_setup
+
+        return function_setup(
+            original_function=original_function,
+            rules_obj=Rules(),
+            start_time=datetime.now(),
+            litellm_call_id=str(uuid.uuid4()),
+            **kwargs,
+        )
+
+    def test_text_completion_missing_prompt_raises_bad_request(self):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            self._call_function_setup(
+                original_function="atext_completion",
+                model="text-davinci-003",
+            )
+        assert exc_info.value.status_code == 400
+        assert "prompt" in str(exc_info.value)
+
+    def test_text_completion_with_prompt_succeeds(self):
+        logging_obj, kwargs = self._call_function_setup(
+            original_function="atext_completion",
+            model="text-davinci-003",
+            prompt="hello",
+        )
+        assert kwargs["prompt"] == "hello"
+
+    def test_image_generation_missing_prompt_raises_bad_request(self):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            self._call_function_setup(
+                original_function="aimage_generation",
+                model="dall-e-3",
+            )
+        assert exc_info.value.status_code == 400
+        assert "prompt" in str(exc_info.value)
+
+    def test_moderation_missing_input_raises_bad_request(self):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            self._call_function_setup(
+                original_function="amoderation",
+                model="text-moderation-latest",
+            )
+        assert exc_info.value.status_code == 400
+        assert "input" in str(exc_info.value)

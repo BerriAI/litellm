@@ -1036,17 +1036,47 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.image_generation.value
             or call_type == CallTypes.aimage_generation.value
         ):
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            if len(args) > 0:
+                messages = args[0]
+            else:
+                prompt_value = kwargs.get("prompt")
+                if prompt_value is None:
+                    raise BadRequestError(
+                        message="Missing required parameter: 'prompt' for image generation.",
+                        model=kwargs.get("model") or "",
+                        llm_provider="",
+                    )
+                messages = prompt_value
         elif (
             call_type == CallTypes.moderation.value
             or call_type == CallTypes.amoderation.value
         ):
-            messages = args[1] if len(args) > 1 else kwargs["input"]
+            if len(args) > 1:
+                messages = args[1]
+            else:
+                input_value = kwargs.get("input")
+                if input_value is None:
+                    raise BadRequestError(
+                        message="Missing required parameter: 'input' for moderation.",
+                        model=kwargs.get("model") or "",
+                        llm_provider="",
+                    )
+                messages = input_value
         elif (
             call_type == CallTypes.atext_completion.value
             or call_type == CallTypes.text_completion.value
         ):
-            messages = args[0] if len(args) > 0 else kwargs["prompt"]
+            if len(args) > 0:
+                messages = args[0]
+            else:
+                prompt_value = kwargs.get("prompt")
+                if prompt_value is None:
+                    raise BadRequestError(
+                        message="Missing required parameter: 'prompt' for text completion.",
+                        model=kwargs.get("model") or "",
+                        llm_provider="",
+                    )
+                messages = prompt_value
         elif (
             call_type == CallTypes.rerank.value or call_type == CallTypes.arerank.value
         ):
@@ -1055,7 +1085,17 @@ def function_setup(  # noqa: PLR0915
             call_type == CallTypes.atranscription.value
             or call_type == CallTypes.transcription.value
         ):
-            _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
+            if len(args) > 1:
+                _file_obj: FileTypes = args[1]
+            else:
+                file_value = kwargs.get("file")
+                if file_value is None:
+                    raise BadRequestError(
+                        message="Missing required parameter: 'file' for transcription.",
+                        model=kwargs.get("model") or "",
+                        llm_provider="",
+                    )
+                _file_obj = file_value
             # Lazy import audio_utils.utils only when needed for transcription calls
             audio_utils = _get_cached_audio_utils()
             file_checksum = audio_utils.get_audio_file_content_hash(file_obj=_file_obj)
