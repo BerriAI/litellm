@@ -5750,3 +5750,90 @@ class TestLazyFeatureMiddleware:
         assert attempts == [
             "called"
         ], f"failing register_fn should be invoked once, not on every request; got {attempts}"
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_redis_clean_miss_skips_stale_in_memory():
+    """When Redis is reachable and cleanly returns None (TTL expired,
+    counter genuinely absent), the read must reseed from DB - NOT fall
+    through to per-pod in-memory which only contains this pod's writes.
+
+    Pre-fix in multi-pod deployments, in-memory contained a stale local
+    subset (e.g. $30) while DB had the true cross-pod total ($500). The
+    fall-through returned $30, enforcement passed, bypass.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-1"
+
+    # Per-pod stale in-memory: only this pod's writes, not cross-pod truth.
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=30.0)
+
+    # Redis cleanly returns None (key expired or never written on this pod).
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_increment = AsyncMock(return_value=500.0)
+    counter_cache.redis_cache = fake_redis
+
+    # DB has the authoritative cross-pod spend.
+    db_row = MagicMock()
+    db_row.spend = 500.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=db_row)
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        spend = await get_current_spend(counter_key=counter_key, fallback_spend=0.0)
+        assert spend == 500.0, (
+            f"expected DB-authoritative 500.0 on clean Redis miss, got {spend} "
+            f"(stale per-pod in-memory $30 would have caused multi-pod bypass)"
+        )
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_redis_error_falls_back_to_in_memory():
+    """When Redis raises, the read should still degrade to in-memory rather
+    than going straight to DB - in-memory is at least same-pod-fresh and
+    cheaper than a DB query during a Redis outage."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-1"
+
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=42.0)
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    counter_cache.redis_cache = fake_redis
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(
+        return_value=MagicMock(spend=999.0)
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        spend = await get_current_spend(counter_key=counter_key, fallback_spend=0.0)
+        assert spend == 42.0, (
+            f"expected in-memory fallback 42.0 on Redis error, got {spend} "
+            f"(should not have hit DB when Redis errored)"
+        )
+        # DB query should NOT have fired - in-memory short-circuits.
+        fake_prisma.db.litellm_teammembership.find_unique.assert_not_awaited()
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
