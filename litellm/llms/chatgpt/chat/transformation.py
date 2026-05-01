@@ -41,6 +41,17 @@ class ChatGPTConfig(OpenAIConfig):
             )
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
 
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+    ) -> List[AllMessageValues]:
+        # ChatGPT backend rejects system-role messages; normalize to user-role.
+        for i, message in enumerate(messages):
+            if isinstance(message, dict) and message.get("role") == "system":
+                messages[i] = {"role": "user", "content": message.get("content", "")}
+        return super()._transform_messages(messages, model)
+
     def validate_environment(
         self,
         headers: dict,
