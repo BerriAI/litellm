@@ -59,14 +59,9 @@ def get_stored_api_key(expected_base_url: Optional[str] = None) -> Optional[str]
     originally issued for that URL. This prevents credential leakage when the
     CLI is pointed at a different (possibly malicious) server.
     """
-    token_data = load_token()
-    if not token_data or "key" not in token_data:
-        return None
-    if expected_base_url is not None:
-        stored_url = token_data.get("base_url")
-        if stored_url != expected_base_url.rstrip("/"):
-            return None
-    return token_data["key"]
+    from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
+
+    return get_litellm_gateway_api_key(expected_base_url=expected_base_url)
 
 
 # Team selection utilities
