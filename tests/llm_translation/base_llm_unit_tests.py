@@ -401,10 +401,7 @@ class BaseLLMChatTest(ABC):
             {
                 "type": "file",
                 "file": {
-                    # SHA-pinned jsDelivr mirror of tests/llm_translation/fixtures/dummy.pdf;
-                    # raw.githubusercontent.com serves PDFs as application/octet-stream
-                    # which OpenAI/Gemini reject when LiteLLM client-fetches the URL.
-                    "file_id": "https://cdn.jsdelivr.net/gh/BerriAI/litellm@aab3ef8988b12d166b20356a81c53127480f1125/tests/llm_translation/fixtures/dummy.pdf"
+                    "file_id": "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/tests/llm_translation/fixtures/dummy.pdf"
                 },
             },
         ]
