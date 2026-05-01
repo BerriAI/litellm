@@ -1,5 +1,5 @@
 """
-Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
+Translate from OpenAI's `/v1/chat/completions` to LiteLLM Proxy's `/v1/chat/completions`
 """
 
 from typing import TYPE_CHECKING, List, Optional, Tuple
@@ -39,7 +39,9 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+        dynamic_api_key = (
+            api_key or get_secret_str("LITELLM_PROXY_API_KEY") or "fake-api-key"
+        )  # litellm_proxy does not require an api key, but OpenAI client requires non-None value
         return api_base, dynamic_api_key
 
     def get_models(
@@ -55,7 +57,9 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
-        return api_key or get_secret_str("LITELLM_PROXY_API_KEY")
+        return (
+            api_key or get_secret_str("LITELLM_PROXY_API_KEY") or "fake-api-key"
+        )  # litellm_proxy does not require an api key
 
     @staticmethod
     def _should_use_litellm_proxy_by_default(
