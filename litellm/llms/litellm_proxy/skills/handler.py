@@ -10,6 +10,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
+from litellm.llms.litellm_proxy.skills.store import LiteLLMSkillsStore
 from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest, UserAPIKeyAuth
 from litellm.proxy.common_utils.resource_ownership import (
     get_primary_resource_owner_scope,
@@ -104,6 +105,7 @@ class LiteLLMSkillsHandler:
             LiteLLM_SkillsTable record
         """
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        store = LiteLLMSkillsStore(prisma_client)
 
         skill_id = f"litellm_skill_{uuid.uuid4()}"
         owner = get_primary_resource_owner_scope(user_api_key_dict) or user_id
@@ -138,7 +140,7 @@ class LiteLLMSkillsHandler:
             f"LiteLLMSkillsHandler: Creating skill {skill_id} with title={data.display_title}"
         )
 
-        new_skill = await prisma_client.db.litellm_skillstable.create(data=skill_data)
+        new_skill = await store.create_skill(skill_data)
 
         return _prisma_skill_to_litellm(new_skill)
 
@@ -159,6 +161,7 @@ class LiteLLMSkillsHandler:
             List of LiteLLM_SkillsTable records
         """
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        store = LiteLLMSkillsStore(prisma_client)
 
         verbose_logger.debug(
             f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}"
@@ -183,9 +186,7 @@ class LiteLLMSkillsHandler:
             else:
                 find_many_kwargs["where"] = {"created_by": {"in": owner_scopes}}
 
-        skills = await prisma_client.db.litellm_skillstable.find_many(
-            **find_many_kwargs
-        )
+        skills = await store.list_skills(find_many_kwargs)
 
         return [_prisma_skill_to_litellm(s) for s in skills]
 
@@ -207,12 +208,11 @@ class LiteLLMSkillsHandler:
             ValueError: If skill not found
         """
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        store = LiteLLMSkillsStore(prisma_client)
 
         verbose_logger.debug(f"LiteLLMSkillsHandler: Getting skill {skill_id}")
 
-        skill = await prisma_client.db.litellm_skillstable.find_unique(
-            where={"skill_id": skill_id}
-        )
+        skill = await store.find_skill(skill_id)
 
         if skill is None:
             raise ValueError(f"Skill not found: {skill_id}")
@@ -242,13 +242,12 @@ class LiteLLMSkillsHandler:
             ValueError: If skill not found
         """
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        store = LiteLLMSkillsStore(prisma_client)
 
         verbose_logger.debug(f"LiteLLMSkillsHandler: Deleting skill {skill_id}")
 
         # Check if skill exists
-        skill = await prisma_client.db.litellm_skillstable.find_unique(
-            where={"skill_id": skill_id}
-        )
+        skill = await store.find_skill(skill_id)
 
         if skill is None:
             raise ValueError(f"Skill not found: {skill_id}")
@@ -259,7 +258,7 @@ class LiteLLMSkillsHandler:
             raise ValueError(f"Skill not found: {skill_id}")
 
         # Delete the skill
-        await prisma_client.db.litellm_skillstable.delete(where={"skill_id": skill_id})
+        await store.delete_skill(skill_id)
 
         return {"id": skill_id, "type": "skill_deleted"}
 

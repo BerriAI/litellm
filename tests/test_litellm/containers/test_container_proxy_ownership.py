@@ -242,6 +242,29 @@ async def test_should_track_container_owner_in_memory_without_prisma(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_should_bound_in_memory_container_owner_tracking(monkeypatch):
+    monkeypatch.setattr(ownership, "MAX_IN_MEMORY_CONTAINER_OWNERS", 2)
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=None),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    for container_id in ("cntr_1", "cntr_2", "cntr_3"):
+        await ownership.record_container_owner(
+            response=_container(container_id),
+            user_api_key_dict=auth,
+            custom_llm_provider="openai",
+        )
+
+    assert list(ownership._IN_MEMORY_CONTAINER_OWNERS.keys()) == [
+        "container:openai:cntr_2",
+        "container:openai:cntr_3",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_should_deny_container_access_for_different_owner(monkeypatch):
     table = AsyncMock()
     table.find_first.return_value = SimpleNamespace(created_by="user-2")
@@ -845,6 +868,59 @@ async def test_should_record_container_owner_inside_create_endpoint(monkeypatch)
         user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
         custom_llm_provider="openai",
     )
+
+
+@pytest.mark.asyncio
+async def test_should_not_route_owner_record_errors_through_llm_error_handler(
+    monkeypatch,
+):
+    from litellm.proxy.container_endpoints import endpoints
+
+    proxy_server_stub = SimpleNamespace(
+        general_settings={},
+        llm_router=None,
+        proxy_config=None,
+        proxy_logging_obj=None,
+        select_data_generator=None,
+        user_api_base=None,
+        user_max_tokens=None,
+        user_model=None,
+        user_request_timeout=None,
+        user_temperature=None,
+        version="test",
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_stub)
+
+    class FakeProcessor:
+        def __init__(self, data):
+            pass
+
+        async def base_process_llm_request(self, **kwargs):
+            return _container("cntr_provider")
+
+        async def _handle_llm_api_exception(self, **kwargs):
+            raise AssertionError("ownership errors should not use LLM error handler")
+
+    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
+    monkeypatch.setattr(
+        endpoints,
+        "record_container_owner",
+        AsyncMock(side_effect=HTTPException(status_code=403, detail="Forbidden")),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await endpoints.create_container(
+            request=SimpleNamespace(
+                query_params={},
+                headers={},
+                json=AsyncMock(return_value={}),
+                body=AsyncMock(return_value=b"{}"),
+            ),
+            fastapi_response=SimpleNamespace(),
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        )
+
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio
