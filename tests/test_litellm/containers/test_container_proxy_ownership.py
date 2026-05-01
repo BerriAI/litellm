@@ -708,6 +708,117 @@ async def test_should_forward_decoded_container_id_for_proxy_retrieve(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_should_record_container_owner_inside_create_endpoint(monkeypatch):
+    from litellm.proxy.container_endpoints import endpoints
+
+    proxy_server_stub = SimpleNamespace(
+        general_settings={},
+        llm_router=None,
+        proxy_config=None,
+        proxy_logging_obj=None,
+        select_data_generator=None,
+        user_api_base=None,
+        user_max_tokens=None,
+        user_model=None,
+        user_request_timeout=None,
+        user_temperature=None,
+        version="test",
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_stub)
+
+    response = _container("cntr_provider")
+
+    class FakeProcessor:
+        def __init__(self, data):
+            pass
+
+        async def base_process_llm_request(self, **kwargs):
+            return response
+
+        async def _handle_llm_api_exception(self, **kwargs):
+            raise kwargs["e"]
+
+    record_owner = AsyncMock(return_value=response)
+    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
+    monkeypatch.setattr(endpoints, "record_container_owner", record_owner)
+
+    result = await endpoints.create_container(
+        request=SimpleNamespace(
+            query_params={},
+            headers={},
+            json=AsyncMock(return_value={}),
+            body=AsyncMock(return_value=b"{}"),
+        ),
+        fastapi_response=SimpleNamespace(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    assert result == response
+    record_owner.assert_awaited_once_with(
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+async def test_should_filter_container_list_inside_list_endpoint(monkeypatch):
+    from litellm.proxy.container_endpoints import endpoints
+
+    proxy_server_stub = SimpleNamespace(
+        general_settings={},
+        llm_router=None,
+        proxy_config=None,
+        proxy_logging_obj=None,
+        select_data_generator=None,
+        user_api_base=None,
+        user_max_tokens=None,
+        user_model=None,
+        user_request_timeout=None,
+        user_temperature=None,
+        version="test",
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_stub)
+
+    response = ContainerListResponse(
+        object="list",
+        data=[_container("cntr_provider")],
+        has_more=False,
+    )
+
+    class FakeProcessor:
+        def __init__(self, data):
+            pass
+
+        async def base_process_llm_request(self, **kwargs):
+            return response
+
+        async def _handle_llm_api_exception(self, **kwargs):
+            raise kwargs["e"]
+
+    filter_response = AsyncMock(return_value=response)
+    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
+    monkeypatch.setattr(
+        endpoints,
+        "filter_container_list_response",
+        filter_response,
+    )
+
+    result = await endpoints.list_containers(
+        request=SimpleNamespace(query_params={}, headers={}),
+        fastapi_response=SimpleNamespace(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    assert result == response
+    filter_response.assert_awaited_once_with(
+        response=response,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
 async def test_should_forward_decoded_container_id_for_proxy_delete(monkeypatch):
     from litellm.proxy.container_endpoints import endpoints
 
