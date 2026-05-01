@@ -205,7 +205,10 @@ class _FakeTx:
                 continue
             if r.owner_token != owner_token:
                 continue
-            if agent_id is not None and r.agent_id != agent_id:
+            if agent_id is None:
+                if r.agent_id is not None:
+                    continue
+            elif r.agent_id != agent_id:
                 continue
             if actions is not None and r.action not in actions:
                 continue

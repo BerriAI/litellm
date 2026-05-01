@@ -174,21 +174,36 @@ async def report_task_result(
         return None
 
     if result == "success":
-        return await prisma_client.db.litellm_scheduledtasktable.update(
-            where={"task_id": task_id},
+        affected = await prisma_client.db.litellm_scheduledtasktable.update_many(
+            where={"task_id": task_id, "owner_token": owner_token},
             data={"consecutive_errors": 0, "last_error": None},
+        )
+        if affected == 0:
+            return None
+        return await prisma_client.db.litellm_scheduledtasktable.find_first(
+            where={"task_id": task_id, "owner_token": owner_token},
         )
 
     new_count = (existing.consecutive_errors or 0) + 1
-    update: Dict[str, Any] = {
+    update_data: Dict[str, Any] = {
         "consecutive_errors": new_count,
         "last_error": reason,
     }
-    if new_count >= MAX_CONSECUTIVE_ERRORS and existing.status == "pending":
-        update["status"] = "failed"
-    return await prisma_client.db.litellm_scheduledtasktable.update(
-        where={"task_id": task_id},
-        data=update,
+    where_clause: Dict[str, Any] = {
+        "task_id": task_id,
+        "owner_token": owner_token,
+    }
+    if new_count >= MAX_CONSECUTIVE_ERRORS:
+        update_data["status"] = "failed"
+        where_clause["status"] = "pending"
+    affected = await prisma_client.db.litellm_scheduledtasktable.update_many(
+        where=where_clause,
+        data=update_data,
+    )
+    if affected == 0:
+        return None
+    return await prisma_client.db.litellm_scheduledtasktable.find_first(
+        where={"task_id": task_id, "owner_token": owner_token},
     )
 
 
