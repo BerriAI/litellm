@@ -85,19 +85,18 @@ class CachingHandlerResponse(BaseModel):
 
 
 in_memory_cache_obj = InMemoryCache()
-_RESPONSES_STREAMING_CALLBACK_CALL_TYPES = {
-    CallTypes.aresponses.value,
-    CallTypes.responses.value,
-}
 
 
-def _should_defer_streaming_cache_hit_callbacks(
-    *, call_type: str, kwargs: Dict[str, Any]
-) -> bool:
-    return (
-        kwargs.get("stream", False) is True
-        and call_type in _RESPONSES_STREAMING_CALLBACK_CALL_TYPES
-    )
+def _should_defer_streaming_cache_hit_callbacks(*, kwargs: Dict[str, Any]) -> bool:
+    """
+    When stream=True, do not run success callbacks at cache-hit time.
+
+    Cached chat/text completion replay uses CustomStreamWrapper; cached Responses
+    replay uses CachedResponsesAPIStreamingIterator. Both invoke logging success
+    handlers when the stream finishes; firing them here too would double-count
+    spend and callback records.
+    """
+    return kwargs.get("stream", False) is True
 
 
 class LLMCachingHandler:
@@ -220,10 +219,7 @@ class LLMCachingHandler:
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
-                    if not _should_defer_streaming_cache_hit_callbacks(
-                        call_type=call_type,
-                        kwargs=kwargs,
-                    ):
+                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
                         # LOG SUCCESS
                         self._async_log_cache_hit_on_callbacks(
                             logging_obj=logging_obj,
@@ -343,10 +339,7 @@ class LLMCachingHandler:
                         is_async=False,
                     )
 
-                    if not _should_defer_streaming_cache_hit_callbacks(
-                        call_type=call_type,
-                        kwargs=kwargs,
-                    ):
+                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
                         logging_obj.handle_sync_success_callbacks_for_async_calls(
                             result=cached_result,
                             start_time=start_time,
