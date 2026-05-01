@@ -1168,6 +1168,42 @@ def check_org_key_rpm_tpm_limits(
     )
 
 
+async def _validate_caller_can_assign_key_org(
+    user_api_key_dict: UserAPIKeyAuth,
+    organization_id: str,
+    prisma_client: PrismaClient,
+) -> None:
+    """Reject ``/key/update`` requests that point a key at an organization
+    the caller does not belong to.
+
+    Mirrors the org-membership rule already enforced on ``/key/list`` in
+    ``validate_key_list_check``. Proxy admins are checked at the call site.
+    """
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot assign a key to an organization without a user_id on the caller's token",
+        )
+
+    user_row = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": user_api_key_dict.user_id},
+        include={"organization_memberships": True},
+    )
+    memberships = (
+        getattr(user_row, "organization_memberships", None) if user_row else None
+    )
+    member_org_ids = {
+        membership.organization_id
+        for membership in (memberships or [])
+        if membership.organization_id is not None
+    }
+    if organization_id not in member_org_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Caller is not a member of organization_id={organization_id}",
+        )
+
+
 async def _check_org_key_limits(
     org_table: LiteLLM_OrganizationTable,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
@@ -2168,10 +2204,26 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
         )
 
+    # When the caller asks to change the key's organization_id, require that
+    # they are a member of (or a proxy admin over) the target organization.
+    # Without this gate, any caller could assign their key to an arbitrary
+    # organization_id by passing it in the request body — VERIA-55 secondary
+    # IDOR. The check mirrors the membership rule already used on the
+    # `/key/list` filter path in `validate_key_list_check`.
+    _existing_org_id = getattr(existing_key_row, "organization_id", None)
+    if (
+        data.organization_id is not None
+        and data.organization_id != _existing_org_id
+        and not _is_proxy_admin
+    ):
+        await _validate_caller_can_assign_key_org(
+            user_api_key_dict=user_api_key_dict,
+            organization_id=data.organization_id,
+            prisma_client=prisma_client,
+        )
+
     # Check org key limits only when throughput-related fields or organization_id change
-    _org_id_to_check = data.organization_id or getattr(
-        existing_key_row, "organization_id", None
-    )
+    _org_id_to_check = data.organization_id or _existing_org_id
     _throughput_fields_changed = (
         data.organization_id is not None
         or data.tpm_limit is not None
