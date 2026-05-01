@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from litellm import acompletion, completion
+from litellm.exceptions import APIConnectionError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 FAKE_API_BASE = (
@@ -31,6 +32,15 @@ def _chat_response() -> Dict[str, Any]:
         },
         "success": True,
         "errors": [],
+        "messages": [],
+    }
+
+
+def _error_response() -> Dict[str, Any]:
+    return {
+        "result": None,
+        "success": False,
+        "errors": [{"code": 7003, "message": "Could not route"}],
         "messages": [],
     }
 
@@ -145,3 +155,23 @@ def test_completion_cloudflare_stream(sync_mode):
         if c.choices[0].delta.content
     )
     assert "language" in content.lower()
+
+
+def test_completion_cloudflare_api_error():
+    messages = [{"role": "user", "content": "what llm are you"}]
+    mock_resp = _make_mock_response(_error_response())
+    # Setting to a 200 HTTP code because Cloudflare returns standard HTTP OK even when it wraps error JSONs.
+    mock_resp.status_code = 200
+
+    with patch.object(HTTPHandler, "post", return_value=mock_resp) as mock_post:
+        with pytest.raises(APIConnectionError) as exc_info:
+            completion(
+                model="cloudflare/@cf/meta/llama-2-7b-chat-int8",
+                messages=messages,
+                max_tokens=15,
+                api_base=FAKE_API_BASE,
+                api_key=FAKE_API_KEY,
+            )
+
+        mock_post.assert_called_once()
+        assert "7003" in str(exc_info.value)
