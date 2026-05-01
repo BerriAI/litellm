@@ -1127,6 +1127,7 @@ class MCPServerManager:
                 tools = await self._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
+                    user_api_key_auth=user_api_key_auth,
                 )
                 return tools
             except Exception as e:

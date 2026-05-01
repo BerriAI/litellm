@@ -2,7 +2,7 @@ import pytest
 import uuid
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi import HTTPException
+
 from contextlib import asynccontextmanager
 from litellm.proxy._experimental.mcp_server.server import (
     handle_sse_mcp_endpoint,
@@ -160,10 +160,20 @@ async def test_session_id_capture_and_binding():
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             AsyncMock(return_value=wrong_post_auth_context),
         ):
-            with pytest.raises(HTTPException) as exc:
-                await handle_sse_post_messages(post_scope, mock_receive, mock_send)
-            assert exc.value.status_code == 403
-            assert "Authentication mismatch" in exc.value.detail
+            # Reset mock_send calls
+            mock_send.reset_mock()
+            await handle_sse_post_messages(post_scope, mock_receive, mock_send)
+
+            # Verify 403 was sent
+            assert mock_send.call_count >= 1
+            # Check the status code in the http.response.start message
+            status_sent = False
+            for call in mock_send.call_args_list:
+                msg = call[0][0]
+                if msg.get("type") == "http.response.start":
+                    assert msg.get("status") == 403
+                    status_sent = True
+            assert status_sent, "Should have sent a 403 status"
 
         # 3b. Test POST Message Binding (No Auth - Security Fix)
         no_post_auth_context = (
@@ -179,10 +189,19 @@ async def test_session_id_capture_and_binding():
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             AsyncMock(return_value=no_post_auth_context),
         ):
-            with pytest.raises(HTTPException) as exc:
-                await handle_sse_post_messages(post_scope, mock_receive, mock_send)
-            assert exc.value.status_code == 403
-            assert "Authentication mismatch" in exc.value.detail
+            # Reset mock_send calls
+            mock_send.reset_mock()
+            await handle_sse_post_messages(post_scope, mock_receive, mock_send)
+
+            # Verify 403 was sent
+            assert mock_send.call_count >= 1
+            status_sent = False
+            for call in mock_send.call_args_list:
+                msg = call[0][0]
+                if msg.get("type") == "http.response.start":
+                    assert msg.get("status") == 403
+                    status_sent = True
+            assert status_sent, "Should have sent a 403 status"
 
         # Finish the run
         finish_run.set()
