@@ -348,6 +348,38 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details.image_tokens == 100
         assert result.completion_tokens_details.text_tokens == 70
 
+    def test_transform_response_api_usage_populates_reasoning_tokens_regression_15377(
+        self,
+    ):
+        """Regression test for issue #15377.
+
+        Azure OpenAI Responses API returns ``usage.output_tokens_details`` with
+        ``reasoning_tokens``. LiteLLM must transform this into
+        ``completion_tokens_details.reasoning_tokens`` on the returned ``Usage``
+        object so downstream callbacks (e.g. ``async_log_success_event``) see
+        the reasoning tokens rather than ``completion_tokens_details=None``.
+        """
+        # Raw usage shape as returned by Azure Responses API for a reasoning model.
+        usage = {
+            "input_tokens": 12,
+            "input_tokens_details": {"cached_tokens": 0},
+            "output_tokens": 204,
+            "output_tokens_details": {"reasoning_tokens": 64},
+            "total_tokens": 216,
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert isinstance(result, Usage)
+        # Core fix: completion_tokens_details must be populated, not None.
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.reasoning_tokens == 64
+        # Sanity check: prompt_tokens_details still behaves as before.
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.cached_tokens == 0
+
 
 class TestResponsesAPIProviderSpecificParams:
     """
