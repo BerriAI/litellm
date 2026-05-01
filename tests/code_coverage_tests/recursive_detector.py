@@ -46,6 +46,7 @@ IGNORE_FUNCTIONS = [
     "dict",  # max depth set. _LiteLLMParamsDictView.dict() calls builtin dict(), not itself.
     "_read_image_bytes",  # max depth set.
     "_get_masked_values",  # max depth set (default 20) to prevent infinite recursion while masking nested sensitive config dicts.
+    "_redact_sensitive_litellm_params",  # max depth set (default 10).
 ]
 
 

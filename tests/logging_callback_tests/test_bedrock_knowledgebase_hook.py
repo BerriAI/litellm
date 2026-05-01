@@ -354,6 +354,7 @@ async def test_bedrock_kb_request_body_has_transformed_filters(
                 api_base=api_base,
                 litellm_logging_obj=logging_obj,
                 litellm_params=litellm_params_dict,
+                extra_body=None,
             )
         )
         captured_request_body["url"] = url

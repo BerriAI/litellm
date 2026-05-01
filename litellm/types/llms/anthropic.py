@@ -330,7 +330,11 @@ class AnthropicMessagesToolResultParam(TypedDict, total=False):
     content: Union[
         str,
         Iterable[
-            Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
         ],
     ]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
