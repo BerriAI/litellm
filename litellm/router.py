@@ -9425,12 +9425,18 @@ class Router:
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
             # Do not fall back when access-group filtering removed every candidate;
+        if len(healthy_deployments) == 0:
+            # check if the user sent in a deployment name instead
+            # Do not fall back when access-group filtering removed every candidate;
             # _get_deployment_by_litellm_model does not re-apply that filter.
             if _pre_model_access_group_filter_len == 0:
-                healthy_deployments = self._get_deployment_by_litellm_model(model=model)
-
-        if verbose_router_logger.isEnabledFor(logging.DEBUG):
-            verbose_router_logger.debug(
+                _litellm_model_deployments = self._get_deployment_by_litellm_model(model=model)
+                healthy_deployments = self._filter_deployments_by_model_access_groups(
+                    model=model,
+                    healthy_deployments=_litellm_model_deployments,
+                    request_kwargs=request_kwargs,
+                    request_team_id=request_team_id,
+                )
                 f"initial list of deployments: {healthy_deployments}"
             )
 
