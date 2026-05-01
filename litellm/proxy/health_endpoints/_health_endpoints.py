@@ -728,6 +728,10 @@ async def _save_background_health_checks_to_db(
 _PROXY_ADMIN_ROLES = frozenset(
     {
         LitellmUserRoles.PROXY_ADMIN.value,
+        # View-only admins are operators (oncall, support); they need the
+        # routing fields (api_base, api_version) to diagnose health and tell
+        # which provider region a check is hitting. They cannot mutate config
+        # so granting them the read-only view is safe.
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
     }
 )
@@ -782,14 +786,18 @@ def _filter_health_check_results_by_model_ids(
     Endpoints without a model_id (e.g. CLI-model entries that predate the
     model_id wiring) are dropped conservatively — we cannot prove they belong
     to the caller, so they are excluded rather than leaked.
+
+    Each retained endpoint is shallow-copied before being returned, so any
+    downstream transform (e.g. _strip_admin_only_fields_from_health_result)
+    cannot accidentally mutate the shared ``health_check_results`` cache.
     """
     healthy = [
-        ep
+        dict(ep)
         for ep in (results.get("healthy_endpoints") or [])
         if ep.get("model_id") in allowed_model_ids
     ]
     unhealthy = [
-        ep
+        dict(ep)
         for ep in (results.get("unhealthy_endpoints") or [])
         if ep.get("model_id") in allowed_model_ids
     ]
@@ -954,6 +962,13 @@ async def health_endpoint(
             )
         _llm_model_list = copy.deepcopy(llm_model_list)
         ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
+        # Live path: scope by model_name (every deployment has one).
+        # Cache path: scope by model_id (the cache is keyed on model_id).
+        # Consequence: a deployment whose model_name the caller can access
+        # but which lacks model_info.id will appear in the live /health
+        # response but NOT in the background-cache /health response. This is
+        # surfaced via the "warnings" field below so operators can fix the
+        # missing model_info.id rather than guess at the discrepancy.
         if len(user_api_key_dict.models) > 0:
             allowed_models = set(user_api_key_dict.models)
             _llm_model_list = [
