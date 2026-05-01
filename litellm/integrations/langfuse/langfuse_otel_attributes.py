@@ -86,7 +86,18 @@ class LangfuseLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
     def set_messages(span: "Span", kwargs: Dict[str, Any]):
-        prompt = {"messages": kwargs.get("messages")}
+        # Normalize litellm.Message (pydantic) -> dict so json.dumps works.
+        # Callers can pass list[litellm.Message] via the documented public
+        # export; without this, json.dumps raises TypeError and the whole
+        # OpenInference attribute setter bails — surfacing as the spammy
+        # "Failed to set OpenInference span attributes: Object of type
+        # Message is not JSON serializable" error and dropping the input
+        # payload from the span.
+        raw_messages = kwargs.get("messages") or []
+        messages = [
+            m.model_dump() if isinstance(m, BaseModel) else m for m in raw_messages
+        ]
+        prompt: Dict[str, Any] = {"messages": messages}
         optional_params = kwargs.get("optional_params", {})
         functions = optional_params.get("functions")
         tools = optional_params.get("tools")

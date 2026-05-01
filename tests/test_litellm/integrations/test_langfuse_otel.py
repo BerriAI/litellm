@@ -115,6 +115,66 @@ class TestLangfuseOtelIntegration:
                 mock_span, mock_kwargs, mock_response, LangfuseLLMObsOTELAttributes
             )
 
+    def test_set_messages_handles_pydantic_message_objects(self):
+        """Pydantic ``litellm.Message`` objects in ``messages`` must not raise.
+
+        Regression test for the spammy "Object of type Message is not JSON
+        serializable" error that previously fired on every LLM call when the
+        caller passed ``list[litellm.Message]`` (a documented public API)
+        rather than ``list[dict]``.
+        """
+        from litellm.integrations.langfuse.langfuse_otel_attributes import (
+            LangfuseLLMObsOTELAttributes,
+        )
+        from litellm.types.utils import Message
+
+        captured: dict = {}
+
+        def _capture(span, key, value):
+            captured[key] = value
+
+        kwargs = {
+            "messages": [
+                Message(role="user", content="hello"),
+                Message(role="assistant", content="hi back"),
+            ]
+        }
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse_otel_attributes.safe_set_attribute",
+            side_effect=_capture,
+        ):
+            # Must not raise — previously raised TypeError inside json.dumps.
+            LangfuseLLMObsOTELAttributes.set_messages(MagicMock(), kwargs)
+
+        payload = json.loads(captured["langfuse.observation.input"])
+        assert payload["messages"][0]["role"] == "user"
+        assert payload["messages"][0]["content"] == "hello"
+        assert payload["messages"][1]["role"] == "assistant"
+        assert payload["messages"][1]["content"] == "hi back"
+
+    def test_set_messages_passes_through_plain_dicts(self):
+        """Plain-dict messages (the existing path) must keep working unchanged."""
+        from litellm.integrations.langfuse.langfuse_otel_attributes import (
+            LangfuseLLMObsOTELAttributes,
+        )
+
+        captured: dict = {}
+
+        def _capture(span, key, value):
+            captured[key] = value
+
+        kwargs = {"messages": [{"role": "user", "content": "hello"}]}
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse_otel_attributes.safe_set_attribute",
+            side_effect=_capture,
+        ):
+            LangfuseLLMObsOTELAttributes.set_messages(MagicMock(), kwargs)
+
+        payload = json.loads(captured["langfuse.observation.input"])
+        assert payload["messages"] == [{"role": "user", "content": "hello"}]
+
     def test_set_langfuse_environment_attribute(self):
         """Test that Langfuse environment is set correctly when environment variable is present."""
         mock_span = MagicMock()
