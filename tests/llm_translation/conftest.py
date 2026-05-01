@@ -122,9 +122,6 @@ def pytest_recording_configure(config, vcr):
     if _vcr_disabled():
         return
     vcr.register_persister(make_redis_persister())
-    # vcrpy's aiohttp record path drains the response stream via
-    # ``await response.read()``; without the patch, downstream consumers
-    # (litellm's AiohttpResponseStream) see an empty body on first record.
     patch_vcrpy_aiohttp_record_path()
 
 
