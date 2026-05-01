@@ -1331,7 +1331,7 @@ async def test_health_endpoint_returns_200_when_requested_model_has_healthy_endp
             model="model-a",
         )
 
-    assert response.status_code != 503
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -1395,7 +1395,7 @@ async def test_health_endpoint_no_model_param_returns_200_even_when_zero_healthy
             model_id=None,
         )
 
-    assert response.status_code != 503
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -1447,7 +1447,7 @@ async def test_health_readiness_returns_200_when_db_connected():
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         result = await health_readiness(response=response)
 
-    assert response.status_code != 503
+    assert response.status_code == 200
     assert result["db"] == "connected"
 
 
@@ -1466,7 +1466,7 @@ async def test_health_readiness_returns_200_when_no_db_configured():
     with patch("litellm.proxy.proxy_server.prisma_client", None):
         result = await health_readiness(response=response)
 
-    assert response.status_code != 503
+    assert response.status_code == 200
     assert result["db"] == "Not connected"
 
 
