@@ -245,6 +245,7 @@ async def test_should_prevent_second_tag_reservation_over_budget(
                 "counter_key": "spend:tag:tag-budget-race",
                 "entity_type": "Tag",
                 "entity_id": "tag-budget-race",
+                "reserved_cost": 0.6,
                 "applied_adjustment": 0.0,
             }
         ]
@@ -290,16 +291,33 @@ async def test_should_prevent_second_tag_reservation_over_budget(
 
 
 @pytest.mark.asyncio
-async def test_should_update_warm_end_user_and_tag_counters_without_reservation(
+async def test_should_seed_and_update_end_user_and_tag_counters_without_reservation(
     spend_counter_state,
 ):
-    counter_cache, _ = spend_counter_state
-    counter_cache.in_memory_cache.set_cache(
-        key="spend:end_user:customer-1",
-        value=4.0,
+    counter_cache, key_cache = spend_counter_state
+    await key_cache.async_set_cache(
+        key="end_user_id:customer-1",
+        value=LiteLLM_EndUserTable(
+            user_id="customer-1",
+            blocked=False,
+            spend=4.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=10.0),
+        ).model_dump(),
     )
-    counter_cache.in_memory_cache.set_cache(key="spend:tag:paid-tag", value=7.0)
-    counter_cache.in_memory_cache.set_cache(key="spend:tag:other-tag", value=2.0)
+    await key_cache.async_set_cache(
+        key="tag:paid-tag",
+        value=LiteLLM_TagTable(
+            tag_name="paid-tag",
+            spend=7.0,
+        ).model_dump(),
+    )
+    await key_cache.async_set_cache(
+        key="tag:other-tag",
+        value=LiteLLM_TagTable(
+            tag_name="other-tag",
+            spend=2.0,
+        ).model_dump(),
+    )
 
     from litellm.proxy.proxy_server import increment_spend_counters
 
@@ -537,6 +555,82 @@ async def test_should_shrink_uncapped_reservation_when_counter_advances(
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-budget-uncapped-race"
     ) == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
+async def test_should_shrink_uncapped_reservation_multiple_times(
+    spend_counter_state,
+    monkeypatch,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-double-resize",
+        spend=0.2,
+        max_budget=1.0,
+        team_id="team-budget-double-resize",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-budget-double-resize",
+        spend=0.2,
+        max_budget=1.0,
+    )
+    request_body = _request_body()
+    request_body.pop("max_tokens")
+
+    from litellm.proxy.spend_tracking import budget_reservation
+
+    stale_spend_by_counter_key = {
+        "spend:key:key-budget-double-resize": 0.3,
+        "spend:team:team-budget-double-resize": 0.4,
+    }
+
+    async def stale_counter_read(counter):
+        await counter_cache.async_increment_cache(
+            key=counter.counter_key,
+            value=stale_spend_by_counter_key[counter.counter_key],
+        )
+        return 0.2
+
+    monkeypatch.setattr(
+        budget_reservation,
+        "_get_current_counter_value",
+        stale_counter_read,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=None,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=team_object,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.6)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-double-resize"
+    ) == pytest.approx(0.9)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:team:team-budget-double-resize"
+    ) == pytest.approx(1.0)
+
+    await release_budget_reservation(reservation)
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-double-resize"
+    ) == pytest.approx(0.3)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:team:team-budget-double-resize"
+    ) == pytest.approx(0.4)
 
 
 def test_should_start_window_without_reset_at_at_duration_boundary():

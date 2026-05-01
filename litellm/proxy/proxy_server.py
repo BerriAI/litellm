@@ -1993,8 +1993,9 @@ async def _increment_end_user_and_tag_spend_counters(
     reserved_counter_keys: Set[str],
 ) -> None:
     if end_user_id is not None:
-        await _increment_warm_unreserved_spend_counter(
+        await _init_and_increment_unreserved_spend_counter(
             counter_key=f"spend:end_user:{end_user_id}",
+            source_cache_key=f"end_user_id:{end_user_id}",
             increment=response_cost,
             reserved_counter_keys=reserved_counter_keys,
         )
@@ -2007,24 +2008,12 @@ async def _increment_end_user_and_tag_spend_counters(
         if not tag_name or not isinstance(tag_name, str) or tag_name in seen_tags:
             continue
         seen_tags.add(tag_name)
-        await _increment_warm_unreserved_spend_counter(
+        await _init_and_increment_unreserved_spend_counter(
             counter_key=f"spend:tag:{tag_name}",
+            source_cache_key=f"tag:{tag_name}",
             increment=response_cost,
             reserved_counter_keys=reserved_counter_keys,
         )
-
-
-async def _increment_warm_unreserved_spend_counter(
-    counter_key: str,
-    increment: float,
-    reserved_counter_keys: Set[str],
-) -> None:
-    if counter_key in reserved_counter_keys:
-        return
-    if await spend_counter_cache.async_get_cache(key=counter_key) is None:
-        return
-
-    await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
 
 
 async def _increment_org_spend_counter(

@@ -500,6 +500,7 @@ async def test_update_database_and_spend_counters_preserves_counter_exception_wh
         mock_log_exception.assert_called_once_with(
             "Failed to invalidate budget reservation counters after spend counter update failed"
         )
+        assert budget_reservation["finalized"] is True
 
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
 
