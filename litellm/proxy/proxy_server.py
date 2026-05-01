@@ -6,6 +6,7 @@ import inspect
 import io
 import os
 import random
+import re
 import secrets
 import shutil
 import subprocess
@@ -950,6 +951,13 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 
+def _generate_stable_operation_id(route: Any) -> str:
+    operation_id = re.sub(r"\W", "_", f"{route.name}{route.path_format}")
+    if route.methods:
+        operation_id = f"{operation_id}_{sorted(route.methods)[0].lower()}"
+    return operation_id
+
+
 app = FastAPI(
     docs_url=_get_docs_url(),
     redoc_url=_get_redoc_url(),
@@ -959,6 +967,7 @@ app = FastAPI(
     version=version,
     root_path=server_root_path,
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
+    generate_unique_id_function=_generate_stable_operation_id,
 )
 
 vertex_live_passthrough_vertex_base = VertexBase()
