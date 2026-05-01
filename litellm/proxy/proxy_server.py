@@ -335,6 +335,7 @@ from litellm.proxy.management_endpoints.callback_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
+    _user_has_admin_view,
     admin_can_invite_user,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
@@ -11962,7 +11963,7 @@ async def alerting_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={
@@ -13074,7 +13075,7 @@ async def invitation_info(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={
@@ -13496,7 +13497,7 @@ async def get_config_general_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -13560,7 +13561,7 @@ async def get_config_list(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={
@@ -14272,8 +14273,8 @@ async def get_model_cost_map_reload_status(
 
     Get the status of the scheduled model cost map reload job.
     """
-    # Check if user is admin
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Read-only status check — admin viewers can read.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
@@ -14375,7 +14376,8 @@ async def get_model_cost_map_source(
     - fallback_reason: human-readable reason why remote failed (null on success)
     - model_count: number of models in the currently loaded cost map
     """
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Read-only source info — admin viewers can read.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
@@ -14632,8 +14634,8 @@ async def get_anthropic_beta_headers_reload_status(
 
     Get the status of the scheduled Anthropic beta headers reload job.
     """
-    # Check if user is admin
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Read-only status — admin viewers can read.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
@@ -14739,7 +14741,8 @@ async def get_adaptive_router_state(
     adaptive-router deployment. Each snapshot's `router_name` field identifies
     which deployment it came from.
     """
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Read-only state — admin viewers can read.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
