@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.types.utils import EmbeddingResponse
 
+from ._tenant_scope import get_tenant_scope
 from .base_cache import BaseCache
 
 
@@ -109,6 +110,16 @@ class RedisSemanticCache(BaseCache):
         # Initialize the Redis vectorizer and cache
         cache_vectorizer = CustomTextVectorizer(self._get_embedding)
 
+        # State for tenant-scoped indexes (VERIA-54). The default
+        # ``self.llmcache`` serves direct-SDK / no-proxy requests where
+        # no scope is present; per-tenant requests get their own index
+        # via ``_get_cache_for_scope`` so cross-tenant lookups become
+        # impossible by construction (no shared schema, no shared keys).
+        self._index_name_base = index_name
+        self._redis_url = redis_url
+        self._cache_vectorizer = cache_vectorizer
+        self._tenant_caches: Dict[str, "SemanticCache"] = {}
+
         self.llmcache = SemanticCache(
             name=index_name,
             redis_url=redis_url,
@@ -116,6 +127,38 @@ class RedisSemanticCache(BaseCache):
             distance_threshold=self.distance_threshold,
             overwrite=False,
         )
+
+    def _get_cache_for_scope(self, tenant_scope: Optional[str]) -> Any:
+        """Return the ``SemanticCache`` instance for a tenant scope.
+
+        ``None`` returns the default index (BC for callers without proxy
+        metadata). Any non-None scope gets its own RedisVL index, lazily
+        created on first use so two tenants share no keys, no schema,
+        and no vector neighborhood.
+        """
+        if tenant_scope is None:
+            return self.llmcache
+        cached = self._tenant_caches.get(tenant_scope)
+        if cached is not None:
+            return cached
+        from hashlib import sha256
+
+        from redisvl.extensions.llmcache import SemanticCache
+
+        # Hash the scope so the Redis index name is always a valid
+        # identifier (team_ids and user_ids can contain characters that
+        # RedisVL rejects in index names).
+        scope_hash = sha256(tenant_scope.encode("utf-8")).hexdigest()[:16]
+        scoped_name = f"{self._index_name_base}:tenant:{scope_hash}"
+        scoped = SemanticCache(
+            name=scoped_name,
+            redis_url=self._redis_url,
+            vectorizer=self._cache_vectorizer,
+            distance_threshold=self.distance_threshold,
+            overwrite=False,
+        )
+        self._tenant_caches[tenant_scope] = scoped
+        return scoped
 
     def _get_ttl(self, **kwargs) -> Optional[int]:
         """
@@ -206,12 +249,13 @@ class RedisSemanticCache(BaseCache):
             prompt = get_str_from_messages(messages)
             value_str = str(value)
 
+            llmcache = self._get_cache_for_scope(get_tenant_scope(kwargs))
             # Get TTL and store in Redis semantic cache
             ttl = self._get_ttl(**kwargs)
             if ttl is not None:
-                self.llmcache.store(prompt, value_str, ttl=int(ttl))
+                llmcache.store(prompt, value_str, ttl=int(ttl))
             else:
-                self.llmcache.store(prompt, value_str)
+                llmcache.store(prompt, value_str)
         except Exception as e:
             print_verbose(
                 f"Error setting {value_str or value} in the Redis semantic cache: {str(e)}"
@@ -238,8 +282,9 @@ class RedisSemanticCache(BaseCache):
                 return None
 
             prompt = get_str_from_messages(messages)
+            llmcache = self._get_cache_for_scope(get_tenant_scope(kwargs))
             # Check the cache for semantically similar prompts
-            results = self.llmcache.check(prompt=prompt)
+            results = llmcache.check(prompt=prompt)
 
             # Return None if no similar prompts found
             if not results:
@@ -341,17 +386,18 @@ class RedisSemanticCache(BaseCache):
             # Generate embedding for the value (response) to cache
             prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
 
+            llmcache = self._get_cache_for_scope(get_tenant_scope(kwargs))
             # Get TTL and store in Redis semantic cache
             ttl = self._get_ttl(**kwargs)
             if ttl is not None:
-                await self.llmcache.astore(
+                await llmcache.astore(
                     prompt,
                     value_str,
                     vector=prompt_embedding,  # Pass through custom embedding
                     ttl=ttl,
                 )
             else:
-                await self.llmcache.astore(
+                await llmcache.astore(
                     prompt,
                     value_str,
                     vector=prompt_embedding,  # Pass through custom embedding
@@ -385,8 +431,9 @@ class RedisSemanticCache(BaseCache):
             # Generate embedding for the prompt
             prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
 
+            llmcache = self._get_cache_for_scope(get_tenant_scope(kwargs))
             # Check the cache for semantically similar prompts
-            results = await self.llmcache.acheck(prompt=prompt, vector=prompt_embedding)
+            results = await llmcache.acheck(prompt=prompt, vector=prompt_embedding)
 
             # handle results / cache hit
             if not results:

@@ -18,7 +18,18 @@ from litellm._logging import print_verbose
 from litellm.constants import QDRANT_SCALAR_QUANTILE, QDRANT_VECTOR_SIZE
 from litellm.types.utils import EmbeddingResponse
 
+from ._tenant_scope import get_tenant_scope
 from .base_cache import BaseCache
+
+# Sentinel stored in payload when no proxy-injected tenant scope is
+# present; querying with the same sentinel keeps direct-SDK callers
+# (master key, no proxy) sharing a single legacy pool.
+_NO_TENANT_SCOPE = ""
+
+
+def _qdrant_tenant_filter(scope: str) -> dict:
+    """Qdrant query filter that constrains a search to a single scope."""
+    return {"must": [{"key": "tenant_scope", "match": {"value": scope}}]}
 
 
 class QdrantSemanticCache(BaseCache):
@@ -202,6 +213,7 @@ class QdrantSemanticCache(BaseCache):
                     "id": str(uuid.uuid4()),
                     "vector": embedding,
                     "payload": {
+                        "tenant_scope": get_tenant_scope(kwargs) or _NO_TENANT_SCOPE,
                         "text": prompt,
                         "response": value,
                     },
@@ -239,6 +251,9 @@ class QdrantSemanticCache(BaseCache):
 
         data = {
             "vector": embedding,
+            "filter": _qdrant_tenant_filter(
+                get_tenant_scope(kwargs) or _NO_TENANT_SCOPE
+            ),
             "params": {
                 "quantization": {
                     "ignore": False,
@@ -332,6 +347,7 @@ class QdrantSemanticCache(BaseCache):
                     "id": str(uuid.uuid4()),
                     "vector": embedding,
                     "payload": {
+                        "tenant_scope": get_tenant_scope(kwargs) or _NO_TENANT_SCOPE,
                         "text": prompt,
                         "response": value,
                     },
@@ -386,6 +402,9 @@ class QdrantSemanticCache(BaseCache):
 
         data = {
             "vector": embedding,
+            "filter": _qdrant_tenant_filter(
+                get_tenant_scope(kwargs) or _NO_TENANT_SCOPE
+            ),
             "params": {
                 "quantization": {
                     "ignore": False,
