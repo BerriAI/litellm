@@ -891,6 +891,45 @@ class TestVertexBase:
                 result_url == expected_url
             ), f"Expected {expected_url}, got {result_url} for model {model}"
 
+    @pytest.mark.parametrize(
+        "api_base, endpoint, expected_url",
+        [
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+        ],
+    )
+    def test_check_custom_proxy_gemini_prebuilt_route_handling(
+        self, api_base, endpoint, expected_url
+    ):
+        """Test that Gemini custom api_base values are not double-appended when they already include model routing."""
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base=api_base,
+            custom_llm_provider="gemini",
+            gemini_api_key="test-api-key",
+            endpoint=endpoint,
+            stream=False,
+            auth_header=None,
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            model="gemini-2.5-flash-lite",
+        )
+
+        assert result_url == expected_url
+
     def test_check_custom_proxy_streaming_parameter(self):
         """Test that streaming parameter correctly adds ?alt=sse to URLs"""
         vertex_base = VertexBase()
