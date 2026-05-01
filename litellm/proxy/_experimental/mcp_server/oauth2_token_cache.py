@@ -281,7 +281,9 @@ async def resolve_mcp_auth(
                 mcp_token_exchange_handler,
             )
 
-            return await mcp_token_exchange_handler.exchange_token(subject_token, server)
+            return await mcp_token_exchange_handler.exchange_token(
+                subject_token, server
+            )
         # No subject_token — fall back to client_credentials using the same client
         # credentials and token_url so M2M scenarios still work.
         if server.client_id and server.client_secret and server.token_url:
