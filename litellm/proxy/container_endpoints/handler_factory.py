@@ -21,6 +21,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.container_endpoints.ownership import (
     assert_user_can_access_container,
+    get_container_forwarding_params,
 )
 
 
@@ -183,6 +184,13 @@ async def _process_binary_request(
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
+    forwarding_params = get_container_forwarding_params(
+        container_id,
+        original_container_id,
+        custom_llm_provider,
+    )
+    if "model_id" in forwarding_params:
+        litellm_params["model_id"] = forwarding_params["model_id"]
 
     # Get the provider config
     container_provider_config = _get_container_provider_config(custom_llm_provider)
@@ -283,18 +291,19 @@ async def _process_multipart_upload_request(
         or "openai"
     )
 
-    container_access = await assert_user_can_access_container(
+    original_container_id, custom_llm_provider = await assert_user_can_access_container(
         container_id=container_id,
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
-    custom_llm_provider = container_access[1]
 
-    # Keep the managed container id in the forwarded request. The container API
-    # layer decodes it before the upstream provider call and uses embedded
-    # routing metadata to preserve model/deployment affinity.
-    data["container_id"] = container_id
-    data["custom_llm_provider"] = custom_llm_provider
+    data.update(
+        get_container_forwarding_params(
+            container_id,
+            original_container_id,
+            custom_llm_provider,
+        )
+    )
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -361,15 +370,22 @@ async def _process_request(
 
     # Validate container_id ownership if present in path_params.
     if "container_id" in path_params:
-        container_access = await assert_user_can_access_container(
-            container_id=path_params["container_id"],
-            user_api_key_dict=user_api_key_dict,
-            custom_llm_provider=custom_llm_provider,
+        original_container_id, custom_llm_provider = (
+            await assert_user_can_access_container(
+                container_id=path_params["container_id"],
+                user_api_key_dict=user_api_key_dict,
+                custom_llm_provider=custom_llm_provider,
+            )
         )
-        custom_llm_provider = container_access[1]
-        # Preserve the managed id for downstream container decoding/routing.
-
-    data["custom_llm_provider"] = custom_llm_provider
+        data.update(
+            get_container_forwarding_params(
+                path_params["container_id"],
+                original_container_id,
+                custom_llm_provider,
+            )
+        )
+    else:
+        data["custom_llm_provider"] = custom_llm_provider
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:

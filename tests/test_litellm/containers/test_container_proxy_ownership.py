@@ -83,6 +83,34 @@ async def test_should_record_team_owner_for_keys_without_user_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_should_fallback_to_memory_when_persistent_owner_record_fails(
+    monkeypatch,
+):
+    table = AsyncMock()
+    table.find_unique.side_effect = Exception("db unavailable")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    await ownership.record_container_owner(
+        response=_container("cntr_provider"),
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert (
+        ownership._IN_MEMORY_CONTAINER_OWNERS["container:openai:cntr_provider"]
+        == "user-1"
+    )
+
+
+@pytest.mark.asyncio
 async def test_should_track_container_owner_in_memory_without_prisma(monkeypatch):
     monkeypatch.setattr(
         ownership,
@@ -216,7 +244,7 @@ async def test_should_filter_container_list_to_owned_records(monkeypatch):
     response = ContainerListResponse(
         object="list",
         data=[_container("cntr_owned"), _container("cntr_other")],
-        has_more=False,
+        has_more=True,
     )
 
     filtered = await ownership.filter_container_list_response(
@@ -228,6 +256,7 @@ async def test_should_filter_container_list_to_owned_records(monkeypatch):
     assert [item.id for item in filtered.data] == ["cntr_owned"]
     assert filtered.first_id == "cntr_owned"
     assert filtered.last_id == "cntr_owned"
+    assert filtered.has_more is False
     where = table.find_many.await_args.kwargs["where"]
     assert where["file_purpose"] == ownership.CONTAINER_OBJECT_PURPOSE
     assert where["created_by"]["in"] == ["user-1", "user:user-1"]
@@ -334,7 +363,7 @@ async def test_should_filter_container_list_with_in_memory_ownership(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_should_preserve_managed_container_id_for_proxy_forwarding(monkeypatch):
+async def test_should_forward_decoded_container_id_for_proxy_forwarding(monkeypatch):
     from litellm.proxy.container_endpoints import handler_factory
 
     proxy_server_stub = SimpleNamespace(
@@ -388,12 +417,13 @@ async def test_should_preserve_managed_container_id_for_proxy_forwarding(monkeyp
         path_params={"container_id": encoded_id},
     )
 
-    assert result["container_id"] == encoded_id
+    assert result["container_id"] == "cntr_provider"
     assert result["custom_llm_provider"] == "azure"
+    assert result["model_id"] == "router-gpt"
 
 
 @pytest.mark.asyncio
-async def test_should_preserve_managed_container_id_for_multipart_upload(monkeypatch):
+async def test_should_forward_decoded_container_id_for_multipart_upload(monkeypatch):
     from litellm.proxy.common_utils import http_parsing_utils
     from litellm.proxy.container_endpoints import handler_factory
 
@@ -458,13 +488,14 @@ async def test_should_preserve_managed_container_id_for_multipart_upload(monkeyp
         container_id=encoded_id,
     )
 
-    assert result["container_id"] == encoded_id
+    assert result["container_id"] == "cntr_provider"
     assert result["custom_llm_provider"] == "azure"
+    assert result["model_id"] == "router-gpt"
     assert result["file"] == "file-data"
 
 
 @pytest.mark.asyncio
-async def test_should_preserve_managed_container_id_for_proxy_retrieve(monkeypatch):
+async def test_should_forward_decoded_container_id_for_proxy_retrieve(monkeypatch):
     from litellm.proxy.container_endpoints import endpoints
 
     proxy_server_stub = SimpleNamespace(
@@ -513,12 +544,13 @@ async def test_should_preserve_managed_container_id_for_proxy_retrieve(monkeypat
         user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
     )
 
-    assert result["container_id"] == encoded_id
+    assert result["container_id"] == "cntr_provider"
     assert result["custom_llm_provider"] == "azure"
+    assert result["model_id"] == "router-gpt"
 
 
 @pytest.mark.asyncio
-async def test_should_preserve_managed_container_id_for_proxy_delete(monkeypatch):
+async def test_should_forward_decoded_container_id_for_proxy_delete(monkeypatch):
     from litellm.proxy.container_endpoints import endpoints
 
     proxy_server_stub = SimpleNamespace(
@@ -567,5 +599,6 @@ async def test_should_preserve_managed_container_id_for_proxy_delete(monkeypatch
         user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
     )
 
-    assert result["container_id"] == encoded_id
+    assert result["container_id"] == "cntr_provider"
     assert result["custom_llm_provider"] == "azure"
+    assert result["model_id"] == "router-gpt"
