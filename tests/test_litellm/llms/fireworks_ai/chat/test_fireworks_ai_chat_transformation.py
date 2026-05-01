@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+import litellm
+
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
@@ -142,6 +144,17 @@ def test_get_model_info_respects_explicit_fireworks_capabilities():
     assert model_info["supports_function_calling"] is False
     assert model_info["supports_reasoning"] is True
     assert model_info["supports_tool_choice"] is False
+
+
+def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
+    """Test that Fireworks only overrides supports_reasoning for supported models."""
+    config = FireworksAIConfig()
+    model = "fireworks_ai/test-reasoning-false"
+    monkeypatch.setitem(litellm.model_cost, model, {"supports_reasoning": False})
+
+    info = config.get_provider_info(model)
+
+    assert "supports_reasoning" not in info
 
 
 def test_add_transform_inline_image_block_skips_data_urls():
