@@ -348,6 +348,8 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Transform the cancel response API response into a ResponsesAPIResponse
         """
+        from litellm.litellm_core_utils.core_helpers import process_response_headers
+
         try:
             raw_response_json = raw_response.json()
         except Exception:
@@ -356,4 +358,14 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             raise AzureOpenAIError(
                 message=raw_response.text, status_code=raw_response.status_code
             )
-        return ResponsesAPIResponse(**raw_response_json)
+        raw_response_headers = dict(raw_response.headers)
+        processed_headers = process_response_headers(raw_response_headers)
+
+        response = ResponsesAPIResponse(**raw_response_json)
+        # Propagate provider response headers with `llm_provider-` prefix
+        # (e.g. `llm_provider-x-ms-region`), matching the behavior of Azure
+        # chat completions and the rest of the Responses API surface.
+        # Issue: https://github.com/BerriAI/litellm/issues/15232
+        response._hidden_params["additional_headers"] = processed_headers
+        response._hidden_params["headers"] = raw_response_headers
+        return response
