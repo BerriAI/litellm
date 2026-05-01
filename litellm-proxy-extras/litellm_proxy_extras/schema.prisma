@@ -277,6 +277,7 @@ model LiteLLM_ObjectPermissionTable {
   models                String[]       @default([])
   blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
+  search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]

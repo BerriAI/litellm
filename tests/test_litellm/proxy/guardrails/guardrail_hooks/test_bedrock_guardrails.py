@@ -1854,6 +1854,60 @@ async def test_make_bedrock_api_request_logging_event_type_for_spend_logs():
 
 
 @pytest.mark.asyncio
+async def test_make_bedrock_api_request_filters_dynamic_evaluation_overrides():
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+    mock_credentials = MagicMock()
+    mock_credentials.access_key = "test-access-key"
+    mock_credentials.secret_key = "test-secret-key"
+    mock_credentials.token = None
+
+    mock_bedrock_response = MagicMock()
+    mock_bedrock_response.status_code = 200
+    mock_bedrock_response.json.return_value = {"action": "NONE", "assessments": []}
+
+    prepared_request = MagicMock()
+    prepared_request.url = "https://bedrock.test/apply"
+    prepared_request.body = b"{}"
+    prepared_request.headers = {}
+
+    with (
+        patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post,
+        patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ),
+        patch.object(
+            guardrail, "_prepare_request", return_value=prepared_request
+        ) as mock_prepare_request,
+        patch.object(
+            guardrail,
+            "get_guardrail_dynamic_request_body_params",
+            return_value={
+                "content": [{"text": {"text": "benign replacement"}}],
+                "source": "OUTPUT",
+                "outputScope": "FULL",
+            },
+        ),
+    ):
+        mock_post.return_value = mock_bedrock_response
+
+        await guardrail.make_bedrock_api_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "actual prompt"}],
+            request_data={"model": "gpt-4o"},
+        )
+
+    prepared_data = mock_prepare_request.call_args.kwargs["data"]
+    assert prepared_data["source"] == "INPUT"
+    assert "actual prompt" in json.dumps(prepared_data["content"])
+    assert "benign replacement" not in json.dumps(prepared_data["content"])
+    assert prepared_data["outputScope"] == "FULL"
+
+
+@pytest.mark.asyncio
 async def test_during_call_hook_invokes_bedrock_async_moderation_hook():
     """
     Bedrock sets use_native_during_call_hook so ProxyLogging runs the real
