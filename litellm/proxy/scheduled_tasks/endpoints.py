@@ -117,6 +117,7 @@ async def create_scheduled_task(
     owner_token = _require_token(user_api_key_dict)
     prisma_client = _get_prisma_client()
 
+    await store.sweep_expired_for_owner(prisma_client, owner_token)
     active = await store.count_active_for_owner(prisma_client, owner_token)
     if active >= store.MAX_ACTIVE_TASKS_PER_KEY:
         raise HTTPException(
