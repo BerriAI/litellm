@@ -39,6 +39,23 @@ def _raise_vector_store_scan_depth_exceeded() -> None:
     )
 
 
+def _append_payload_to_scan_stack(
+    payload_stack: list[tuple[Any, int]],
+    value: Any,
+    next_depth: int,
+) -> None:
+    if isinstance(value, dict):
+        if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
+            _raise_vector_store_scan_depth_exceeded()
+        payload_stack.append((value, next_depth))
+    elif isinstance(value, list):
+        if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
+            if any(isinstance(item, (dict, list)) for item in value):
+                _raise_vector_store_scan_depth_exceeded()
+            return
+        payload_stack.append((value, next_depth))
+
+
 def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
     vector_store_ids: set[str] = set()
     payload_stack = [(payload, 0)]
@@ -61,15 +78,18 @@ def _collect_vector_store_ids_from_payload(payload: Any) -> set[str]:
                     vector_store_ids.add(value)
                     continue
                 if isinstance(value, (dict, list)):
-                    next_depth = depth + 1
-                    if next_depth > DEFAULT_MAX_RECURSE_DEPTH:
-                        _raise_vector_store_scan_depth_exceeded()
-                    payload_stack.append((value, next_depth))
+                    _append_payload_to_scan_stack(
+                        payload_stack=payload_stack,
+                        value=value,
+                        next_depth=depth + 1,
+                    )
         elif isinstance(current_payload, list):
-            next_depth = depth + 1
-            if current_payload and next_depth > DEFAULT_MAX_RECURSE_DEPTH:
-                _raise_vector_store_scan_depth_exceeded()
-            payload_stack.extend((item, next_depth) for item in current_payload)
+            for item in current_payload:
+                _append_payload_to_scan_stack(
+                    payload_stack=payload_stack,
+                    value=item,
+                    next_depth=depth + 1,
+                )
 
     return vector_store_ids
 
