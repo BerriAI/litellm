@@ -1,12 +1,9 @@
 import json
 import os
 import sys
-from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import orjson
 import pytest
-from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -19,7 +16,6 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
 @pytest.mark.asyncio
@@ -169,6 +165,78 @@ class TestMCPRequestHandler:
                 # Verify the mock functions were called correctly
                 mock_key_servers.assert_called_once_with(user_api_key_auth)
                 mock_team_servers.assert_called_once_with(user_api_key_auth)
+
+    @pytest.mark.parametrize(
+        "org_servers,team_servers,key_servers,expected_servers,scenario",
+        [
+            (
+                ["org_server1", "org_server2"],
+                [],
+                [],
+                ["org_server1", "org_server2"],
+                "inherit_from_org",
+            ),
+            (
+                ["server1", "server2"],
+                ["server1", "server3"],
+                [],
+                ["server1"],
+                "team_intersects_org",
+            ),
+            (
+                ["server1", "server2"],
+                [],
+                ["server2", "server3"],
+                ["server2"],
+                "key_intersects_org",
+            ),
+            (
+                ["server1", "server2"],
+                ["server1", "server2", "server3"],
+                ["server2", "server3"],
+                ["server2"],
+                "key_team_intersection_then_org",
+            ),
+            (
+                [],
+                ["team_server"],
+                [],
+                ["team_server"],
+                "no_org_permissions_keeps_key_team_result",
+            ),
+        ],
+    )
+    async def test_get_allowed_mcp_servers_org_inheritance_logic(
+        self, org_servers, team_servers, key_servers, expected_servers, scenario
+    ):
+        """Test organization MCP permissions inherit/intersect with key/team permissions."""
+
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="test-team" if team_servers else None,
+            org_id="test-org" if org_servers else None,
+        )
+
+        with patch.object(
+            MCPRequestHandler, "_get_allowed_mcp_servers_for_key"
+        ) as mock_key_servers:
+            with patch.object(
+                MCPRequestHandler, "_get_allowed_mcp_servers_for_team"
+            ) as mock_team_servers:
+                with patch.object(
+                    MCPRequestHandler, "_get_allowed_mcp_servers_for_org"
+                ) as mock_org_servers:
+                    mock_key_servers.return_value = key_servers
+                    mock_team_servers.return_value = team_servers
+                    mock_org_servers.return_value = org_servers
+
+                    result = await MCPRequestHandler.get_allowed_mcp_servers(
+                        user_api_key_auth
+                    )
+
+                    assert sorted(result) == sorted(expected_servers)
+                    mock_org_servers.assert_called_once_with(user_api_key_auth)
 
     async def test_permission_inheritance_edge_cases(self):
         """Test edge cases in permission inheritance"""
@@ -342,7 +410,7 @@ class TestMCPRequestHandler:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
             side_effect=mock_user_api_key_auth,
-        ) as mock_auth:
+        ):
             # Call the method
             (
                 auth_result,
@@ -1823,6 +1891,379 @@ async def test_get_allowed_mcp_servers_for_team_without_team_id_returns_empty():
 
 
 @pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_org_uses_object_permission():
+    """Organization object permissions should grant direct, group, and tool-scoped servers."""
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    for sid in ("org-direct-server", "org-tool-server"):
+        global_mcp_server_manager.registry[sid] = MCPServer(
+            server_id=sid,
+            name=sid,
+            server_name=sid,
+            url=f"https://{sid}.example.com",
+            transport=MCPTransport.http,
+        )
+
+    try:
+        org_object_permission = LiteLLM_ObjectPermissionTable(
+            object_permission_id="org-perm-123",
+            mcp_servers=["org-direct-server"],
+            mcp_access_groups=["org-dev-group"],
+            mcp_tool_permissions={"org-tool-server": ["tool_a"]},
+        )
+        org_row = MagicMock()
+        org_row.object_permission = org_object_permission
+        org_row.object_permission_id = "org-perm-123"
+        mock_prisma = MagicMock()
+        mock_cache = MagicMock()
+
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            org_id="org-123",
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_org_object",
+                new_callable=AsyncMock,
+                return_value=org_row,
+            ) as mock_get_org_object,
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=["org-group-server"],
+            ) as mock_access_groups,
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_org(
+                user_api_key_auth
+            )
+
+        assert set(result) == {
+            "org-direct-server",
+            "org-group-server",
+            "org-tool-server",
+        }
+        mock_get_org_object.assert_awaited_once_with(
+            org_id="org-123",
+            prisma_client=mock_prisma,
+            user_api_key_cache=mock_cache,
+            parent_otel_span=user_api_key_auth.parent_otel_span,
+            proxy_logging_obj=None,
+            include_object_permission=True,
+        )
+        mock_access_groups.assert_called_once_with(["org-dev-group"])
+    finally:
+        for sid in ("org-direct-server", "org-tool-server"):
+            global_mcp_server_manager.registry.pop(sid, None)
+
+
+@pytest.mark.asyncio
+async def test_get_org_id_for_user_auth_falls_back_to_team_organization():
+    """Keys without org_id should inherit org permissions through their team."""
+
+    mock_team_obj = MagicMock()
+    mock_team_obj.organization_id = "org-from-team"
+    mock_prisma = MagicMock()
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-123",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new_callable=AsyncMock,
+            return_value=mock_team_obj,
+        ) as mock_get_team_object,
+    ):
+        result = await MCPRequestHandler._get_org_id_for_user_auth(user_api_key_auth)
+
+    assert result == "org-from-team"
+    mock_get_team_object.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_api_key_auth,prisma_client_value,expected_org_id",
+    [
+        (None, object(), None),
+        (
+            UserAPIKeyAuth(
+                api_key="test-key", user_id="test-user", org_id="direct-org"
+            ),
+            object(),
+            "direct-org",
+        ),
+        (
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user"),
+            object(),
+            None,
+        ),
+        (
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user", team_id="team-123"),
+            None,
+            None,
+        ),
+    ],
+)
+async def test_get_org_id_for_user_auth_guard_conditions(
+    user_api_key_auth, prisma_client_value, expected_org_id
+):
+    """Org id resolution should exit early when no lookup is possible."""
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client_value),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team_object,
+    ):
+        result = await MCPRequestHandler._get_org_id_for_user_auth(user_api_key_auth)
+
+    assert result == expected_org_id
+    mock_get_team_object.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_org_id_for_user_auth_returns_none_when_team_is_missing():
+    """Team fallback should not grant org permissions when the team cannot be loaded."""
+
+    mock_prisma = object()
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-missing",
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_get_team_object,
+    ):
+        result = await MCPRequestHandler._get_org_id_for_user_auth(user_api_key_auth)
+
+    assert result is None
+    mock_get_team_object.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resolved_org_id,prisma_client_value",
+    [
+        (None, object()),
+        ("org-123", None),
+    ],
+)
+async def test_get_org_object_permission_guard_conditions(
+    resolved_org_id, prisma_client_value
+):
+    """Org permission lookup should return None when org or prisma state is missing."""
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_org_id_for_user_auth",
+            new_callable=AsyncMock,
+            return_value=resolved_org_id,
+        ) as mock_get_org_id,
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client_value),
+    ):
+        result = await MCPRequestHandler._get_org_object_permission(
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        )
+
+    assert result is None
+    mock_get_org_id.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_permission_returns_none_when_org_is_missing():
+    """Missing organization rows should not create implicit MCP permissions."""
+
+    mock_prisma = MagicMock()
+    mock_cache = MagicMock()
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_org_id_for_user_auth",
+            new_callable=AsyncMock,
+            return_value="org-missing",
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_org_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_get_org_object,
+    ):
+        result = await MCPRequestHandler._get_org_object_permission(
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        )
+
+    assert result is None
+
+    mock_get_org_object.assert_awaited_once_with(
+        org_id="org-missing",
+        prisma_client=mock_prisma,
+        user_api_key_cache=mock_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+        include_object_permission=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_permission_loads_configured_permission_by_id():
+    """Configured org permission ids must resolve before org MCP access is granted."""
+
+    org_object_permission = MagicMock()
+    org_row = MagicMock()
+    org_row.object_permission = None
+    org_row.object_permission_id = "org-perm-123"
+    mock_prisma = MagicMock()
+    mock_cache = MagicMock()
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_org_id_for_user_auth",
+            new_callable=AsyncMock,
+            return_value="org-123",
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_org_object",
+            new_callable=AsyncMock,
+            return_value=org_row,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_object_permission",
+            new_callable=AsyncMock,
+            return_value=org_object_permission,
+        ) as mock_get_object_permission,
+    ):
+        result = await MCPRequestHandler._get_org_object_permission(
+            UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+        )
+
+    assert result == org_object_permission
+    mock_get_object_permission.assert_awaited_once_with(
+        object_permission_id="org-perm-123",
+        prisma_client=mock_prisma,
+        user_api_key_cache=mock_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_permission_raises_when_configured_permission_is_missing():
+    """A configured org permission that cannot be loaded should not fail open."""
+
+    org_row = MagicMock()
+    org_row.object_permission = None
+    org_row.object_permission_id = "org-perm-123"
+    mock_prisma = MagicMock()
+    mock_cache = MagicMock()
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_org_id_for_user_auth",
+            new_callable=AsyncMock,
+            return_value="org-123",
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", None),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_org_object",
+            new_callable=AsyncMock,
+            return_value=org_row,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_object_permission",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+    ):
+        with pytest.raises(Exception, match="Organization object_permission"):
+            await MCPRequestHandler._get_org_object_permission(
+                UserAPIKeyAuth(api_key="test-key", user_id="test-user")
+            )
+
+
+@pytest.mark.asyncio
+async def test_get_org_object_includes_object_permission_with_separate_cache_key():
+    """Org lookups that load permissions should not reuse plain org cache entries."""
+
+    from litellm.proxy.auth.auth_checks import get_org_object
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_cache.async_set_cache = AsyncMock()
+
+    org_row = MagicMock()
+    org_row.model_dump.return_value = {
+        "organization_id": "org-123",
+        "organization_alias": "Org 123",
+        "budget_id": "budget-123",
+        "spend": 0.0,
+        "metadata": {},
+        "models": [],
+        "created_by": "admin",
+        "updated_by": "admin",
+        "object_permission_id": "org-perm-123",
+        "object_permission": None,
+    }
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
+        return_value=org_row
+    )
+
+    result = await get_org_object(
+        org_id="org-123",
+        prisma_client=mock_prisma,
+        user_api_key_cache=mock_cache,
+        include_object_permission=True,
+    )
+
+    assert result is not None
+    assert result.organization_id == "org-123"
+    assert result.object_permission_id == "org-perm-123"
+    mock_cache.async_get_cache.assert_awaited_once_with(
+        key="org_id:org-123:with_object_permission",
+        model_type=type(result),
+    )
+    mock_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(
+        where={"organization_id": "org-123"},
+        include={"object_permission": True},
+    )
+    mock_cache.async_set_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user_api_key_auth, prisma_client_value, scenario",
     [
@@ -1888,6 +2329,59 @@ async def test_get_allowed_mcp_servers_for_key_returns_empty_when_db_returns_non
 
     assert result == []
     mock_get_perm.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_org_propagates_lookup_failure():
+    """Org permission lookup failures must reach the top-level fail-closed guard."""
+
+    with patch.object(
+        MCPRequestHandler,
+        "_get_org_object_permission",
+        new_callable=AsyncMock,
+        side_effect=Exception("lookup failed"),
+    ):
+        with pytest.raises(Exception, match="lookup failed"):
+            await MCPRequestHandler._get_allowed_mcp_servers_for_org(
+                UserAPIKeyAuth(
+                    api_key="test-key", user_id="test-user", org_id="org-123"
+                )
+            )
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_fails_closed_on_org_lookup_failure():
+    """An org lookup error should deny MCP server access instead of dropping the org ceiling."""
+
+    user_api_key_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        org_id="org-123",
+    )
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_key",
+            new_callable=AsyncMock,
+            return_value=["server-from-key"],
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_team",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_org",
+            new_callable=AsyncMock,
+            side_effect=Exception("lookup failed"),
+        ),
+    ):
+        result = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+
+    assert result == []
 
 
 @pytest.mark.asyncio
@@ -2086,6 +2580,105 @@ class TestAgentMCPPermissions:
                         user_api_key_auth=user_api_key_auth,
                     )
                     assert sorted(result) == ["tool_a", "tool_b"]
+
+    async def test_get_allowed_tools_for_server_org_inheritance(self):
+        """Org-level tool permissions apply when key/team do not restrict tools."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            org_id="org-tools",
+        )
+        org_perm = MagicMock()
+        org_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_c"]}
+
+        with patch.object(
+            MCPRequestHandler, "_get_key_object_permission", return_value=None
+        ):
+            with patch.object(
+                MCPRequestHandler,
+                "_get_team_object_permission",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                with patch.object(
+                    MCPRequestHandler,
+                    "_get_org_object_permission",
+                    new_callable=AsyncMock,
+                    return_value=org_perm,
+                ):
+                    result = await MCPRequestHandler.get_allowed_tools_for_server(
+                        server_id="server_1",
+                        user_api_key_auth=user_api_key_auth,
+                    )
+
+        assert sorted(result) == ["tool_a", "tool_c"]
+
+    async def test_get_allowed_tools_for_server_org_intersection(self):
+        """Key/team tool restrictions stay inside org-level tool permissions."""
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            org_id="org-tools",
+        )
+        key_perm = MagicMock()
+        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+        org_perm = MagicMock()
+        org_perm.mcp_tool_permissions = {"server_1": ["tool_b", "tool_c"]}
+
+        with patch.object(
+            MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+        ):
+            with patch.object(
+                MCPRequestHandler,
+                "_get_team_object_permission",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                with patch.object(
+                    MCPRequestHandler,
+                    "_get_org_object_permission",
+                    new_callable=AsyncMock,
+                    return_value=org_perm,
+                ):
+                    result = await MCPRequestHandler.get_allowed_tools_for_server(
+                        server_id="server_1",
+                        user_api_key_auth=user_api_key_auth,
+                    )
+
+        assert result == ["tool_b"]
+
+    async def test_get_allowed_tools_for_server_fails_closed_on_permission_error(self):
+        """Permission lookup errors should deny tools, not become unrestricted access."""
+
+        user_api_key_auth = UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            org_id="org-tools",
+        )
+        key_perm = MagicMock()
+        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+
+        with patch.object(
+            MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+        ):
+            with patch.object(
+                MCPRequestHandler,
+                "_get_team_object_permission",
+                new_callable=AsyncMock,
+                return_value=None,
+            ):
+                with patch.object(
+                    MCPRequestHandler,
+                    "_get_org_object_permission",
+                    new_callable=AsyncMock,
+                    side_effect=Exception("lookup failed"),
+                ):
+                    result = await MCPRequestHandler.get_allowed_tools_for_server(
+                        server_id="server_1",
+                        user_api_key_auth=user_api_key_auth,
+                    )
+
+        assert result == []
 
 
 @pytest.mark.asyncio

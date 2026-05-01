@@ -2522,6 +2522,7 @@ async def get_org_object(
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
     include_budget_table: bool = False,
+    include_object_permission: bool = False,
 ) -> Optional[LiteLLM_OrganizationTable]:
     """
     - Check if org id in proxy Org Table
@@ -2535,6 +2536,7 @@ async def get_org_object(
         parent_otel_span: Optional OpenTelemetry span
         proxy_logging_obj: Optional proxy logging object
         include_budget_table: If True, includes litellm_budget_table in the query
+        include_object_permission: If True, includes object_permission in the query
     """
     if prisma_client is None:
         raise Exception(
@@ -2543,10 +2545,13 @@ async def get_org_object(
     if not isinstance(org_id, str):
         return None
 
-    # Use different cache key if budget table is included
+    # Use different cache keys when loading relations so a plain org cache entry
+    # does not mask permission or budget data on auth-critical paths.
     cache_key = "org_id:{}".format(org_id)
     if include_budget_table:
         cache_key = "org_id:{}:with_budget".format(org_id)
+    if include_object_permission:
+        cache_key = "{}:with_object_permission".format(cache_key)
 
     # check if in cache
     deserialized_org = await user_api_key_cache.async_get_cache(
@@ -2558,8 +2563,13 @@ async def get_org_object(
     # else, check db
     try:
         query_kwargs: Dict[str, Any] = {"where": {"organization_id": org_id}}
+        include: Dict[str, bool] = {}
         if include_budget_table:
-            query_kwargs["include"] = {"litellm_budget_table": True}
+            include["litellm_budget_table"] = True
+        if include_object_permission:
+            include["object_permission"] = True
+        if include:
+            query_kwargs["include"] = include
 
         response = await prisma_client.db.litellm_organizationtable.find_unique(
             **query_kwargs
