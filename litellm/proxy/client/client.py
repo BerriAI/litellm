@@ -36,7 +36,7 @@ class Client:
 
         # Initialize resource clients
 
-        self.http = HTTPClient(base_url=base_url, api_key=api_key, timeout=timeout)
+        self.http = HTTPClient(base_url=base_url, api_key=self._api_key, timeout=timeout)
         self.models = ModelsManagementClient(
             base_url=self._base_url, api_key=self._api_key
         )
