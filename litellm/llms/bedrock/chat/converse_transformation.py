@@ -449,9 +449,11 @@ class AmazonConverseConfig(BaseConfig):
             optional_params.update(reasoning_config)
         else:
             # Anthropic and other models: convert to thinking parameter
-            optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+            thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort, model=model
             )
+            if thinking is not None:
+                optional_params["thinking"] = thinking
 
     @staticmethod
     def _clamp_thinking_budget_tokens(optional_params: dict) -> None:

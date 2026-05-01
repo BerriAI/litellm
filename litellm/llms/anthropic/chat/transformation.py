@@ -1088,9 +1088,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                thinking = AnthropicConfig._map_reasoning_effort(
                     reasoning_effort=value, model=model
                 )
+                if thinking is not None:
+                    optional_params["thinking"] = thinking
                 # For Claude 4.6+ models, effort is controlled via output_config,
                 # not thinking budget_tokens. Map reasoning_effort to output_config.
                 if AnthropicConfig._is_claude_4_6_model(

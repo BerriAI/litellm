@@ -330,9 +330,11 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
         if "reasoning_effort" in non_default_params and "claude" in model:
-            optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+            thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=non_default_params.get("reasoning_effort"), model=model
             )
+            if thinking is not None:
+                optional_params["thinking"] = thinking
             optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
