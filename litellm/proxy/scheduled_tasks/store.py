@@ -189,15 +189,14 @@ async def report_task_result(
         "consecutive_errors": new_count,
         "last_error": reason,
     }
-    where_clause: Dict[str, Any] = {
-        "task_id": task_id,
-        "owner_token": owner_token,
-    }
     if new_count >= MAX_CONSECUTIVE_ERRORS:
         update_data["status"] = "failed"
-        where_clause["status"] = "pending"
     affected = await prisma_client.db.litellm_scheduledtasktable.update_many(
-        where=where_clause,
+        where={
+            "task_id": task_id,
+            "owner_token": owner_token,
+            "status": "pending",
+        },
         data=update_data,
     )
     if affected == 0:
