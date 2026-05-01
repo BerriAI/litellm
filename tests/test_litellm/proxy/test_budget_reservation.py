@@ -70,7 +70,7 @@ def test_should_not_serialize_budget_reservation_on_user_api_key_auth():
 
 
 @pytest.mark.asyncio
-async def test_should_prevent_second_key_reservation_over_budget(
+async def test_should_shrink_second_key_reservation_to_remaining_budget(
     spend_counter_state,
 ):
     counter_cache, key_cache = spend_counter_state
@@ -102,6 +102,23 @@ async def test_should_prevent_second_key_reservation_over_budget(
             == 0.6
         )
 
+        second_reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        assert second_reservation is not None
+        assert second_reservation["reserved_cost"] == pytest.approx(0.4)
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-race"
+        ) == pytest.approx(1.0)
+
         with pytest.raises(litellm.BudgetExceededError):
             await reserve_budget_for_request(
                 request_body=_request_body(),
@@ -115,15 +132,19 @@ async def test_should_prevent_second_key_reservation_over_budget(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
-    assert (
-        counter_cache.in_memory_cache.get_cache(key="spend:key:key-budget-race") == 0.6
-    )
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-race"
+    ) == pytest.approx(1.0)
 
+    await release_budget_reservation(second_reservation)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-race"
+    ) == pytest.approx(0.6)
     await release_budget_reservation(reservation)
 
 
 @pytest.mark.asyncio
-async def test_should_prevent_second_end_user_reservation_over_budget(
+async def test_should_shrink_second_end_user_reservation_to_remaining_budget(
     spend_counter_state,
 ):
     counter_cache, key_cache = spend_counter_state
@@ -160,6 +181,24 @@ async def test_should_prevent_second_end_user_reservation_over_budget(
             key="spend:end_user:end-user-budget-race"
         ) == pytest.approx(0.6)
 
+        second_reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            end_user_object=end_user_object,
+        )
+        assert second_reservation is not None
+        assert second_reservation["reserved_cost"] == pytest.approx(0.4)
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:end_user:end-user-budget-race"
+        ) == pytest.approx(1.0)
+
         with pytest.raises(litellm.BudgetExceededError):
             await reserve_budget_for_request(
                 request_body=_request_body(),
@@ -174,6 +213,11 @@ async def test_should_prevent_second_end_user_reservation_over_budget(
                 end_user_object=end_user_object,
             )
 
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:end_user:end-user-budget-race"
+    ) == pytest.approx(1.0)
+
+    await release_budget_reservation(second_reservation)
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:end_user:end-user-budget-race"
     ) == pytest.approx(0.6)
@@ -195,7 +239,7 @@ async def test_should_prevent_second_end_user_reservation_over_budget(
 
 
 @pytest.mark.asyncio
-async def test_should_prevent_second_tag_reservation_over_budget(
+async def test_should_shrink_second_tag_reservation_to_remaining_budget(
     spend_counter_state,
 ):
     counter_cache, key_cache = spend_counter_state
@@ -257,6 +301,23 @@ async def test_should_prevent_second_tag_reservation_over_budget(
             is None
         )
 
+        second_reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=prisma_client,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        assert second_reservation is not None
+        assert second_reservation["reserved_cost"] == pytest.approx(0.4)
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:tag:tag-budget-race"
+        ) == pytest.approx(1.0)
+
         with pytest.raises(litellm.BudgetExceededError):
             await reserve_budget_for_request(
                 request_body=request_body,
@@ -270,6 +331,11 @@ async def test_should_prevent_second_tag_reservation_over_budget(
                 proxy_logging_obj=proxy_logging_obj,
             )
 
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:tag:tag-budget-race"
+    ) == pytest.approx(1.0)
+
+    await release_budget_reservation(second_reservation)
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:tag:tag-budget-race"
     ) == pytest.approx(0.6)
@@ -441,6 +507,50 @@ async def test_should_seed_org_counter_from_with_budget_cache(spend_counter_stat
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:org:org-counter-with-budget"
     ) == pytest.approx(2.25)
+
+
+@pytest.mark.asyncio
+async def test_should_cap_known_estimate_to_remaining_budget(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-known-estimate-cap",
+        spend=0.9,
+        max_budget=1.0,
+    )
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-budget-known-estimate-cap",
+        value=0.9,
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.6,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.1)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-known-estimate-cap"
+    ) == pytest.approx(1.0)
+
+    await release_budget_reservation(reservation)
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-known-estimate-cap"
+    ) == pytest.approx(0.9)
 
 
 @pytest.mark.asyncio
@@ -923,8 +1033,12 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
     )
     team_object = LiteLLM_TeamTable(
         team_id="team-budget-cleanup-failure",
-        spend=0.0,
+        spend=0.3,
         max_budget=0.3,
+    )
+    await key_cache.async_set_cache(
+        key="team_id:team-budget-cleanup-failure",
+        value=team_object,
     )
 
     original_increment_cache = counter_cache.async_increment_cache
@@ -970,7 +1084,7 @@ async def test_should_preserve_budget_error_and_continue_partial_cleanup(
     )
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:team:team-budget-cleanup-failure"
-    ) == pytest.approx(0.0)
+    ) == pytest.approx(0.3)
     mock_log_exception.assert_called()
 
 
