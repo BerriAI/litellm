@@ -337,41 +337,72 @@ async def _handle_team_membership_changes(
         )
 
 
+SCIM_BLOCKED_METADATA_KEY = "scim_blocked"
+
+
+def _key_was_scim_blocked(metadata: Any) -> bool:
+    """True if a verification token carries the SCIM-block marker in metadata."""
+    return (
+        isinstance(metadata, dict) and metadata.get(SCIM_BLOCKED_METADATA_KEY) is True
+    )
+
+
 async def _set_user_keys_blocked(user_id: str, blocked: bool) -> int:
     """
-    Block or unblock all virtual keys owned by a user and invalidate them in
-    the in-memory/redis caches so the change takes effect immediately.
+    Block or unblock virtual keys owned by a user and invalidate them in the
+    in-memory/redis caches so the change takes effect immediately.
 
-    Returns the number of keys whose state was flipped. Used by the SCIM
-    deprovisioning flow so a user's keys stop working the moment SCIM marks
-    the user inactive (or deletes them).
+    Each key SCIM blocks is tagged with ``metadata.scim_blocked = True``. On
+    reactivation we only unblock keys carrying that marker, so a key an admin
+    blocked manually for unrelated reasons is left alone.
+
+    Returns the number of keys whose state was flipped.
     """
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
     prisma_client = await _get_prisma_client_or_raise_exception()
 
-    # Only flip keys whose current state differs — avoids touching keys that
-    # were already (un)blocked manually by an admin. `blocked` is a nullable
-    # column with no default, so existing keys typically have `blocked=NULL`;
-    # we must treat NULL as "not blocked" so SQL equality on NULL doesn't
-    # silently skip them.
     if blocked:
-        state_filter: Dict[str, Any] = {"OR": [{"blocked": False}, {"blocked": None}]}
+        # Block keys that aren't already blocked. `blocked` is a nullable column
+        # with no default so existing rows typically hold NULL; treat NULL as
+        # "not blocked" so SQL equality on NULL doesn't silently skip them.
+        candidates = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={
+                "user_id": user_id,
+                "OR": [{"blocked": False}, {"blocked": None}],
+            },
+        )
+        affected_keys = candidates
     else:
-        state_filter = {"blocked": True}
+        # Only unblock keys that SCIM previously blocked. An admin-managed
+        # block has no `scim_blocked` marker and must not be reversed here.
+        candidates = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"user_id": user_id, "blocked": True},
+        )
+        affected_keys = [k for k in candidates if _key_was_scim_blocked(k.metadata)]
 
-    where_clause: Dict[str, Any] = {"user_id": user_id, **state_filter}
-
-    affected_keys = await prisma_client.db.litellm_verificationtoken.find_many(
-        where=where_clause,
-    )
     if not affected_keys:
         return 0
 
-    await prisma_client.db.litellm_verificationtoken.update_many(
-        where=where_clause,
-        data={"blocked": blocked},
-    )
+    # Per-key updates: we need to add/remove the SCIM-block marker in JSON
+    # metadata, which `update_many` can't express. Cardinality is bounded by
+    # the number of keys a single user owns.
+    for key_row in affected_keys:
+        current_metadata: Dict[str, Any] = (
+            dict(key_row.metadata) if isinstance(key_row.metadata, dict) else {}
+        )
+        if blocked:
+            new_metadata = {**current_metadata, SCIM_BLOCKED_METADATA_KEY: True}
+        else:
+            new_metadata = {
+                k: v
+                for k, v in current_metadata.items()
+                if k != SCIM_BLOCKED_METADATA_KEY
+            }
+        await prisma_client.db.litellm_verificationtoken.update(
+            where={"token": key_row.token},
+            data={"blocked": blocked, "metadata": safe_dumps(new_metadata)},
+        )
 
     for key_row in affected_keys:
         await _delete_cache_key_object(
