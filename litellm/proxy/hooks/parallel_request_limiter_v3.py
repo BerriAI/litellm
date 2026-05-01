@@ -86,19 +86,22 @@ CHECK_AND_INCREMENT_BY_N_SCRIPT = """
 -- All-or-nothing: if any descriptor would exceed its limit, no counter is
 -- modified.
 --
+-- Uses Redis server time (`redis.call('TIME')`) instead of a client-supplied
+-- timestamp so that window resets are deterministic across replicas with
+-- skewed wall-clocks. This prevents a clock-skew-induced reopening of the
+-- TOCTOU window across multi-replica deployments.
+--
 -- KEYS layout: pairs of (window_key, counter_key), one pair per descriptor.
--- ARGV layout:
---   ARGV[1] = now (unix seconds)
---   ARGV[2] = window_size (seconds)
---   For each descriptor i (1..N), starting at ARGV[3]:
---     ARGV[3 + (i-1)*3 + 0] = limit
---     ARGV[3 + (i-1)*3 + 1] = increment
---     ARGV[3 + (i-1)*3 + 2] = ttl (counter TTL when window resets)
+-- ARGV layout: per-descriptor 4-tuple, starting at ARGV[1]:
+--     ARGV[(i-1)*4 + 1] = limit
+--     ARGV[(i-1)*4 + 2] = increment
+--     ARGV[(i-1)*4 + 3] = ttl_seconds (counter TTL when window resets)
+--     ARGV[(i-1)*4 + 4] = window_size_seconds (sliding-window length)
 --
 -- Return on success: { 0, new_counter_1, new_counter_2, ... }
 -- Return on over-limit: { 1, descriptor_index, current_counter, limit }
-local now = tonumber(ARGV[1])
-local window_size = tonumber(ARGV[2])
+local time_reply = redis.call('TIME')
+local now = tonumber(time_reply[1])
 local descriptor_count = #KEYS / 2
 
 -- Pass 1: read state, validate. Abort without writing if any over limit.
@@ -106,9 +109,10 @@ local descriptor_state = {}
 for i = 1, descriptor_count do
     local window_key = KEYS[(i - 1) * 2 + 1]
     local counter_key = KEYS[(i - 1) * 2 + 2]
-    local arg_base = 3 + (i - 1) * 3
+    local arg_base = (i - 1) * 4 + 1
     local limit = tonumber(ARGV[arg_base])
     local increment = tonumber(ARGV[arg_base + 1])
+    local window_size = tonumber(ARGV[arg_base + 3])
 
     local window_start = redis.call('GET', window_key)
     local window_expired = (not window_start) or
@@ -133,9 +137,10 @@ local results = { 0 }
 for i = 1, descriptor_count do
     local window_key = KEYS[(i - 1) * 2 + 1]
     local counter_key = KEYS[(i - 1) * 2 + 2]
-    local arg_base = 3 + (i - 1) * 3
+    local arg_base = (i - 1) * 4 + 1
     local increment = tonumber(ARGV[arg_base + 1])
     local ttl = tonumber(ARGV[arg_base + 2])
+    local window_size = tonumber(ARGV[arg_base + 3])
 
     local window_expired = descriptor_state[i][1]
 
@@ -261,6 +266,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         # limiters) within this process to close the TOCTOU window between
         # read-only check and counter increment. Multi-replica deployments
         # additionally rely on Redis Lua atomicity for cross-process safety.
+        #
+        # Coarse granularity: this single lock serializes ALL atomic check+
+        # increment operations across batch and dynamic limiters on this
+        # instance. A slow batch input-file fetch (which happens upstream of
+        # the lock) does not block here, but Redis Lua latency does. If
+        # contention shows up under load (visible as p99 latency spikes
+        # correlated with batch traffic), shard to a per-descriptor-key lock
+        # via a `weakref.WeakValueDictionary[str, asyncio.Lock]`. Punted as a
+        # follow-up because Lua dominates wall-time and the lock is held for
+        # one round-trip.
         self._check_and_increment_lock = asyncio.Lock()
 
     def _get_batch_rate_limiter(self) -> Optional[Any]:
@@ -740,7 +755,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     descriptor_key, descriptor_value, rlt
                 )
                 keys.extend([window_key, counter_key])
-                script_args.extend([int(limit_value), inc_amount, int(window_size)])
+                # Per-descriptor 4-tuple: limit, increment, ttl, window_size.
+                # window_size is per-descriptor — descriptors may carry custom
+                # windows distinct from self.window_size, and the Lua script
+                # uses this slot to evaluate window expiry.
+                script_args.extend(
+                    [
+                        int(limit_value),
+                        inc_amount,
+                        int(window_size),
+                        int(window_size),
+                    ]
+                )
                 per_counter_meta.append(
                     {
                         "descriptor_key": descriptor_key,
@@ -750,34 +776,44 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         "counter_key": counter_key,
                         "increment": inc_amount,
                         "ttl": int(window_size),
+                        "window_size": int(window_size),
                     }
                 )
 
         if not keys:
             return RateLimitResponse(overall_code="OK", statuses=[])
 
-        current_time = self._get_current_time()
-        now_int = int(current_time.timestamp())
-
         # Multi-process atomicity via Redis Lua. Single-process atomicity
         # falls back to the asyncio.Lock + in-memory sliding window below.
+        # Note: in-memory state diverges from Redis state — if Lua fails
+        # mid-write, retrying via in-memory may double-count. See fallback
+        # warning below.
         if self.check_and_increment_by_n_script is not None:
             try:
                 raw = await self.check_and_increment_by_n_script(
                     keys=keys,
-                    args=[now_int, self.window_size] + script_args,
+                    args=script_args,
                 )
                 return self._build_atomic_response(raw, per_counter_meta)
             except Exception as e:
-                verbose_proxy_logger.warning(
-                    f"atomic_check_and_increment_by_n Lua failed, falling back "
-                    f"to in-memory: {str(e)}"
+                # Escalated from warning to error: Lua failures (script timeout,
+                # Redis OOM, network partition) leave counter state ambiguous.
+                # The fallback path below uses LOCAL DualCache, which is a
+                # different store from Redis — counters here will diverge from
+                # Redis until that key's window expires (TTL bounds divergence).
+                # Operators should alert on this log line; sustained occurrences
+                # indicate Redis health degradation that may erode rate-limit
+                # accuracy.
+                verbose_proxy_logger.error(
+                    f"atomic_check_and_increment_by_n: Redis Lua execution "
+                    f"failed ({type(e).__name__}: {e}). Falling back to "
+                    f"in-memory enforcement — counters will diverge from Redis "
+                    f"state until window expires (window_size={self.window_size}s)."
                 )
 
         async with self._check_and_increment_lock:
             return await self._atomic_check_and_increment_in_memory(
                 per_counter_meta=per_counter_meta,
-                now_int=now_int,
                 parent_otel_span=parent_otel_span,
             )
 
@@ -826,21 +862,30 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     async def _atomic_check_and_increment_in_memory(
         self,
         per_counter_meta: List[Dict[str, Any]],
-        now_int: int,
         parent_otel_span: Optional[Span] = None,
     ) -> RateLimitResponse:
-        """In-memory all-or-nothing check-and-increment. Caller holds lock."""
+        """In-memory all-or-nothing check-and-increment. Caller holds lock.
+
+        Reads/writes the LOCAL DualCache (`local_only=True`) — note this is
+        a different store from Redis. When this fallback fires after a Lua
+        failure, in-memory counters will diverge from Redis until each key's
+        window expires (TTL bounds divergence).
+        """
+        # Use a single 'now' for the duration of this critical section so all
+        # descriptors evaluate window expiry consistently.
+        now_int = int(self._get_current_time().timestamp())
+
         # Pass 1: read state, validate.
         descriptor_state: List[Dict[str, Any]] = []
         for meta in per_counter_meta:
+            window_size = meta["window_size"]
             window_start = await self.internal_usage_cache.async_get_cache(
                 key=meta["window_key"],
                 litellm_parent_otel_span=parent_otel_span,
                 local_only=True,
             )
             window_expired = (
-                window_start is None
-                or (now_int - int(window_start)) >= self.window_size
+                window_start is None or (now_int - int(window_start)) >= window_size
             )
             current_counter = (
                 0
@@ -885,7 +930,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 await self.internal_usage_cache.async_set_cache(
                     key=meta["window_key"],
                     value=str(now_int),
-                    ttl=self.window_size,
+                    ttl=meta["window_size"],
                     litellm_parent_otel_span=parent_otel_span,
                     local_only=True,
                 )
