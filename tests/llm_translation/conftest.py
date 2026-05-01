@@ -121,6 +121,11 @@ def pytest_recording_configure(config, vcr):
     if _vcr_disabled():
         return
     vcr.register_persister(make_redis_persister())
+    # vcrpy patches httpx's transport; litellm's default AiohttpTransport
+    # routes around httpx and produces empty responses under the patched
+    # transport. Force pure-httpx transport so vcrpy can record/replay.
+    litellm.disable_aiohttp_transport = True
+    os.environ["DISABLE_AIOHTTP_TRANSPORT"] = "True"
 
 
 # ---------------------------------------------------------------------------
