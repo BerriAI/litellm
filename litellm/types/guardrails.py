@@ -96,6 +96,7 @@ class SupportedGuardrailIntegrations(Enum):
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
+    PEYEEYE = "peyeeye"
 
 
 class Role(Enum):
@@ -442,6 +443,23 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
+class PEyeEyeGuardrailConfigModel(BaseModel):
+    """Configuration parameters for the peyeeye PII redaction & rehydration guardrail"""
+
+    peyeeye_locale: Optional[str] = Field(
+        default="auto",
+        description="BCP-47 language tag for PII detection. 'auto' lets peyeeye detect.",
+    )
+    peyeeye_entities: Optional[List[str]] = Field(
+        default=None,
+        description="Restrict detection to these entity IDs (e.g. ['EMAIL', 'CARD']). Omit to detect all 60+ built-in entities.",
+    )
+    peyeeye_session_mode: Optional[Literal["stateful", "stateless"]] = Field(
+        default="stateful",
+        description="'stateful' uses peyeeye sessions; 'stateless' returns a sealed rehydration key (no PII retained server-side).",
+    )
+
+
 class PillarGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Pillar Security guardrail"""
 
@@ -758,6 +776,7 @@ class LitellmParams(
     BedrockGuardrailConfigModel,
     LakeraV2GuardrailConfigModel,
     LassoGuardrailConfigModel,
+    PEyeEyeGuardrailConfigModel,
     PillarGuardrailConfigModel,
     GraySwanGuardrailConfigModel,
     NomaGuardrailConfigModel,
