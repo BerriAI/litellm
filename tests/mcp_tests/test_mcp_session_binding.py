@@ -9,6 +9,7 @@ from litellm.proxy._experimental.mcp_server.server import (
     handle_sse_post_messages,
     _captured_session_id_container_var,
     _session_id_auth_storage,
+    _session_obj_auth_storage,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -284,3 +285,85 @@ async def test_anonymous_session_still_works():
 
         finish_run.set()
         await task
+
+
+@pytest.mark.asyncio
+async def test_session_obj_auth_storage_lazy_cache_and_fallback():
+    """
+    Verify that get_or_extract_auth_context:
+    1. Lazily caches auth in _session_obj_auth_storage when ContextVar is set.
+    2. Falls back to _session_obj_auth_storage when ContextVar is lost.
+
+    This proves the robust id(session)-based lookup works without relying
+    on the private _read_stream attribute.
+    """
+    from litellm.proxy._experimental.mcp_server.server import (
+        get_or_extract_auth_context,
+        set_auth_context,
+    )
+
+    # Create a fake session object (any object with a stable id)
+    fake_session = MagicMock(name="FakeServerSession")
+    session_id_key = id(fake_session)
+
+    # Create a fake request_ctx
+    fake_request_ctx_value = MagicMock()
+    fake_request_ctx_value.session = fake_session
+
+    test_auth = UserAPIKeyAuth(api_key="lazy-cache-key", user_id="lazy-user")
+
+    # Ensure _session_obj_auth_storage starts clean for this session
+    _session_obj_auth_storage.pop(session_id_key, None)
+
+    # --- Step 1: ContextVar has auth, session is available ---
+    # get_or_extract_auth_context should lazily cache auth.
+    with patch(
+        "mcp.server.lowlevel.server.request_ctx",
+    ) as mock_ctx_var:
+        mock_ctx_var.get.return_value = fake_request_ctx_value
+
+        # Set the ContextVar-based auth
+        set_auth_context(
+            user_api_key_auth=test_auth,
+            mcp_auth_header="auth-hdr",
+            mcp_servers=["srv1"],
+            mcp_server_auth_headers={},
+            oauth2_headers={},
+            raw_headers={},
+            client_ip="127.0.0.1",
+        )
+
+        result = await get_or_extract_auth_context()
+        assert result[0] is not None
+        assert result[0].api_key == "lazy-cache-key"
+
+        # Verify lazy cache was populated
+        assert session_id_key in _session_obj_auth_storage
+        cached = _session_obj_auth_storage[session_id_key]
+        assert cached.user_api_key_auth.api_key == "lazy-cache-key"
+
+    # --- Step 2: ContextVar is cleared (simulates SDK sub-task) ---
+    # get_or_extract_auth_context should recover from _session_obj_auth_storage.
+    set_auth_context(
+        user_api_key_auth=None,
+        mcp_auth_header=None,
+        mcp_servers=None,
+        mcp_server_auth_headers=None,
+        oauth2_headers=None,
+        raw_headers=None,
+        client_ip=None,
+    )
+
+    with patch(
+        "mcp.server.lowlevel.server.request_ctx",
+    ) as mock_ctx_var:
+        mock_ctx_var.get.return_value = fake_request_ctx_value
+
+        result = await get_or_extract_auth_context()
+        assert (
+            result[0] is not None
+        ), "Fallback to _session_obj_auth_storage failed — auth was lost"
+        assert result[0].api_key == "lazy-cache-key"
+
+    # Cleanup
+    _session_obj_auth_storage.pop(session_id_key, None)
