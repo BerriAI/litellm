@@ -167,6 +167,81 @@ def _allow_model_level_clientside_configurable_parameters(
     )
 
 
+# Config dicts whose entries are spread as ``**dict`` into outbound LLM
+# API calls. ``litellm_embedding_config`` is consumed by the Milvus
+# vector store transformer; future nested-config keys with the same
+# threat shape should be added here.
+_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config",)
+
+# Banned root-level params. Same list applies to every entry in
+# ``_NESTED_CONFIG_KEYS`` because those dicts get spread as ``**kwargs``
+# into the same outbound calls.
+_BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
+    "api_base",
+    "base_url",
+    "user_config",
+    "aws_sts_endpoint",
+    "aws_web_identity_token",
+    "aws_role_name",
+    "vertex_credentials",
+    # Endpoint-targeting fields that retarget the outbound request or
+    # an observability callback. An attacker-controlled value either
+    # exfiltrates the request payload (incl. messages + admin-set
+    # tokens) to the attacker's host, or coerces the proxy into
+    # authenticating against the attacker's host with admin secrets.
+    "aws_bedrock_runtime_endpoint",
+    "langsmith_base_url",
+    "langfuse_host",
+    "posthog_host",
+    "braintrust_host",
+    "slack_webhook_url",
+    # Provider-specific endpoint overrides that flow into the outbound
+    # request via ``optional_params``. Same threat as ``api_base``:
+    # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
+    # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
+    # ``deployment_url`` redirects SAP deployments.
+    "s3_endpoint_url",
+    "sagemaker_base_url",
+    "deployment_url",
+)
+
+
+def _check_banned_params(
+    body: dict,
+    general_settings: dict,
+    llm_router: Optional[Router],
+    model: str,
+) -> None:
+    """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
+
+    Shared between the root-level check and the nested-config check so a
+    new banned param only needs to be added in one place.
+    """
+    for param in _BANNED_REQUEST_BODY_PARAMS:
+        if param not in body:
+            continue
+        if general_settings.get("allow_client_side_credentials") is True:
+            return
+        if (
+            _allow_model_level_clientside_configurable_parameters(
+                model=model,
+                param=param,
+                request_body_value=body[param],
+                llm_router=llm_router,
+            )
+            is True
+        ):
+            return
+        raise ValueError(
+            f"Rejected Request: {param} is not allowed in request body. "
+            "Clientside passthrough requires explicit admin opt-in via "
+            "either `general_settings.allow_client_side_credentials = true` "
+            "(proxy-wide) or `configurable_clientside_auth_params` on the "
+            "deployment in your proxy config.yaml. "
+            "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
+        )
+
+
 def is_request_body_safe(
     request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str
 ) -> bool:
@@ -175,72 +250,31 @@ def is_request_body_safe(
 
     A malicious user can set the ﻿api_base to their own domain and invoke POST /chat/completions to intercept and steal the OpenAI API key.
     Relevant issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997
+
+    The blocklist is enforced unconditionally. Legitimate clientside
+    credential / endpoint passthrough goes through one of the two
+    explicit admin opt-ins (``general_settings.allow_client_side_credentials``
+    proxy-wide or ``configurable_clientside_auth_params`` per deployment).
+    Historically there was a third, *implicit*, *caller-controlled* path:
+    ``check_complete_credentials`` returned True when the caller supplied
+    any non-empty ``api_key``, which made the entire blocklist a no-op.
+    That bypass turned every missing entry on the blocklist into an
+    exploitable SSRF / credential-exfil hole — see GHSA-jh89-88fc-qrfp,
+    GHSA-3frq-6r6h-7j64, and the chain of veria-admin findings (Dv_m860l,
+    b_yRJeQ5, stN90yjP, LBlyOAc8, U2TD78kg). Removed: the blocklist now
+    has a single, predictable failure mode for missing entries (a 400),
+    not a credential leak.
+
+    Iterative single-level descent into ``_NESTED_CONFIG_KEYS`` (rather
+    than recursion) covers nested-config attacks like Milvus's
+    ``litellm_embedding_config.api_base`` (VERIA-6) without exposing a
+    recursion-depth DoS surface.
     """
-    banned_params = [
-        "api_base",
-        "base_url",
-        "user_config",
-        "aws_sts_endpoint",
-        "aws_web_identity_token",
-        "aws_role_name",
-        "vertex_credentials",
-        # Endpoint-targeting fields that retarget the outbound request or
-        # an observability callback. An attacker-controlled value either
-        # exfiltrates the request payload (incl. messages + admin-set
-        # tokens) to the attacker's host, or coerces the proxy into
-        # authenticating against the attacker's host with admin secrets.
-        "aws_bedrock_runtime_endpoint",
-        "langsmith_base_url",
-        "langfuse_host",
-        "posthog_host",
-        "braintrust_host",
-        "slack_webhook_url",
-        # Provider-specific endpoint overrides that flow into the outbound
-        # request via ``optional_params``. Same threat as ``api_base``:
-        # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
-        # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
-        # ``deployment_url`` redirects SAP deployments.
-        "s3_endpoint_url",
-        "sagemaker_base_url",
-        "deployment_url",
-    ]
-
-    # The blocklist is enforced unconditionally. Legitimate clientside
-    # credential / endpoint passthrough goes through one of the two
-    # explicit admin opt-ins (``general_settings.allow_client_side_credentials``
-    # proxy-wide or ``configurable_clientside_auth_params`` per deployment).
-    # Historically there was a third, *implicit*, *caller-controlled* path:
-    # ``check_complete_credentials`` returned True when the caller supplied
-    # any non-empty ``api_key``, which made the entire blocklist a no-op.
-    # That bypass turned every missing entry on the blocklist into an
-    # exploitable SSRF / credential-exfil hole — see GHSA-jh89-88fc-qrfp,
-    # GHSA-3frq-6r6h-7j64, and the chain of veria-admin findings (Dv_m860l,
-    # b_yRJeQ5, stN90yjP, LBlyOAc8, U2TD78kg). Removed: the blocklist now
-    # has a single, predictable failure mode for missing entries (a 400),
-    # not a credential leak.
-    for param in banned_params:
-        if param in request_body:
-            if general_settings.get("allow_client_side_credentials") is True:
-                return True
-            elif (
-                _allow_model_level_clientside_configurable_parameters(
-                    model=model,
-                    param=param,
-                    request_body_value=request_body[param],
-                    llm_router=llm_router,
-                )
-                is True
-            ):
-                return True
-            raise ValueError(
-                f"Rejected Request: {param} is not allowed in request body. "
-                "Clientside passthrough requires explicit admin opt-in via "
-                "either `general_settings.allow_client_side_credentials = true` "
-                "(proxy-wide) or `configurable_clientside_auth_params` on the "
-                "deployment in your proxy config.yaml. "
-                "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
-            )
-
+    _check_banned_params(request_body, general_settings, llm_router, model)
+    for nested_key in _NESTED_CONFIG_KEYS:
+        nested = request_body.get(nested_key)
+        if isinstance(nested, dict):
+            _check_banned_params(nested, general_settings, llm_router, model)
     return True
 
 
