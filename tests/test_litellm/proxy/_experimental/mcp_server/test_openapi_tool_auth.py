@@ -83,6 +83,11 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     assert pre_call_kwargs["name"] == "list_pets"
     assert pre_call_kwargs["server"] is fake_server
     assert pre_call_kwargs["user_api_key_auth"] is user
+    # `proxy_logging_obj` must be sourced from the canonical proxy_server
+    # module (same as the managed path) — passing None would crash the
+    # downstream `_create_mcp_request_object_from_kwargs` call with
+    # AttributeError after the security checks succeed.
+    assert pre_call_kwargs["proxy_logging_obj"] is not None
 
 
 @pytest.mark.asyncio
@@ -151,4 +156,65 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
 
     assert exc.value.status_code == 403
     pre_call.assert_awaited_once()
+    handle_local.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_openapi_local_tool_denied_when_server_not_resolvable():
+    """If the local-registry tool is found but no MCP server resolves
+    (startup race or orphaned registry entry), the call must be rejected
+    rather than dispatched without `pre_call_tool_check`."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    user = UserAPIKeyAuth(
+        api_key="sk-user",
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    fake_tool = MagicMock()
+    fake_tool.name = "list_pets"
+
+    pre_call = AsyncMock(return_value={})
+    handle_local = AsyncMock(return_value=[])
+
+    # `_get_mcp_server_from_tool_name` returns None — no server context.
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=None,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "pre_call_tool_check",
+            new=pre_call,
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=fake_tool,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            new=handle_local,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await mcp_module.execute_mcp_tool(
+                name="list_pets",
+                arguments={},
+                allowed_mcp_servers=[],
+                start_time=datetime.now(timezone.utc),
+                user_api_key_auth=user,
+            )
+
+    assert exc.value.status_code == 503
+    pre_call.assert_not_awaited()
     handle_local.assert_not_awaited()
