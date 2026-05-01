@@ -4700,7 +4700,10 @@ def embedding(  # noqa: PLR0915
     Parameters:
     - model: The embedding model to use.
     - input: The input for which embeddings are to be generated.
-    - encoding_format: Optional[str] The format to return the embeddings in. Can be either `float` or `base64`
+    - encoding_format: Optional[str] The format to return the embeddings in. Can be either `float` or `base64`.
+      For OpenAI-compatible embedding routing (`openai`, custom base URL, etc.), when omitted LiteLLM resolves:
+      explicit argument → mapped optional params (e.g. proxy `litellm_params`) → environment variable
+      `LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT` → default `"float"`.
     - dimensions: The number of dimensions the resulting output embeddings should have. Only supported in text-embedding-3 and later models.
     - timeout: The timeout value for the API call, default 10 mins
     - litellm_call_id: The call ID for litellm logging.
