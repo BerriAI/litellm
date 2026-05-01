@@ -36,9 +36,11 @@ class SpendCounterReseed:
         spend:team:{team_id}              -> LiteLLM_TeamTable.spend
         spend:team_member:{uid}:{tid}     -> LiteLLM_TeamMembership.spend
         spend:user:{user_id}              -> LiteLLM_UserTable.spend
-        spend:end_user:{end_user_id}      -> LiteLLM_EndUserTable.spend
-        spend:tag:{tag_name}              -> LiteLLM_TagTable.spend
         spend:org:{org_id}                -> LiteLLM_OrganizationTable.spend
+
+    End-user and tag spend counters intentionally do not reseed here. Their
+    auth paths already load the corresponding objects via get_end_user_object()
+    and get_tag_objects_batch(); callers pass those values as fallback_spend.
     """
 
     _locks: ClassVar["OrderedDict[str, asyncio.Lock]"] = OrderedDict()
@@ -103,15 +105,9 @@ class SpendCounterReseed:
                     where={"user_id": user_id}
                 )
             elif counter_key.startswith("spend:end_user:"):
-                end_user_id = counter_key[len("spend:end_user:") :]
-                row = await prisma_client.db.litellm_endusertable.find_unique(
-                    where={"user_id": end_user_id}
-                )
+                return None
             elif counter_key.startswith("spend:tag:"):
-                tag_name = counter_key[len("spend:tag:") :]
-                row = await prisma_client.db.litellm_tagtable.find_unique(
-                    where={"tag_name": tag_name}
-                )
+                return None
             elif counter_key.startswith("spend:org:"):
                 org_id = counter_key[len("spend:org:") :]
                 row = await prisma_client.db.litellm_organizationtable.find_unique(
