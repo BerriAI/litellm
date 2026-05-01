@@ -1319,7 +1319,47 @@ async def azure_proxy_route(
 
     Checks if the deployment id in the url is a litellm model name. If so, it will route using the llm_router.allm_passthrough_route.
     """
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.proxy_server import llm_router, proxy_logging_obj
+
+    # --- Permission management hooks (enterprise) ---
+    _passthrough_pre_request = None
+    _passthrough_post_response = None
+    _passthrough_list_filter = None
+    _managed_files_obj = None
+    try:
+        from litellm_enterprise.proxy.hooks.azure_passthrough_permissions import (
+            passthrough_list_filter as _passthrough_list_filter,
+            passthrough_post_response as _passthrough_post_response,
+            passthrough_pre_request as _passthrough_pre_request,
+        )
+
+        if proxy_logging_obj is not None:
+            _managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+    except ImportError:
+        pass
+
+    passthrough_op = None
+    if _passthrough_pre_request is not None and _managed_files_obj is not None:
+        endpoint, passthrough_op = await _passthrough_pre_request(
+            endpoint=endpoint,
+            request_method=request.method,
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=_managed_files_obj,
+        )
+
+        # Handle list operations by filtering from managed tables
+        if (
+            passthrough_op is not None
+            and passthrough_op.operation == "list"
+            and _passthrough_list_filter is not None
+        ):
+            list_response = await _passthrough_list_filter(
+                op=passthrough_op,
+                user_api_key_dict=user_api_key_dict,
+                managed_files_obj=_managed_files_obj,
+            )
+            if list_response is not None:
+                return list_response
 
     parts = endpoint.split(
         "/"
@@ -1388,9 +1428,24 @@ async def azure_proxy_route(
                             ),
                         )
 
-                # Non-streaming response
+                # Non-streaming response - apply post-response permission hook
                 result = cast(httpx.Response, result)
                 content = await result.aread()
+
+                if (
+                    passthrough_op is not None
+                    and passthrough_op.operation == "create"
+                    and _passthrough_post_response is not None
+                    and _managed_files_obj is not None
+                ):
+                    content = await _passthrough_post_response(
+                        response_body=content,
+                        op=passthrough_op,
+                        user_api_key_dict=user_api_key_dict,
+                        managed_files_obj=_managed_files_obj,
+                        deployment_name=part,
+                    )
+
                 return Response(
                     content=content,
                     status_code=result.status_code,
@@ -1474,15 +1529,48 @@ async def azure_proxy_route(
             "Required 'AZURE_API_KEY' in environment to make pass-through calls to Azure."
         )
 
-    return await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
-        endpoint=endpoint,
-        request=request,
-        fastapi_response=fastapi_response,
-        user_api_key_dict=user_api_key_dict,
-        base_target_url=base_target_url,
-        api_key=azure_api_key,
-        custom_llm_provider=litellm.LlmProviders.AZURE,
+    received_value = (
+        await BaseOpenAIPassThroughHandler._base_openai_pass_through_handler(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            base_target_url=base_target_url,
+            api_key=azure_api_key,
+            custom_llm_provider=litellm.LlmProviders.AZURE,
+        )
     )
+
+    # Post-response permission hook for create operations (default path)
+    if (
+        passthrough_op is not None
+        and passthrough_op.operation == "create"
+        and _passthrough_post_response is not None
+        and _managed_files_obj is not None
+        and isinstance(received_value, Response)
+        and not isinstance(received_value, StreamingResponse)
+    ):
+        # Extract deployment name from endpoint parts
+        _deployment_name = None
+        for _part in parts:
+            if _part not in ("openai", "deployments", "batches", "files", "responses"):
+                _deployment_name = _part
+                break
+        modified_body = await _passthrough_post_response(
+            response_body=received_value.body,
+            op=passthrough_op,
+            user_api_key_dict=user_api_key_dict,
+            managed_files_obj=_managed_files_obj,
+            deployment_name=_deployment_name,
+        )
+        received_value = Response(
+            content=modified_body,
+            status_code=received_value.status_code,
+            headers=dict(received_value.headers),
+            media_type=received_value.media_type,
+        )
+
+    return received_value
 
 
 from abc import ABC, abstractmethod
