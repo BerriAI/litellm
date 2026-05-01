@@ -13,36 +13,28 @@ from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 
 def get_litellm_web_search_tool() -> Dict[str, Any]:
     """
-    Get the standard LiteLLM web search tool definition.
+    Get the web search tool definition in Anthropic format.
 
-    This is the canonical tool definition that all native web search tools
-    (like Anthropic's web_search_20250305, Claude Code's web_search, etc.)
-    are converted to for interception.
+    Uses the same name and schema that Claude Code expects so it appears
+    as the native WebSearch tool in the client.
 
     Returns:
-        Dict containing the Anthropic-style tool definition with:
-        - name: Tool name
-        - description: What the tool does
-        - input_schema: JSON schema for tool parameters
-
-    Example:
-        >>> tool = get_litellm_web_search_tool()
-        >>> tool['name']
-        'litellm_web_search'
+        Dict containing the Anthropic-style tool definition.
     """
     return {
         "name": LITELLM_WEB_SEARCH_TOOL_NAME,
         "description": (
-            "Search the web for information. Use this when you need current "
-            "information or answers to questions that require up-to-date data."
+            "Search the web for current information. Returns search results "
+            "with titles, URLs, and snippets. Use this tool when you need "
+            "up-to-date information beyond your knowledge cutoff."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query to execute",
-                }
+                    "description": "The search query to use",
+                },
             },
             "required": ["query"],
         },
@@ -51,7 +43,7 @@ def get_litellm_web_search_tool() -> Dict[str, Any]:
 
 def get_litellm_web_search_tool_openai() -> Dict[str, Any]:
     """
-    Get the standard LiteLLM web search tool definition in OpenAI format.
+    Get the web search tool definition in OpenAI format.
 
     Used by async_pre_call_deployment_hook which runs in the chat completions
     path where tools must be in OpenAI format (type: "function" with
@@ -65,16 +57,17 @@ def get_litellm_web_search_tool_openai() -> Dict[str, Any]:
         "function": {
             "name": LITELLM_WEB_SEARCH_TOOL_NAME,
             "description": (
-                "Search the web for information. Use this when you need current "
-                "information or answers to questions that require up-to-date data."
+                "Search the web for current information. Returns search results "
+                "with titles, URLs, and snippets. Use this tool when you need "
+                "up-to-date information beyond your knowledge cutoff."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The search query to execute",
-                    }
+                        "description": "The search query to use",
+                    },
                 },
                 "required": ["query"],
             },
@@ -82,45 +75,35 @@ def get_litellm_web_search_tool_openai() -> Dict[str, Any]:
     }
 
 
+_WEB_SEARCH_NAMES = {LITELLM_WEB_SEARCH_TOOL_NAME, "WebSearch", "web_search", "litellm_web_search"}
+
+
 def is_web_search_tool_chat_completion(tool: Dict[str, Any]) -> bool:
     """
-    Check if a tool is a web search tool for Chat Completions API (strict check).
+    Check if a tool is a web search tool for Chat Completions API.
 
-    This is a stricter version that ONLY checks for the exact LiteLLM web search tool name.
-    Use this for Chat Completions API to avoid false positives with user-defined tools.
-
-    Detects ONLY:
-    - LiteLLM standard: name == "litellm_web_search" (Anthropic format)
-    - OpenAI format: type == "function" with function.name == "litellm_web_search"
+    Detects:
+    - Anthropic format: name in {litellm_web_search, WebSearch, web_search}
+    - OpenAI format: type == "function" with function.name in same set
 
     Args:
         tool: Tool dictionary to check
 
     Returns:
-        True if tool is exactly the LiteLLM web search tool
-
-    Example:
-        >>> is_web_search_tool_chat_completion({"name": "litellm_web_search"})
-        True
-        >>> is_web_search_tool_chat_completion({"type": "function", "function": {"name": "litellm_web_search"}})
-        True
-        >>> is_web_search_tool_chat_completion({"name": "web_search"})
-        False
-        >>> is_web_search_tool_chat_completion({"name": "WebSearch"})
-        False
+        True if tool is a web search tool
     """
     tool_name = tool.get("name", "")
     tool_type = tool.get("type", "")
 
-    # Check for OpenAI format: {"type": "function", "function": {"name": "litellm_web_search"}}
+    # Check for OpenAI format
     if tool_type == "function" and "function" in tool:
         function_def = tool.get("function", {})
         function_name = function_def.get("name", "")
-        if function_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+        if function_name in _WEB_SEARCH_NAMES:
             return True
 
-    # Check for LiteLLM standard tool (Anthropic format)
-    if tool_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+    # Check for Anthropic format
+    if tool_name in _WEB_SEARCH_NAMES:
         return True
 
     return False
@@ -175,8 +158,8 @@ def is_web_search_tool(tool: Dict[str, Any]) -> bool:
     if tool_name == "web_search" and tool_type:
         return True
 
-    # Check for legacy WebSearch format
-    if tool_name == "WebSearch":
+    # Check for legacy names
+    if tool_name in ("WebSearch", "litellm_web_search"):
         return True
 
     return False

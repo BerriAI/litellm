@@ -131,6 +131,18 @@ class FakeAnthropicMessagesStreamIterator:
                 f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode()
             )
 
+        elif block_type in ("server_tool_use", "web_search_tool_result"):
+            # Emit the full block as content_block_start — same as
+            # Anthropic's native streaming format for server-side tools.
+            content_block_start = {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": block_dict,
+            }
+            chunks.append(
+                f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode()
+            )
+
         content_block_stop = {"type": "content_block_stop", "index": index}
         chunks.append(
             f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode()
