@@ -31,18 +31,21 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
   const userEmail: string = decoded?.user_email ?? "";
   const userId: string | null = decoded?.user_id ?? null;
   const accessToken: string | null = decoded?.key ?? null;
-  const jwtToken: string | null = credentialsData?.token ?? null;
 
   const handleSubmit = (formValues: { password: string }) => {
-    if (!accessToken || !jwtToken || !userId || !inviteId) return;
+    if (!accessToken || !userId || !inviteId) return;
 
     setClaimError(null);
 
     claimToken(
       { accessToken, inviteId, userId, password: formValues.password },
       {
-        onSuccess: () => {
-          document.cookie = `token=${jwtToken}; path=/; SameSite=Lax`;
+        onSuccess: (data: { token?: string }) => {
+          if (!data?.token) {
+            setClaimError("Failed to start session. Please try again.");
+            return;
+          }
+          document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
           const proxyBaseUrl = getProxyBaseUrl();
           window.location.href = proxyBaseUrl
             ? `${proxyBaseUrl}/ui/?login=success`

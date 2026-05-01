@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     response_schema_prompt,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
@@ -132,26 +133,28 @@ def _extract_max_media_resolution_from_messages(
     return max_resolution
 
 
-def _apply_gemini_3_metadata(
+def _apply_gemini_metadata(
     part: PartType,
     model: Optional[str],
     media_resolution_enum: Optional[Dict[str, str]],
     video_metadata: Optional[Dict[str, Any]],
 ) -> PartType:
     """
-    Apply the unique media_resolution and video_metadata parameters of Gemini 3+
+    Apply media_resolution and video_metadata parameters to a Gemini part.
+
+    - Per-part media_resolution: Gemini 3+ only (2.x uses generation_config global).
+    - video_metadata (fps, startOffset, endOffset): all Gemini models (1.x, 2.x, 3+).
     """
     if model is None:
         return part
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
-    if not VertexGeminiConfig._is_gemini_3_or_newer(model):
-        return part
-
     part_dict = dict(part)
 
-    if media_resolution_enum is not None:
+    if media_resolution_enum is not None and VertexGeminiConfig._is_gemini_3_or_newer(
+        model
+    ):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
@@ -206,7 +209,7 @@ def _process_gemini_media(
                 mime_type = format
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-            return _apply_gemini_3_metadata(
+            return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
         elif (
@@ -216,14 +219,14 @@ def _process_gemini_media(
         ):
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-            return _apply_gemini_3_metadata(
+            return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
-            return _apply_gemini_3_metadata(
+            return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
         raise Exception("Invalid image received - {}".format(image_url))
@@ -712,16 +715,8 @@ def _transform_request_body(  # noqa: PLR0915
         optional_params.pop("output_config", None)
         config_fields = GenerationConfig.__annotations__.keys()
 
-        # If the LiteLLM client sends Gemini-supported parameter "labels", add it
-        # as "labels" field to the request sent to the Gemini backend.
-        labels: Optional[dict[str, str]] = optional_params.pop("labels", None)
-        # If the LiteLLM client sends OpenAI-supported parameter "metadata", add it
-        # as "labels" field to the request sent to the Gemini backend.
-        if labels is None and "metadata" in litellm_params:
-            metadata = litellm_params["metadata"]
-            if metadata is not None and "requester_metadata" in metadata:
-                rm = metadata["requester_metadata"]
-                labels = {k: v for k, v in rm.items() if isinstance(v, str)}
+        # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
+        labels = pop_vertex_request_labels(optional_params, litellm_params)
 
         filtered_params = {
             k: v
@@ -733,9 +728,9 @@ def _transform_request_body(  # noqa: PLR0915
             **filtered_params
         )
 
-        # For Gemini 2.x models, add media_resolution to generation_config (global)
-        # Gemini 3+ supports per-part media_resolution, but 2.x only supports global
-        # Gemini 1.x does not support mediaResolution at all
+        # For Gemini 2.x models, also add media_resolution to generation_config (global)
+        # as a fallback, since some 2.x versions may not support per-part media_resolution.
+        # Gemini 1.x does not support mediaResolution at all.
         if "gemini-2" in model:
             max_media_resolution = _extract_max_media_resolution_from_messages(messages)
             if max_media_resolution:
