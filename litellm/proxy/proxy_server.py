@@ -2048,7 +2048,7 @@ async def _increment_org_spend_counter(
 
     await _init_and_increment_unreserved_spend_counter(
         counter_key=f"spend:org:{org_id}",
-        source_cache_key=f"org_id:{org_id}:with_budget",
+        source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
         increment=response_cost,
         reserved_counter_keys=reserved_counter_keys,
     )
@@ -2056,7 +2056,7 @@ async def _increment_org_spend_counter(
 
 async def _init_and_increment_unreserved_spend_counter(
     counter_key: str,
-    source_cache_key: str,
+    source_cache_key: Union[str, List[str]],
     increment: float,
     reserved_counter_keys: Set[str],
 ) -> None:
@@ -2072,7 +2072,7 @@ async def _init_and_increment_unreserved_spend_counter(
 
 async def _init_and_increment_spend_counter(
     counter_key: str,
-    source_cache_key: str,
+    source_cache_key: Union[str, List[str]],
     increment: float,
 ):
     """
@@ -2117,7 +2117,7 @@ async def _init_and_increment_window_spend_counter(
 
 async def _ensure_spend_counter_initialized(
     counter_key: str,
-    source_cache_key: str,
+    source_cache_key: Union[str, List[str]],
 ):
     is_warm = await _is_spend_counter_cache_warm(counter_key=counter_key)
     if is_warm is False:
@@ -2130,17 +2130,29 @@ async def _ensure_spend_counter_initialized(
         )
         if db_spend is None:
             # DB unavailable - fall back to in-process cache (may be stale).
-            source = await user_api_key_cache.async_get_cache(key=source_cache_key)
-            base_spend: float = 0.0
-            if source is not None:
-                if isinstance(source, dict):
-                    base_spend = source.get("spend", 0.0) or 0.0
-                else:
-                    base_spend = getattr(source, "spend", 0.0) or 0.0
+            base_spend = await _get_source_cache_base_spend(
+                source_cache_key=source_cache_key
+            )
             if base_spend > 0:
                 await _increment_spend_counter_cache(
                     counter_key=counter_key, increment=base_spend
                 )
+
+
+async def _get_source_cache_base_spend(
+    source_cache_key: Union[str, List[str]],
+) -> float:
+    source_cache_keys = (
+        [source_cache_key] if isinstance(source_cache_key, str) else source_cache_key
+    )
+    for cache_key in source_cache_keys:
+        source = await user_api_key_cache.async_get_cache(key=cache_key)
+        if source is None:
+            continue
+        if isinstance(source, dict):
+            return float(source.get("spend", 0.0) or 0.0)
+        return float(getattr(source, "spend", 0.0) or 0.0)
+    return 0.0
 
 
 async def _ensure_window_spend_counter_initialized(
