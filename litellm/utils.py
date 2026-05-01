@@ -6287,9 +6287,9 @@ def validate_environment(  # noqa: PLR0915
             ):
                 keys_in_environment = True
             else:
-                missing_keys.extend(
-                    ["AZURE_API_BASE", "AZURE_API_VERSION", "AZURE_API_KEY"]
-                )
+                for _key in ["AZURE_API_BASE", "AZURE_API_VERSION", "AZURE_API_KEY"]:
+                    if _key not in os.environ:
+                        missing_keys.append(_key)
         elif custom_llm_provider == "anthropic":
             if (
                 "ANTHROPIC_API_KEY" in os.environ
@@ -6327,7 +6327,9 @@ def validate_environment(  # noqa: PLR0915
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_LOCATION"])
+                for _key in ["VERTEXAI_PROJECT", "VERTEXAI_LOCATION"]:
+                    if _key not in os.environ:
+                        missing_keys.append(_key)
         elif custom_llm_provider == "huggingface":
             if "HUGGINGFACE_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -6374,8 +6376,9 @@ def validate_environment(  # noqa: PLR0915
             ):
                 keys_in_environment = True
             else:
-                missing_keys.append("AWS_ACCESS_KEY_ID")
-                missing_keys.append("AWS_SECRET_ACCESS_KEY")
+                for _key in ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]:
+                    if _key not in os.environ:
+                        missing_keys.append(_key)
         elif custom_llm_provider in ["ollama", "ollama_chat"]:
             if "OLLAMA_API_BASE" in os.environ:
                 keys_in_environment = True
@@ -6580,7 +6583,9 @@ def validate_environment(  # noqa: PLR0915
             if "VERTEXAI_PROJECT" in os.environ and "VERTEXAI_LOCATION" in os.environ:
                 keys_in_environment = True
             else:
-                missing_keys.extend(["VERTEXAI_PROJECT", "VERTEXAI_LOCATION"])
+                for _key in ["VERTEXAI_PROJECT", "VERTEXAI_LOCATION"]:
+                    if _key not in os.environ:
+                        missing_keys.append(_key)
         ## huggingface
         elif model in litellm.huggingface_models:
             if "HUGGINGFACE_API_KEY" in os.environ:
@@ -6963,7 +6968,7 @@ def mock_completion_streaming_obj(
         yield mock_response
         return
     for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
+        completion_obj = Delta(role="assistant", content=mock_response[i: i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
         else:
@@ -6972,7 +6977,7 @@ def mock_completion_streaming_obj(
                 _streaming_choice = litellm.utils.StreamingChoices(
                     index=j,
                     delta=litellm.utils.Delta(
-                        role="assistant", content=mock_response[i : i + 3]
+                        role="assistant", content=mock_response[i: i + 3]
                     ),
                 )
                 _all_choices.append(_streaming_choice)
@@ -6992,7 +6997,7 @@ async def async_mock_completion_streaming_obj(
         yield mock_response
         return
     for i in range(0, len(mock_response), 3):
-        completion_obj = Delta(role="assistant", content=mock_response[i : i + 3])
+        completion_obj = Delta(role="assistant", content=mock_response[i: i + 3])
         if n is None:
             model_response.choices[0].delta = completion_obj
         else:
@@ -7001,7 +7006,7 @@ async def async_mock_completion_streaming_obj(
                 _streaming_choice = litellm.utils.StreamingChoices(
                     index=j,
                     delta=litellm.utils.Delta(
-                        role="assistant", content=mock_response[i : i + 3]
+                        role="assistant", content=mock_response[i: i + 3]
                     ),
                 )
                 _all_choices.append(_streaming_choice)
