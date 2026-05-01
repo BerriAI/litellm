@@ -1549,6 +1549,38 @@ class OpenTelemetry(CustomLogger):
                     value=kwargs.get("model"),
                 )
 
+            # The LiteLLM model group (alias) as requested by the user - distinct from underlying model name
+            model_group = standard_logging_payload.get("model_group")
+            if model_group:
+                self.safe_set_attribute(
+                    span=span, key="litellm.model_group", value=model_group
+                )
+
+            # Original model group (the one user first requested, before any fallback)
+            original_model_group = metadata.get("original_model_group")
+            if original_model_group:
+                self.safe_set_attribute(
+                    span=span,
+                    key="litellm.original_model_group",
+                    value=original_model_group,
+                )
+
+            # Retry/fallback count
+            retry_count = metadata.get("retry_count")
+            if retry_count:
+                self.safe_set_attribute(
+                    span=span, key="litellm.retry_count", value=retry_count
+                )
+
+            # Previous model attempts (JSON-encoded list of failed models)
+            previous_models = metadata.get("previous_models")
+            if previous_models:
+                self.safe_set_attribute(
+                    span=span,
+                    key="litellm.previous_models",
+                    value=safe_dumps(previous_models),
+                )
+
             # The LLM request type
             self.safe_set_attribute(
                 span=span,

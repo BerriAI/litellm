@@ -2642,6 +2642,9 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     ]  # S3/GCS object key for cold storage retrieval
     team_alias: Optional[str]
     team_id: Optional[str]
+    previous_models: Optional[List[dict]]  # failed model attempts before this successful call
+    retry_count: Optional[int]  # number of retries/fallbacks that occurred
+    original_model_group: Optional[str]  # the LiteLLM model alias originally requested by the user
 
 
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):

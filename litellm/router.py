@@ -6407,6 +6407,15 @@ class Router:
             _metadata_var = (
                 "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
             )
+
+            # Emit a warning so the failed model attempt is visible in console logs
+            verbose_router_logger.warning(
+                "litellm.router: request failed on model=%s, exception=%s (%s). Will retry/fallback.",
+                kwargs.get("model", "unknown"),
+                type(e).__name__,
+                str(e)[:200],
+            )
+
             # Log failed model as the previous model
             previous_model = {
                 "exception_type": type(e).__name__,

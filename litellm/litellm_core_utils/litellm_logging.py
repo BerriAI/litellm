@@ -4812,10 +4812,24 @@ class StandardLoggingPayloadSetup:
             user_api_key_auth_metadata=None,
             team_alias=None,
             team_id=None,
+            previous_models=None,
+            retry_count=None,
+            original_model_group=None,
         )
         if isinstance(metadata, dict):
             for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
                 clean_metadata[key] = metadata[key]  # type: ignore
+
+            # Populate fallback/retry observability fields
+            previous_models = metadata.get("previous_models")
+            if previous_models:
+                clean_metadata["previous_models"] = previous_models
+                retry_count = len(previous_models)
+                if retry_count > 0:
+                    clean_metadata["retry_count"] = retry_count
+            original_model_group = metadata.get("original_model_group")
+            if original_model_group:
+                clean_metadata["original_model_group"] = original_model_group
 
             user_api_key = metadata.get("user_api_key")
             if (
@@ -5659,12 +5673,26 @@ def get_standard_logging_metadata(
         user_api_key_auth_metadata=None,
         team_alias=None,
         team_id=None,
+        previous_models=None,
+        retry_count=None,
+        original_model_group=None,
     )
     if isinstance(metadata, dict):
         # Update the clean_metadata with values from input metadata that match StandardLoggingMetadata fields
         for key in StandardLoggingMetadata.__annotations__.keys():
             if key in metadata:
                 clean_metadata[key] = metadata[key]  # type: ignore
+
+        # Populate fallback/retry observability fields
+        previous_models = metadata.get("previous_models")
+        if previous_models:
+            clean_metadata["previous_models"] = previous_models
+            retry_count = len(previous_models)
+            if retry_count > 0:
+                clean_metadata["retry_count"] = retry_count
+        original_model_group = metadata.get("original_model_group")
+        if original_model_group:
+            clean_metadata["original_model_group"] = original_model_group
 
         if metadata.get("user_api_key") is not None:
             if is_valid_sha256_hash(str(metadata.get("user_api_key"))):

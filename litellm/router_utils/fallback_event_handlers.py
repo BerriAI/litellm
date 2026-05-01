@@ -126,6 +126,10 @@ async def run_async_fallback(
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
             verbose_router_logger.info(f"Falling back to model_group = {mg}")
+            # Preserve the very first (user-requested) model group across multiple fallback hops
+            kwargs.setdefault("metadata", {}).setdefault(
+                "original_model_group", original_model_group
+            )
             if isinstance(mg, str):
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
