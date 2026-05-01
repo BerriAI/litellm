@@ -153,6 +153,7 @@ if MCP_AVAILABLE:
         MCPAuthenticatedUser,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -900,6 +901,20 @@ if MCP_AVAILABLE:
                 allowed_mcp_server_id
             )
             if mcp_server is not None:
+                # Apply oauth2_flow resolution for legacy DB rows where it may be NULL
+                resolved_flow = MCPServerManager._resolve_oauth2_flow(
+                    auth_type=mcp_server.auth_type,
+                    oauth2_flow=mcp_server.oauth2_flow,
+                    token_url=mcp_server.token_url,
+                    authorization_url=mcp_server.authorization_url,
+                    client_id=mcp_server.client_id,
+                    client_secret=mcp_server.client_secret,
+                )
+                if resolved_flow and resolved_flow != mcp_server.oauth2_flow:
+                    # Create a new instance with the resolved flow for this request
+                    mcp_server = mcp_server.model_copy(
+                        update={"oauth2_flow": resolved_flow}
+                    )
                 allowed_mcp_servers.append(mcp_server)
 
         if mcp_servers is not None:
@@ -1100,8 +1115,13 @@ if MCP_AVAILABLE:
 
         extra_headers: Optional[Dict[str, str]] = None
         if server.auth_type == MCPAuth.oauth2:
-            # Copy to avoid mutating the original dict (important for parallel fetching)
-            extra_headers = oauth2_headers.copy() if oauth2_headers else None
+            # For OAuth2 M2M servers, upstream Authorization must come from
+            # client_credentials token fetch, never from caller headers.
+            if server.has_client_credentials:
+                extra_headers = None
+            else:
+                # Copy to avoid mutating the original dict (important for parallel fetching)
+                extra_headers = oauth2_headers.copy() if oauth2_headers else None
 
         if server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -1114,10 +1134,16 @@ if MCP_AVAILABLE:
             for header in server.extra_headers:
                 if not isinstance(header, str):
                     continue
+                if server.has_client_credentials and header.lower() == "authorization":
+                    continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
                     continue
                 extra_headers[header] = header_value
+
+        # Reset to None if no headers were actually added
+        if extra_headers is not None and len(extra_headers) == 0:
+            extra_headers = None
 
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
@@ -1377,11 +1403,19 @@ if MCP_AVAILABLE:
                     spend_meta["per_server_tool_counts"] = per_server_tool_counts
 
                 end_time = datetime.now()
-                await litellm_logging_obj.async_success_handler(
-                    result=all_tools,
-                    start_time=list_tools_start_time,
-                    end_time=end_time,
-                )
+                try:
+                    await litellm_logging_obj.async_success_handler(
+                        result=all_tools,
+                        start_time=list_tools_start_time,
+                        end_time=end_time,
+                    )
+                except Exception as log_exc:
+                    # list_tools responses must not be dropped due to non-blocking
+                    # observability/serialization failures.
+                    verbose_logger.warning(
+                        "MCP list_tools success logging failed (continuing): %s",
+                        log_exc,
+                    )
 
             verbose_logger.info(
                 f"Successfully fetched {len(all_tools)} tools total from all MCP servers"

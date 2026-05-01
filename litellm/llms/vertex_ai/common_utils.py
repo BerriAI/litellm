@@ -97,7 +97,7 @@ def get_vertex_ai_model_route(
     Determine which handler to use for a Vertex AI model based on the model name.
 
     Args:
-        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "google/gemma-4-26b-a4b-it-maas", "openai/gpt-oss-120b")
+        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "google/gemma-4-26b-a4b-it-maas", "openai/gpt-oss-120b", "xai/grok-4.1-fast-non-reasoning")
         litellm_params: Optional litellm parameters dict that may contain base_model for routing
 
     Returns:
@@ -117,6 +117,9 @@ def get_vertex_ai_model_route(
         VertexAIModelRoute.GEMMA
 
         >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
+        VertexAIModelRoute.MODEL_GARDEN
+
+        >>> get_vertex_ai_model_route("xai/grok-4.1-fast-non-reasoning")
         VertexAIModelRoute.MODEL_GARDEN
 
         >>> get_vertex_ai_model_route("1234567890", {"api_base": "http://10.96.32.8"})
@@ -152,8 +155,11 @@ def get_vertex_ai_model_route(
     if "gemma/" in model or model.startswith("google/gemma-"):
         return VertexAIModelRoute.GEMMA
 
-    # Check for model garden openai models
-    if "openai" in model:
+    # Check for model garden OpenAI-compatible publisher models.
+    # Examples:
+    # - openai/gpt-oss-120b-maas
+    # - xai/grok-4.1-fast-non-reasoning
+    if "openai" in model or model.startswith("xai/"):
         return VertexAIModelRoute.MODEL_GARDEN
 
     # Check for gemini models
@@ -259,8 +265,8 @@ def get_vertex_base_model_name(model: str) -> str:
         >>> get_vertex_base_model_name("gemma/gemma-3-12b-it")
         "gemma-3-12b-it"
 
-        >>> get_vertex_base_model_name("openai/gpt-oss-120b")
-        "gpt-oss-120b"
+        >>> get_vertex_base_model_name("xai/grok-4.1-fast-non-reasoning")
+        "grok-4.1-fast-non-reasoning"
 
         >>> get_vertex_base_model_name("1234567890")
         "1234567890"
