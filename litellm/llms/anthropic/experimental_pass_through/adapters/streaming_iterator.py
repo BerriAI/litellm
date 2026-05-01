@@ -155,14 +155,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                     # 3. If the trigger chunk carries tool argument data, queue it
                     # so the input_json_delta is not silently dropped.
-                    if (
-                        processed_chunk.get("type") == "content_block_delta"
-                        and isinstance(processed_chunk.get("delta"), dict)
-                        and processed_chunk["delta"].get("type") == "input_json_delta"
-                        and processed_chunk["delta"].get("partial_json")
-                    ):
+                    if self._has_meaningful_delta(processed_chunk):
                         self.chunk_queue.append(processed_chunk)
-
                     self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
@@ -348,13 +342,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                         # 3. If the trigger chunk carries tool argument data, queue it
                         # so the input_json_delta is not silently dropped.
-                        if (
-                            processed_chunk.get("type") == "content_block_delta"
-                            and isinstance(processed_chunk.get("delta"), dict)
-                            and processed_chunk["delta"].get("type")
-                            == "input_json_delta"
-                            and processed_chunk["delta"].get("partial_json")
-                        ):
+                        if self._has_meaningful_delta(processed_chunk):
                             self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block
@@ -453,6 +441,23 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             else:
                 # For non-dict chunks, forward the original value unchanged
                 yield chunk
+
+    def _has_meaningful_delta(self, processed_chunk: Any) -> bool:
+        """
+        Check if a processed chunk contains meaningful delta content that
+        should be emitted alongside a content_block_start event.
+
+        AI Providers deliver complete tool calls (name + arguments) in a single streaming chunk.
+        Without emitting the delta, the arguments are silently dropped.
+        """
+        if processed_chunk.get("type") != "content_block_delta":
+            return False
+        delta = processed_chunk.get("delta")
+        if not isinstance(delta, dict):
+            return False
+        if delta.get("type") == "input_json_delta":
+            return bool(delta.get("partial_json"))
+        return False
 
     def _increment_content_block_index(self):
         self.current_content_block_index += 1
