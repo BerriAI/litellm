@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Optional
 
@@ -8,6 +9,8 @@ from vcr.serialize import deserialize, serialize
 
 CASSETTE_TTL_SECONDS = 24 * 60 * 60
 REDIS_KEY_PREFIX = "litellm:vcr:cassette:"
+
+_log = logging.getLogger(__name__)
 
 
 def redis_key_for(cassette_path: str) -> str:
@@ -31,6 +34,10 @@ def _redis_url_from_env() -> Optional[str]:
 
 def _build_default_client():
     import redis
+    from redis.backoff import ExponentialBackoff
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+    from redis.retry import Retry
 
     url = _redis_url_from_env()
     if not url:
@@ -39,11 +46,15 @@ def _build_default_client():
             "Cassette Redis is intentionally separate from the application "
             "Redis (REDIS_URL/REDIS_HOST) to avoid being flushed by tests."
         )
+    # Managed Redis providers (e.g. Upstash) drop idle TLS connections; retry on
+    # connection/timeout errors so a single dropped socket doesn't fail teardown.
     return redis.Redis.from_url(
         url,
         socket_timeout=5,
         socket_connect_timeout=5,
         decode_responses=False,
+        retry=Retry(ExponentialBackoff(cap=2, base=0.1), retries=2),
+        retry_on_error=[RedisConnectionError, RedisTimeoutError],
     )
 
 
@@ -53,10 +64,30 @@ def make_redis_persister(
 ):
     redis_client = client if client is not None else _build_default_client()
 
+    # Lazily resolve the redis exception classes so callers can pass any
+    # client (incl. fakeredis) without importing the real `redis` package.
+    try:
+        from redis.exceptions import ConnectionError as RedisConnectionError
+        from redis.exceptions import TimeoutError as RedisTimeoutError
+
+        _transient_errors: tuple = (RedisConnectionError, RedisTimeoutError)
+    except ImportError:  # pragma: no cover - redis is a hard test dep
+        _transient_errors = ()
+
     class _RedisPersister:
         @staticmethod
         def load_cassette(cassette_path, serializer):
-            data = redis_client.get(redis_key_for(cassette_path))
+            try:
+                data = redis_client.get(redis_key_for(cassette_path))
+            except _transient_errors as exc:
+                # Treat a Redis outage on read as a cassette miss so tests fall
+                # through to a live call instead of erroring in setup.
+                _log.warning(
+                    "VCR redis load failed for %s; treating as cache miss: %s",
+                    cassette_path,
+                    exc,
+                )
+                raise CassetteNotFoundError() from exc
             if data is None:
                 raise CassetteNotFoundError()
             if isinstance(data, bytes):
@@ -67,7 +98,17 @@ def make_redis_persister(
         def save_cassette(cassette_path, cassette_dict, serializer):
             data = serialize(cassette_dict, serializer)
             payload = data.encode("utf-8") if isinstance(data, str) else data
-            redis_client.set(redis_key_for(cassette_path), payload, ex=ttl_seconds)
+            try:
+                redis_client.set(redis_key_for(cassette_path), payload, ex=ttl_seconds)
+            except _transient_errors as exc:
+                # Cassette persistence is a cache, not test correctness. A Redis
+                # outage on save should not fail an otherwise-passing test —
+                # the next run will simply re-record.
+                _log.warning(
+                    "VCR redis save failed for %s; cassette not persisted: %s",
+                    cassette_path,
+                    exc,
+                )
 
     return _RedisPersister
 
