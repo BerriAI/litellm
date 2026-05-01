@@ -3391,3 +3391,80 @@ def test_access_group_filter_empty_does_not_bypass_via_litellm_model_fallback(
                 }
             },
         )
+
+
+def test_access_group_block_does_not_silently_use_default_fallback_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    When access-group filtering empties candidates for model X, the router must not use
+    ``fallbacks`` default ``*`` routing to model Y: Y may have no ``access_groups``, so
+    ``_filter_deployments_by_model_access_groups`` would not constrain Y and the caller
+    would be served despite being blocked from X.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key1",
+                    "mock_response": "blocked-dep-1",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key2",
+                    "mock_response": "blocked-dep-2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-4-fallback",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fallback-key",
+                    "mock_response": "should-not-reach",
+                },
+            },
+        ],
+        fallbacks=[{"*": ["gpt-4-fallback"]}],
+    )
+
+    orig_groups = router.get_model_access_groups
+
+    def fake_get_model_access_groups(
+        model_name=None, model_access_group=None, team_id=None
+    ):
+        if model_name == "gpt-5" and model_access_group is None:
+            return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
+        return orig_groups(
+            model_name=model_name,
+            model_access_group=model_access_group,
+            team_id=team_id,
+        )
+
+    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG1"],
+        team_models=["AG1"],
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        router._common_checks_available_deployment(
+            model="gpt-5",
+            request_kwargs={
+                "metadata": {
+                    "user_api_key_team_id": "team2",
+                    "user_api_key_auth": scoped_key,
+                }
+            },
+        )
