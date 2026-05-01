@@ -148,6 +148,110 @@ async def test_form_data_with_json_metadata():
 
 
 @pytest.mark.asyncio
+async def test_form_data_with_json_user_config_and_tags():
+    """
+    Multipart endpoints receive structured fields as strings. user_config must
+    be decoded before route_request splats it into Router(**user_config), and a
+    JSON-list tags field should behave like the same field in JSON requests.
+    """
+    mock_request = MagicMock()
+
+    user_config = {
+        "model_list": [
+            {
+                "model_name": "openai/gpt-image-1",
+                "litellm_params": {
+                    "model": "openai/gpt-image-1",
+                    "api_key": "sk-fake",
+                },
+            }
+        ]
+    }
+    litellm_metadata = {"request_id": "req-123"}
+
+    test_data = {
+        "model": "openai/gpt-image-1",
+        "prompt": "edit this image",
+        "image": "tiny.png",
+        "user_config": json.dumps(user_config),
+        "litellm_metadata": json.dumps(litellm_metadata),
+        "tags": json.dumps(["image-edit", "multipart"]),
+    }
+
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+    mock_request.state._cached_headers = None
+
+    result = await _read_request_body(mock_request)
+
+    assert result["user_config"] == user_config
+    assert result["litellm_metadata"] == litellm_metadata
+    assert result["tags"] == ["image-edit", "multipart"]
+    assert result["model"] == "openai/gpt-image-1"
+    assert result["prompt"] == "edit this image"
+    assert result["image"] == "tiny.png"
+
+
+@pytest.mark.asyncio
+async def test_form_data_with_invalid_json_user_config():
+    """Invalid JSON in structured multipart fields should fail during parsing."""
+    mock_request = MagicMock()
+    test_data = {
+        "model": "openai/gpt-image-1",
+        "user_config": '{"model_list": invalid}',
+    }
+
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+    mock_request.state._cached_headers = None
+
+    with pytest.raises(json.JSONDecodeError):
+        await _read_request_body(mock_request)
+
+
+@pytest.mark.asyncio
+async def test_form_data_with_plain_string_tags():
+    """Plain string tags are preserved unless the caller sends a JSON list."""
+    mock_request = MagicMock()
+    test_data = {
+        "model": "whisper-1",
+        "file": "audio.mp3",
+        "tags": "production",
+    }
+
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+    mock_request.state._cached_headers = None
+
+    result = await _read_request_body(mock_request)
+
+    assert result["tags"] == "production"
+
+
+@pytest.mark.asyncio
+async def test_form_data_with_malformed_json_like_tags():
+    """Malformed JSON-like tag strings should stay unchanged."""
+    mock_request = MagicMock()
+    test_data = {
+        "model": "whisper-1",
+        "file": "audio.mp3",
+        "tags": "[production",
+    }
+
+    mock_request.form = AsyncMock(return_value=test_data)
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+    mock_request.state._cached_headers = None
+
+    result = await _read_request_body(mock_request)
+
+    assert result["tags"] == "[production"
+
+
+@pytest.mark.asyncio
 async def test_form_data_with_invalid_json_metadata():
     """
     Test that form data with invalid JSON in metadata field raises an exception.
