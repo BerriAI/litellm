@@ -117,6 +117,24 @@ class TestRAGFlowChatTransformation:
             == "http://localhost:9380/api/v1/agents_openai/my-agent-id/chat/completions"
         )
 
+    def test_get_complete_url_encodes_entity_id(self):
+        """Test RAGFlow chat IDs are encoded as one upstream path segment."""
+        config = RAGFlowConfig()
+
+        url = config.get_complete_url(
+            api_base="http://localhost:9380",
+            api_key=None,
+            model="ragflow/chat/..%2F..%2Fagents_openai%2Fother/gpt-4o-mini",
+            optional_params={},
+            litellm_params={},
+            stream=False,
+        )
+
+        assert (
+            url
+            == "http://localhost:9380/api/v1/chats_openai/..%252F..%252Fagents_openai%252Fother/chat/completions"
+        )
+
     def test_get_complete_url_strips_v1(self):
         """Test URL construction when api_base ends with /v1."""
         config = RAGFlowConfig()

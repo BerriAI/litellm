@@ -12,6 +12,7 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -97,8 +98,15 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
         agent_id, agent_alias_id = self._get_agent_id_and_alias_id(model)
         session_id = self._get_session_id(optional_params)
+        encoded_agent_id = encode_url_path_segment(agent_id, field_name="agent_id")
+        encoded_agent_alias_id = encode_url_path_segment(
+            agent_alias_id, field_name="agent_alias_id"
+        )
+        encoded_session_id = encode_url_path_segment(
+            session_id, field_name="session_id"
+        )
 
-        endpoint_url = f"{endpoint_url}/agents/{agent_id}/agentAliases/{agent_alias_id}/sessions/{session_id}/text"
+        endpoint_url = f"{endpoint_url}/agents/{encoded_agent_id}/agentAliases/{encoded_agent_alias_id}/sessions/{encoded_session_id}/text"
 
         return endpoint_url
 

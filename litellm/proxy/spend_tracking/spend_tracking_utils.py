@@ -53,20 +53,13 @@ def _get_max_string_length_prompt_in_db() -> int:
 
 
 def _is_master_key(api_key: Optional[str], _master_key: Optional[str]) -> bool:
+    """
+    Raw-only constant-time master-key comparison. The hashed form is never
+    considered equivalent — only the raw master-key string matches.
+    """
     if _master_key is None or api_key is None:
         return False
-
-    ## string comparison
-    is_master_key = secrets.compare_digest(api_key, _master_key)
-    if is_master_key:
-        return True
-
-    ## hash comparison
-    is_master_key = secrets.compare_digest(api_key, hash_token(_master_key))
-    if is_master_key:
-        return True
-
-    return False
+    return secrets.compare_digest(api_key, _master_key)
 
 
 def _get_spend_logs_metadata(
@@ -235,8 +228,6 @@ def _extract_usage_for_ocr_call(response_obj: Any, response_obj_dict: dict) -> d
 def get_logging_payload(  # noqa: PLR0915
     kwargs, response_obj, start_time, end_time
 ) -> SpendLogsPayload:
-    from litellm.proxy.proxy_server import general_settings, master_key
-
     if kwargs is None:
         kwargs = {}
 
@@ -295,11 +286,6 @@ def get_logging_payload(  # noqa: PLR0915
         if api_key.startswith("sk-"):
             # hash the api_key
             api_key = hash_token(api_key)
-        if (
-            _is_master_key(api_key=api_key, _master_key=master_key)
-            and general_settings.get("disable_adding_master_key_hash_to_db") is True
-        ):
-            api_key = "litellm_proxy_master_key"  # use a known alias, if the user disabled storing master key in db
 
     if (
         standard_logging_payload is not None
@@ -324,11 +310,6 @@ def get_logging_payload(  # noqa: PLR0915
         and standard_logging_payload.get("request_tags") is not None
     ):  # use 'tags' from standard logging payload instead
         request_tags = json.dumps(standard_logging_payload["request_tags"])
-    if (
-        _is_master_key(api_key=api_key, _master_key=master_key)
-        and general_settings.get("disable_adding_master_key_hash_to_db") is True
-    ):
-        api_key = "litellm_proxy_master_key"  # use a known alias, if the user disabled storing master key in db
 
     _model_id = metadata.get("model_info", {}).get("id", "")
     _model_group = metadata.get("model_group", "")

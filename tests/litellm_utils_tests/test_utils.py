@@ -812,7 +812,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     # Assert redaction occurred
     assert _redacted_response_obj.choices[0].message.content == "redacted-by-litellm"
 
-    # Test Case 3: standard_callback_dynamic_params does not override litellm.turn_off_message_logging
+    # Test Case 3: standard_callback_dynamic_params does not set turn_off_message_logging
     # since litellm.turn_off_message_logging is True redaction should occur
     standard_callback_dynamic_params = StandardCallbackDynamicParams()
     litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
