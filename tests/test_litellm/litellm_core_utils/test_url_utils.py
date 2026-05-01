@@ -394,3 +394,45 @@ class TestHostAllowlist:
 
         monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
         validate_url("http://internal.corp/")
+
+
+class TestProviderUrlDestinationAllowlist:
+    def test_host_entry_matches_any_scheme_and_port(self):
+        assert url_utils.is_url_destination_allowed_by_host(
+            "https://trusted.example/v1/chat/completions",
+            ["trusted.example"],
+        )
+        assert url_utils.is_url_destination_allowed_by_host(
+            "http://trusted.example:8080/v1/chat/completions",
+            ["trusted.example"],
+        )
+
+    def test_origin_entry_matches_scheme_and_default_port(self):
+        assert url_utils.is_url_destination_allowed_by_host(
+            "https://trusted.example/v1/chat/completions",
+            ["https://trusted.example"],
+        )
+        assert not url_utils.is_url_destination_allowed_by_host(
+            "http://trusted.example/v1/chat/completions",
+            ["https://trusted.example"],
+        )
+
+    def test_port_entry_only_matches_same_effective_port(self):
+        assert url_utils.is_url_destination_allowed_by_host(
+            "https://trusted.example/v1/chat/completions",
+            ["trusted.example:443"],
+        )
+        assert not url_utils.is_url_destination_allowed_by_host(
+            "https://trusted.example:8443/v1/chat/completions",
+            ["trusted.example:443"],
+        )
+
+    def test_rejects_userinfo_and_invalid_port(self):
+        assert not url_utils.is_url_destination_allowed_by_host(
+            "https://user:pass@trusted.example/v1/chat/completions",
+            ["trusted.example"],
+        )
+        assert not url_utils.is_url_destination_allowed_by_host(
+            "https://trusted.example:99999/v1/chat/completions",
+            ["trusted.example"],
+        )

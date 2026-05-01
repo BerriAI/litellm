@@ -26,10 +26,12 @@ def test_huggingface_chat_rejects_url_valued_model():
     assert exc_info.value.status_code == 400
 
 
-def test_huggingface_chat_allows_legacy_url_model_when_rejection_disabled(
+def test_huggingface_chat_allows_legacy_url_model_when_host_is_allowlisted(
     monkeypatch,
 ):
-    monkeypatch.setattr(litellm, "reject_url_model_destinations", False)
+    monkeypatch.setattr(
+        litellm, "provider_url_destination_allowed_hosts", ["trusted.example"]
+    )
     config = HuggingFaceChatConfig()
 
     complete_url = config.get_complete_url(
@@ -41,6 +43,26 @@ def test_huggingface_chat_allows_legacy_url_model_when_rejection_disabled(
     )
 
     assert complete_url == "https://trusted.example/v1/chat/completions"
+
+
+def test_huggingface_chat_rejects_url_model_when_host_is_not_allowlisted(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        litellm, "provider_url_destination_allowed_hosts", ["trusted.example"]
+    )
+    config = HuggingFaceChatConfig()
+
+    with pytest.raises(HuggingFaceError) as exc_info:
+        config.get_complete_url(
+            api_base=None,
+            api_key="hf-secret",
+            model="https://other.example",
+            optional_params={},
+            litellm_params={},
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 def test_huggingface_chat_keeps_explicit_api_base_for_custom_endpoints():
@@ -69,10 +91,14 @@ def test_huggingface_embedding_config_rejects_url_valued_model():
     assert exc_info.value.status_code == 400
 
 
-def test_huggingface_embedding_config_allows_legacy_url_model_when_rejection_disabled(
+def test_huggingface_embedding_config_allows_legacy_url_model_when_origin_is_allowlisted(
     monkeypatch,
 ):
-    monkeypatch.setattr(litellm, "reject_url_model_destinations", False)
+    monkeypatch.setattr(
+        litellm,
+        "provider_url_destination_allowed_hosts",
+        ["https://trusted.example"],
+    )
     config = HuggingFaceEmbeddingConfig()
 
     api_base = config.get_api_base(
