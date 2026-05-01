@@ -231,6 +231,42 @@ class TestTokenUtilities:
             result = get_stored_api_key()
             assert result is None
 
+    def test_get_stored_api_key_base_url_match(self):
+        """Stored key is returned when expected_base_url matches stored origin"""
+        token_data = {"key": "sk-prod", "base_url": "https://real-proxy.com"}
+        with patch(
+            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            return_value=token_data,
+        ):
+            assert get_stored_api_key(expected_base_url="https://real-proxy.com") == "sk-prod"
+
+    def test_get_stored_api_key_base_url_match_trailing_slash(self):
+        """Trailing slash on expected_base_url is normalised before comparison"""
+        token_data = {"key": "sk-prod", "base_url": "https://real-proxy.com"}
+        with patch(
+            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            return_value=token_data,
+        ):
+            assert get_stored_api_key(expected_base_url="https://real-proxy.com/") == "sk-prod"
+
+    def test_get_stored_api_key_base_url_mismatch(self):
+        """Stored key is NOT returned when expected_base_url differs from stored origin"""
+        token_data = {"key": "sk-prod", "base_url": "https://real-proxy.com"}
+        with patch(
+            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            return_value=token_data,
+        ):
+            assert get_stored_api_key(expected_base_url="https://evil.com") is None
+
+    def test_get_stored_api_key_old_token_no_base_url(self):
+        """Old tokens without a base_url field are rejected when origin check is requested"""
+        token_data = {"key": "sk-old-token"}
+        with patch(
+            "litellm.litellm_core_utils.cli_token_utils.load_cli_token",
+            return_value=token_data,
+        ):
+            assert get_stored_api_key(expected_base_url="https://real-proxy.com") is None
+
 
 class TestLoginCommand:
     """Test login CLI command"""
