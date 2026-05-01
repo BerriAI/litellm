@@ -2089,6 +2089,20 @@
         "litellm_provider": "azure",
         "mode": "chat"
     },
+    "azure_ai/gpt-image-2": {
+        "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3e-05,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
     "azure_ai/gpt-oss-120b": {
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 6e-07,
@@ -21020,6 +21034,20 @@
         "litellm_provider": "openai",
         "mode": "image_generation",
         "output_cost_per_image_token": 8e-06,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
+    "gpt-image-2": {
+        "cache_read_input_image_token_cost": 2e-06,
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3e-05,
+        "source": "https://platform.openai.com/docs/models/gpt-image-2",
         "supported_endpoints": [
             "/v1/images/generations",
             "/v1/images/edits"
