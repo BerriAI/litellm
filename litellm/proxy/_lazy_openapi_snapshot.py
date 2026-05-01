@@ -61,12 +61,12 @@ def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
         if not isinstance(path_ops, dict):
             continue
 
-        methods = {method for method in path_ops if method in HTTP_METHODS}
+        methods = {method for method in path_ops if method in HTTP_METHOD_SUFFIXES}
         if not methods:
             continue
 
         for method, operation in path_ops.items():
-            if method not in HTTP_METHODS or not isinstance(operation, dict):
+            if method not in HTTP_METHOD_SUFFIXES or not isinstance(operation, dict):
                 continue
 
             operation_id = operation.get("operationId")
