@@ -21,6 +21,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
+    AUDIT_ACTIONS,
     CommonProxyErrors,
     KeyManagementSystem,
     LiteLLM_AuditLogs,
@@ -66,7 +67,7 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 
 async def _emit_hashicorp_vault_audit_log(
     *,
-    action: str,
+    action: AUDIT_ACTIONS,
     before_config: Optional[Mapping[str, Any]],
     after_config: Optional[Mapping[str, Any]],
     user_api_key_dict: UserAPIKeyAuth,
@@ -256,6 +257,8 @@ async def update_hashicorp_vault_config(
     existing_record = await prisma_client.db.litellm_configoverrides.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
+    existing_decrypted: Optional[Dict[str, Any]] = None
+    env_values: Dict[str, Any] = {}
     if existing_record is not None and existing_record.config_value is not None:
         existing_data = _parse_config_value(existing_record.config_value)
         existing_decrypted = proxy_config._decrypt_db_variables(existing_data)
@@ -263,7 +266,8 @@ async def update_hashicorp_vault_config(
             if field not in config_data and existing_decrypted.get(field):
                 config_data[field] = existing_decrypted[field]
     else:
-        # No DB record yet — merge from current env vars
+        # No DB record (or DB record with null config_value) — merge from
+        # current env vars instead.
         env_values = _get_current_env_values(HASHICORP_ENV_VAR_MAPPING)
         for field in HASHICORP_ENV_VAR_MAPPING:
             if field not in config_data and env_values.get(field):
@@ -336,9 +340,13 @@ async def update_hashicorp_vault_config(
     # Mutating the proxy's KMS config affects every secret retrieval going
     # forward — emit an audit-log row so the action is traceable even
     # though the secret_manager_client itself was just swapped under us.
-    before_config = existing_decrypted if existing_record is not None else env_values
+    # ``existing_decrypted`` is only set when the DB row had a non-null
+    # ``config_value`` (the same branch that ran the merge above);
+    # otherwise fall back to whatever env vars were in scope.
+    before_config = existing_decrypted if existing_decrypted is not None else env_values
+    action: AUDIT_ACTIONS = "updated" if existing_decrypted is not None else "created"
     await _emit_hashicorp_vault_audit_log(
-        action="updated" if existing_record is not None else "created",
+        action=action,
         before_config=before_config,
         after_config=config_data,
         user_api_key_dict=user_api_key_dict,

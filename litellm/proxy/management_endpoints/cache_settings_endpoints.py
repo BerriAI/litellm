@@ -20,6 +20,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import (
+    AUDIT_ACTIONS,
     LiteLLM_AuditLogs,
     LitellmTableNames,
     UserAPIKeyAuth,
@@ -67,7 +68,7 @@ def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
 
 async def _emit_cache_settings_audit_log(
     *,
-    action: str,
+    action: AUDIT_ACTIONS,
     before_settings: Optional[Mapping[str, Any]],
     after_settings: Optional[Mapping[str, Any]],
     user_api_key_dict: UserAPIKeyAuth,
@@ -416,7 +417,7 @@ async def update_cache_settings(
                 before_settings = json.loads(existing_row.cache_settings)
             except (TypeError, ValueError):
                 before_settings = None
-        action = "updated" if existing_row is not None else "created"
+        action: AUDIT_ACTIONS = "updated" if existing_row is not None else "created"
 
         # Encrypt sensitive fields (keep redis_type for storage)
         encrypted_settings = proxy_config._encrypt_env_variables(
