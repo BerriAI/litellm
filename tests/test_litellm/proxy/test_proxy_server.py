@@ -5213,6 +5213,118 @@ async def test_window_spend_counter_reseeds_from_spend_logs_on_counter_miss():
 
 
 @pytest.mark.asyncio
+async def test_init_spend_counter_redis_clean_miss_skips_stale_in_memory():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import _init_and_increment_spend_counter
+
+    counter_cache = DualCache()
+    counter_key = "spend:team:team-stale-local"
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=10.0)
+
+    redis_store: dict = {}
+
+    async def redis_increment(key, value, **_):
+        redis_store[key] = (redis_store.get(key) or 0.0) + value
+        return redis_store[key]
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    counter_cache.redis_cache = fake_redis
+
+    db_row = MagicMock()
+    db_row.spend = 42.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=db_row)
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma, orig_user = (
+        ps.spend_counter_cache,
+        ps.prisma_client,
+        ps.user_api_key_cache,
+    )
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    ps.user_api_key_cache = DualCache()
+    try:
+        await _init_and_increment_spend_counter(
+            counter_key=counter_key,
+            source_cache_key="team_id:team-stale-local",
+            increment=1.5,
+        )
+
+        fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(
+            where={"team_id": "team-stale-local"}
+        )
+        assert redis_store[counter_key] == pytest.approx(43.5)
+        assert counter_cache.in_memory_cache.get_cache(
+            key=counter_key
+        ) == pytest.approx(43.5)
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+        ps.user_api_key_cache = orig_user
+
+
+@pytest.mark.asyncio
+async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+
+    counter_cache = DualCache()
+    counter_key = "spend:key:key-window-stale-local:window:1h"
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=100.0)
+    window_start = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    redis_store: dict = {}
+
+    async def redis_increment(key, value, **_):
+        redis_store[key] = (redis_store.get(key) or 0.0) + value
+        return redis_store[key]
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_increment = AsyncMock(side_effect=redis_increment)
+    counter_cache.redis_cache = fake_redis
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(
+        return_value=[{"api_key": "key-window-stale-local", "_sum": {"spend": 2.25}}]
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        await _init_and_increment_window_spend_counter(
+            counter_key=counter_key,
+            entity_type="Key",
+            entity_id="key-window-stale-local",
+            window_start=window_start,
+            increment=0.5,
+        )
+
+        fake_prisma.db.litellm_spendlogs.group_by.assert_awaited_once_with(
+            by=["api_key"],
+            where={
+                "api_key": "key-window-stale-local",
+                "startTime": {"gte": window_start},
+            },
+            sum={"spend": True},
+        )
+        assert redis_store[counter_key] == pytest.approx(2.75)
+        assert counter_cache.in_memory_cache.get_cache(
+            key=counter_key
+        ) == pytest.approx(2.75)
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
 async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure():
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import _increment_spend_counter_cache
@@ -5293,6 +5405,9 @@ async def test_get_current_spend_reseeds_from_db_when_counter_missing():
         assert ("spend:team_member:user-1:team-1", 362.0) in [
             (w["key"], w["value"]) for w in recorded_warms
         ]
+        assert counter_cache.in_memory_cache.get_cache(
+            key="spend:team_member:user-1:team-1"
+        ) == pytest.approx(362.0)
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma

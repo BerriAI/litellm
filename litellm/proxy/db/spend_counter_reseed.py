@@ -183,7 +183,7 @@ class SpendCounterReseed:
                 return None
             # Warm even when 0 so subsequent reads hit cache, not DB.
             try:
-                if require_cache_warm and spend_counter_cache.redis_cache is not None:
+                if spend_counter_cache.redis_cache is not None:
                     current_value = (
                         await spend_counter_cache.redis_cache.async_increment(
                             key=counter_key,
@@ -273,6 +273,7 @@ class SpendCounterReseed:
     ) -> Optional[float]:
         lock = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
+            redis_clean_miss = False
             if spend_counter_cache.redis_cache is not None:
                 try:
                     val = await spend_counter_cache.redis_cache.async_get_cache(
@@ -280,11 +281,13 @@ class SpendCounterReseed:
                     )
                     if val is not None:
                         return float(val)
+                    redis_clean_miss = True
                 except Exception:
                     pass
-            val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-            if val is not None:
-                return float(val)
+            if not redis_clean_miss:
+                val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                if val is not None:
+                    return float(val)
 
             window_spend = await SpendCounterReseed.window_from_spend_logs(
                 prisma_client=prisma_client,
