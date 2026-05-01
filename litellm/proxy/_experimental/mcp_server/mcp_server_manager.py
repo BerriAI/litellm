@@ -780,13 +780,9 @@ class MCPServerManager:
                 if credentials_dict
                 else None
             ),
-            audience=(
-                credentials_dict.get("audience") if credentials_dict else None
-            ),
+            audience=(credentials_dict.get("audience") if credentials_dict else None),
             subject_token_type=(
-                credentials_dict.get("subject_token_type")
-                if credentials_dict
-                else None
+                credentials_dict.get("subject_token_type") if credentials_dict else None
             )
             or "urn:ietf:params:oauth:token-type:access_token",
         )
@@ -1179,7 +1175,7 @@ class MCPServerManager:
             auth_value = normalized.get("authorization")
         if auth_value:
             if auth_value.startswith("Bearer "):
-                return auth_value[len("Bearer "):]
+                return auth_value[len("Bearer ") :]
             return auth_value
         return None
 
