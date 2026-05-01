@@ -199,7 +199,7 @@ class VertexAIFilesHandler(GCSBucketBase):
 
         # Apply transformation to convert Vertex AI batch outputs to OpenAI format
         config = VertexAIFilesConfig()
-        
+
         # Create a logging object for transformation
         logging_obj = Logging(
             model="",
@@ -210,11 +210,9 @@ class VertexAIFilesHandler(GCSBucketBase):
             litellm_call_id="",
             function_id="",
         )
-        
+
         return config.transform_file_content_response(
-            raw_response=mock_response,
-            logging_obj=logging_obj,
-            litellm_params={}
+            raw_response=mock_response, logging_obj=logging_obj, litellm_params={}
         )
 
     def file_content(
