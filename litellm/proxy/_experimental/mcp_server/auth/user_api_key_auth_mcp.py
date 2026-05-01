@@ -853,12 +853,20 @@ class MCPRequestHandler:
             )
             return []
 
+    # Sentinel stored in cache when an org has no object_permission, so we
+    # don't re-query the DB on every MCP request for that org.
+    _ORG_NO_PERMISSION_SENTINEL = "__org_no_mcp_permission__"
+
     @staticmethod
     async def _get_org_object_permission(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ):
         """
         Get org object_permission, using user_api_key_cache to avoid DB hits on every request.
+
+        Caches both positive results and the absence of an object_permission so that orgs
+        with no MCP permissions configured (the common default) do not trigger a DB query
+        on every request.
         """
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -875,13 +883,22 @@ class MCPRequestHandler:
         try:
             cached = await user_api_key_cache.async_get_cache(key=cache_key)
             if cached is not None:
+                # Sentinel means the DB confirmed no object_permission for this org
+                if cached == MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL:
+                    return None
                 return cached
 
             org_row = await prisma_client.db.litellm_organizationtable.find_unique(
                 where={"organization_id": org_id},
                 include={"object_permission": True},
             )
+
             if org_row is None or org_row.object_permission is None:
+                # Cache the negative result so subsequent calls skip the DB
+                await user_api_key_cache.async_set_cache(
+                    key=cache_key,
+                    value=MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL,
+                )
                 return None
 
             obj_perm = org_row.object_permission
