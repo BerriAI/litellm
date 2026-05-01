@@ -137,10 +137,7 @@ sys.modules.setdefault("mitmproxy", _mitmproxy_pkg)
 sys.modules.setdefault("mitmproxy.http", _http_mod)
 
 from tests.e2e_cassette_proxy.addon import CassetteAddon  # noqa: E402
-from tests.e2e_cassette_proxy.redis_store import (  # noqa: E402
-    CachedResponse,
-    RedisCassetteStore,
-)
+from tests.e2e_cassette_proxy.redis_store import RedisCassetteStore  # noqa: E402
 
 
 def _addon_with_fake_redis():
@@ -231,6 +228,42 @@ def test_should_skip_passthrough_hosts_completely():
     addon.request(flow)
     assert flow.response is None
     assert addon._stats["skipped"] == 1
+
+
+def test_should_skip_mitm_it_so_ca_cert_is_not_cached():
+    """``mitm.it/cert/pem`` serves the proxy's *current-instance* CA. If we
+    cached it, the next mitmdump run would serve a stale CA from Redis,
+    and clients trusting that stale CA would reject leaf certs signed by
+    the new run's CA: ``SSL: CERTIFICATE_VERIFY_FAILED: authority and
+    subject key identifier mismatch``. So ``mitm.it`` must be in the
+    passthrough list end-to-end (request *and* response paths)."""
+    fake, addon = _addon_with_fake_redis()
+
+    cert_req = _FakeRequest(
+        method="GET",
+        url="http://mitm.it/cert/pem",
+        body=b"",
+        headers={"accept": "*/*"},
+        host="mitm.it",
+        path="/cert/pem",
+    )
+    flow = _FakeFlow(cert_req)
+    addon.request(flow)
+    # Request hook short-circuits before any Redis lookup.
+    assert flow.response is None
+    assert addon._stats["skipped"] == 1
+    assert addon._stats["miss"] == 0
+
+    # Even if the response hook fires (mitmproxy fetched the real CA from
+    # the running instance), it must not be persisted to Redis.
+    flow.response = _FakeResponse(
+        200,
+        body=b"-----BEGIN CERTIFICATE-----\nMIIabc...\n-----END CERTIFICATE-----\n",
+        headers={"content-type": "application/x-x509-ca-cert"},
+    )
+    addon.response(flow)
+    assert addon._stats["stored"] == 0
+    assert len(fake.keys("*")) == 0
 
 
 def test_replay_only_should_serve_599_on_miss():

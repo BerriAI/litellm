@@ -42,14 +42,25 @@ if not _log.handlers:
     _log.propagate = False
 
 
-# Hosts we should *never* cache — Redis itself, the proxy admin UI,
-# anything pointed at localhost. Extended via env var
-# ``LITELLM_E2E_CASS_PASSTHROUGH_HOSTS`` (comma-separated).
+# Hosts we should *never* cache. Three categories:
+#
+# - Loopback / sidecar: localhost, 127.0.0.1, host.docker.internal —
+#   the test harness itself, postgres, redis, etc.
+# - The proxy's own admin UI (``mitm.it``): mitmproxy serves its CA
+#   certificate from this magic host. The CA is regenerated per
+#   ``mitmdump`` instance, so caching its response would hand a stale
+#   CA to the next CI run, which would then trust leaf certs signed
+#   by a *different* CA → ``SSL: CERTIFICATE_VERIFY_FAILED:
+#   authority and subject key identifier mismatch``.
+#
+# Extend at runtime via ``LITELLM_E2E_CASS_PASSTHROUGH_HOSTS``
+# (comma-separated).
 _PASSTHROUGH_HOSTS = {
     "localhost",
     "127.0.0.1",
     "0.0.0.0",
     "host.docker.internal",
+    "mitm.it",
 }
 
 
