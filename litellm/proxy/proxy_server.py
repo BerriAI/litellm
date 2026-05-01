@@ -12891,9 +12891,12 @@ async def update_config(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    For Admin UI - allows admin to update config via UI
+    For Admin UI - allows admin to update config via UI.
 
-    Currently supports modifying General Settings + LiteLLM settings
+    Writes only the sections present in the request body to LiteLLM_Config rows
+    (one row per top-level section). Sections the caller did not send are left
+    untouched — this endpoint never persists pre-existing YAML values to DB as
+    a side effect of an unrelated update.
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
     try:
@@ -12901,109 +12904,96 @@ async def update_config(  # noqa: PLR0915
             raise HTTPException(
                 status_code=403, detail="Only proxy admins can update config"
             )
-        import base64
 
-        """
-        - Update the ConfigTable DB
-        - Run 'add_deployment'
-        """
         if prisma_client is None:
             raise Exception("No DB Connected")
 
-        if store_model_in_db is not True:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+        async def _read_section(param_name: str) -> dict:
+            row = await prisma_client.db.litellm_config.find_first(
+                where={"param_name": param_name}
+            )
+            if row is None or row.param_value is None:
+                return {}
+            return dict(row.param_value)
+
+        async def _upsert_section(param_name: str, value: dict) -> None:
+            serialized = json.dumps(value)
+            await prisma_client.db.litellm_config.upsert(
+                where={"param_name": param_name},
+                data={
+                    "create": {"param_name": param_name, "param_value": serialized},
+                    "update": {"param_value": serialized},
                 },
             )
+            # invalidate the DualCache entry so the next reader (this process
+            # or any other proxy in the cluster) goes to DB.
+            await invalidate_config_param(param_name)
 
-        updated_settings = config_info.json(exclude_none=True)
-        updated_settings = prisma_client.jsonify_object(updated_settings)
-        for k, v in updated_settings.items():
-            if k == "router_settings":
-                await prisma_client.db.litellm_config.upsert(
-                    where={"param_name": k},
-                    data={
-                        "create": {"param_name": k, "param_value": v},
-                        "update": {"param_value": v},
-                    },
-                )
-                await invalidate_config_param(k)
-
-        ### OLD LOGIC [TODO] MOVE TO DB ###
-
-        # Load existing config
-        config = await proxy_config.get_config()
-        verbose_proxy_logger.debug("Loaded config: %s", config)
-
-        # update the general settings
+        # general_settings: merge per-key, with the alert_to_webhook_url side
+        # effect of auto-enabling slack alerting.
         if config_info.general_settings is not None:
-            config.setdefault("general_settings", {})
-            updated_general_settings = config_info.general_settings.dict(
-                exclude_none=True
-            )
-
-            _existing_settings = config["general_settings"]
-            for k, v in updated_general_settings.items():
-                # overwrite existing settings with updated values
+            existing = await _read_section("general_settings")
+            updates = config_info.general_settings.dict(exclude_none=True)
+            for k, v in updates.items():
                 if k == "alert_to_webhook_url":
-                    # check if slack is already enabled. if not, enable it
-                    if "alerting" not in _existing_settings:
-                        _existing_settings = {"alerting": ["slack"]}
-                    elif isinstance(_existing_settings["alerting"], list):
-                        if "slack" not in _existing_settings["alerting"]:
-                            _existing_settings["alerting"].append("slack")
-                _existing_settings[k] = v
-            config["general_settings"] = _existing_settings
+                    if "alerting" not in existing:
+                        existing["alerting"] = ["slack"]
+                    elif (
+                        isinstance(existing["alerting"], list)
+                        and "slack" not in existing["alerting"]
+                    ):
+                        existing["alerting"].append("slack")
+                existing[k] = v
+            await _upsert_section("general_settings", existing)
 
+        # environment_variables: encrypt request values, then merge into existing.
         if config_info.environment_variables is not None:
-            config.setdefault("environment_variables", {})
-            _updated_environment_variables = config_info.environment_variables
+            existing = await _read_section("environment_variables")
+            for k, v in config_info.environment_variables.items():
+                existing[k] = encrypt_value_helper(value=v)
+            await _upsert_section("environment_variables", existing)
 
-            # encrypt updated_environment_variables #
-            for k, v in _updated_environment_variables.items():
-                encrypted_value = encrypt_value_helper(value=v)
-                _updated_environment_variables[k] = encrypted_value
-
-            _existing_env_variables = config["environment_variables"]
-
-            for k, v in _updated_environment_variables.items():
-                # overwrite existing env variables with updated values
-                _existing_env_variables[k] = _updated_environment_variables[k]
-
-        # update the litellm settings
+        # litellm_settings: merge existing + request, request wins (matching
+        # router_settings semantics — the caller's value for any given key is
+        # what gets persisted). success_callback is special-cased: it is
+        # always normalized + deduped, and unioned with any existing list,
+        # because callbacks are additive (callers send the new entry, not
+        # the full set). Normalizing on every write — not only when an
+        # existing entry is present — keeps the DB free of mixed-case
+        # entries that delete_callback (lowercase lookup) cannot find.
         if config_info.litellm_settings is not None:
-            config.setdefault("litellm_settings", {})
-            updated_litellm_settings = config_info.litellm_settings
-            config["litellm_settings"] = {
-                **updated_litellm_settings,
-                **config["litellm_settings"],
-            }
+            existing = await _read_section("litellm_settings")
+            updated_litellm_settings = dict(config_info.litellm_settings)
 
-            # if litellm.success_callback in updated_litellm_settings and config["litellm_settings"]
-            if (
-                "success_callback" in updated_litellm_settings
-                and "success_callback" in config["litellm_settings"]
-            ):
-                # check both success callback are lists
-                if isinstance(
-                    config["litellm_settings"]["success_callback"], list
-                ) and isinstance(updated_litellm_settings["success_callback"], list):
-                    updated_success_callbacks_normalized = normalize_callback_names(
-                        updated_litellm_settings["success_callback"]
-                    )
-                    combined_success_callback = (
-                        config["litellm_settings"]["success_callback"]
-                        + updated_success_callbacks_normalized
-                    )
-                    combined_success_callback = list(set(combined_success_callback))
-                    config["litellm_settings"][
-                        "success_callback"
-                    ] = combined_success_callback
+            incoming_cb = updated_litellm_settings.get("success_callback")
+            if isinstance(incoming_cb, list):
+                updated_litellm_settings["success_callback"] = normalize_callback_names(
+                    incoming_cb
+                )
 
-        # Save the updated config
-        await proxy_config.save_config(new_config=config)
+            merged = {**existing, **updated_litellm_settings}
+
+            incoming_cb = updated_litellm_settings.get("success_callback")
+            existing_cb = existing.get("success_callback")
+            if isinstance(incoming_cb, list):
+                if isinstance(existing_cb, list):
+                    # Normalize the existing list too — a row written by a
+                    # different code path may still hold mixed-case names,
+                    # which would otherwise dedup-miss against the lowercase
+                    # incoming entries.
+                    merged["success_callback"] = list(
+                        set(normalize_callback_names(existing_cb) + incoming_cb)
+                    )
+                else:
+                    merged["success_callback"] = list(set(incoming_cb))
+
+            await _upsert_section("litellm_settings", merged)
+
+        # router_settings: merge existing + request, request wins.
+        if config_info.router_settings is not None:
+            existing = await _read_section("router_settings")
+            updates = config_info.router_settings.dict(exclude_none=True)
+            await _upsert_section("router_settings", {**existing, **updates})
 
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
