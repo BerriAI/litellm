@@ -45,6 +45,57 @@ async def test_should_store_team_owner_for_keys_without_user_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_should_store_token_owner_for_keys_without_user_team_or_org(monkeypatch):
+    table = AsyncMock()
+    table.create.side_effect = lambda data: _skill(data["skill_id"], data["created_by"])
+    prisma_client = type(
+        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
+    )()
+    monkeypatch.setattr(
+        LiteLLMSkillsHandler,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+
+    auth = UserAPIKeyAuth(token="hashed-token")
+
+    skill = await LiteLLMSkillsHandler.create_skill(
+        data=NewSkillRequest(display_title="skill"),
+        user_api_key_dict=auth,
+    )
+
+    assert skill.created_by == "key:hashed-token"
+    assert table.create.await_args.kwargs["data"]["updated_by"] == "key:hashed-token"
+
+
+@pytest.mark.asyncio
+async def test_should_store_unscoped_owner_for_identityless_proxy_auth(monkeypatch):
+    table = AsyncMock()
+    table.create.side_effect = lambda data: _skill(data["skill_id"], data["created_by"])
+    prisma_client = type(
+        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
+    )()
+    monkeypatch.setattr(
+        LiteLLMSkillsHandler,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+
+    auth = UserAPIKeyAuth()
+
+    skill = await LiteLLMSkillsHandler.create_skill(
+        data=NewSkillRequest(display_title="skill"),
+        user_api_key_dict=auth,
+    )
+
+    assert skill.created_by == "__litellm_unscoped_proxy__"
+    assert (
+        table.create.await_args.kwargs["data"]["updated_by"]
+        == "__litellm_unscoped_proxy__"
+    )
+
+
+@pytest.mark.asyncio
 async def test_should_filter_list_skills_to_authenticated_owner_scopes(monkeypatch):
     table = AsyncMock()
     table.find_many.return_value = [_skill("litellm_skill_owner", "user-1")]
