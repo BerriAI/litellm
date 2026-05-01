@@ -20,7 +20,6 @@ from fastapi.security.api_key import APIKeyHeader
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
-from litellm.caching import DualCache
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
@@ -60,6 +59,7 @@ from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -329,7 +329,7 @@ _global_spend_coordinator = EventDrivenCacheCoordinator(log_prefix="[GLOBAL SPEN
 
 async def _fetch_global_spend_with_event_coordination(
     cache_key: str,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient,
 ) -> Optional[float]:
     """
@@ -345,14 +345,14 @@ async def _fetch_global_spend_with_event_coordination(
 
     return await _global_spend_coordinator.get_or_load(
         cache_key=cache_key,
-        cache=user_api_key_cache,
+        cache=user_api_key_cache,  # pyright: ignore[reportArgumentType]
         load_fn=_load_global_spend,
     )
 
 
 async def get_global_proxy_spend(
     litellm_proxy_admin_name: str,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     prisma_client: Optional[PrismaClient],
     token: str,
     proxy_logging_obj: ProxyLogging,
@@ -510,7 +510,7 @@ async def _resolve_jwt_to_virtual_key(
     jwt_claims: dict,
     jwt_handler: JWTHandler,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span],
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[UserAPIKeyAuth]:
@@ -1112,9 +1112,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             is_master_key_valid = False
 
         ## VALIDATE MASTER KEY ##
-        try:
-            assert isinstance(master_key, str)
-        except Exception:
+        if not isinstance(master_key, str):
             raise HTTPException(
                 status_code=500,
                 detail={
@@ -1184,11 +1182,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     if len(api_key) > 8
                     else "****"
                 )
-                assert api_key.startswith(
-                    "sk-"
-                ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
-                    _masked_key
-                )  # prevent token hashes from being used
+                if not api_key.startswith("sk-"):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail=(
+                            "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
+                                _masked_key
+                            )
+                        ),
+                    )  # prevent token hashes from being used
             else:
                 verbose_logger.warning(
                     "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key is not a string. Got type={}".format(
@@ -1295,7 +1297,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
                     team_member_info = await user_api_key_cache.async_get_cache(
-                        key=_cache_key
+                        key=_cache_key,
+                        model_type=LiteLLM_TeamMembership,
                     )
                     if team_member_info is None:
                         # read from DB
@@ -1303,18 +1306,23 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         _team_id = valid_token.team_id
 
                         if _user_id is not None and _team_id is not None:
-                            team_member_info = await prisma_client.db.litellm_teammembership.find_first(
+                            _db_member = await prisma_client.db.litellm_teammembership.find_first(
                                 where={
                                     "user_id": _user_id,
                                     "team_id": _team_id,
                                 },  # type: ignore
                                 include={"litellm_budget_table": True},
                             )
-                            await user_api_key_cache.async_set_cache(
-                                key=_cache_key,
-                                value=team_member_info,
-                                ttl=5,
-                            )
+                            if _db_member is not None:
+                                team_member_info = LiteLLM_TeamMembership(
+                                    **_db_member.dict()
+                                )
+                                await user_api_key_cache.async_set_cache(
+                                    key=_cache_key,
+                                    value=team_member_info,
+                                    model_type=LiteLLM_TeamMembership,
+                                    ttl=5,
+                                )
 
                     if (
                         team_member_info is not None
@@ -1461,9 +1469,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             else:
                 valid_token.team_object_permission = None
 
-            await user_api_key_cache.async_set_cache(
-                key=valid_token.team_id, value=_team_obj
-            )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
+            # Only cache when the key is a real team_id (non-team keys must not use key=None).
+            if valid_token.team_id is not None and _team_obj is not None:
+                await user_api_key_cache.async_set_cache(
+                    key=valid_token.team_id,
+                    value=_team_obj,
+                    model_type=LiteLLM_TeamTableCachedObj,
+                )  # save team table in cache - used for tpm/rpm limiting - tpm_rpm_limiter.py
 
             # Fetch project object if key belongs to a project
             _project_obj = None

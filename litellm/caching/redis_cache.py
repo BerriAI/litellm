@@ -551,6 +551,13 @@ class RedisCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         from redis.asyncio import Redis
 
+        if key is None:
+            verbose_logger.debug(
+                "LiteLLM Redis Caching: async set() skipped — key is None, value=%r",
+                value,
+            )
+            return None
+
         start_time = time.time()
         try:
             _redis_client: Redis = self.init_async_client()  # type: ignore
@@ -569,8 +576,9 @@ class RedisCache(BaseCache):
                 )
             )
             verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%r, value=%r",
                 str(e),
+                key,
                 value,
             )
             raise e
