@@ -2007,17 +2007,32 @@ class PrometheusLogger(CustomLogger):
                     if code is not None:
                         exception_status = str(code)
 
-            # Create enum_values for the label factory (always create for use in different metrics)
+            # On LiteLLM-side rejects (no deployment picked), route request_kwargs["model"]
+            # into requested_model and leave deployment-scoped labels empty.
+            deployment_selected = bool(model_id)
+            if deployment_selected:
+                label_litellm_model_name = litellm_model_name
+                label_model_id = model_id
+                label_api_base = api_base
+                label_api_provider = llm_provider
+                label_requested_model = model_group or litellm_model_name
+            else:
+                label_litellm_model_name = ""
+                label_model_id = ""
+                label_api_base = ""
+                label_api_provider = ""
+                label_requested_model = litellm_model_name or model_group
+
             enum_values = UserAPIKeyLabelValues(
-                litellm_model_name=litellm_model_name,
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=llm_provider,
+                litellm_model_name=label_litellm_model_name,
+                model_id=label_model_id,
+                api_base=label_api_base,
+                api_provider=label_api_provider,
                 exception_status=exception_status,
                 exception_class=(
                     self._get_exception_class_name(exception) if exception else None
                 ),
-                requested_model=model_group or litellm_model_name,
+                requested_model=label_requested_model,
                 hashed_api_key=hashed_api_key,
                 api_key_alias=api_key_alias,
                 team=team,
@@ -2031,12 +2046,14 @@ class PrometheusLogger(CustomLogger):
             log these labels
             ["litellm_model_name", "model_id", "api_base", "api_provider"]
             """
-            self.set_deployment_partial_outage(
-                litellm_model_name=litellm_model_name or "",
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=llm_provider or "",
-            )
+            # Only mark a deployment outage when one was actually picked.
+            if deployment_selected:
+                self.set_deployment_partial_outage(
+                    litellm_model_name=litellm_model_name or "",
+                    model_id=model_id,
+                    api_base=api_base,
+                    api_provider=llm_provider or "",
+                )
             _deployment_label_ctx = PrometheusLabelFactoryContext(enum_values)
             if exception is not None:
                 PrometheusLogger._inc_labeled_counter(
