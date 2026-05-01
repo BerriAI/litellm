@@ -18,21 +18,15 @@ def redis_key_for(cassette_path: str) -> str:
     return f"{REDIS_KEY_PREFIX}{rel}"
 
 
+CASSETTE_REDIS_URL_ENV = "CASSETTE_REDIS_URL"
+
+
 def _redis_url_from_env() -> Optional[str]:
-    for var in ("REDIS_URL", "REDIS_SSL_URL"):
-        url = os.environ.get(var)
-        if url:
-            return url
-    host = os.environ.get("REDIS_HOST")
-    if not host:
-        return None
-    scheme = "rediss" if os.environ.get("REDIS_SSL", "").lower() == "true" else "redis"
-    auth = ""
-    if os.environ.get("REDIS_PASSWORD"):
-        user = os.environ.get("REDIS_USERNAME", "")
-        auth = f"{user}:{os.environ['REDIS_PASSWORD']}@"
-    port = os.environ.get("REDIS_PORT", "6379")
-    return f"{scheme}://{auth}{host}:{port}"
+    # Use a dedicated cassette Redis URL so the VCR cache is isolated from any
+    # application Redis used by tests (which may be flushed by other suites).
+    # Intentionally do NOT fall back to REDIS_URL/REDIS_HOST — sharing a Redis
+    # with the app cache risks cassettes being wiped by flushdb/flushall.
+    return os.environ.get(CASSETTE_REDIS_URL_ENV) or None
 
 
 def _build_default_client():
@@ -41,7 +35,9 @@ def _build_default_client():
     url = _redis_url_from_env()
     if not url:
         raise RuntimeError(
-            "Set REDIS_URL, REDIS_SSL_URL, or REDIS_HOST to enable the VCR persister"
+            f"Set {CASSETTE_REDIS_URL_ENV} to enable the VCR persister. "
+            "Cassette Redis is intentionally separate from the application "
+            "Redis (REDIS_URL/REDIS_HOST) to avoid being flushed by tests."
         )
     return redis.Redis.from_url(
         url,

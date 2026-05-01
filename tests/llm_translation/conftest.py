@@ -113,9 +113,10 @@ def vcr_config():
 def _vcr_disabled() -> bool:
     if os.environ.get("LITELLM_VCR_DISABLE") == "1":
         return True
-    return not any(
-        os.environ.get(var) for var in ("REDIS_URL", "REDIS_SSL_URL", "REDIS_HOST")
-    )
+    # Cassettes live on a dedicated Redis (CASSETTE_REDIS_URL) so the cache
+    # isn't shared with — and accidentally flushed by — tests that exercise
+    # the application Redis via REDIS_URL/REDIS_HOST.
+    return not os.environ.get("CASSETTE_REDIS_URL")
 
 
 def pytest_recording_configure(config, vcr):
