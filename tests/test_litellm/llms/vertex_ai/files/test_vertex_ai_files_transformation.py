@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
     VertexAIJsonlFilesTransformation,
+    _get_litellm_batch_custom_id_from_labels,
     _sanitize_gcp_label_value,
 )
 from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
@@ -449,6 +450,59 @@ class TestVertexBatchOutputTransformation:
             assert "choices" in body
             assert len(body["choices"]) > 0
 
+    def test_transform_vertex_batch_output_with_first_line_prompt_feedback(
+        self, config, monkeypatch
+    ):
+        """Test that promptFeedback-only first lines are detected as Vertex batch output."""
+        vertex_outputs = [
+            {
+                "status": "",
+                "processed_time": "2024-11-01T18:13:16.826+00:00",
+                "request": {"labels": {"litellm_custom_id": "blocked-request"}},
+                "response": {
+                    "promptFeedback": {"blockReason": "SAFETY"},
+                    "modelVersion": "gemini-2.0-flash-001@default",
+                },
+            },
+            {
+                "status": "",
+                "processed_time": "2024-11-01T18:13:17.826+00:00",
+                "request": {"labels": {"litellm_custom_id": "request-2"}},
+                "response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]},
+            },
+        ]
+
+        def mock_transform_single(
+            vertex_output,
+            vertex_gemini_config,
+            logging_obj,
+            mock_httpx_response,
+        ):
+            return {
+                "custom_id": vertex_output["request"]["labels"]["litellm_custom_id"]
+            }
+
+        monkeypatch.setattr(
+            config,
+            "_transform_single_vertex_batch_output_to_openai",
+            mock_transform_single,
+        )
+
+        content = "\n".join(json.dumps(output) for output in vertex_outputs).encode(
+            "utf-8"
+        )
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(
+            content
+        )
+        results = [
+            json.loads(line) for line in transformed_content.decode("utf-8").split("\n")
+        ]
+
+        assert [result["custom_id"] for result in results] == [
+            "blocked-request",
+            "request-2",
+        ]
+
     def test_batch_detection_requires_candidates_or_non_empty_status(self, config):
         """Test that JSONL with a blank status but no candidates is returned as-is."""
         non_batch_output = {
@@ -491,7 +545,9 @@ class TestVertexBatchOutputTransformation:
                     id(mock_httpx_response),
                 )
             )
-            return {"custom_id": vertex_output["request"]["labels"]["litellm_custom_id"]}
+            return {
+                "custom_id": vertex_output["request"]["labels"]["litellm_custom_id"]
+            }
 
         monkeypatch.setattr(
             config,
@@ -562,6 +618,42 @@ class TestVertexBatchCustomIdLabels:
         raw_label = vertex_request["request"]["labels"]["litellm_custom_id_raw"]
         assert raw_label != "request-1"
         assert _sanitize_gcp_label_value(raw_label) == raw_label
+
+    def test_long_custom_id_round_trips_across_raw_label_chunks(self):
+        """Test that long custom_ids are not truncated in raw labels."""
+        transformation = VertexAIJsonlFilesTransformation()
+        custom_id_a = "shared-prefix-that-is-longer-than-thirty-six-bytes-A"
+        custom_id_b = "shared-prefix-that-is-longer-than-thirty-six-bytes-B"
+
+        openai_jsonl_content = [
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": "gemini-1.5-flash-001",
+                    "messages": [{"role": "user", "content": "Question"}],
+                },
+            }
+            for custom_id in (custom_id_a, custom_id_b)
+        ]
+
+        vertex_jsonl_content = (
+            transformation._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+                openai_jsonl_content
+            )
+        )
+        labels_a = vertex_jsonl_content[0]["request"]["labels"]
+        labels_b = vertex_jsonl_content[1]["request"]["labels"]
+
+        assert "litellm_custom_id_raw_1" in labels_a
+        assert "litellm_custom_id_raw_1" in labels_b
+        assert labels_a["litellm_custom_id_raw"] == labels_b["litellm_custom_id_raw"]
+        assert (
+            labels_a["litellm_custom_id_raw_1"] != labels_b["litellm_custom_id_raw_1"]
+        )
+        assert _get_litellm_batch_custom_id_from_labels(labels_a) == custom_id_a
+        assert _get_litellm_batch_custom_id_from_labels(labels_b) == custom_id_b
 
     def test_multiple_requests_each_get_their_own_label(self):
         """Test that multiple requests each get their own custom_id label"""

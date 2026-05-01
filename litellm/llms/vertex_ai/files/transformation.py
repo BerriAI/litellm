@@ -66,23 +66,39 @@ def _sanitize_gcp_label_value(value: str) -> str:
 def _encode_gcp_label_value(value: str) -> str:
     """Encode arbitrary text into a GCP-label-safe value."""
     max_encoded_len = _GCP_LABEL_VALUE_MAX_LEN - len(_CUSTOM_ID_RAW_LABEL_PREFIX)
-    max_raw_bytes = (max_encoded_len * 5) // 8
-    raw_bytes = value.encode("utf-8")[:max_raw_bytes]
-    while raw_bytes:
-        try:
-            raw_bytes.decode("utf-8")
-            break
-        except UnicodeDecodeError:
-            raw_bytes = raw_bytes[:-1]
-    encoded = base64.b32encode(raw_bytes).decode("ascii").rstrip("=").lower()
+    encoded = (
+        base64.b32encode(value.encode("utf-8")).decode("ascii").rstrip("=").lower()
+    )
+    if len(encoded) > max_encoded_len:
+        raise ValueError("Encoded label value exceeds GCP label length")
     return f"{_CUSTOM_ID_RAW_LABEL_PREFIX}{encoded}"
+
+
+def _encode_gcp_label_value_chunks(value: str) -> List[str]:
+    """Encode arbitrary text across one or more GCP-label-safe values."""
+    max_encoded_len = _GCP_LABEL_VALUE_MAX_LEN - len(_CUSTOM_ID_RAW_LABEL_PREFIX)
+    encoded = (
+        base64.b32encode(value.encode("utf-8")).decode("ascii").rstrip("=").lower()
+    )
+    return [
+        f"{_CUSTOM_ID_RAW_LABEL_PREFIX}{encoded[i : i + max_encoded_len]}"
+        for i in range(0, len(encoded), max_encoded_len)
+    ] or [_CUSTOM_ID_RAW_LABEL_PREFIX]
 
 
 def _decode_gcp_label_value(value: str) -> Optional[str]:
     """Decode values produced by _encode_gcp_label_value."""
-    if not value.startswith(_CUSTOM_ID_RAW_LABEL_PREFIX):
-        return None
-    encoded = value[len(_CUSTOM_ID_RAW_LABEL_PREFIX) :].upper()
+    return _decode_gcp_label_value_chunks([value])
+
+
+def _decode_gcp_label_value_chunks(values: List[str]) -> Optional[str]:
+    """Decode values produced by _encode_gcp_label_value_chunks."""
+    encoded_parts = []
+    for value in values:
+        if not value.startswith(_CUSTOM_ID_RAW_LABEL_PREFIX):
+            return None
+        encoded_parts.append(value[len(_CUSTOM_ID_RAW_LABEL_PREFIX) :])
+    encoded = "".join(encoded_parts).upper()
     padding = "=" * (-len(encoded) % 8)
     try:
         return base64.b32decode(encoded + padding).decode("utf-8")
@@ -95,19 +111,32 @@ def _set_litellm_batch_custom_id_labels(labels: Dict[str, str], custom_id: Any) 
     Store OpenAI batch custom_id for Vertex batch correlation.
 
     ``litellm_custom_id`` is GCP-label-safe (may alter casing and characters).
-    ``litellm_custom_id_raw`` encodes the original string (truncated) for
+    ``litellm_custom_id_raw`` encodes the original string for
     round-trip correlation in batch output transforms.
     """
     custom_id_str = str(custom_id)
     labels["litellm_custom_id"] = _sanitize_gcp_label_value(custom_id_str)
-    labels["litellm_custom_id_raw"] = _encode_gcp_label_value(custom_id_str)
+    raw_label_chunks = _encode_gcp_label_value_chunks(custom_id_str)
+    labels["litellm_custom_id_raw"] = raw_label_chunks[0]
+    for index, raw_label_chunk in enumerate(raw_label_chunks[1:], start=1):
+        labels[f"litellm_custom_id_raw_{index}"] = raw_label_chunk
 
 
 def _get_litellm_batch_custom_id_from_labels(labels: Dict[str, Any]) -> str:
     """Prefer encoded custom_id when present (see _set_litellm_batch_custom_id_labels)."""
     raw = labels.get("litellm_custom_id_raw")
     if raw:
-        decoded = _decode_gcp_label_value(str(raw))
+        raw_chunks = [str(raw)]
+        chunk_prefix = "litellm_custom_id_raw_"
+        indexed_chunks = []
+        for key, value in labels.items():
+            if key.startswith(chunk_prefix) and key[len(chunk_prefix) :].isdigit():
+                indexed_chunks.append((int(key[len(chunk_prefix) :]), str(value)))
+        raw_chunks.extend(
+            raw_label_chunk
+            for _, raw_label_chunk in sorted(indexed_chunks, key=lambda item: item[0])
+        )
+        decoded = _decode_gcp_label_value_chunks(raw_chunks)
         if decoded is not None:
             return decoded
         return str(raw)
@@ -634,6 +663,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             )
             has_success_or_error = (
                 "candidates" in first_line.get("response", {})
+                or "promptFeedback" in first_line.get("response", {})
                 or bool(first_line.get("status"))
             )
 
