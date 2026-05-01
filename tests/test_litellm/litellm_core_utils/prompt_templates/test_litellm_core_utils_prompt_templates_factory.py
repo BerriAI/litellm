@@ -2487,10 +2487,6 @@ def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
     inside the tool_result content. Reuses anthropic_process_openai_file_message,
     which already handles this for user messages.
     """
-    from litellm.litellm_core_utils.prompt_templates.factory import (
-        convert_to_anthropic_tool_result,
-    )
-
     pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
     message = {
         "tool_call_id": "toolu_pdf_1",
@@ -2513,7 +2509,7 @@ def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
     assert len(tool_result["content"]) == 1
     assert "document" in tool_result["content"][0]
     assert tool_result["content"][0]["document"]["format"] == "pdf"
-    assert tool_result["content"][0]["document"]["source"]["bytes"] == "dGVzdA=="
+    assert tool_result["content"][0]["document"]["source"]["bytes"] == pdf_b64
 
 
 def test_bedrock_converse_messages_pt_document_various_formats():
