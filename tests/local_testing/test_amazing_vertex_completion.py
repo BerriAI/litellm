@@ -3812,7 +3812,6 @@ def test_vertex_ai_llama_tool_calling():
 
 def test_vertex_schema_test():
     load_vertex_ai_credentials()
-    litellm._turn_on_debug()
 
     def tool_call(text: str | None) -> str:
         return text or "No text provided"

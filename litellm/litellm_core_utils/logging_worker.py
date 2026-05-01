@@ -507,11 +507,13 @@ class LoggingWorker:
                 except asyncio.QueueEmpty:
                     break
 
-                # Run the coroutine synchronously in new loop
-                # Note: We run the coroutine directly, not via create_task,
-                # since we're in a new event loop context
+                # Run the coroutine synchronously in new loop with a per-task
+                # timeout so a single hung coroutine cannot block the entire
+                # flush past the outer time budget.
                 try:
-                    loop.run_until_complete(task["coroutine"])
+                    loop.run_until_complete(
+                        asyncio.wait_for(task["coroutine"], timeout=2.0)
+                    )
                     processed += 1
                 except Exception:
                     # Silent failure to not break user's program
