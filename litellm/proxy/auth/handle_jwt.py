@@ -6,6 +6,8 @@ Currently only supports admin.
 JWT token must have 'litellm_proxy_admin' in scope.
 """
 
+from __future__ import annotations
+
 import fnmatch
 import hashlib
 import os
@@ -20,7 +22,6 @@ import jwt
 from jwt.api_jwk import PyJWK
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.caching import DualCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
@@ -46,6 +47,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 from .auth_checks import (
@@ -73,7 +75,7 @@ class JWTHandler:
     """
 
     prisma_client: Optional[PrismaClient]
-    user_api_key_cache: DualCache
+    user_api_key_cache: UserApiKeyCache
     # Supported algos: https://pyjwt.readthedocs.io/en/stable/algorithms.html
     # "Warning: Make sure not to mix symmetric and asymmetric algorithms that interpret
     #   the key in different ways (e.g. HS* and RS*)."
@@ -99,7 +101,7 @@ class JWTHandler:
     def update_environment(
         self,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         litellm_jwtauth: LiteLLM_JWTAuth,
         leeway: int = 0,
     ) -> None:
@@ -952,7 +954,7 @@ class JWTAuthManager:
         jwt_handler: JWTHandler,
         jwt_valid_token: dict,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
@@ -1045,7 +1047,7 @@ class JWTAuthManager:
         route: str,
         jwt_handler: JWTHandler,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
     ) -> Tuple[Optional[str], Optional[LiteLLM_TeamTable]]:
@@ -1133,7 +1135,7 @@ class JWTAuthManager:
         valid_user_email: Optional[bool],
         jwt_handler: JWTHandler,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
         route: str,
@@ -1349,7 +1351,7 @@ class JWTAuthManager:
         jwt_valid_token: dict,
         user_object: Optional[LiteLLM_UserTable],
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: Optional[DualCache] = None,
+        user_api_key_cache: Optional[UserApiKeyCache] = None,
     ) -> None:
         """
         Sync user role and team memberships with JWT claims
@@ -1377,7 +1379,8 @@ class JWTAuthManager:
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,
-                    value=user_object.model_dump(),
+                    value=user_object,
+                    model_type=LiteLLM_UserTable,
                     ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
 
@@ -1400,7 +1403,8 @@ class JWTAuthManager:
             if user_api_key_cache is not None:
                 await user_api_key_cache.async_set_cache(
                     key=user_object.user_id,
-                    value=user_object.model_dump(),
+                    value=user_object,
+                    model_type=LiteLLM_UserTable,
                     ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
                 )
         return None
@@ -1412,7 +1416,7 @@ class JWTAuthManager:
         request_headers: Optional[dict],
         jwt_handler: JWTHandler,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
     ) -> None:
@@ -1456,7 +1460,7 @@ class JWTAuthManager:
         user_object: Optional[LiteLLM_UserTable],
         user_id: Optional[str],
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
         team_id_upsert: Optional[bool],
@@ -1514,7 +1518,7 @@ class JWTAuthManager:
         general_settings: dict,
         route: str,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Optional[Span],
         proxy_logging_obj: ProxyLogging,
         request_headers: Optional[dict] = None,
