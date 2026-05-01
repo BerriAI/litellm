@@ -49,6 +49,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
 )
 from litellm.proxy.auth.auth_utils import abbreviate_api_key
+from litellm.proxy.auth.reject_invalid_tokens import InvalidVirtualKeyCache
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
@@ -3041,7 +3042,11 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     access_group_ids: Optional[list] = None,
     budget_limits: Optional[list] = None,  # multiple concurrent budget windows
 ):
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import (
+        premium_user,
+        prisma_client,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise Exception(
@@ -3253,7 +3258,13 @@ async def generate_key_helper_fn(  # noqa: PLR0915
                 data=key_data, table_name="key"
             )
 
-            key_data["token_id"] = getattr(create_key_response, "token", None)
+            created_token_id = getattr(create_key_response, "token", None)
+            key_data["token_id"] = created_token_id
+            if isinstance(created_token_id, str):
+                await InvalidVirtualKeyCache.delete_invalid_token_cache(
+                    hashed_token=created_token_id,
+                    user_api_key_cache=user_api_key_cache,
+                )
             key_data["litellm_budget_table"] = getattr(
                 create_key_response, "litellm_budget_table", None
             )
@@ -3903,6 +3914,15 @@ async def _execute_virtual_key_regeneration(
     updated_token_dict = dict(updated_token) if updated_token is not None else {}
     updated_token_dict["key"] = new_token
     updated_token_dict["token_id"] = updated_token_dict.pop("token")
+
+    await InvalidVirtualKeyCache.delete_invalid_token_cache(
+        hashed_token=new_token_hash,
+        user_api_key_cache=user_api_key_cache,
+    )
+    await InvalidVirtualKeyCache.delete_invalid_token_cache(
+        hashed_token=hashed_api_key,
+        user_api_key_cache=user_api_key_cache,
+    )
 
     if hashed_api_key or key:
         await _delete_cache_key_object(

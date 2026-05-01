@@ -9726,3 +9726,91 @@ async def test_execute_virtual_key_regeneration_cache_invalidation_with_token_ha
         call_kwargs = mock_delete_cache.call_args.kwargs
         # The token hash should be passed as-is, NOT double-hashed
         assert call_kwargs["hashed_token"] == token_hash
+
+
+@pytest.mark.asyncio
+async def test_execute_virtual_key_regeneration_clears_invalid_token_cache_for_new_key():
+    """
+    Custom regenerated keys may have been attempted before regeneration and
+    negative-cached. Regeneration should clear that stale invalid-token cache entry.
+    """
+    from litellm.proxy._types import RegenerateKeyRequest, hash_token
+    from litellm.proxy.auth.reject_invalid_tokens import InvalidVirtualKeyCache
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    old_token_hash = "old-token-hash"
+    custom_new_key = "sk-custom-new-key-previously-invalid"
+    new_token_hash = hash_token(token=custom_new_key)
+
+    existing_key = LiteLLM_VerificationToken(
+        token=old_token_hash,
+        user_id="user-1",
+        models=["gpt-4"],
+        team_id=None,
+        max_budget=None,
+        tags=None,
+    )
+
+    class DictLikeResult:
+        def __init__(self, data):
+            self._data = data
+
+        def __iter__(self):
+            return iter(self._data.items())
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=DictLikeResult(
+            {"token": new_token_hash, "key_name": "sk-...alid", "user_id": "user-1"}
+        )
+    )
+    mock_prisma_client.jsonify_object = MagicMock(side_effect=lambda data: data)
+
+    mock_user_api_key_cache = MagicMock()
+    mock_user_api_key_cache.async_delete_cache = AsyncMock()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin",
+        user_id="admin-user",
+    )
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.prepare_key_update_data",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=existing_key,
+            hashed_api_key=old_token_hash,
+            key=old_token_hash,
+            data=RegenerateKeyRequest(new_key=custom_new_key),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+            user_api_key_cache=mock_user_api_key_cache,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    mock_user_api_key_cache.async_delete_cache.assert_any_await(
+        key=InvalidVirtualKeyCache._cache_key(new_token_hash)
+    )
+    mock_user_api_key_cache.async_delete_cache.assert_any_await(
+        key=InvalidVirtualKeyCache._cache_key(old_token_hash)
+    )

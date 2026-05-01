@@ -58,6 +58,7 @@ from litellm.proxy.auth.auth_utils import (
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
+from litellm.proxy.auth.reject_invalid_tokens import InvalidVirtualKeyCache
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -1164,7 +1165,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         ## Check DB
-
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
@@ -1176,29 +1176,24 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         if valid_token is None:
-            if isinstance(
-                api_key, str
-            ):  # if generated token, make sure it starts with sk-.
-                _masked_key = (
-                    "{}****{}".format(api_key[:4], api_key[-4:])
-                    if len(api_key) > 8
-                    else "****"
-                )
-                assert api_key.startswith(
-                    "sk-"
-                ), "LiteLLM Virtual Key expected. Received={}, expected to start with 'sk-'.".format(
-                    _masked_key
-                )  # prevent token hashes from being used
-            else:
-                verbose_logger.warning(
-                    "litellm.proxy.proxy_server.user_api_key_auth(): Warning - Key is not a string. Got type={}".format(
-                        type(api_key) if api_key is not None else "None"
-                    )
-                )
-            abbreviated_api_key = abbreviate_api_key(api_key=api_key)
-            if api_key.startswith("sk-"):
-                api_key = hash_token(token=api_key)
+            is_invalid_token = await InvalidVirtualKeyCache.check_invalid_token(
+                api_key=api_key,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                general_settings=general_settings,
+            )
 
+            if is_invalid_token:
+                raise ProxyException(
+                    message="Authentication Error at InvalidVirtualKeyCache, Invalid proxy server token passed. Token (hash) = {}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
+                        hash_token(token=api_key),
+                    ),
+                    type=ProxyErrorTypes.token_not_found_in_db,
+                    param="key",
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
+
+            api_key = hash_token(token=api_key)
             try:
                 with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
                     valid_token = await get_key_object(
@@ -1210,8 +1205,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
             except ProxyException as e:
                 if e.code == 401 or e.code == "401":
-                    e.message = "Authentication Error, Invalid proxy server token passed. Received API Key = {}, Key Hash (Token) ={}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
-                        abbreviated_api_key, api_key
+                    e.message = "Authentication Error, Invalid proxy server token passed. Token (hash) = {}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`".format(
+                        api_key
                     )
                 raise e
             # update end-user params on valid token

@@ -12,7 +12,8 @@ sys.path.insert(
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth, hash_token
+from litellm.proxy.auth.reject_invalid_tokens import InvalidVirtualKeyCache
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.types.utils import StandardLoggingPayload
 
@@ -278,6 +279,12 @@ async def test_enrich_failure_metadata_with_full_key_lookup():
             new_callable=AsyncMock,
             return_value=mock_key_obj,
         ),
+        patch.object(
+            InvalidVirtualKeyCache,
+            "check_invalid_hashed_token",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
         patch(
             "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
             new_callable=AsyncMock,
@@ -349,6 +356,52 @@ async def test_enrich_failure_metadata_skips_when_no_api_key():
 
 
 @pytest.mark.asyncio
+async def test_enrich_failure_metadata_skips_key_lookup_for_negative_cached_invalid_key():
+    """
+    Invalid auth failures are already negative-cached. Failure metadata enrichment
+    should not re-query the key combined view for those same invalid keys.
+    """
+    raw_api_key = "sk-invalid-key"
+    hashed_api_key = hash_token(raw_api_key)
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value="")
+
+    with (
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"invalid_virtual_key_cache_ttl": 3600},
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+        ) as mock_get_key,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team,
+    ):
+        metadata = {
+            "user_api_key": hashed_api_key,
+            "user_api_key_alias": None,
+            "user_api_key_user_id": None,
+            "user_api_key_team_id": None,
+            "user_api_key_team_alias": None,
+        }
+
+        result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
+
+        assert result == metadata
+        mock_cache.async_get_cache.assert_awaited_once_with(
+            key=InvalidVirtualKeyCache._cache_key(hashed_api_key)
+        )
+        mock_get_key.assert_not_called()
+        mock_get_team.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_enriches_auth_error_metadata():
     """
     Simulates a 401 ProxyException (e.g. can_key_call_model). In this case
@@ -388,6 +441,12 @@ async def test_async_post_call_failure_hook_enriches_auth_error_metadata():
             "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
             new_callable=AsyncMock,
             return_value=mock_key_obj,
+        ),
+        patch.object(
+            InvalidVirtualKeyCache,
+            "check_invalid_hashed_token",
+            new_callable=AsyncMock,
+            return_value=False,
         ),
         patch(
             "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",

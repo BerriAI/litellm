@@ -90,7 +90,9 @@ jobs:
         include:
           # Must run serially — event-loop conflict with the logging worker.
           - test-group: key-generation
-            test-path: "tests/proxy_unit_tests/test_key_generate_prisma.py"
+            test-path: >-
+              tests/proxy_unit_tests/test_key_generate_prisma.py
+              tests/proxy_unit_tests/test_key_generate_invalid_token_cache.py
             workers: 0
             dist: loadscope
             timeout: 20
@@ -100,6 +102,7 @@ jobs:
             test-path: >-
               tests/proxy_unit_tests/test_auth_checks.py
               tests/proxy_unit_tests/test_user_api_key_auth.py
+              tests/proxy_unit_tests/test_reject_invalid_tokens.py
             workers: 4
             dist: loadscope
             timeout: 15
@@ -116,7 +119,9 @@ jobs:
 
           # ---- test_proxy_utils.py, single shard, worksteal distribution ----
           - test-group: proxy-utils
-            test-path: "tests/proxy_unit_tests/test_proxy_utils.py"
+            test-path: >-
+              tests/proxy_unit_tests/test_proxy_utils.py
+              tests/proxy_unit_tests/test_deprecated_key_lookup.py
             workers: 4
             dist: worksteal
             timeout: 15
