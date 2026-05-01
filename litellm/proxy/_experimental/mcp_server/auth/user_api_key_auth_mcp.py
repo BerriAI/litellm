@@ -886,12 +886,18 @@ class MCPRequestHandler:
         org_id = user_api_key_auth.org_id
         cache_key = f"org_object_permission:{org_id}"
 
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
         try:
             cached = await user_api_key_cache.async_get_cache(key=cache_key)
             if cached is not None:
                 # Sentinel means the DB confirmed no object_permission for this org
                 if cached == MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL:
                     return None
+                # Redis deserialises to a plain dict; reconstruct the Pydantic model
+                # so callers can access .mcp_servers / .mcp_tool_permissions as attrs.
+                if isinstance(cached, dict):
+                    return LiteLLM_ObjectPermissionTable(**cached)
                 return cached
 
             org_row = await prisma_client.db.litellm_organizationtable.find_unique(
@@ -907,8 +913,14 @@ class MCPRequestHandler:
                 )
                 return None
 
-            obj_perm = org_row.object_permission
-            await user_api_key_cache.async_set_cache(key=cache_key, value=obj_perm)
+            # Convert raw Prisma model → Pydantic before caching.  Caching the
+            # Pydantic .dict() ensures the value survives a Redis JSON round-trip
+            # as a plain dict that we can reconstruct above (same pattern used by
+            # get_end_user_object / get_team_object in auth_checks.py).
+            obj_perm = LiteLLM_ObjectPermissionTable(**org_row.object_permission.dict())
+            await user_api_key_cache.async_set_cache(
+                key=cache_key, value=obj_perm.dict()
+            )
             return obj_perm
         except Exception as e:
             verbose_logger.warning(f"Failed to get org object permission: {str(e)}")
