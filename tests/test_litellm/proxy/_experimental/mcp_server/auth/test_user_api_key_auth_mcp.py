@@ -2249,9 +2249,12 @@ async def test_get_org_object_includes_object_permission_with_separate_cache_key
         include_object_permission=True,
     )
 
-    assert result == org_row
+    assert result is not None
+    assert result.organization_id == "org-123"
+    assert result.object_permission_id == "org-perm-123"
     mock_cache.async_get_cache.assert_awaited_once_with(
-        key="org_id:org-123:with_object_permission"
+        key="org_id:org-123:with_object_permission",
+        model_type=type(result),
     )
     mock_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(
         where={"organization_id": "org-123"},
