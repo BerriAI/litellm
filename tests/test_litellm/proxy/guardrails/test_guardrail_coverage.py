@@ -252,6 +252,54 @@ async def test_lakera_v2_inspects_multimodal_list_content(user_api_key, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_lasso_multimodal_falls_back_to_classify(user_api_key, monkeypatch):
+    """Lasso's classifix (mask) endpoint returns text that overwrites
+    ``data["messages"]``. For multimodal input that would silently strip
+    image parts — the hook must use the classify endpoint instead and
+    leave the original payload intact."""
+    monkeypatch.setenv("LASSO_API_KEY", "ls-test")
+    from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import LassoGuardrail
+
+    guard = LassoGuardrail(lasso_api_key="ls-test", mask=True)
+
+    masking_called = False
+    classify_called = False
+
+    async def fake_masking(data, cache, message_type, messages):
+        nonlocal masking_called
+        masking_called = True
+        return data
+
+    async def fake_classification(data, cache, message_type, messages):
+        nonlocal classify_called
+        classify_called = True
+        return data
+
+    with (
+        patch.object(guard, "_handle_masking", side_effect=fake_masking),
+        patch.object(guard, "_handle_classification", side_effect=fake_classification),
+    ):
+        await guard._run_lasso_guardrail(
+            data={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "hello"},
+                            {"type": "image_url", "image_url": {"url": "..."}},
+                        ],
+                    }
+                ]
+            },
+            cache=DualCache(),
+            message_type="PROMPT",
+        )
+
+    assert classify_called is True
+    assert masking_called is False
+
+
+@pytest.mark.asyncio
 async def test_lasso_inspects_responses_api_input(user_api_key, monkeypatch):
     monkeypatch.setenv("LASSO_API_KEY", "ls-test")
     from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import LassoGuardrail
