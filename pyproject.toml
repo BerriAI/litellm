@@ -52,7 +52,7 @@ proxy = [
     "azure-identity==1.25.2",
     "azure-storage-blob==12.28.0",
     "mcp==1.26.0",
-    "litellm-proxy-extras==0.4.69",
+    "litellm-proxy-extras==0.4.70",
     "litellm-enterprise==0.1.39",
     "RestrictedPython==8.1",
     "rich==13.9.4",
@@ -149,6 +149,8 @@ dev = [
     "parameterized==0.9.0",
     "openapi-core==0.22.0; python_version < '3.14'",
     "pytest-timeout==2.4.0",
+    "vcrpy==8.1.1",
+    "pytest-recording==0.13.4",
 ]
 proxy-dev = [
     "prisma==0.11.0",

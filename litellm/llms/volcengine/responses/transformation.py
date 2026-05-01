@@ -17,6 +17,7 @@ from pydantic import fields as pyd_fields
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
@@ -300,7 +301,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{response_id}"
+        encoded_response_id = encode_url_path_segment(
+            response_id, field_name="response_id"
+        )
+        url = f"{api_base}/{encoded_response_id}"
         data: Dict = {}
         return url, data
 
@@ -333,7 +337,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{response_id}"
+        encoded_response_id = encode_url_path_segment(
+            response_id, field_name="response_id"
+        )
+        url = f"{api_base}/{encoded_response_id}"
         data: Dict = {}
         return url, data
 
@@ -372,7 +379,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{response_id}/input_items"
+        encoded_response_id = encode_url_path_segment(
+            response_id, field_name="response_id"
+        )
+        url = f"{api_base}/{encoded_response_id}/input_items"
         params: Dict[str, Any] = {}
         if after is not None:
             params["after"] = after
@@ -408,7 +418,10 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{response_id}/cancel"
+        encoded_response_id = encode_url_path_segment(
+            response_id, field_name="response_id"
+        )
+        url = f"{api_base}/{encoded_response_id}/cancel"
         data: Dict = {}
         return url, data
 

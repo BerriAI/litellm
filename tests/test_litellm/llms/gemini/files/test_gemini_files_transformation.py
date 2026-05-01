@@ -141,44 +141,28 @@ class TestGoogleAIStudioFilesTransformation:
         assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
         assert params == {}
 
-    def test_transform_retrieve_file_request_rejects_traversal_name(self):
+    def test_transform_retrieve_file_request_encodes_file_id_path_segment(self):
+        file_id = "files/../../models/gemini-pro?x=1#frag"
         litellm_params = {"api_key": "test-api-key"}
 
-        with pytest.raises(ValueError, match="Invalid Gemini file name"):
+        url, params = self.handler.transform_retrieve_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert (
+            url
+            == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
+        )
+        assert params == {}
+
+    def test_transform_retrieve_file_request_rejects_dot_path_segment(self):
+        with pytest.raises(ValueError, match="file_id cannot be a dot path segment"):
             self.handler.transform_retrieve_file_request(
-                file_id="files/../secrets",
+                file_id="files/..",
                 optional_params={},
-                litellm_params=litellm_params,
-            )
-
-    def test_transform_retrieve_file_request_rejects_encoded_traversal_name(self):
-        litellm_params = {"api_key": "test-api-key"}
-
-        with pytest.raises(ValueError, match="Invalid Gemini file name"):
-            self.handler.transform_retrieve_file_request(
-                file_id="files/..%2Fsecrets",
-                optional_params={},
-                litellm_params=litellm_params,
-            )
-
-    def test_transform_retrieve_file_request_rejects_double_encoded_separator(self):
-        litellm_params = {"api_key": "test-api-key"}
-
-        with pytest.raises(ValueError, match="Invalid Gemini file name"):
-            self.handler.transform_retrieve_file_request(
-                file_id="files/..%252Fsecrets",
-                optional_params={},
-                litellm_params=litellm_params,
-            )
-
-    def test_transform_retrieve_file_request_rejects_deeply_encoded_separator(self):
-        litellm_params = {"api_key": "test-api-key"}
-
-        with pytest.raises(ValueError, match="Invalid Gemini file name"):
-            self.handler.transform_retrieve_file_request(
-                file_id="files/..%2525252Fsecrets",
-                optional_params={},
-                litellm_params=litellm_params,
+                litellm_params={"api_key": "test-api-key"},
             )
 
     @patch.dict("os.environ", {}, clear=True)
@@ -385,9 +369,7 @@ class TestGoogleAIStudioFilesTransformation:
             litellm_params=litellm_params,
         )
 
-        # Verify URL extraction
-        assert "files/test123" in url
-        assert "generativelanguage.googleapis.com" in url
+        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
 
         # Params should be empty (API key goes in header via validate_environment)
         assert params == {}
@@ -439,28 +421,21 @@ class TestGoogleAIStudioFilesTransformation:
         assert url == "https://custom-gemini.example/v1beta/files/test123"
         assert params == {}
 
-    def test_transform_delete_file_request_rejects_encoded_traversal_url(self):
+    def test_transform_delete_file_request_encodes_file_id_path_segment(self):
+        file_id = "files/../../models/gemini-pro?x=1#frag"
         litellm_params = {
             "api_key": "test-api-key",
             "api_base": "https://generativelanguage.googleapis.com",
         }
 
-        with pytest.raises(ValueError, match="Invalid Gemini file name"):
-            self.handler.transform_delete_file_request(
-                file_id="https://generativelanguage.googleapis.com/v1beta/files/..%2Fsecrets",
-                optional_params={},
-                litellm_params=litellm_params,
-            )
+        url, params = self.handler.transform_delete_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
 
-    def test_transform_delete_file_request_rejects_deeply_encoded_traversal_url(self):
-        litellm_params = {
-            "api_key": "test-api-key",
-            "api_base": "https://generativelanguage.googleapis.com",
-        }
-
-        with pytest.raises(ValueError, match="Invalid Gemini file name"):
-            self.handler.transform_delete_file_request(
-                file_id="https://generativelanguage.googleapis.com/v1beta/files/..%2525252Fsecrets",
-                optional_params={},
-                litellm_params=litellm_params,
-            )
+        assert (
+            url
+            == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
+        )
+        assert params == {}

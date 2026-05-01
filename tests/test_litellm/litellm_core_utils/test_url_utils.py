@@ -4,7 +4,14 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils import url_utils
-from litellm.litellm_core_utils.url_utils import SSRFError, _is_blocked_ip, validate_url
+from litellm.litellm_core_utils.url_utils import (
+    SSRFError,
+    _is_blocked_ip,
+    assert_same_origin,
+    encode_url_path_segment,
+    encode_url_path_segments,
+    validate_url,
+)
 
 
 @pytest.fixture
@@ -78,6 +85,28 @@ class TestIsBlockedIp:
     def test_blocks_ipv4_mapped_azure_wire_server(self):
         """::ffff:168.63.129.16 must be unwrapped and blocked via the exception list."""
         assert _is_blocked_ip("::ffff:168.63.129.16") is True
+
+
+class TestEncodeUrlPathSegment:
+    def test_encodes_path_delimiters_and_query_markers(self):
+        encoded = encode_url_path_segment("../../v1/files?limit=1#frag")
+
+        assert encoded == "..%2F..%2Fv1%2Ffiles%3Flimit%3D1%23frag"
+
+    def test_encodes_path_segments_without_collapsing_valid_model_paths(self):
+        encoded = encode_url_path_segments("@cf/meta/model?debug=1")
+
+        assert encoded == "%40cf/meta/model%3Fdebug%3D1"
+
+    @pytest.mark.parametrize("value", ["", ".", "..", None])
+    def test_rejects_empty_and_dot_segments(self, value):
+        with pytest.raises(ValueError):
+            encode_url_path_segment(value, field_name="resource_id")
+
+    @pytest.mark.parametrize("value", ["../model", "model/../other", "/model"])
+    def test_rejects_dot_segments_in_multi_segment_paths(self, value):
+        with pytest.raises(ValueError):
+            encode_url_path_segments(value, field_name="model")
 
 
 class TestValidateUrl:
@@ -436,3 +465,73 @@ class TestProviderUrlDestinationAllowlist:
             "https://trusted.example:99999/v1/chat/completions",
             ["trusted.example"],
         )
+
+
+# ── assert_same_origin ────────────────────────────────────────────────────────
+
+
+def test_assert_same_origin_matches_scheme_host_port():
+    """A polling URL on the same scheme + host + port as the api_base
+    passes — the upstream is trusted; the URL it returned points back at
+    the same upstream."""
+    assert_same_origin(
+        "https://api.example.com/v1/operations/abc",
+        "https://api.example.com/v1/generate",
+    )
+
+
+def test_assert_same_origin_treats_default_ports_as_explicit():
+    """``https://x/`` and ``https://x:443/`` are the same origin."""
+    assert_same_origin("https://api.example.com/poll", "https://api.example.com:443/")
+    assert_same_origin("https://api.example.com:443/poll", "https://api.example.com/")
+    assert_same_origin("http://api.example.com/poll", "http://api.example.com:80/")
+
+
+def test_assert_same_origin_rejects_different_host():
+    with pytest.raises(SSRFError, match="host"):
+        assert_same_origin(
+            "https://attacker.example.com/poll",
+            "https://api.example.com/generate",
+        )
+
+
+def test_assert_same_origin_rejects_different_scheme():
+    with pytest.raises(SSRFError, match="scheme"):
+        assert_same_origin(
+            "http://api.example.com/poll", "https://api.example.com/generate"
+        )
+
+
+def test_assert_same_origin_rejects_different_port():
+    with pytest.raises(SSRFError, match="port"):
+        assert_same_origin(
+            "https://api.example.com:8443/poll", "https://api.example.com/generate"
+        )
+
+
+def test_assert_same_origin_rejects_non_http_scheme():
+    """``file://`` polling URLs are rejected outright — the upstream
+    should never return a non-HTTP scheme."""
+    with pytest.raises(SSRFError, match="scheme"):
+        assert_same_origin("file:///etc/passwd", "https://api.example.com/")
+
+
+def test_assert_same_origin_case_insensitive_host():
+    assert_same_origin(
+        "https://API.example.com/poll", "https://api.example.com/generate"
+    )
+
+
+def test_assert_same_origin_error_message_does_not_leak_hostnames():
+    """Greptile P2: in the SSRF threat model the caller is the attacker.
+    The error message must not echo the operator's expected host or the
+    attacker-supplied candidate host back to the caller — only identify
+    *which* component mismatched."""
+    with pytest.raises(SSRFError) as exc:
+        assert_same_origin(
+            "https://attacker.example.com:1234/poll",
+            "https://api.internal-corp.example/generate",
+        )
+    detail = str(exc.value)
+    assert "attacker.example.com" not in detail
+    assert "api.internal-corp.example" not in detail
