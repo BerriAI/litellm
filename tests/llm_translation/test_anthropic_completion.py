@@ -870,7 +870,7 @@ from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 def test_anthropic_json_mode_and_tool_call_response(
     json_mode, tool_calls, expect_null_response
 ):
-    result = litellm.AnthropicConfig()._transform_response_for_json_mode(
+    result, _, _ = litellm.AnthropicConfig()._resolve_json_mode_non_streaming(
         json_mode=json_mode,
         tool_calls=tool_calls,
     )
