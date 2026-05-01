@@ -28,19 +28,12 @@ from tests._vcr_redis_persister import (  # noqa: E402
 )
 
 
-# Controller-side handles for writing per-test VCR verdicts to the live
-# terminal. ``pytest_configure`` stashes the pluginmanager (workers don't get
-# a TerminalReporter — their output is captured and aggregated by the
-# controller), and ``pytest_runtest_logreport`` resolves the TerminalReporter
-# lazily on first use because it isn't registered yet at conftest configure
-# time.
 _controller_pluginmanager = None
 _controller_terminal_reporter = None
 
 
 # vcrpy and respx both patch the httpx transport — applying both makes one
-# silently win. Files in this set use respx and are skipped by the
-# auto-marker below.
+# silently win, so respx-using files opt out of the auto-marker.
 _RESPX_CONFLICTING_FILES = frozenset(
     {
         "test_azure_o_series.py",
@@ -58,26 +51,11 @@ _VCR_AUTO_MARKER_SKIP_FILES = _RESPX_CONFLICTING_FILES | frozenset(
 )
 
 # Tests that observe live cross-call provider state (e.g. prompt-cache
-# warm-up between two consecutive calls) cannot benefit from cassette
-# replay: the second call's "expected" state depends on what the *live*
-# provider does between the two calls, not on what was recorded earlier.
-# Auto-marking them with @pytest.mark.vcr just wastes cycles and (before
-# the outcome gate) used to poison the cache. They go live with their
-# existing @pytest.mark.flaky retry logic.
-#
-# Match by suffix on the pytest nodeid so subclassed/parametrized variants
-# are covered: e.g. "::test_prompt_caching" matches all subclasses that
-# inherit the base test.
+# warm-up between two consecutive calls); replay can't reproduce that state.
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES = frozenset(
     {
-        # Provider prompt-cache propagation isn't deterministic between two
-        # back-to-back calls; the test is flaky against the live provider.
         "::test_prompt_caching",
-        # Bedrock Nova returns tool_call vs JSON nondeterministically; the
-        # base assertion expects JSON. Other providers' versions of this
-        # test are healthy, so we narrow with a class-name guard below.
         "TestBedrockInvokeNovaJson::test_json_response_pydantic_obj",
-        # Bedrock streaming response_cost calc returns None intermittently.
         "::test_bedrock_converse__streaming_passthrough",
     }
 )
@@ -156,9 +134,6 @@ def vcr_config():
 def _vcr_disabled() -> bool:
     if os.environ.get("LITELLM_VCR_DISABLE") == "1":
         return True
-    # Cassettes live on a dedicated Redis (CASSETTE_REDIS_URL) so the cache
-    # isn't shared with — and accidentally flushed by — tests that exercise
-    # the application Redis via REDIS_URL/REDIS_HOST.
     return not os.environ.get("CASSETTE_REDIS_URL")
 
 
@@ -171,12 +146,6 @@ def pytest_recording_configure(config, vcr):
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Attach each phase's report to the item so fixture teardown can read it.
-
-    Used by ``_vcr_outcome_gate`` below to skip persisting cassettes for
-    failed test runs (incl. failed retries that pytest-rerunfailures will
-    re-attempt) so a "bad luck" recording can't poison future replays.
-    """
     outcome = yield
     rep = outcome.get_result()
     setattr(item, f"rep_{rep.when}", rep)
@@ -184,19 +153,6 @@ def pytest_runtest_makereport(item, call):
 
 @pytest.fixture(autouse=True)
 def _vcr_outcome_gate(request, vcr):
-    """Tell the persister whether the test that owns this cassette passed.
-
-    Runs after ``vcr`` (which yields the active Cassette). At teardown time
-    the call-phase report is attached to the item by the makereport hook
-    above, so we can mark the cassette key passed/failed before vcrpy's
-    Cassette.__exit__ triggers persister.save_cassette.
-
-    Stashes a per-test hit/miss verdict on ``user_properties`` so the
-    controller-side ``pytest_runtest_logreport`` hook can surface it to the
-    live terminal. xdist serializes ``user_properties`` on each phase's
-    report back to the controller, which is the only process that has a
-    TerminalReporter wired to CI's live log.
-    """
     yield
     cassette = vcr
     rep_call = getattr(request.node, "rep_call", None)
@@ -212,20 +168,13 @@ def _vcr_outcome_gate(request, vcr):
 
 
 def pytest_configure(config):
-    """Stash the pluginmanager so the logreport hook can find TerminalReporter.
-
-    We can't grab TerminalReporter directly here — it's not registered until
-    pytest's own ``pytest_configure`` runs, and conftest hooks may run first.
-    Stashing the config is enough; the hook resolves on first use.
-    """
     global _controller_pluginmanager
     if os.environ.get("PYTEST_XDIST_WORKER"):
-        return  # workers don't have a live-log TerminalReporter
+        return
     _controller_pluginmanager = config.pluginmanager
 
 
 def _resolve_terminal_reporter():
-    """Lazy-resolve the TerminalReporter once it's been registered."""
     global _controller_terminal_reporter
     if _controller_terminal_reporter is not None:
         return _controller_terminal_reporter
@@ -238,15 +187,10 @@ def _resolve_terminal_reporter():
 
 
 def pytest_runtest_logreport(report):
-    """Print VCR verdicts on the controller, alongside PASSED/FAILED markers.
-
-    Runs once per phase per test. We pick teardown so the verdict (appended
-    in ``_vcr_outcome_gate`` teardown) is present in ``report.user_properties``.
-    """
     if report.when != "teardown":
         return
     if os.environ.get("PYTEST_XDIST_WORKER"):
-        return  # only the controller has a live-log TerminalReporter
+        return
     if not vcr_verbose_enabled():
         return
     reporter = _resolve_terminal_reporter()

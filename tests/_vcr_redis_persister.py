@@ -9,35 +9,15 @@ from vcr.serialize import deserialize, serialize
 
 CASSETTE_TTL_SECONDS = 24 * 60 * 60
 REDIS_KEY_PREFIX = "litellm:vcr:cassette:"
-
-# Healthy cassettes hold 1–5 episodes (a single test rarely makes more than a
-# handful of distinct HTTP calls). When a cassette balloons past this, it
-# usually means a test produces non-deterministic request bodies (e.g. uuid)
-# under record_mode=new_episodes, and every CI run is appending fresh
-# unmatched episodes instead of replaying. That growth is unbounded over
-# time and silently inflates Redis. Refuse to persist past this threshold so
-# the pathology surfaces loudly instead.
+CASSETTE_REDIS_URL_ENV = "CASSETTE_REDIS_URL"
+VCR_VERBOSE_ENV = "LITELLM_VCR_VERBOSE"
 MAX_EPISODES_PER_CASSETTE = 50
 
 _log = logging.getLogger(__name__)
-
-
-# Per-process map: cassette key -> "did the test that produced this cassette
-# pass?". The conftest's pytest_runtest_makereport hook sets True when the test
-# body succeeds; save_cassette consults it to avoid persisting recordings from
-# failed runs. We key by the redis cache key so retries (which may produce a
-# fresh cassette object each time but write to the same key) interleave
-# correctly.
 _passed_by_cassette_key: dict[str, bool] = {}
 
 
 def mark_test_outcome_for_cassette(cassette_path: str, passed: bool) -> None:
-    """Record whether the test that owns ``cassette_path`` passed.
-
-    Called from a pytest hook in conftest. The recorded value is consulted by
-    ``save_cassette`` so failed-attempt recordings (e.g. a flaky test that
-    asserts on provider state) don't poison the cache for future runs.
-    """
     _passed_by_cassette_key[redis_key_for(cassette_path)] = passed
 
 
@@ -49,14 +29,7 @@ def redis_key_for(cassette_path: str) -> str:
     return f"{REDIS_KEY_PREFIX}{rel}"
 
 
-CASSETTE_REDIS_URL_ENV = "CASSETTE_REDIS_URL"
-
-
 def _redis_url_from_env() -> Optional[str]:
-    # Use a dedicated cassette Redis URL so the VCR cache is isolated from any
-    # application Redis used by tests (which may be flushed by other suites).
-    # Intentionally do NOT fall back to REDIS_URL/REDIS_HOST — sharing a Redis
-    # with the app cache risks cassettes being wiped by flushdb/flushall.
     return os.environ.get(CASSETTE_REDIS_URL_ENV) or None
 
 
@@ -74,8 +47,6 @@ def _build_default_client():
             "Cassette Redis is intentionally separate from the application "
             "Redis (REDIS_URL/REDIS_HOST) to avoid being flushed by tests."
         )
-    # Managed Redis providers (e.g. Upstash) drop idle TLS connections; retry on
-    # connection/timeout errors so a single dropped socket doesn't fail teardown.
     return redis.Redis.from_url(
         url,
         socket_timeout=5,
@@ -92,8 +63,6 @@ def make_redis_persister(
 ):
     redis_client = client if client is not None else _build_default_client()
 
-    # Lazily resolve the redis exception classes so callers can pass any
-    # client (incl. fakeredis) without importing the real `redis` package.
     try:
         from redis.exceptions import ConnectionError as RedisConnectionError
         from redis.exceptions import TimeoutError as RedisTimeoutError
@@ -108,8 +77,6 @@ def make_redis_persister(
             try:
                 data = redis_client.get(redis_key_for(cassette_path))
             except _transient_errors as exc:
-                # Treat a Redis outage on read as a cassette miss so tests fall
-                # through to a live call instead of erroring in setup.
                 _log.warning(
                     "VCR redis load failed for %s; treating as cache miss: %s",
                     cassette_path,
@@ -125,20 +92,9 @@ def make_redis_persister(
         @staticmethod
         def save_cassette(cassette_path, cassette_dict, serializer):
             key = redis_key_for(cassette_path)
-            # Only persist successful runs. A failed test (incl. all the failed
-            # retries before a passing one) would otherwise poison the cache —
-            # e.g. a flaky test that observes provider state across two calls
-            # could capture a "bad luck" response that deterministically fails
-            # every future replay. We default to True if the hook didn't run
-            # (e.g. cassette saved outside a test context) so non-test usage
-            # still works.
             passed = _passed_by_cassette_key.pop(key, True)
             episode_count = len(cassette_dict.get("requests", []) or [])
             if episode_count > MAX_EPISODES_PER_CASSETTE:
-                # Pathology: the test is producing non-deterministic request
-                # bodies and accumulating unbounded episodes. Refuse the save
-                # so the cassette can't keep ballooning, and surface a loud
-                # warning so someone investigates / opts the test out.
                 _log.warning(
                     "VCR redis save refused for %s; cassette has %d episodes "
                     "(> MAX_EPISODES_PER_CASSETTE=%d). The test likely produces "
@@ -162,9 +118,6 @@ def make_redis_persister(
             try:
                 redis_client.set(key, payload, ex=ttl_seconds)
             except _transient_errors as exc:
-                # Cassette persistence is a cache, not test correctness. A Redis
-                # outage on save should not fail an otherwise-passing test —
-                # the next run will simply re-record.
                 _log.warning(
                     "VCR redis save failed for %s; cassette not persisted: %s",
                     cassette_path,
@@ -175,7 +128,6 @@ def make_redis_persister(
 
 
 def filter_non_2xx_response(response):
-    # Returning None tells vcrpy to skip persisting; see Cassette.append.
     if not isinstance(response, dict):
         return response
     status = response.get("status")
@@ -209,32 +161,14 @@ def patch_vcrpy_aiohttp_record_path() -> None:
     _PATCHED_AIOHTTP_RECORD = True
 
 
-VCR_VERBOSE_ENV = "LITELLM_VCR_VERBOSE"
-
-
 def vcr_verbose_enabled() -> bool:
     return os.environ.get(VCR_VERBOSE_ENV) == "1"
 
 
 def format_vcr_verdict(cassette: Any) -> str:
-    """Build a one-line hit/miss verdict for a vcrpy Cassette.
-
-    HIT  — at least one request was served from cache and nothing new was
-           recorded. (Pure replay.)
-    MISS — nothing from cache; one or more requests went live and were
-           recorded. (Cold cache.)
-    PARTIAL — mix of replay and new recordings. Usually means the cassette
-              matches some but not all requests for this test (e.g. retries,
-              new branches, or vcrpy match_on too strict).
-    NOOP — test made no HTTP calls (or VCR not engaged for it).
-    """
     if cassette is None:
         return "[VCR NOOP]"
     played = getattr(cassette, "play_count", 0) or 0
-    # cassette.data is the recorded request/response list; len(cassette) counts
-    # recorded episodes. New recordings during this test = len - prior_len, but
-    # we don't have prior_len here, so we use cassette.dirty (set when an append
-    # happened during this run) as the "new recording" signal.
     dirty = getattr(cassette, "dirty", False)
     total = len(cassette) if hasattr(cassette, "__len__") else 0
     if played == 0 and not dirty:

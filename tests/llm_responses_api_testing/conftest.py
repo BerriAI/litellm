@@ -23,8 +23,6 @@ from tests._vcr_redis_persister import (  # noqa: E402
 )
 
 
-# Controller-side handles for writing per-test VCR verdicts to the live
-# terminal. See the matching comment in tests/llm_translation/conftest.py.
 _controller_pluginmanager = None
 _controller_terminal_reporter = None
 
@@ -98,9 +96,6 @@ def vcr_config():
 def _vcr_disabled() -> bool:
     if os.environ.get("LITELLM_VCR_DISABLE") == "1":
         return True
-    # Cassettes live on a dedicated Redis (CASSETTE_REDIS_URL) so the cache
-    # isn't shared with — and accidentally flushed by — tests that exercise
-    # the application Redis via REDIS_URL/REDIS_HOST.
     return not os.environ.get("CASSETTE_REDIS_URL")
 
 
@@ -113,12 +108,6 @@ def pytest_recording_configure(config, vcr):
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Attach each phase's report to the item so fixture teardown can read it.
-
-    Used by ``_vcr_outcome_gate`` below to skip persisting cassettes for
-    failed test runs (incl. failed retries that pytest-rerunfailures will
-    re-attempt) so a "bad luck" recording can't poison future replays.
-    """
     outcome = yield
     rep = outcome.get_result()
     setattr(item, f"rep_{rep.when}", rep)
@@ -126,17 +115,6 @@ def pytest_runtest_makereport(item, call):
 
 @pytest.fixture(autouse=True)
 def _vcr_outcome_gate(request, vcr):
-    """Tell the persister whether the test that owns this cassette passed.
-
-    Runs after ``vcr`` (which yields the active Cassette). At teardown time
-    the call-phase report is attached to the item by the makereport hook
-    above, so we can mark the cassette key passed/failed before vcrpy's
-    Cassette.__exit__ triggers persister.save_cassette.
-
-    Stashes a per-test hit/miss verdict on ``user_properties`` so the
-    controller-side ``pytest_runtest_logreport`` hook can surface it to the
-    live terminal under xdist.
-    """
     yield
     cassette = vcr
     rep_call = getattr(request.node, "rep_call", None)
@@ -152,7 +130,6 @@ def _vcr_outcome_gate(request, vcr):
 
 
 def pytest_configure(config):
-    """Stash the pluginmanager so the logreport hook can find TerminalReporter."""
     global _controller_pluginmanager
     if os.environ.get("PYTEST_XDIST_WORKER"):
         return
@@ -172,7 +149,6 @@ def _resolve_terminal_reporter():
 
 
 def pytest_runtest_logreport(report):
-    """Emit per-test VCR verdicts on the controller's live terminal."""
     if report.when != "teardown":
         return
     if os.environ.get("PYTEST_XDIST_WORKER"):

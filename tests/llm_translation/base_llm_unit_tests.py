@@ -401,16 +401,9 @@ class BaseLLMChatTest(ABC):
             {
                 "type": "file",
                 "file": {
-                    # jsDelivr serves the repo's tests/llm_translation/fixtures/dummy.pdf
-                    # with `Content-Type: application/pdf`. Two reasons we don't
-                    # use raw.githubusercontent.com or upload.wikimedia.org:
-                    # - raw GitHub returns Content-Type: application/octet-stream,
-                    #   which OpenAI/Gemini reject when LiteLLM fetches the URL
-                    #   client-side and forwards the bytes.
-                    # - Wikimedia URLs intermittently return 400 from Anthropic's
-                    #   server-side URL fetcher.
-                    # The URL is pinned to a specific commit SHA so jsDelivr can
-                    # serve it as immutable (cache-control: immutable, max-age=1y).
+                    # SHA-pinned jsDelivr mirror of tests/llm_translation/fixtures/dummy.pdf;
+                    # raw.githubusercontent.com serves PDFs as application/octet-stream
+                    # which OpenAI/Gemini reject when LiteLLM client-fetches the URL.
                     "file_id": "https://cdn.jsdelivr.net/gh/BerriAI/litellm@aab3ef8988b12d166b20356a81c53127480f1125/tests/llm_translation/fixtures/dummy.pdf"
                 },
             },
