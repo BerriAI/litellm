@@ -2379,7 +2379,11 @@ class Router:
         """
         dep_params = deployment.get("litellm_params", {}) or {}
         for key in clientside_credential_keys:
-            if kwargs.get(key) is None and dep_params.get(key) is not None:
+            if (
+                key in kwargs
+                and kwargs.get(key) is None
+                and dep_params.get(key) is not None
+            ):
                 kwargs.pop(key, None)
 
     def _update_kwargs_with_deployment(

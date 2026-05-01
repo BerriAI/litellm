@@ -811,11 +811,7 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
     def test_caller_resupplied_value_overrides_admin_value_on_base_override(self):
         # When the caller redirects ``api_base`` and *also* supplies their
         # own value for one of the admin fields (e.g. ``organization``),
-        # the caller's value must win — never the admin's. The naive
-        # ``if field not in request_kwargs: pop`` shape lets a caller echo
-        # the field name with any value (or empty string) to keep the
-        # admin's value forwarded, which is the exfiltration vector this
-        # test guards against.
+        # the caller's value must win — never the admin's.
         from litellm.router_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
@@ -836,9 +832,9 @@ class TestGetDynamicLitellmParamsClearsAdminConfigOnBaseOverride:
         assert out["extra_body"] == {"attacker": "value"}
 
     def test_field_echo_does_not_preserve_admin_value(self):
-        # Regression: a caller that echoes an admin-config field name with
-        # an *empty* value (or any value) must not be able to keep the
-        # admin's value in ``litellm_params``.
+        # Regression: a caller that resupplies an admin-config field name
+        # with an empty value must not be able to keep the admin's value in
+        # ``litellm_params``.
         from litellm.router_utils.clientside_credential_handler import (
             get_dynamic_litellm_params,
         )
