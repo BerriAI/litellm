@@ -319,7 +319,7 @@ def _resolve_health_check_max_tokens(
     3. For non-wildcard reasoning routes: BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING
        from env (if set)
     4. BACKGROUND_HEALTH_CHECK_MAX_TOKENS (global, any route including wildcards)
-    5. Non-wildcard default: 5
+    5. Non-wildcard default: 16
     6. Wildcard and nothing from (1)(4): leave unset (caller omits max_tokens)
     """
     explicit = model_info.get("health_check_max_tokens", None)
@@ -350,7 +350,7 @@ def _resolve_health_check_max_tokens(
         return int(BACKGROUND_HEALTH_CHECK_MAX_TOKENS)
 
     if not is_wildcard:
-        return 5
+        return 16
 
     return None
 
