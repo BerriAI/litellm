@@ -512,6 +512,7 @@ async def common_checks(  # noqa: PLR0915
                 if not await _key_access_group_grants_model(
                     model=_model,
                     valid_token=valid_token,
+                    team_object=team_object,
                     llm_router=llm_router,
                 ):
                     raise
@@ -2870,20 +2871,28 @@ async def can_team_access_model(
 async def _key_access_group_grants_model(
     model: Union[str, List[str]],
     valid_token: Optional[UserAPIKeyAuth],
+    team_object: Optional[LiteLLM_TeamTable],
     llm_router: Optional[Router],
 ) -> bool:
     """
     Returns True if the key's `access_group_ids` expand to models that grant
     access to `model`. Used to let a key's access group override a team's
     model restriction in `common_checks`.
+
+    A key's access group only counts if it is also assigned to the key's team
+    (i.e., present in `team_object.access_group_ids`). This preserves the
+    team-as-owner boundary: a team member cannot escalate by naming an access
+    group that belongs to a different team.
     """
-    if valid_token is None:
+    if valid_token is None or team_object is None:
         return False
-    key_access_group_ids = valid_token.access_group_ids or []
-    if not key_access_group_ids:
+    key_access_group_ids = set(valid_token.access_group_ids or [])
+    team_access_group_ids = set(team_object.access_group_ids or [])
+    allowed_group_ids = key_access_group_ids & team_access_group_ids
+    if not allowed_group_ids:
         return False
     models_from_groups = await _get_models_from_access_groups(
-        access_group_ids=key_access_group_ids,
+        access_group_ids=list(allowed_group_ids),
     )
     if not models_from_groups:
         return False

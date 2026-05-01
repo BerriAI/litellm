@@ -1164,6 +1164,12 @@ async def test_key_access_group_grants_model_when_group_covers_model():
         token="test-token",
         models=[],
         access_group_ids=["ryan-access-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=["ryan-access-group"],
     )
 
     with patch(
@@ -1175,6 +1181,7 @@ async def test_key_access_group_grants_model_when_group_covers_model():
             await _key_access_group_grants_model(
                 model="claude-haiku-4-5",
                 valid_token=valid_token,
+                team_object=team_object,
                 llm_router=None,
             )
             is True
@@ -1190,11 +1197,18 @@ async def test_key_access_group_grants_model_when_key_has_no_groups():
         token="test-token",
         models=[],
         access_group_ids=[],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=["ryan-access-group"],
     )
     assert (
         await _key_access_group_grants_model(
             model="claude-haiku-4-5",
             valid_token=valid_token,
+            team_object=team_object,
             llm_router=None,
         )
         is False
@@ -1212,6 +1226,12 @@ async def test_key_access_group_grants_model_when_group_does_not_cover_model():
         token="test-token",
         models=[],
         access_group_ids=["other-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=["other-group"],
     )
 
     with patch(
@@ -1223,7 +1243,76 @@ async def test_key_access_group_grants_model_when_group_does_not_cover_model():
             await _key_access_group_grants_model(
                 model="claude-haiku-4-5",
                 valid_token=valid_token,
+                team_object=team_object,
                 llm_router=None,
             )
             is False
         )
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_group_not_assigned_to_team():
+    """
+    Regression test: a team member naming a foreign access group on their key
+    must NOT escalate to that group's models. The group expands to the requested
+    model, but it isn't assigned to the key's team — so the override is denied.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["team-b-premium"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=["team-a-basic"],
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks._get_models_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["claude-opus-4-5"],
+    ) as mocked_expand:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-opus-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is False
+        )
+        # Foreign group must be filtered out before expansion ever runs.
+        mocked_expand.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_team_has_no_groups():
+    """Team with no access_group_ids leaves the intersection empty → denied."""
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["ryan-access-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],
+    )
+    assert (
+        await _key_access_group_grants_model(
+            model="claude-haiku-4-5",
+            valid_token=valid_token,
+            team_object=team_object,
+            llm_router=None,
+        )
+        is False
+    )
