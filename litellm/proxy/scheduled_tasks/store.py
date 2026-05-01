@@ -326,6 +326,7 @@ async def claim_due(
         if not rows:
             return []
 
+        expired_task_ids: set = set()
         async with tx.batch_() as batcher:
             for r in rows:
                 expires_at = r["expires_at"]
@@ -339,6 +340,7 @@ async def claim_due(
                 if expires_at <= now:
                     new_status = "expired"
                     new_next = r["next_run_at"]
+                    expired_task_ids.add(r["task_id"])
                 elif r["fire_once"]:
                     new_status = "fired"
                     new_next = r["next_run_at"]
@@ -371,4 +373,5 @@ async def claim_due(
             "scheduled_for": r["next_run_at"],
         }
         for r in rows
+        if r["task_id"] not in expired_task_ids
     ]
