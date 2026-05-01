@@ -20,7 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import iter_user_text
+from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMDetectorDetection,
@@ -465,7 +465,7 @@ class IBMGuardrailDetector(CustomGuardrail):
             return data
 
         # Covers multimodal list content + Responses-API input.
-        contents_to_check: List[str] = list(iter_user_text(data))
+        contents_to_check: List[str] = list(iter_message_text(data))
         if contents_to_check:
             if self.is_detector_server:
                 # Call detector server with all contents at once
@@ -540,7 +540,7 @@ class IBMGuardrailDetector(CustomGuardrail):
             return
 
         # Covers multimodal list content + Responses-API input.
-        contents_to_check: List[str] = list(iter_user_text(data))
+        contents_to_check: List[str] = list(iter_message_text(data))
         if contents_to_check:
             if self.is_detector_server:
                 # Call detector server with all contents at once

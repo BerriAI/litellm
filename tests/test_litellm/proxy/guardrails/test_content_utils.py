@@ -2,25 +2,25 @@
 
 from litellm.proxy.guardrails._content_utils import (
     build_inspection_messages,
-    iter_user_text,
+    iter_message_text,
     walk_user_text,
 )
 
 
-# ── iter_user_text ────────────────────────────────────────────────────────────
+# ── iter_message_text ────────────────────────────────────────────────────────────
 
 
-def test_iter_user_text_string_messages():
+def test_iter_message_text_string_messages():
     data = {
         "messages": [
             {"role": "user", "content": "hello"},
             {"role": "assistant", "content": "hi"},
         ]
     }
-    assert list(iter_user_text(data)) == ["hello", "hi"]
+    assert list(iter_message_text(data)) == ["hello", "hi"]
 
 
-def test_iter_user_text_multimodal_list_content():
+def test_iter_message_text_multimodal_list_content():
     """VERIA-11: list-format content must be inspected, not silently skipped."""
     data = {
         "messages": [
@@ -34,26 +34,26 @@ def test_iter_user_text_multimodal_list_content():
             }
         ]
     }
-    assert list(iter_user_text(data)) == ["AWS_KEY=AKIA...", "more secrets"]
+    assert list(iter_message_text(data)) == ["AWS_KEY=AKIA...", "more secrets"]
 
 
-def test_iter_user_text_responses_api_string_input():
+def test_iter_message_text_responses_api_string_input():
     """fniVO9-F: Responses-API ``input`` must be inspectable when ``messages`` absent."""
     data = {"input": "tell me a secret"}
-    assert list(iter_user_text(data)) == ["tell me a secret"]
+    assert list(iter_message_text(data)) == ["tell me a secret"]
 
 
-def test_iter_user_text_responses_api_list_input_messages():
+def test_iter_message_text_responses_api_list_input_messages():
     data = {
         "input": [
             {"role": "user", "content": "first"},
             {"role": "user", "content": "second"},
         ]
     }
-    assert list(iter_user_text(data)) == ["first", "second"]
+    assert list(iter_message_text(data)) == ["first", "second"]
 
 
-def test_iter_user_text_responses_api_list_input_content_parts():
+def test_iter_message_text_responses_api_list_input_content_parts():
     data = {
         "input": [
             {"type": "text", "text": "alpha"},
@@ -61,23 +61,42 @@ def test_iter_user_text_responses_api_list_input_content_parts():
             {"type": "text", "text": "beta"},
         ]
     }
-    assert list(iter_user_text(data)) == ["alpha", "beta"]
+    assert list(iter_message_text(data)) == ["alpha", "beta"]
 
 
-def test_iter_user_text_walks_messages_and_input_independently():
+def test_iter_message_text_responses_api_list_input_mixed_dicts_and_strings():
+    """Greptile P2: mixed-list ``input`` with content-part dicts AND bare
+    strings must yield every text fragment — read helpers used to truncate
+    the bare strings."""
+    data = {
+        "input": [
+            {"type": "text", "text": "from-dict"},
+            "from-bare-string",
+            {"type": "image_url", "image_url": {"url": "..."}},
+            "another-bare-string",
+        ]
+    }
+    assert list(iter_message_text(data)) == [
+        "from-dict",
+        "from-bare-string",
+        "another-bare-string",
+    ]
+
+
+def test_iter_message_text_walks_messages_and_input_independently():
     """When both are present (rare), every fragment from either field is
     inspected — a stricter guarantee than "first one wins"."""
     data = {
         "messages": [{"role": "user", "content": "msg-content"}],
         "input": "input-content",
     }
-    assert list(iter_user_text(data)) == ["msg-content", "input-content"]
+    assert list(iter_message_text(data)) == ["msg-content", "input-content"]
 
 
-def test_iter_user_text_empty_data():
-    assert list(iter_user_text({})) == []
-    assert list(iter_user_text({"messages": []})) == []
-    assert list(iter_user_text({"input": ""})) == []
+def test_iter_message_text_empty_data():
+    assert list(iter_message_text({})) == []
+    assert list(iter_message_text({"messages": []})) == []
+    assert list(iter_message_text({"input": ""})) == []
 
 
 # ── walk_user_text ────────────────────────────────────────────────────────────
@@ -137,6 +156,23 @@ def test_walk_user_text_redacts_responses_api_list_input():
     assert visited == 1
     assert data["input"][0] == {"type": "text", "text": "[redacted]AKIAEXAMPLE[/]"}
     assert data["input"][1] == {"type": "image_url", "image_url": {"url": "..."}}
+
+
+def test_walk_user_text_redacts_mixed_list_input():
+    """Read and write helpers must agree on coverage — bare strings inside
+    a mixed ``input`` list are inspected by both."""
+    data = {
+        "input": [
+            {"type": "text", "text": "secret-one"},
+            "secret-two",
+            {"type": "image_url", "image_url": {"url": "..."}},
+        ]
+    }
+    visited = walk_user_text(data, lambda s: f"<{s}>")
+    assert visited == 2
+    assert data["input"][0] == {"type": "text", "text": "<secret-one>"}
+    assert data["input"][1] == "<secret-two>"
+    assert data["input"][2] == {"type": "image_url", "image_url": {"url": "..."}}
 
 
 # ── build_inspection_messages ─────────────────────────────────────────────────
