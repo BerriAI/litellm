@@ -162,6 +162,58 @@ async def test_lakera_v2_inspects_responses_api_input(user_api_key, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_lakera_v2_multimodal_pii_degrades_to_block(user_api_key, monkeypatch):
+    """Mask-in-place uses Lakera offsets and cannot preserve image/audio
+    parts of multimodal input. When PII is detected on a multimodal
+    request, the hook must raise the block exception instead of silently
+    flattening ``data["messages"]`` to text-only."""
+    monkeypatch.setenv("LAKERA_API_KEY", "lk-test")
+    from fastapi import HTTPException
+
+    from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
+        LakeraAIGuardrail,
+    )
+
+    guard = LakeraAIGuardrail(api_key="lk-test", on_flagged="block")
+
+    async def fake_call_v2_guard(messages, request_data, event_type):
+        return (
+            {
+                "flagged": True,
+                "payload": [{"detector_type": "pii/email", "start": 0, "end": 5}],
+            },
+            {"EMAIL": 1},
+        )
+
+    with (
+        patch.object(guard, "call_v2_guard", side_effect=fake_call_v2_guard),
+        patch.object(guard, "_is_only_pii_violation", return_value=True),
+        patch.object(
+            guard,
+            "_get_http_exception_for_blocked_guardrail",
+            return_value=HTTPException(status_code=400, detail="blocked"),
+        ),
+    ):
+        with pytest.raises(HTTPException):
+            await guard.async_pre_call_hook(
+                user_api_key_dict=user_api_key,
+                cache=DualCache(),
+                data={
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "leak"},
+                                {"type": "image_url", "image_url": {"url": "..."}},
+                            ],
+                        }
+                    ]
+                },
+                call_type="acompletion",
+            )
+
+
+@pytest.mark.asyncio
 async def test_lakera_v2_inspects_multimodal_list_content(user_api_key, monkeypatch):
     monkeypatch.setenv("LAKERA_API_KEY", "lk-test")
     from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
