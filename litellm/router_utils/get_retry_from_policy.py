@@ -10,6 +10,7 @@ from litellm.exceptions import (
     AuthenticationError,
     BadRequestError,
     ContentPolicyViolationError,
+    ContextWindowExceededError,
     RateLimitError,
     Timeout,
 )
@@ -28,6 +29,7 @@ def get_num_retries_from_retry_policy(
     TimeoutErrorRetries: Optional[int] = None
     RateLimitErrorRetries: Optional[int] = None
     ContentPolicyViolationErrorRetries: Optional[int] = None
+    ContextWindowExceededErrorRetries: Optional[int] = None
     """
     # if we can find the exception then in the retry policy -> return the number of retries
 
@@ -60,6 +62,11 @@ def get_num_retries_from_retry_policy(
         and retry_policy.ContentPolicyViolationErrorRetries is not None
     ):
         return retry_policy.ContentPolicyViolationErrorRetries
+    # Check ContextWindowExceededError before BadRequestError since it's a subclass
+    if isinstance(exception, ContextWindowExceededError):
+        if retry_policy.ContextWindowExceededErrorRetries is not None:
+            return retry_policy.ContextWindowExceededErrorRetries
+        return 0
     if (
         isinstance(exception, BadRequestError)
         and retry_policy.BadRequestErrorRetries is not None

@@ -1230,6 +1230,8 @@ def _get_wrapper_num_retries(
         kwargs["retry_policy"] = reset_retry_policy()
         if retry_policy_num_retries is not None:
             num_retries = retry_policy_num_retries
+    elif isinstance(exception, litellm.exceptions.ContextWindowExceededError):
+        num_retries = 0
 
     return num_retries, kwargs
 
@@ -1695,6 +1697,8 @@ def client(original_function):  # noqa: PLR0915
                     kwargs["retry_policy"] = (
                         reset_retry_policy()
                     )  # prevent infinite loops
+                elif isinstance(e, litellm.exceptions.ContextWindowExceededError):
+                    num_retries = 0
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1744,6 +1748,8 @@ def client(original_function):  # noqa: PLR0915
                     kwargs["retry_policy"] = (
                         reset_retry_policy()
                     )  # prevent infinite loops
+                elif isinstance(e, litellm.exceptions.ContextWindowExceededError):
+                    num_retries = 0
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
