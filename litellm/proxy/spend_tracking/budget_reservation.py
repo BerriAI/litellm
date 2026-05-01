@@ -34,7 +34,14 @@ class _BudgetCounter:
 
 
 class _CounterReservationUnavailable(Exception):
-    pass
+    def __init__(
+        self,
+        touched_counter: bool = False,
+        counter_invalidated: bool = False,
+    ) -> None:
+        self.touched_counter = touched_counter
+        self.counter_invalidated = counter_invalidated
+        super().__init__("Counter reservation unavailable")
 
 
 def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
@@ -103,14 +110,20 @@ async def reserve_budget_for_request(
                 counter=counter,
                 reserved_cost=reservation_cost,
             )
+            applied_entries.append(entry)
             try:
                 reserved_value = await _reserve_counter(
                     counter=counter,
                     reservation_cost=reservation_cost,
                 )
-            except _CounterReservationUnavailable:
+            except _CounterReservationUnavailable as exc:
+                if exc.touched_counter and not exc.counter_invalidated:
+                    await _release_applied_entries_best_effort(
+                        entries=[entry],
+                        default_reserved_cost=reservation_cost,
+                    )
+                applied_entries.remove(entry)
                 continue
-            applied_entries.append(entry)
 
             if reserved_value is not None:
                 current_spend = reserved_value
@@ -577,6 +590,7 @@ async def _reserve_counter(
         _increment_spend_counter_cache,
     )
 
+    attempted_increment = False
     try:
         if counter.source_cache_key is not None:
             await _ensure_spend_counter_initialized(
@@ -599,6 +613,7 @@ async def _reserve_counter(
                 )
                 raise _CounterReservationUnavailable
 
+        attempted_increment = True
         reserved_value = await _increment_spend_counter_cache(
             counter_key=counter.counter_key,
             increment=reservation_cost,
@@ -612,15 +627,20 @@ async def _reserve_counter(
             counter.counter_key,
             exc_info=True,
         )
+        counter_invalidated = False
         try:
             await _invalidate_spend_counter(counter_key=counter.counter_key)
+            counter_invalidated = True
         except Exception:
             verbose_proxy_logger.warning(
                 "Failed to invalidate spend counter after budget reservation failure for %s",
                 counter.counter_key,
                 exc_info=True,
             )
-        raise _CounterReservationUnavailable
+        raise _CounterReservationUnavailable(
+            touched_counter=attempted_increment,
+            counter_invalidated=counter_invalidated,
+        )
 
 
 async def _get_current_counter_value(counter: _BudgetCounter) -> float:
