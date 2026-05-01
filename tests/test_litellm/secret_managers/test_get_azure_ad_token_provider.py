@@ -98,6 +98,37 @@ class TestGetAzureAdTokenProvider:
     @patch.dict(
         os.environ,
         {
+            "AZURE_SCOPE": "https://cognitiveservices.azure.com/.default",
+            "AZURE_CREDENTIAL": "ManagedIdentityCredential",
+        },
+        clear=True,
+    )
+    @patch("azure.identity.get_bearer_token_provider")
+    @patch("azure.identity.ManagedIdentityCredential")
+    def test_get_azure_ad_token_provider_managed_identity_credential_without_client_id(
+        self, mock_managed_identity_credential, mock_get_bearer_token_provider
+    ):
+        """Test get_azure_ad_token_provider with system-assigned ManagedIdentityCredential."""
+        mock_credential_instance = MagicMock()
+        mock_managed_identity_credential.return_value = mock_credential_instance
+
+        mock_token_provider = MagicMock(return_value="mock-system-managed-identity-token")
+        mock_get_bearer_token_provider.return_value = mock_token_provider
+
+        result = get_azure_ad_token_provider()
+
+        assert callable(result)
+        mock_managed_identity_credential.assert_called_once_with()
+        mock_get_bearer_token_provider.assert_called_once_with(
+            mock_credential_instance, "https://cognitiveservices.azure.com/.default"
+        )
+
+        token = result()
+        assert token == "mock-system-managed-identity-token"
+
+    @patch.dict(
+        os.environ,
+        {
             "AZURE_CLIENT_ID": "test-client-id",
             "AZURE_TENANT_ID": "test-tenant-id",
             "AZURE_CERTIFICATE_PATH": "/path/to/cert.pem",
