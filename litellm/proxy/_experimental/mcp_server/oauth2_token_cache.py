@@ -287,6 +287,14 @@ async def resolve_mcp_auth(
         if server.client_id and server.client_secret and server.token_url:
             token, _ = await mcp_oauth2_token_cache._fetch_token(server)
             return token
+        # OBO configured but no subject_token and missing client credentials — warn
+        # rather than silently proceeding unauthenticated.
+        verbose_logger.warning(
+            "MCP server '%s' is configured for token exchange (OBO) but no subject_token "
+            "was provided and client credentials (client_id/client_secret/token_url) are "
+            "incomplete. The request will proceed without authentication.",
+            server.server_id,
+        )
     if server.has_client_credentials:
         return await mcp_oauth2_token_cache.async_get_token(server)
     return server.authentication_token
