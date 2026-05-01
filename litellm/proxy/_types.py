@@ -17,6 +17,9 @@ from typing_extensions import Required, TypedDict
 
 from litellm._uuid import uuid
 from litellm.constants import MCP_STDIO_ALLOWED_COMMANDS
+from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+    validate_no_callback_env_reference,
+)
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -904,6 +907,7 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     agents: Optional[List[str]] = None
     agent_access_groups: Optional[List[str]] = None
     models: Optional[List[str]] = None
+    search_tools: Optional[List[str]] = None
 
 
 class BudgetLimitEntry(LiteLLMPydanticObjectBase):
@@ -1868,8 +1872,10 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 raise ValueError(
                     f"Invalid callback variable: {key}. Must be one of {valid_keys}"
                 )
-            if not isinstance(value, str):
-                callback_vars[key] = str(value)
+            callback_vars[key] = str(value)
+            validate_no_callback_env_reference(
+                key, callback_vars[key], source="key/team callback metadata"
+            )
         return values
 
 
@@ -1934,6 +1940,7 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     agent_access_groups: Optional[List[str]] = []
     mcp_toolsets: Optional[List[str]] = None
     blocked_tools: Optional[List[str]] = []
+    search_tools: Optional[List[str]] = []
 
 
 class LiteLLM_TeamTable(TeamBase):
@@ -2154,8 +2161,8 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
     )
     auth: bool = Field(
-        default=False,
-        description="Whether authentication is required for the pass-through endpoint. If True, requests to the endpoint will require a valid LiteLLM API key.",
+        default=True,
+        description="Whether authentication is required for the pass-through endpoint. Defaults to True so a pass-through silently created without an explicit value still requires a valid LiteLLM API key — set to False only if the endpoint is meant to be a public forwarder (e.g. an unauthenticated webhook target).",
     )
     guardrails: Optional[PassThroughGuardrailsConfig] = Field(
         default=None,

@@ -1393,6 +1393,10 @@ except (ValueError, TypeError):
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
+# Stable identifier substituted in place of the master key on UserAPIKeyAuth
+# objects so the master key (or its hash) never propagates to spend logs,
+# Prometheus metrics, audit trails, or any other downstream consumer.
+LITELLM_PROXY_MASTER_KEY_ALIAS = "litellm_proxy_master_key"
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
@@ -1421,6 +1425,7 @@ LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
+CLI_SSO_SESSION_TTL_SECONDS = 600
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
 # Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
 CLI_JWT_EXPIRATION_HOURS = int(

@@ -9,11 +9,14 @@ import { defaultPageSize } from "../constants";
 import { PaginatedResponse } from ".";
 import type { LogsSortField } from "./columns";
 
-const FILTER_KEYS = {
+/** Spend log `model` column (LLM public model name or `search_tool_name` for /search). */
+export const FILTER_KEYS = {
   TEAM_ID: "Team ID",
   KEY_HASH: "Key Hash",
   REQUEST_ID: "Request ID",
   MODEL: "Model",
+  /** Exact match on LiteLLM_SpendLogs.model — use for search tools and public model names. */
+  PUBLIC_MODEL_OR_SEARCH_TOOL: "Public model / search tool",
   USER_ID: "User ID",
   END_USER: "End User",
   STATUS: "Status",
@@ -58,6 +61,7 @@ export function useLogFilterLogic({
       [FILTER_KEYS.KEY_HASH]: "",
       [FILTER_KEYS.REQUEST_ID]: "",
       [FILTER_KEYS.MODEL]: "",
+      [FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "",
       [FILTER_KEYS.USER_ID]: "",
       [FILTER_KEYS.END_USER]: "",
       [FILTER_KEYS.STATUS]: "",
@@ -107,6 +111,7 @@ export function useLogFilterLogic({
             end_user: filters[FILTER_KEYS.END_USER] || undefined,
             status_filter: filters[FILTER_KEYS.STATUS] || undefined,
             model_id: filters[FILTER_KEYS.MODEL] || undefined,
+            model: filters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL] || undefined,
             key_alias: filters[FILTER_KEYS.KEY_ALIAS] || undefined,
             error_code: filters[FILTER_KEYS.ERROR_CODE] || undefined,
             error_message: filters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
@@ -155,7 +160,8 @@ export function useLogFilterLogic({
         filters[FILTER_KEYS.END_USER] ||
         filters[FILTER_KEYS.ERROR_CODE] ||
         filters[FILTER_KEYS.ERROR_MESSAGE] ||
-        filters[FILTER_KEYS.MODEL]
+        filters[FILTER_KEYS.MODEL] ||
+        filters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL]
       ),
     [filters],
   );
@@ -216,6 +222,11 @@ export function useLogFilterLogic({
 
     if (filters[FILTER_KEYS.MODEL]) {
       filteredData = filteredData.filter((log) => log.model_id === filters[FILTER_KEYS.MODEL]);
+    }
+
+    if (filters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL]) {
+      const m = filters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL];
+      filteredData = filteredData.filter((log) => log.model === m);
     }
 
     if (filters[FILTER_KEYS.KEY_HASH]) {
