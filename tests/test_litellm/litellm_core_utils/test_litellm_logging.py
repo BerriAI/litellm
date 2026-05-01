@@ -36,6 +36,49 @@ def test_get_masked_api_base(logging_obj):
     assert type(masked_api_base) == str
 
 
+@pytest.mark.parametrize(
+    "non_default_params",
+    [
+        {"cache_control_injection_points": [{"location": "message", "index": -1}]},
+        {"knowledge_bases": ["kb-1"]},
+        {"vector_store_ids": ["vs-1"]},
+    ],
+)
+def test_should_run_prompt_management_hooks_without_prompt_id_for_dynamic_params(
+    logging_obj, non_default_params
+):
+    assert (
+        logging_obj.should_run_prompt_management_hooks(
+            non_default_params=non_default_params,
+            prompt_id=None,
+            tools=None,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "non_default_params",
+    [
+        {"temperature": 0.5},
+        {"max_tokens": 100},
+        {"temperature": 0.7, "top_p": 0.9, "max_tokens": 256},
+        {},
+    ],
+)
+def test_should_run_prompt_management_hooks_false_for_non_dynamic_params(
+    logging_obj, non_default_params
+):
+    assert (
+        logging_obj.should_run_prompt_management_hooks(
+            non_default_params=non_default_params,
+            prompt_id=None,
+            tools=None,
+        )
+        is False
+    )
+
+
 def test_sentry_sample_rate():
     existing_sample_rate = os.getenv("SENTRY_API_SAMPLE_RATE")
     try:
