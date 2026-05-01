@@ -2101,7 +2101,7 @@ class LiteLLMCompletionResponsesConfig:
             and usage.prompt_tokens_details is not None
         ):
             prompt_details = usage.prompt_tokens_details
-            input_details_dict: Dict[str, int] = {}
+            input_details_dict: Dict[str, Any] = {}
 
             if (
                 hasattr(prompt_details, "cached_tokens")
@@ -2122,6 +2122,16 @@ class LiteLLMCompletionResponsesConfig:
                 and prompt_details.audio_tokens is not None
             ):
                 input_details_dict["audio_tokens"] = prompt_details.audio_tokens
+
+            # Forward Anthropic prompt-caching fields so callers see cache
+            # creation token counts on the Responses API usage payload.
+            for cache_field in (
+                "cache_creation_tokens",
+                "cache_creation_token_details",
+            ):
+                value = getattr(prompt_details, cache_field, None)
+                if value is not None:
+                    input_details_dict[cache_field] = value
 
             if input_details_dict:
                 response_usage.input_tokens_details = InputTokensDetails(

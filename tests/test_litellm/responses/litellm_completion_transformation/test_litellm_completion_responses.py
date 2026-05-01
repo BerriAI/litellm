@@ -1565,6 +1565,86 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details.cached_tokens == 3
         assert response_usage.input_tokens_details.text_tokens == 6
 
+    def test_transform_usage_with_cache_creation_tokens_anthropic(self):
+        """Test that Anthropic cache creation token fields are propagated onto input_tokens_details"""
+        usage = Usage(
+            prompt_tokens=20,
+            completion_tokens=10,
+            total_tokens=30,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=4,  # cache_read_input_tokens
+                cache_creation_tokens=12,  # cache_creation_input_tokens
+                text_tokens=4,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hi!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 4
+        assert (
+            getattr(
+                response_usage.input_tokens_details, "cache_creation_tokens", None
+            )
+            == 12
+        )
+
+    def test_transform_usage_without_cache_creation_tokens(self):
+        """Test that cache_creation_tokens is absent when not present on prompt_tokens_details"""
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0,
+                text_tokens=10,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hi!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert response_usage.input_tokens_details is not None
+        assert (
+            getattr(
+                response_usage.input_tokens_details, "cache_creation_tokens", None
+            )
+            is None
+        )
+
     def test_transform_usage_with_reasoning_tokens_gemini(self):
         """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""
         # Setup: Simulate Gemini usage with thoughtsTokenCount
