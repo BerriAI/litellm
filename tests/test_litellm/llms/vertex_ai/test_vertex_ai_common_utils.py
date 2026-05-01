@@ -15,7 +15,9 @@ from litellm.llms.vertex_ai.common_utils import (
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    pop_vertex_request_labels,
     set_schema_property_ordering,
+    vertex_request_labels_from_litellm_params,
 )
 
 
@@ -1444,3 +1446,65 @@ def test_add_object_type_does_not_add_type_when_anyof_present():
 
     # Verify type was not added (anyOf handles the type)
     assert "type" not in input_schema, "type should not be added when anyOf is present"
+
+
+def test_vertex_request_labels_from_litellm_params_extracts_requester_metadata():
+    assert vertex_request_labels_from_litellm_params(None) is None
+    assert vertex_request_labels_from_litellm_params({}) is None
+    assert vertex_request_labels_from_litellm_params({"metadata": None}) is None
+    lp = {"metadata": {"requester_metadata": {"team": "analytics", "count": 3}}}
+    assert vertex_request_labels_from_litellm_params(lp) == {"team": "analytics"}
+
+
+def test_vertex_request_labels_from_litellm_params_accepts_litellm_metadata():
+    lp = {
+        "litellm_metadata": {
+            "requester_metadata": {"team": "platform", "count": 3}
+        }
+    }
+    assert vertex_request_labels_from_litellm_params(lp) == {"team": "platform"}
+
+
+def test_vertex_request_labels_prefers_metadata_over_litellm_metadata():
+    lp = {
+        "metadata": {"requester_metadata": {"source": "metadata"}},
+        "litellm_metadata": {"requester_metadata": {"source": "litellm_metadata"}},
+    }
+    assert vertex_request_labels_from_litellm_params(lp) == {"source": "metadata"}
+
+
+def test_pop_vertex_request_labels_prefers_explicit_labels_then_metadata():
+    optional = {"labels": {"env": "prod"}}
+    litellm_params = {"metadata": {"requester_metadata": {"team": "x"}}}
+    assert pop_vertex_request_labels(optional, litellm_params) == {"env": "prod"}
+    assert "labels" not in optional
+
+    optional2: dict = {}
+    assert pop_vertex_request_labels(optional2, litellm_params) == {"team": "x"}
+
+    optional3 = {"labels": {"team": 123}}
+    assert pop_vertex_request_labels(optional3, litellm_params) == {"team": "x"}
+
+
+def test_pop_vertex_request_labels_uses_litellm_metadata_when_metadata_absent():
+    optional: dict = {}
+    litellm_params = {
+        "litellm_metadata": {"requester_metadata": {"team": "from_litellm_meta"}}
+    }
+    assert pop_vertex_request_labels(optional, litellm_params) == {
+        "team": "from_litellm_meta"
+    }
+
+
+def test_vertex_text_embedding_request_includes_labels_from_metadata():
+    import litellm
+
+    req = litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+        input="hi",
+        optional_params={},
+        model="text-embedding-004",
+        litellm_params={
+            "metadata": {"requester_metadata": {"project_id": "cost-center-1"}}
+        },
+    )
+    assert req.get("labels") == {"project_id": "cost-center-1"}

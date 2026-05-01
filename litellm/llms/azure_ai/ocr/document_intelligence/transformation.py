@@ -17,6 +17,7 @@ from urllib.parse import quote
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.constants import (
     AZURE_DOCUMENT_INTELLIGENCE_API_VERSION,
     AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI,
@@ -599,6 +600,16 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                         "Azure Document Intelligence returned 202 but no Operation-Location header found"
                     )
 
+                # Reject cross-origin polling URLs — the auth headers
+                # below would otherwise leak to whatever URL the upstream
+                # (or an attacker-controlled upstream) returns. VERIA-51.
+                try:
+                    assert_same_origin(operation_url, str(raw_response.request.url))
+                except SSRFError as ssrf_err:
+                    raise ValueError(
+                        f"Azure Document Intelligence: rejected polling URL ({ssrf_err})"
+                    )
+
                 # Get headers for polling (need auth)
                 poll_headers = {
                     "Ocp-Apim-Subscription-Key": raw_response.request.headers.get(
@@ -709,6 +720,14 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
                 if not operation_url:
                     raise ValueError(
                         "Azure Document Intelligence returned 202 but no Operation-Location header found"
+                    )
+
+                # Reject cross-origin polling URLs (see sync path). VERIA-51.
+                try:
+                    assert_same_origin(operation_url, str(raw_response.request.url))
+                except SSRFError as ssrf_err:
+                    raise ValueError(
+                        f"Azure Document Intelligence: rejected polling URL ({ssrf_err})"
                     )
 
                 # Get headers for polling (need auth)

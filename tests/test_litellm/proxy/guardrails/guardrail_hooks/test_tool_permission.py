@@ -220,6 +220,27 @@ class TestToolPermissionGuardrail:
         assert tool_calls[0].id == "call_123"
         assert tool_calls[0].function.name == "Read"
 
+    def test_extract_tool_calls_legacy_function_call_format(self):
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    message={
+                        "function_call": {
+                            "name": "Read",
+                            "arguments": '{"file_path": "/test/file.txt"}',
+                        },
+                    }
+                )
+            ]
+        )
+
+        tool_calls = self.guardrail._extract_tool_calls_from_response(response)
+        assert len(tool_calls) == 1
+        assert isinstance(tool_calls[0], ChatCompletionMessageToolCall)
+        assert tool_calls[0].id == "legacy_function_call_0"
+        assert tool_calls[0].function.name == "Read"
+        assert tool_calls[0].function.arguments == '{"file_path": "/test/file.txt"}'
+
     def test_extract_tool_calls_empty_response(self):
         response = ModelResponse(choices=[])
         tool_calls = self.guardrail._extract_tool_calls_from_response(response)
@@ -262,6 +283,31 @@ class TestToolPermissionGuardrail:
             "type": "function",
         }
         response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call]})])
+        user_api_key_dict = UserAPIKeyAuth()
+        data = {"guardrails": ["test-tool-permission"]}
+
+        with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await self.guardrail.async_post_call_success_hook(
+                    data=data, user_api_key_dict=user_api_key_dict, response=response
+                )
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_success_hook_with_denied_legacy_function_call_raises(
+        self,
+    ):
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    message={
+                        "function_call": {
+                            "name": "Read",
+                            "arguments": "{}",
+                        },
+                    }
+                )
+            ]
+        )
         user_api_key_dict = UserAPIKeyAuth()
         data = {"guardrails": ["test-tool-permission"]}
 
@@ -379,7 +425,9 @@ class TestToolPermissionGuardrail:
         assert "berri" in choice.message.content
 
     @pytest.mark.asyncio
-    async def test_async_post_call_success_hook_missing_arguments_default_allows(self):
+    async def test_async_post_call_success_hook_missing_arguments_blocks_param_rule(
+        self,
+    ):
         guardrail = ToolPermissionGuardrail(
             guardrail_name="mail-guardrail",
             rules=[
@@ -405,9 +453,52 @@ class TestToolPermissionGuardrail:
         data = {"guardrails": ["mail-guardrail"]}
 
         with patch.object(guardrail, "should_run_guardrail", return_value=True):
-            await guardrail.async_post_call_success_hook(
-                data=data, user_api_key_dict=user_api_key_dict, response=response
-            )
+            with pytest.raises(GuardrailRaisedException):
+                await guardrail.async_post_call_success_hook(
+                    data=data, user_api_key_dict=user_api_key_dict, response=response
+                )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "arguments",
+        [
+            "{not-json",
+            '["owner@berri.ai"]',
+        ],
+    )
+    async def test_async_post_call_success_hook_malformed_arguments_blocks_param_rule(
+        self, arguments
+    ):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="mail-guardrail",
+            rules=[
+                {
+                    "id": "deny_gmail",
+                    "tool_name": r"^mail_mcp-send_email$",
+                    "decision": "deny",
+                    "allowed_param_patterns": {"to[]": r"^.+@gmail\.com$"},
+                }
+            ],
+            default_action="allow",
+            on_disallowed_action="block",
+        )
+
+        tool_call = {
+            "function": {
+                "name": "mail_mcp-send_email",
+                "arguments": arguments,
+            },
+            "type": "function",
+        }
+        response = ModelResponse(choices=[Choices(message={"tool_calls": [tool_call]})])
+        user_api_key_dict = UserAPIKeyAuth()
+        data = {"guardrails": ["mail-guardrail"]}
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(GuardrailRaisedException):
+                await guardrail.async_post_call_success_hook(
+                    data=data, user_api_key_dict=user_api_key_dict, response=response
+                )
 
     @pytest.mark.asyncio
     async def test_async_pre_call_hook_block_mode(self):
@@ -416,6 +507,65 @@ class TestToolPermissionGuardrail:
                 {"type": "function", "function": {"name": "Bash"}},
                 {"type": "function", "function": {"name": "Read"}},
             ]
+        }
+        user_api_key_dict = UserAPIKeyAuth()
+        cache = DualCache(default_in_memory_ttl=1)
+
+        with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(HTTPException) as excinfo:
+                await self.guardrail.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=cache,
+                    data=data,
+                    call_type="completion",
+                )
+        assert excinfo.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_blocks_legacy_functions(self):
+        data = {
+            "functions": [
+                {"name": "Bash", "description": "allowed"},
+                {"name": "Read", "description": "denied"},
+            ]
+        }
+        user_api_key_dict = UserAPIKeyAuth()
+        cache = DualCache(default_in_memory_ttl=1)
+
+        with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(HTTPException) as excinfo:
+                await self.guardrail.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=cache,
+                    data=data,
+                    call_type="completion",
+                )
+        assert excinfo.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_blocks_named_legacy_function_call(self):
+        data = {
+            "functions": [{"name": "Bash"}],
+            "function_call": {"name": "Read"},
+        }
+        user_api_key_dict = UserAPIKeyAuth()
+        cache = DualCache(default_in_memory_ttl=1)
+
+        with patch.object(self.guardrail, "should_run_guardrail", return_value=True):
+            with pytest.raises(HTTPException) as excinfo:
+                await self.guardrail.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=cache,
+                    data=data,
+                    call_type="completion",
+                )
+        assert excinfo.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_blocks_named_tool_choice(self):
+        data = {
+            "tools": [{"type": "function", "function": {"name": "Bash"}}],
+            "tool_choice": {"type": "function", "function": {"name": "Read"}},
         }
         user_api_key_dict = UserAPIKeyAuth()
         cache = DualCache(default_in_memory_ttl=1)
@@ -491,6 +641,41 @@ class TestToolPermissionGuardrail:
         assert "Bash" in tool_names
         assert "Read" not in tool_names
 
+    @pytest.mark.asyncio
+    async def test_async_pre_call_hook_rewrite_mode_filters_legacy_functions(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="test-tool-permission",
+            rules=self.test_rules,
+            default_action="deny",
+            on_disallowed_action="rewrite",
+        )
+        data = {
+            "functions": [
+                {"name": "Bash", "description": "allowed"},
+                {"name": "Read", "description": "denied"},
+            ],
+            "function_call": {"name": "Read"},
+            "tools": [
+                {"type": "function", "function": {"name": "Bash"}},
+            ],
+            "tool_choice": {"type": "function", "function": {"name": "Read"}},
+        }
+        user_api_key_dict = UserAPIKeyAuth()
+        cache = DualCache(default_in_memory_ttl=1)
+
+        with patch.object(guardrail, "should_run_guardrail", return_value=True):
+            new_data = await guardrail.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=cache,
+                data=data,
+                call_type="completion",
+            )
+
+        assert isinstance(new_data, dict)
+        assert [function["name"] for function in new_data["functions"]] == ["Bash"]
+        assert new_data["function_call"] == "none"
+        assert new_data["tool_choice"] == "none"
+
     def test_modify_response_with_permission_errors(self):
         # Setup a response with one tool_call
         tool_call = ChatCompletionMessageToolCall(
@@ -519,6 +704,40 @@ class TestToolPermissionGuardrail:
         choice = response.choices[0]
         assert isinstance(choice, Choices)
         assert choice.message.tool_calls is None or choice.message.tool_calls == []
+        assert isinstance(choice.message.content, str)
+        assert "Permission denied" in choice.message.content
+
+    def test_modify_response_with_permission_errors_filters_legacy_function_call(self):
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    message={
+                        "function_call": {
+                            "name": "Read",
+                            "arguments": "{}",
+                        },
+                        "content": "",
+                    }
+                )
+            ]
+        )
+        tool_call = self.guardrail._extract_tool_calls_from_response(response)[0]
+        denied_tools = [
+            (
+                tool_call,
+                PermissionError(
+                    tool_name="Read",
+                    rule_id="deny_read",
+                    message="Tool 'Read' denied by rule 'deny_read'",
+                ),
+            )
+        ]
+
+        self.guardrail._modify_response_with_permission_errors(response, denied_tools)
+
+        choice = response.choices[0]
+        assert isinstance(choice, Choices)
+        assert choice.message.function_call is None
         assert isinstance(choice.message.content, str)
         assert "Permission denied" in choice.message.content
 

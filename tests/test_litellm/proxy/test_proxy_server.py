@@ -5505,15 +5505,208 @@ async def test_reseed_warms_cache_even_on_zero_db_spend():
         ps.prisma_client = orig_prisma
 
 
+# -----------------------------------------------------------------------------
+# /config/update — critical paths only.
+#
+# These exercise the four behaviors that broke or changed in the rewrite of
+# update_config (litellm/proxy/proxy_server.py): targeted per-section writes,
+# the removal of the store_model_in_db gate, env var encryption, and the
+# success_callback / litellm_settings merge semantics. All other branches
+# (auth, missing-DB, slack auto-enable, router_settings merge) are covered
+# implicitly or by upstream tests.
+# -----------------------------------------------------------------------------
+
+
+class _FakeRow:
+    def __init__(self, param_name, param_value):
+        self.param_name = param_name
+        self.param_value = param_value
+
+
+class _FakeLitellmConfig:
+    def __init__(self, initial_rows=None):
+        self.rows = dict(initial_rows or {})
+        self.upsert_calls: list = []
+        self.find_first = AsyncMock(side_effect=self._find_first)
+        self.upsert = AsyncMock(side_effect=self._upsert)
+
+    async def _find_first(self, where=None):
+        if where and "param_name" in where:
+            name = where["param_name"]
+            if name in self.rows:
+                return _FakeRow(name, self.rows[name])
+        return None
+
+    async def _upsert(self, where=None, data=None):
+        name = where["param_name"]
+        raw = data["update"]["param_value"]
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        self.rows[name] = value
+        self.upsert_calls.append((name, value))
+
+
+class _FakePrismaClient:
+    def __init__(self, initial_rows=None):
+        self.db = mock.MagicMock()
+        self.db.litellm_config = _FakeLitellmConfig(initial_rows=initial_rows)
+        self.jsonify_object = lambda obj: obj
+
+
+@pytest.fixture
+def _update_config_setup(monkeypatch):
+    """Install fakes for the /config/update endpoint and return (client, prisma)."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth as auth_dep
+
+    def _install(initial_rows=None, store_model_in_db=True):
+        prisma = _FakePrismaClient(initial_rows=initial_rows)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.store_model_in_db", store_model_in_db
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.encrypt_value_helper",
+            lambda value, **_: f"enc:{value}",
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.invalidate_config_param",
+            AsyncMock(return_value=None),
+        )
+        from litellm.proxy.proxy_server import proxy_config as real_proxy_config
+
+        monkeypatch.setattr(
+            real_proxy_config, "add_deployment", AsyncMock(return_value=None)
+        )
+
+        original_overrides = app.dependency_overrides.copy()
+        app.dependency_overrides[auth_dep] = lambda: UserAPIKeyAuth(
+            user_id="test_admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-1234",
+        )
+        client = TestClient(app)
+
+        def _restore():
+            app.dependency_overrides = original_overrides
+
+        return client, prisma, _restore
+
+    return _install
+
+
+def test_update_config_writes_only_sent_section(_update_config_setup):
+    """A request that only touches general_settings must not write any other
+    section row, and must leave previously-written rows byte-identical."""
+    client, prisma, restore = _update_config_setup(
+        initial_rows={
+            "litellm_settings": {"drop_params": True},
+            "environment_variables": {"FOO": "enc:bar"},
+        }
+    )
+    try:
+        resp = client.post(
+            "/config/update",
+            json={"general_settings": {"store_prompts_in_spend_logs": True}},
+        )
+        assert resp.status_code == 200
+        written = {name for name, _ in prisma.db.litellm_config.upsert_calls}
+        assert written == {"general_settings"}
+        assert prisma.db.litellm_config.rows["litellm_settings"] == {
+            "drop_params": True
+        }
+        assert prisma.db.litellm_config.rows["environment_variables"] == {
+            "FOO": "enc:bar"
+        }
+    finally:
+        restore()
+
+
+def test_update_config_can_flip_store_model_in_db_when_currently_false(
+    _update_config_setup,
+):
+    """The endpoint used to refuse all writes when store_model_in_db was
+    False, blocking the very request that would flip it to True."""
+    client, prisma, restore = _update_config_setup(store_model_in_db=False)
+    try:
+        resp = client.post(
+            "/config/update", json={"general_settings": {"store_model_in_db": True}}
+        )
+        assert resp.status_code == 200
+        assert (
+            prisma.db.litellm_config.rows["general_settings"]["store_model_in_db"]
+            is True
+        )
+    finally:
+        restore()
+
+
+def test_update_config_environment_variables_encrypted_before_write(
+    _update_config_setup,
+):
+    """env var values must be encrypted before they hit the DB row."""
+    client, prisma, restore = _update_config_setup()
+    try:
+        resp = client.post(
+            "/config/update",
+            json={"environment_variables": {"OPENAI_API_KEY": "sk-secret"}},
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["environment_variables"]
+        assert stored == {"OPENAI_API_KEY": "enc:sk-secret"}
+    finally:
+        restore()
+
+
+def test_update_config_litellm_settings_request_wins_for_non_callback_keys(
+    _update_config_setup,
+):
+    """Sending {"drop_params": False} when the row holds drop_params: True
+    must persist False (request wins). Untouched keys preserved."""
+    client, prisma, restore = _update_config_setup(
+        initial_rows={
+            "litellm_settings": {"drop_params": True, "set_verbose": True},
+        }
+    )
+    try:
+        resp = client.post(
+            "/config/update", json={"litellm_settings": {"drop_params": False}}
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["litellm_settings"]
+        assert stored["drop_params"] is False
+        assert stored["set_verbose"] is True
+    finally:
+        restore()
+
+
+def test_update_config_success_callback_normalizes_existing_mixed_case(
+    _update_config_setup,
+):
+    """Existing mixed-case callback names (written elsewhere) must be
+    normalized to lowercase before union, otherwise the union dedup misses
+    against the lowercase incoming entry and delete_callback (lowercase
+    lookup) cannot find the original."""
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"litellm_settings": {"success_callback": ["Langfuse", "SQS"]}}
+    )
+    try:
+        resp = client.post(
+            "/config/update",
+            json={"litellm_settings": {"success_callback": ["langfuse"]}},
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["litellm_settings"]["success_callback"]
+        assert set(stored) == {"langfuse", "sqs"}
+    finally:
+        restore()
+
+
 # ---------------------------------------------------------------------------
 # Lazy feature loading (LazyFeatureMiddleware) — verifies that optional
 # routers are NOT imported at module load and ARE imported on first request
 # to a matching path prefix. The same module isn't re-imported on subsequent
 # requests.
 # ---------------------------------------------------------------------------
-
-
-import sys
 
 
 class TestLazyFeatureRegistry:
@@ -5750,3 +5943,90 @@ class TestLazyFeatureMiddleware:
         assert attempts == [
             "called"
         ], f"failing register_fn should be invoked once, not on every request; got {attempts}"
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_redis_clean_miss_skips_stale_in_memory():
+    """When Redis is reachable and cleanly returns None (TTL expired,
+    counter genuinely absent), the read must reseed from DB - NOT fall
+    through to per-pod in-memory which only contains this pod's writes.
+
+    Pre-fix in multi-pod deployments, in-memory contained a stale local
+    subset (e.g. $30) while DB had the true cross-pod total ($500). The
+    fall-through returned $30, enforcement passed, bypass.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-1"
+
+    # Per-pod stale in-memory: only this pod's writes, not cross-pod truth.
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=30.0)
+
+    # Redis cleanly returns None (key expired or never written on this pod).
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_increment = AsyncMock(return_value=500.0)
+    counter_cache.redis_cache = fake_redis
+
+    # DB has the authoritative cross-pod spend.
+    db_row = MagicMock()
+    db_row.spend = 500.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=db_row)
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        spend = await get_current_spend(counter_key=counter_key, fallback_spend=0.0)
+        assert spend == 500.0, (
+            f"expected DB-authoritative 500.0 on clean Redis miss, got {spend} "
+            f"(stale per-pod in-memory $30 would have caused multi-pod bypass)"
+        )
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_redis_error_falls_back_to_in_memory():
+    """When Redis raises, the read should still degrade to in-memory rather
+    than going straight to DB - in-memory is at least same-pod-fresh and
+    cheaper than a DB query during a Redis outage."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-1"
+
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=42.0)
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    counter_cache.redis_cache = fake_redis
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(
+        return_value=MagicMock(spend=999.0)
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        spend = await get_current_spend(counter_key=counter_key, fallback_spend=0.0)
+        assert spend == 42.0, (
+            f"expected in-memory fallback 42.0 on Redis error, got {spend} "
+            f"(should not have hit DB when Redis errored)"
+        )
+        # DB query should NOT have fired - in-memory short-circuits.
+        fake_prisma.db.litellm_teammembership.find_unique.assert_not_awaited()
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
