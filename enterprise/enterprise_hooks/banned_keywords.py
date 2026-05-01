@@ -10,6 +10,7 @@
 from typing import Literal
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.safe_messages import iter_message_texts
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
@@ -74,9 +75,8 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
             """
             self.print_verbose("Inside Banned Keyword List Pre-Call Hook")
             if call_type == "completion" and "messages" in data:
-                for m in data["messages"]:
-                    if "content" in m and isinstance(m["content"], str):
-                        self.test_violation(test_str=m["content"])
+                for _, _, text in iter_message_texts(data["messages"]):
+                    self.test_violation(test_str=text)
 
         except HTTPException as e:
             raise e

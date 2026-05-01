@@ -15,6 +15,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.safe_messages import iter_message_texts
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -465,11 +466,9 @@ class IBMGuardrailDetector(CustomGuardrail):
 
         _messages = data.get("messages")
         if _messages:
-            contents_to_check: List[str] = []
-            for message in _messages:
-                _content = message.get("content")
-                if isinstance(_content, str):
-                    contents_to_check.append(_content)
+            contents_to_check: List[str] = [
+                text for _, _, text in iter_message_texts(_messages)
+            ]
 
             if contents_to_check:
                 if self.is_detector_server:
@@ -552,11 +551,9 @@ class IBMGuardrailDetector(CustomGuardrail):
 
         _messages = data.get("messages")
         if _messages:
-            contents_to_check: List[str] = []
-            for message in _messages:
-                _content = message.get("content")
-                if isinstance(_content, str):
-                    contents_to_check.append(_content)
+            contents_to_check: List[str] = [
+                text for _, _, text in iter_message_texts(_messages)
+            ]
 
             if contents_to_check:
                 if self.is_detector_server:

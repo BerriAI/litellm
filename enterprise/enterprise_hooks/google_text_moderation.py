@@ -11,6 +11,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.safe_messages import collect_message_text
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import CallTypesLiteral
 
@@ -95,10 +96,7 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
         - Rejects request if it fails safety check
         """
         if "messages" in data and isinstance(data["messages"], list):
-            text = ""
-            for m in data["messages"]:  # assume messages is a list
-                if "content" in m and isinstance(m["content"], str):
-                    text += m["content"]
+            text = collect_message_text(data["messages"])
             document = self.language_document(content=text, type_=self.document_type)
 
             request = self.moderate_text_request(

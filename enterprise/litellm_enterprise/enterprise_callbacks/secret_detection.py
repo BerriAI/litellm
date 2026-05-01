@@ -17,6 +17,10 @@ from typing import Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.safe_messages import (
+    iter_request_texts,
+    set_request_text,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 
 GUARDRAIL_NAME = "hide_secrets"
@@ -473,75 +477,20 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         if await self.should_run_check(user_api_key_dict) is False:
             return
 
-        if "messages" in data and isinstance(data["messages"], list):
-            for message in data["messages"]:
-                if "content" in message and isinstance(message["content"], str):
-                    detected_secrets = self.scan_message_for_secrets(message["content"])
-
-                    for secret in detected_secrets:
-                        message["content"] = message["content"].replace(
-                            secret["value"], "[REDACTED]"
-                        )
-
-                    if len(detected_secrets) > 0:
-                        secret_types = [secret["type"] for secret in detected_secrets]
-                        verbose_proxy_logger.warning(
-                            f"Detected and redacted secrets in message: {secret_types}"
-                        )
-                    else:
-                        verbose_proxy_logger.debug("No secrets detected on input.")
-
-        if "prompt" in data:
-            if isinstance(data["prompt"], str):
-                detected_secrets = self.scan_message_for_secrets(data["prompt"])
-                for secret in detected_secrets:
-                    data["prompt"] = data["prompt"].replace(
-                        secret["value"], "[REDACTED]"
-                    )
-                if len(detected_secrets) > 0:
-                    secret_types = [secret["type"] for secret in detected_secrets]
-                    verbose_proxy_logger.warning(
-                        f"Detected and redacted secrets in prompt: {secret_types}"
-                    )
-            elif isinstance(data["prompt"], list):
-                for item in data["prompt"]:
-                    if isinstance(item, str):
-                        detected_secrets = self.scan_message_for_secrets(item)
-                        for secret in detected_secrets:
-                            item = item.replace(secret["value"], "[REDACTED]")
-                        if len(detected_secrets) > 0:
-                            secret_types = [
-                                secret["type"] for secret in detected_secrets
-                            ]
-                            verbose_proxy_logger.warning(
-                                f"Detected and redacted secrets in prompt: {secret_types}"
-                            )
-
-        if "input" in data:
-            if isinstance(data["input"], str):
-                detected_secrets = self.scan_message_for_secrets(data["input"])
-                for secret in detected_secrets:
-                    data["input"] = data["input"].replace(secret["value"], "[REDACTED]")
-                if len(detected_secrets) > 0:
-                    secret_types = [secret["type"] for secret in detected_secrets]
-                    verbose_proxy_logger.warning(
-                        f"Detected and redacted secrets in input: {secret_types}"
-                    )
-            elif isinstance(data["input"], list):
-                _input_in_request = data["input"]
-                for idx, item in enumerate(_input_in_request):
-                    if isinstance(item, str):
-                        detected_secrets = self.scan_message_for_secrets(item)
-                        for secret in detected_secrets:
-                            _input_in_request[idx] = item.replace(
-                                secret["value"], "[REDACTED]"
-                            )
-                        if len(detected_secrets) > 0:
-                            secret_types = [
-                                secret["type"] for secret in detected_secrets
-                            ]
-                            verbose_proxy_logger.warning(
-                                f"Detected and redacted secrets in input: {secret_types}"
-                            )
-                verbose_proxy_logger.debug("Data after redacting input %s", data)
+        any_detected = False
+        for source, slot, text in iter_request_texts(data):
+            detected_secrets = self.scan_message_for_secrets(text)
+            if not detected_secrets:
+                continue
+            any_detected = True
+            redacted = text
+            for secret in detected_secrets:
+                redacted = redacted.replace(secret["value"], "[REDACTED]")
+            set_request_text(data, source, slot, redacted)
+            secret_types = [secret["type"] for secret in detected_secrets]
+            verbose_proxy_logger.warning(
+                f"Detected and redacted secrets in {source}: {secret_types}"
+            )
+        if not any_detected:
+            verbose_proxy_logger.debug("No secrets detected on input.")
         return

@@ -8,6 +8,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.safe_messages import collect_message_text
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -69,6 +70,31 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.on_flagged = on_flagged or "block"
         super().__init__(**kwargs)
 
+    @staticmethod
+    def _flatten_messages_for_lakera(
+        messages: List[AllMessageValues],
+    ) -> List[AllMessageValues]:
+        """
+        Return a copy of `messages` with multimodal list-shaped content
+        flattened to a single string per message.
+
+        Lakera's v2 API expects string content; if we forward multimodal
+        list content unchanged, Lakera does not scan the text fragments
+        and the request bypasses detection. By concatenating text parts
+        into a string before sending, we ensure detection runs over all
+        text the user provided. Non-text parts (image_url, etc.) are
+        dropped from the copy sent to Lakera but preserved in the
+        original `messages` list passed elsewhere.
+        """
+        flattened: List[AllMessageValues] = []
+        for msg in messages:
+            if isinstance(msg, dict) and isinstance(msg.get("content"), list):
+                new_msg = {**msg, "content": collect_message_text([msg])}
+                flattened.append(new_msg)  # type: ignore[arg-type]
+            else:
+                flattened.append(msg)
+        return flattened
+
     async def call_v2_guard(
         self,
         messages: List[AllMessageValues],
@@ -87,7 +113,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         try:
             request = dict(
                 LakeraAIRequest(
-                    messages=messages,
+                    messages=self._flatten_messages_for_lakera(messages),
                     project_id=self.project_id,
                     payload=self.payload,
                     breakdown=self.breakdown,
@@ -144,6 +170,12 @@ class LakeraAIGuardrail(CustomGuardrail):
         """
         Return a copy of messages with any detected PII replaced by
         “[MASKED <TYPE>]” tokens.
+
+        For multimodal list-shaped content, masking is applied against the
+        same flattened text we sent to Lakera (see `_flatten_messages_for_lakera`),
+        so Lakera's reported offsets line up. The masked result is written
+        back into the first text part of the list; any remaining text parts
+        are cleared. Non-text parts (image_url, etc.) are preserved.
         """
         payload = lakera_response.get("payload") if lakera_response else None
         if not payload:
@@ -156,8 +188,15 @@ class LakeraAIGuardrail(CustomGuardrail):
             if not content:
                 continue
 
-            # For v1, we only support masking content strings
-            if not isinstance(content, str):
+            is_list_content = isinstance(content, list)
+            if is_list_content:
+                # Flatten to the same string Lakera saw, so offsets line up.
+                content_str = collect_message_text([msg])
+                if not content_str:
+                    continue
+            elif isinstance(content, str):
+                content_str = content
+            else:
                 continue
 
             # Filter only detections for this message
@@ -183,15 +222,33 @@ class LakeraAIGuardrail(CustomGuardrail):
                 typ = detector_type.split("/")[-1].upper() or "PII"
                 mask = f"[MASKED {typ}]"
                 if start is not None and end is not None:
-                    content = self.mask_content_in_string(
-                        content_string=content,
+                    content_str = self.mask_content_in_string(
+                        content_string=content_str,
                         mask_string=mask,
                         start_index=start,
                         end_index=end,
                     )
                     masked_entity_count[typ] = masked_entity_count.get(typ, 0) + 1
 
-            msg["content"] = content
+            if is_list_content:
+                # Write masked text into the first text part; clear the rest.
+                # Non-text parts (image_url, etc.) are preserved in place.
+                first_text_idx: Optional[int] = None
+                for part_idx, part in enumerate(content):
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        if first_text_idx is None:
+                            first_text_idx = part_idx
+                            part["text"] = content_str
+                        else:
+                            part["text"] = ""
+                    elif isinstance(part, str):
+                        if first_text_idx is None:
+                            first_text_idx = part_idx
+                            content[part_idx] = content_str
+                        else:
+                            content[part_idx] = ""
+            else:
+                msg["content"] = content_str
         return messages
 
     async def async_pre_call_hook(
