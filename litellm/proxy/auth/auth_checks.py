@@ -60,6 +60,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _safe_get_request_headers,
+    _safe_get_request_query_params,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
@@ -486,7 +490,10 @@ async def common_checks(  # noqa: PLR0915
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     _model: Optional[Union[str, List[str]]] = get_model_from_request(
-        request_body, route
+        request_data=request_body,
+        route=route,
+        request_headers=_safe_get_request_headers(request=request),
+        request_query_params=_safe_get_request_query_params(request=request),
     )
 
     # 1. If team is blocked
@@ -656,13 +663,7 @@ async def common_checks(  # noqa: PLR0915
             end_user_object is not None
             and end_user_object.litellm_budget_table is not None
         ):
-            end_user_budget = end_user_object.litellm_budget_table.max_budget
-            if end_user_budget is not None and end_user_object.spend > end_user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=end_user_object.spend,
-                    max_budget=end_user_budget,
-                    message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
-                )
+            await _check_end_user_budget(end_user_obj=end_user_object, route=route)
 
     _enforce_user_param_check(general_settings, request, request_body, route)
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
@@ -1012,7 +1013,7 @@ async def _apply_default_budget_to_end_user(
     return end_user_obj
 
 
-def _check_end_user_budget(
+async def _check_end_user_budget(
     end_user_obj: LiteLLM_EndUserTable,
     route: str,
 ) -> None:
@@ -1033,11 +1034,20 @@ def _check_end_user_budget(
         return
 
     end_user_budget = end_user_obj.litellm_budget_table.max_budget
-    if end_user_budget is not None and end_user_obj.spend > end_user_budget:
+    if end_user_budget is None:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    end_user_spend = await get_current_spend(
+        counter_key=f"spend:end_user:{end_user_obj.user_id}",
+        fallback_spend=end_user_obj.spend or 0.0,
+    )
+    if end_user_spend > end_user_budget:
         raise litellm.BudgetExceededError(
-            current_cost=end_user_obj.spend,
+            current_cost=end_user_spend,
             max_budget=end_user_budget,
-            message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_obj.spend}, Budget={end_user_budget}",
+            message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_spend}, Budget={end_user_budget}",
         )
 
 
@@ -1091,7 +1101,7 @@ async def get_end_user_object(
         )
 
         # Check budget limits
-        _check_end_user_budget(end_user_obj=return_obj, route=route)
+        await _check_end_user_budget(end_user_obj=return_obj, route=route)
 
         return return_obj
 
@@ -1124,7 +1134,7 @@ async def get_end_user_object(
         )
 
         # Check budget limits
-        _check_end_user_budget(end_user_obj=_response, route=route)
+        await _check_end_user_budget(end_user_obj=_response, route=route)
 
         return _response
 
@@ -1616,9 +1626,12 @@ async def _cache_key_object(
     ## CACHE REFRESH TIME
     user_api_key_obj.last_refreshed_at = time.time()
 
+    cached_key_obj = _copy_user_api_key_auth_for_cache(
+        user_api_key_obj=user_api_key_obj
+    )
     await _cache_management_object(
         key=key,
-        value=user_api_key_obj,
+        value=cached_key_obj,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         model_type=UserAPIKeyAuth,
@@ -2348,7 +2361,7 @@ async def get_key_object(
         model_type=UserAPIKeyAuth,
     )
     if user_api_key_auth is not None:
-        return user_api_key_auth
+        return _copy_user_api_key_auth_for_cache(user_api_key_obj=user_api_key_auth)
 
     if check_cache_only:
         raise Exception(
@@ -2399,6 +2412,16 @@ async def get_key_object(
     )
 
     return _response
+
+
+def _copy_user_api_key_auth_for_cache(
+    user_api_key_obj: UserAPIKeyAuth,
+) -> UserAPIKeyAuth:
+    copied_key_obj = user_api_key_obj.model_copy()
+    copied_key_obj.budget_reservation = None
+    copied_key_obj.parent_otel_span = None
+    copied_key_obj.request_route = None
+    return copied_key_obj
 
 
 @log_db_metrics
@@ -3967,13 +3990,19 @@ async def _tag_max_budget_check(
         if (
             tag_object.litellm_budget_table is not None
             and tag_object.litellm_budget_table.max_budget is not None
-            and tag_object.spend is not None
-            and tag_object.spend > tag_object.litellm_budget_table.max_budget
         ):
+            from litellm.proxy.proxy_server import get_current_spend
+
+            tag_spend = await get_current_spend(
+                counter_key=f"spend:tag:{tag_name}",
+                fallback_spend=tag_object.spend or 0.0,
+            )
+            if tag_spend <= tag_object.litellm_budget_table.max_budget:
+                continue
             raise litellm.BudgetExceededError(
-                current_cost=tag_object.spend,
+                current_cost=tag_spend,
                 max_budget=tag_object.litellm_budget_table.max_budget,
-                message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_object.spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
+                message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
             )
 
 
