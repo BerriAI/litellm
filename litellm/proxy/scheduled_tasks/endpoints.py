@@ -341,6 +341,7 @@ async def update_scheduled_task(
             raise HTTPException(
                 status_code=400, detail="expires_at must be in the future"
             )
+        fields["expires_at"] = new_expires
 
     try:
         row = await store.update_task_for_owner(
