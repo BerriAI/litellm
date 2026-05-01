@@ -744,6 +744,11 @@ class ProxyBaseLLMRequestProcessing:
             "aingest",
             "aretrieve_container",
             "adelete_container",
+            "aupload_container_file",
+            "alist_container_files",
+            "aretrieve_container_file",
+            "adelete_container_file",
+            "aretrieve_container_file_content",
             "acreate_skill",
             "alist_skills",
             "aget_skill",
@@ -1001,6 +1006,11 @@ class ProxyBaseLLMRequestProcessing:
             "aingest",
             "aretrieve_container",
             "adelete_container",
+            "aupload_container_file",
+            "alist_container_files",
+            "aretrieve_container_file",
+            "adelete_container_file",
+            "aretrieve_container_file_content",
             "acreate_skill",
             "alist_skills",
             "aget_skill",
@@ -1593,6 +1603,12 @@ class ProxyBaseLLMRequestProcessing:
                         # streaming iterator pipeline.  Running them again
                         # here would duplicate the guardrail API call
                         # (e.g. double OpenAI Moderation charges).
+                        continue
+                    if "async_post_call_streaming_iterator_hook" in type(cb).__dict__:
+                        # Skip — the guardrail already scanned the assembled
+                        # response via its own streaming iterator hook in the
+                        # streaming pipeline. re running this function async_post_call_success_hook
+                        # here would duplicate the scan and can spuriously block the guardrail that already passed / failed.
                         continue
                     else:
                         guardrail_result = await cb.async_post_call_success_hook(

@@ -101,6 +101,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
     create_missing_views,
     should_create_missing_views,
@@ -340,7 +341,7 @@ class ProxyLogging:
 
     def __init__(
         self,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         premium_user: bool = False,
     ):
         ## INITIALIZE  LITELLM CALLBACKS ##
@@ -5718,7 +5719,7 @@ async def get_available_models_for_user(
     include_model_access_groups: bool = False,
     only_model_access_groups: bool = False,
     return_wildcard_routes: bool = False,
-    user_api_key_cache: Optional["DualCache"] = None,
+    user_api_key_cache: Optional["UserApiKeyCache"] = None,
 ) -> List[str]:
     """
     Get the list of models available to a user based on their API key and team permissions.

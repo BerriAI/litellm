@@ -401,7 +401,7 @@ class BaseLLMChatTest(ABC):
             {
                 "type": "file",
                 "file": {
-                    "file_id": "https://upload.wikimedia.org/wikipedia/commons/2/20/Re_example.pdf"
+                    "file_id": "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/tests/llm_translation/fixtures/dummy.pdf"
                 },
             },
         ]
