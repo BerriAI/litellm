@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Optional
 
@@ -8,6 +9,15 @@ from vcr.serialize import deserialize, serialize
 
 CASSETTE_TTL_SECONDS = 24 * 60 * 60
 REDIS_KEY_PREFIX = "litellm:vcr:cassette:"
+
+# Tagged so it's grep-able in CircleCI logs, e.g. ``grep '\[VCR\]' build.log``.
+_log = logging.getLogger("litellm.vcr.persister")
+if not _log.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("[VCR] %(message)s"))
+    _log.addHandler(_h)
+    _log.setLevel(logging.INFO)
+    _log.propagate = False
 
 
 def redis_key_for(cassette_path: str) -> str:
@@ -60,20 +70,82 @@ def make_redis_persister(
     class _RedisPersister:
         @staticmethod
         def load_cassette(cassette_path, serializer):
-            data = redis_client.get(redis_key_for(cassette_path))
+            key = redis_key_for(cassette_path)
+            data = redis_client.get(key)
             if data is None:
+                _log.info(f"miss key={key}")
                 raise CassetteNotFoundError()
             if isinstance(data, bytes):
                 data = data.decode("utf-8")
+            _log.info(f"hit  key={key} bytes={len(data)}")
             return deserialize(data, serializer)
 
         @staticmethod
         def save_cassette(cassette_path, cassette_dict, serializer):
+            key = redis_key_for(cassette_path)
             data = serialize(cassette_dict, serializer)
             payload = data.encode("utf-8") if isinstance(data, str) else data
-            redis_client.set(redis_key_for(cassette_path), payload, ex=ttl_seconds)
+            req_count = len(cassette_dict.get("requests", []) or [])
+            try:
+                redis_client.set(key, payload, ex=ttl_seconds)
+                _log.info(
+                    f"persist key={key} bytes={len(payload)} episodes={req_count}"
+                )
+            except Exception as exc:
+                _log.info(
+                    f"persist-failed key={key} bytes={len(payload)} "
+                    f"episodes={req_count} err={type(exc).__name__}: {exc}"
+                )
+                raise
 
     return _RedisPersister
+
+
+def log_redis_target_banner() -> None:
+    """Print the resolved Redis target + a few server attributes once per worker.
+
+    Goal: make it possible to confirm from CircleCI logs (a) that the worker is
+    pointed at the expected Redis instance, and (b) what its eviction policy and
+    current memory pressure look like before the test session starts."""
+    url = _redis_url_from_env()
+    if not url:
+        _log.info("VCR disabled (no REDIS_URL/REDIS_SSL_URL/REDIS_HOST in env)")
+        return
+
+    safe_url = url
+    if "@" in safe_url:
+        # rediss://user:pass@host:port -> rediss://user:***@host:port
+        head, tail = safe_url.split("@", 1)
+        if ":" in head:
+            scheme_user, _ = head.rsplit(":", 1)
+            safe_url = f"{scheme_user}:***@{tail}"
+
+    _log.info(f"target={safe_url}")
+    try:
+        import redis
+
+        client = redis.Redis.from_url(
+            url, socket_timeout=5, socket_connect_timeout=5, decode_responses=True
+        )
+        info = client.info("memory")
+        for attr in (
+            "maxmemory_human",
+            "maxmemory_policy",
+            "used_memory_human",
+            "used_memory_peak_human",
+        ):
+            if attr in info:
+                _log.info(f"server {attr}={info[attr]}")
+        try:
+            evicted = client.info("stats").get("evicted_keys")
+            if evicted is not None:
+                _log.info(f"server evicted_keys={evicted}")
+        except Exception:
+            pass
+        prefix_count = sum(1 for _ in client.scan_iter(match=f"{REDIS_KEY_PREFIX}*", count=500))
+        _log.info(f"existing vcr keys under {REDIS_KEY_PREFIX!r}: {prefix_count}")
+    except Exception as exc:
+        _log.info(f"banner failed: {type(exc).__name__}: {exc}")
 
 
 def filter_non_2xx_response(response):
