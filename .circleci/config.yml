@@ -233,8 +233,7 @@ commands:
             echo "export CASSETTE_PROXY_DOCKER_ARGS='$ARGS'" >> "$BASH_ENV"
   enable_cassette_proxy_for_pytest:
     description: |
-      Route the *current shell's* HTTP egress through the cassette-proxy
-      sidecar. Use this in jobs where pytest runs in-process (the
+      Prepare the cassette-proxy environment for in-process pytest jobs (the
       ``llm_translation_testing``, ``agent_testing``, ``logging_testing``,
       ``audio_testing``, etc. family) so live ``litellm.completion(...)``
       calls flow through the recording proxy.
@@ -242,23 +241,37 @@ commands:
       Must be called *after* ``start_cassette_proxy`` (which populates
       $CASSETTE_PROXY_HOST_URL and $CASSETTE_PROXY_CA in $BASH_ENV).
 
-      Sets HTTP_PROXY / HTTPS_PROXY for every subsequent ``- run`` step in
-      the job. Also flips ``AIOHTTP_TRUST_ENV=true`` so litellm's aiohttp
-      transport actually honors the proxy variables (it ignores them by
-      default — see ``litellm/llms/custom_httpx/http_handler.py``).
+      Does three things:
 
-      Patches certifi's bundled cacert in every venv on the runner so
-      libraries that read certifi directly (openai-python, httpx,
-      google-auth, langfuse, etc.) trust the proxy CA without any code
-      changes.
+      1. Patches certifi's bundled cacert in every venv on the runner so
+         libraries that read certifi directly (openai-python, httpx,
+         google-auth, langfuse, etc.) trust the proxy CA without any code
+         changes.
+      2. Appends the proxy CA to the system trust store (curl/git/wget).
+      3. Writes the proxy/CA env vars to ``/tmp/cassette-proxy-pytest.env``
+         and installs a ``cassette-pytest`` wrapper at
+         ``/usr/local/bin/cassette-pytest`` that sources that env and execs
+         its arguments. Pytest invocations should use this wrapper.
+
+      We deliberately do NOT export HTTP_PROXY / HTTPS_PROXY / SSL_CERT_FILE
+      etc. globally via $BASH_ENV. Doing so would route the CircleCI agent's
+      own outbound calls (``circleci tests run`` plugin auto-installer,
+      ``store_test_results`` upload, etc.) through mitmproxy, and the
+      CircleCI Go binary uses Go's built-in cert pool which ignores
+      SSL_CERT_FILE, producing
+      ``tls: failed to verify certificate: x509: certificate signed by
+      unknown authority``. Scoping the env to just the ``cassette-pytest``
+      wrapper keeps mitmproxy traffic confined to test processes.
     steps:
       - run:
-          name: Trust cassette-proxy CA + route egress for in-process pytest
+          name: Trust cassette-proxy CA + install cassette-pytest wrapper
           command: |
             : "${CASSETTE_PROXY_CA:?run start_cassette_proxy first}"
             : "${CASSETTE_PROXY_HOST_URL:?run start_cassette_proxy first}"
             # Append CA to certifi cacert.pem in every venv we can find so
             # certifi-backed clients (openai-python, httpx) trust it.
+            # Note: certifi *appends* to its trust list; it does not
+            # *replace* it, so public CAs continue to work too.
             for cacert in $(find / -name cacert.pem 2>/dev/null); do
               if ! grep -q -F "$(head -n 2 "$CASSETTE_PROXY_CA")" "$cacert" 2>/dev/null; then
                 cat "$CASSETTE_PROXY_CA" >> "$cacert" || true
@@ -271,32 +284,55 @@ commands:
             sudo update-ca-certificates 2>/dev/null \
               || update-ca-certificates 2>/dev/null \
               || true
-            # Export env for every subsequent step. NO_PROXY keeps loopback
-            # and the postgres sidecar reachable directly.
-            # Redis hosts must be in NO_PROXY: redis is not HTTP, mitmproxy
-            # cannot proxy it. Same for any non-HTTP TCP services we depend
-            # on (Postgres, Datadog APM, Langfuse OTLP, etc.).
+            # Build NO_PROXY: loopback, container sidecars, and any non-HTTP
+            # TCP service we depend on (Postgres, Redis, Datadog APM, etc.)
+            # since mitmproxy only speaks HTTP/HTTPS.
             EXTRA_NO_PROXY=""
             if [ -n "${REDIS_HOST:-}" ]; then
               EXTRA_NO_PROXY=",${REDIS_HOST}"
             fi
             BASE_NO_PROXY="localhost,127.0.0.1,0.0.0.0,host.docker.internal,postgres-db,redis-cache,cassette-proxy${EXTRA_NO_PROXY}"
+
+            # Write the proxy env to a sourceable file. Pytest jobs source
+            # this via the cassette-pytest wrapper installed below; nothing
+            # else on the runner is affected. (Using printf instead of a
+            # heredoc to dodge YAML literal-block indentation surprises.)
             {
-              echo "export HTTP_PROXY=$CASSETTE_PROXY_HOST_URL"
-              echo "export HTTPS_PROXY=$CASSETTE_PROXY_HOST_URL"
-              echo "export http_proxy=$CASSETTE_PROXY_HOST_URL"
-              echo "export https_proxy=$CASSETTE_PROXY_HOST_URL"
-              echo "export NO_PROXY=$BASE_NO_PROXY"
-              echo "export no_proxy=$BASE_NO_PROXY"
-              echo "export SSL_CERT_FILE=$CASSETTE_PROXY_CA"
-              echo "export REQUESTS_CA_BUNDLE=$CASSETTE_PROXY_CA"
-              echo "export CURL_CA_BUNDLE=$CASSETTE_PROXY_CA"
-              echo "export AWS_CA_BUNDLE=$CASSETTE_PROXY_CA"
-              echo "export NODE_EXTRA_CA_CERTS=$CASSETTE_PROXY_CA"
+              printf 'export HTTP_PROXY=%s\n'           "$CASSETTE_PROXY_HOST_URL"
+              printf 'export HTTPS_PROXY=%s\n'          "$CASSETTE_PROXY_HOST_URL"
+              printf 'export http_proxy=%s\n'           "$CASSETTE_PROXY_HOST_URL"
+              printf 'export https_proxy=%s\n'          "$CASSETTE_PROXY_HOST_URL"
+              printf 'export NO_PROXY=%s\n'             "$BASE_NO_PROXY"
+              printf 'export no_proxy=%s\n'             "$BASE_NO_PROXY"
+              printf 'export SSL_CERT_FILE=%s\n'        "$CASSETTE_PROXY_CA"
+              printf 'export REQUESTS_CA_BUNDLE=%s\n'   "$CASSETTE_PROXY_CA"
+              printf 'export CURL_CA_BUNDLE=%s\n'       "$CASSETTE_PROXY_CA"
+              printf 'export AWS_CA_BUNDLE=%s\n'        "$CASSETTE_PROXY_CA"
+              printf 'export NODE_EXTRA_CA_CERTS=%s\n'  "$CASSETTE_PROXY_CA"
               # litellm's aiohttp transport ignores HTTPS_PROXY unless this
               # is explicitly set (see http_handler.py:951-952).
-              echo "export AIOHTTP_TRUST_ENV=true"
-            } >> "$BASH_ENV"
+              printf 'export AIOHTTP_TRUST_ENV=true\n'
+            } > /tmp/cassette-proxy-pytest.env
+
+            # Install the cassette-pytest wrapper. Build with printf so we
+            # don't have to fight YAML literal-block indentation (a #! line
+            # must start at column 0). The wrapper sources the env file and
+            # execs its arguments, scoping the proxy env to test
+            # subprocesses only.
+            {
+              printf '%s\n' '#!/usr/bin/env bash'
+              printf '%s\n' 'set -e'
+              printf '%s\n' 'if [ -f /tmp/cassette-proxy-pytest.env ]; then'
+              printf '%s\n' '  # shellcheck disable=SC1091'
+              printf '%s\n' '  . /tmp/cassette-proxy-pytest.env'
+              printf '%s\n' 'fi'
+              printf '%s\n' 'exec "$@"'
+            } > /tmp/cassette-pytest
+            chmod +x /tmp/cassette-pytest
+            sudo mv /tmp/cassette-pytest /usr/local/bin/cassette-pytest 2>/dev/null \
+              || mv /tmp/cassette-pytest /usr/local/bin/cassette-pytest
+            # Sanity-check the wrapper resolved on PATH.
+            command -v cassette-pytest
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -414,7 +450,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs cassette-pytest uv run --no-sync python -m pytest \
                 -vv \
                 --cov=litellm \
                 --cov-report=xml \
@@ -481,7 +517,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs cassette-pytest uv run --no-sync python -m pytest \
                 -vv \
                 --cov=litellm \
                 --cov-report=xml \
@@ -542,7 +578,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "langfuse"
+            cassette-pytest uv run --no-sync python -m pytest -v tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "langfuse"
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -729,7 +765,7 @@ jobs:
             for dir in "${IGNORE_DIRS[@]}"; do
               IGNORE_ARGS="$IGNORE_ARGS --ignore=$dir"
             done
-            uv run --no-sync python -m pytest -v tests/llm_translation $IGNORE_ARGS --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread --retries 2 --retry-delay 5 --max-worker-restart=5
+            cassette-pytest uv run --no-sync python -m pytest -v tests/llm_translation $IGNORE_ARGS --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread --retries 2 --retry-delay 5 --max-worker-restart=5
           no_output_timeout: 15m
 
       # Store test results
@@ -756,7 +792,7 @@ jobs:
           command: |
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
-            uv run --no-sync python -m pytest -vv tests/llm_translation/realtime --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/llm_translation/realtime --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -791,7 +827,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -826,7 +862,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2 --timeout=120 --timeout_method=thread
+            LITELLM_LOG=WARNING cassette-pytest uv run --no-sync python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -862,7 +898,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 --retries 3 --retry-delay 5
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 --retries 3 --retry-delay 5
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -906,7 +942,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/llm_responses_api_testing -x --junitxml=test-results/junit.xml --durations=5 -n 8
+            cassette-pytest uv run --no-sync python -m pytest -v tests/llm_responses_api_testing -x --junitxml=test-results/junit.xml --durations=5 -n 8
           no_output_timeout: 15m
 
       # Store test results
@@ -931,7 +967,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/ocr_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/ocr_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -966,7 +1002,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1003,7 +1039,7 @@ jobs:
           name: Run enterprise tests
           command: |
             uv run --no-sync python -m prisma generate
-            uv run --no-sync python -m pytest -v tests/enterprise -x --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
+            cassette-pytest uv run --no-sync python -m pytest -v tests/enterprise -x --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -1027,7 +1063,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1062,7 +1098,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1098,7 +1134,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1134,7 +1170,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/image_gen_tests -n 4 -x --junitxml=test-results/junit.xml --durations=5
+            cassette-pytest uv run --no-sync python -m pytest -v tests/image_gen_tests -n 4 -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -1159,7 +1195,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/logging_callback_tests -vv --cov=litellm --cov-report=xml -n 4 --junitxml=test-results/junit.xml --durations=5 --timeout=120 --timeout_method=thread
+            LITELLM_LOG=WARNING cassette-pytest uv run --no-sync python -m pytest tests/logging_callback_tests -vv --cov=litellm --cov-report=xml -n 4 --junitxml=test-results/junit.xml --durations=5 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1194,7 +1230,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/audio_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/audio_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
