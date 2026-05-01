@@ -519,6 +519,26 @@ class AmazonAnthropicClaudeMessagesConfig(
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_messages_request)
         ensure_bedrock_anthropic_messages_tool_names(anthropic_messages_request)
 
+        # 5b. Filter empty text blocks from assistant messages.
+        # Bedrock rejects {"type":"text","text":""} with:
+        #   "The text field in the ContentBlock object is blank."
+        # These empty blocks come from Claude's streamed responses that emit
+        # a leading content_block_start with empty text.
+        # Ref: https://github.com/BerriAI/litellm/issues/26554
+        for msg in anthropic_messages_request.get("messages", []):
+            if msg.get("role") == "assistant" and isinstance(
+                msg.get("content"), list
+            ):
+                msg["content"] = [
+                    block
+                    for block in msg["content"]
+                    if not (
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and not block.get("text", "").strip()
+                    )
+                ]
+
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
