@@ -44,7 +44,15 @@ def safe_dumps(data: Any, max_depth: int = DEFAULT_MAX_RECURSE_DEPTH) -> str:
             seen.remove(id(obj))
             return result
         elif isinstance(obj, BaseModel):
-            dumped = obj.model_dump()
+            try:
+                dumped = obj.model_dump()
+            except Exception:
+                # Fall back to json mode serialization if standard dump fails
+                # (e.g. empty ChoiceLogprobs with MockValSer in pydantic v2)
+                try:
+                    dumped = obj.model_dump(mode="json")
+                except Exception:
+                    return str(obj)
             result = _serialize(dumped, seen, depth + 1)
             seen.remove(id(obj))
             return result
