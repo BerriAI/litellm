@@ -92,6 +92,61 @@ def test_token_counter_counts_text_completion_prompt_list():
     assert usage.prompt_tokens > 0
 
 
+def test_token_counter_counts_pre_tokenized_prompt_int_list():
+    """OpenAI's text-completion API accepts a single pre-tokenized prompt as
+    a list of ints. Each int is one token; pre-fix this shape was silently
+    counted as zero, leaving a TPM bypass."""
+    from litellm.batches.batch_utils import _get_batch_job_input_file_usage
+
+    usage = _get_batch_job_input_file_usage(
+        file_content_dictionary=[
+            {
+                "body": {
+                    "model": "gpt-3.5-turbo-instruct",
+                    "prompt": [1, 2, 3, 4, 5],
+                }
+            }
+        ]
+    )
+    assert usage.prompt_tokens == 5
+
+
+def test_token_counter_counts_pre_tokenized_prompt_list_of_int_lists():
+    """Multiple pre-tokenized prompts (`list[list[int]]`) — the most
+    important bypass shape. A 1000-token batch must report 1000 tokens,
+    not zero."""
+    from litellm.batches.batch_utils import _get_batch_job_input_file_usage
+
+    usage = _get_batch_job_input_file_usage(
+        file_content_dictionary=[
+            {
+                "body": {
+                    "model": "gpt-3.5-turbo-instruct",
+                    "prompt": [[1] * 250, [2] * 250, [3] * 500],
+                }
+            }
+        ]
+    )
+    assert usage.prompt_tokens == 1000
+
+
+def test_token_counter_counts_pre_tokenized_input_for_embeddings():
+    """Same shape applies to embeddings (`input`)."""
+    from litellm.batches.batch_utils import _get_batch_job_input_file_usage
+
+    usage = _get_batch_job_input_file_usage(
+        file_content_dictionary=[
+            {
+                "body": {
+                    "model": "text-embedding-3-small",
+                    "input": [[1, 2, 3], [4, 5, 6]],
+                }
+            }
+        ]
+    )
+    assert usage.prompt_tokens == 6
+
+
 # ---------------------------------------------------------------------------
 # Model extractor
 # ---------------------------------------------------------------------------

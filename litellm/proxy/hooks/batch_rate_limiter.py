@@ -310,6 +310,19 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 request_count=request_count,
             )
 
+        except HTTPException as e:
+            # Distinguish intentional 403s from `_enforce_batch_file_model_access`
+            # from genuine I/O failures so security-relevant rejections show up
+            # in the access log instead of getting buried in error noise.
+            if e.status_code == 403:
+                verbose_proxy_logger.warning(
+                    f"Batch rejected: caller not authorized for a model named in {file_id}: {e.detail}"
+                )
+            else:
+                verbose_proxy_logger.error(
+                    f"Batch input file rejected for {file_id}: status={e.status_code} detail={e.detail}"
+                )
+            raise
         except Exception as e:
             verbose_proxy_logger.error(
                 f"Error counting input file usage for {file_id}: {str(e)}"
