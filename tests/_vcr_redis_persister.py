@@ -85,3 +85,46 @@ def filter_non_2xx_response(response):
     if not isinstance(code, int):
         return response
     return response if 200 <= code < 300 else None
+
+
+_PATCHED_AIOHTTP_RECORD = False
+
+
+def patch_vcrpy_aiohttp_record_path() -> None:
+    """Make vcrpy's aiohttp record path leave the response body re-readable.
+
+    vcrpy.stubs.aiohttp_stubs.record_response calls ``await response.read()``
+    to capture the body for the cassette, which drains aiohttp's StreamReader.
+    Downstream consumers of the same ClientResponse (e.g.
+    ``litellm.llms.custom_httpx.aiohttp_transport.AiohttpResponseStream``,
+    which iterates ``response.content.iter_chunked``) then see an empty body
+    and surface as ``Expecting value: line 1 column 1 (char 0)`` JSON errors.
+
+    Re-feed the captured bytes back into the StreamReader via ``unread_data``
+    so the body remains available to whoever holds the ClientResponse next.
+    Idempotent; safe to call from multiple conftests.
+    """
+    global _PATCHED_AIOHTTP_RECORD
+    if _PATCHED_AIOHTTP_RECORD:
+        return
+    try:
+        import vcr.stubs.aiohttp_stubs as _aiohttp_stubs
+    except ImportError:  # pragma: no cover - aiohttp not installed in env
+        return
+
+    _orig_record_response = _aiohttp_stubs.record_response
+
+    async def _record_response_preserving_body(cassette, vcr_request, response):
+        await _orig_record_response(cassette, vcr_request, response)
+        body = getattr(response, "_body", None) or b""
+        if body:
+            try:
+                response.content.unread_data(body)
+            except Exception:
+                # If aiohttp removes unread_data in a future release we want
+                # the test to fail loudly via the original empty-body
+                # symptom rather than mask the regression here.
+                pass
+
+    _aiohttp_stubs.record_response = _record_response_preserving_body
+    _PATCHED_AIOHTTP_RECORD = True
