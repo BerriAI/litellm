@@ -5325,6 +5325,36 @@ async def test_window_spend_counter_redis_clean_miss_skips_stale_in_memory():
 
 
 @pytest.mark.asyncio
+async def test_window_spend_counter_skips_invalid_window_start():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import _init_and_increment_window_spend_counter
+
+    counter_cache = DualCache()
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    try:
+        await _init_and_increment_window_spend_counter(
+            counter_key="spend:key:key-invalid-window:window:not-a-duration",
+            entity_type="Key",
+            entity_id="key-invalid-window",
+            window_start=None,
+            increment=0.5,
+        )
+
+        assert (
+            counter_cache.in_memory_cache.get_cache(
+                key="spend:key:key-invalid-window:window:not-a-duration"
+            )
+            is None
+        )
+    finally:
+        ps.spend_counter_cache = orig_counter
+
+
+@pytest.mark.asyncio
 async def test_increment_spend_counters_finalizes_after_unreserved_increments():
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
