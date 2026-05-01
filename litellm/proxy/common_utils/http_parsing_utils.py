@@ -41,7 +41,7 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
         content_type = _request_headers.get("content-type", "")
 
         if "form" in content_type:
-            parsed_body = dict(await request.form())
+            parsed_body: Dict[str, Any] = dict(await request.form())
             for field in _JSON_OBJECT_FORM_FIELDS:
                 if field in parsed_body and isinstance(parsed_body[field], str):
                     parsed_body[field] = json.loads(parsed_body[field])
