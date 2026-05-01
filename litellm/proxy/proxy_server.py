@@ -2105,13 +2105,19 @@ async def _init_and_increment_window_spend_counter(
     window_start: Optional[datetime],
     increment: float,
 ):
-    if window_start is not None:
-        await _ensure_window_spend_counter_initialized(
-            counter_key=counter_key,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            window_start=window_start,
+    if window_start is None:
+        verbose_proxy_logger.warning(
+            "Skipping spend counter increment for invalid budget window %s",
+            counter_key,
         )
+        return
+
+    await _ensure_window_spend_counter_initialized(
+        counter_key=counter_key,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        window_start=window_start,
+    )
     await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
 
 
