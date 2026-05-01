@@ -452,3 +452,18 @@ def test_assert_same_origin_case_insensitive_host():
     assert_same_origin(
         "https://API.example.com/poll", "https://api.example.com/generate"
     )
+
+
+def test_assert_same_origin_error_message_does_not_leak_hostnames():
+    """Greptile P2: in the SSRF threat model the caller is the attacker.
+    The error message must not echo the operator's expected host or the
+    attacker-supplied candidate host back to the caller — only identify
+    *which* component mismatched."""
+    with pytest.raises(SSRFError) as exc:
+        assert_same_origin(
+            "https://attacker.example.com:1234/poll",
+            "https://api.internal-corp.example/generate",
+        )
+    detail = str(exc.value)
+    assert "attacker.example.com" not in detail
+    assert "api.internal-corp.example" not in detail
