@@ -471,6 +471,11 @@ async def test_sse_mcp_handler_mock():
     mock_server.run = AsyncMock()
     mock_server.create_initialization_options = MagicMock()
 
+    # Mock the gateway request scope as an async context manager
+    mock_scope_manager = MagicMock()
+    mock_scope_manager.__aenter__ = AsyncMock()
+    mock_scope_manager.__aexit__ = AsyncMock()
+
     with (
         patch(
             "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
@@ -490,6 +495,7 @@ async def test_sse_mcp_handler_mock():
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server._gateway_initialize_instructions_request_scope",
+            return_value=mock_scope_manager,
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",

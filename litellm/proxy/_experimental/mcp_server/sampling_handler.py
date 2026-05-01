@@ -472,8 +472,10 @@ async def handle_sampling_create_message(
         if openai_tool_choice is not None:
             completion_kwargs["tool_choice"] = openai_tool_choice
         # 5. Add metadata for tracking
+        completion_kwargs["metadata"] = {}
         if params.metadata:
-            completion_kwargs["metadata"] = params.metadata
+            # We nest MCP metadata to avoid collisions with internal LiteLLM auth keys
+            completion_kwargs["metadata"]["mcp_metadata"] = params.metadata
 
         # 6. Inject auth context for cost tracking
         if user_api_key_auth:
@@ -536,10 +538,14 @@ async def handle_sampling_create_message(
         from litellm.exceptions import (
             AuthenticationError,
             BudgetExceededError,
+            ContextWindowExceededError,
             PermissionDeniedError,
             RateLimitError,
+            ServiceUnavailableError,
         )
 
+        # Re-raise known LiteLLM errors so they can be handled by the proxy's
+        # global exception handlers or retry logic if applicable.
         if isinstance(
             e,
             (
@@ -547,6 +553,8 @@ async def handle_sampling_create_message(
                 RateLimitError,
                 AuthenticationError,
                 PermissionDeniedError,
+                ContextWindowExceededError,
+                ServiceUnavailableError,
             ),
         ):
             raise
