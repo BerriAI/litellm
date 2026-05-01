@@ -234,14 +234,14 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   </Typography.Text>
                 </div>
 
-                <Form.Item label="Existing Credentials" name="litellm_credential_name" initialValue={null}>
+                <Form.Item label="Existing Credentials" name="litellm_credential_name">
                   <AntdSelect
                     showSearch
                     placeholder="Select or search for existing credentials"
                     optionFilterProp="children"
                     filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
                     options={[
-                      { value: null, label: "None" },
+                      { value: "", label: "None" },
                       ...credentials.map((credential) => ({
                         value: credential.credential_name,
                         label: credential.credential_name,

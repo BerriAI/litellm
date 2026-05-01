@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
-const credentialsKeys = createQueryKeys("credentials");
+export const credentialsKeys = createQueryKeys("credentials");
 
 export const useCredentials = () => {
   const { accessToken } = useAuthorized();

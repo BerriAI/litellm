@@ -17,14 +17,14 @@ import {
   TableRow,
   Text,
 } from "@tremor/react";
-import { Form } from "antd";
 import { UploadProps } from "antd/es/upload";
 import { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
 import AddCredentialsTab from "./AddCredentialModal";
 import EditCredentialsModal from "./EditCredentialModal";
-import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { credentialsKeys, useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 interface CredentialsPanelProps {
   uploadProps: UploadProps;
@@ -32,7 +32,8 @@ interface CredentialsPanelProps {
 
 const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
   const { accessToken } = useAuthorized();
-  const { data: credentialsResponse, refetch: refetchCredentials } = useCredentials();
+  const { data: credentialsResponse } = useCredentials();
+  const queryClient = useQueryClient();
   const credentialList = credentialsResponse?.credentials || [];
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -41,7 +42,6 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
   const [credentialToDelete, setCredentialToDelete] = useState<CredentialItem | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCredentialDeleting, setIsCredentialDeleting] = useState(false);
-  const [form] = Form.useForm();
 
   const restrictedFields = ["credential_name", "custom_llm_provider"];
   const handleUpdateCredential = async (values: any) => {
@@ -64,7 +64,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     await credentialUpdateCall(accessToken, values.credential_name, newCredential);
     NotificationsManager.success("Credential updated successfully");
     setIsUpdateModalOpen(false);
-    await refetchCredentials();
+    await queryClient.invalidateQueries({ queryKey: credentialsKeys.all });
   };
 
   const handleAddCredential = async (values: any) => {
@@ -88,7 +88,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     await credentialCreateCall(accessToken, newCredential);
     NotificationsManager.success("Credential added successfully");
     setIsAddModalOpen(false);
-    await refetchCredentials();
+    await queryClient.invalidateQueries({ queryKey: credentialsKeys.all });
   };
 
   const renderProviderBadge = (provider: string) => {
@@ -115,7 +115,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
     try {
       await credentialDeleteCall(accessToken, credentialToDelete.credential_name);
       NotificationsManager.success("Credential deleted successfully");
-      await refetchCredentials();
+      await queryClient.invalidateQueries({ queryKey: credentialsKeys.all });
     } catch (error) {
       NotificationsManager.error("Failed to delete credential");
     } finally {
