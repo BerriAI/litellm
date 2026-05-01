@@ -81,6 +81,12 @@ class MCPServer(BaseModel):
     # Defaults to the token's expires_in minus the expiry buffer, or
     # MCP_PER_USER_TOKEN_DEFAULT_TTL when expires_in is absent.
     token_storage_ttl_seconds: Optional[int] = None
+    # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
+    # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
+    # registration time so that natural-hash collisions between two
+    # different ``server_id`` values are bumped deterministically.  Left
+    # ``None`` in default-prefix mode.
+    short_prefix: Optional[str] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property

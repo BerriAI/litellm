@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 import asyncio
 import litellm
 import gzip
+import httpx
 import json
 import logging
 import time
@@ -470,3 +471,96 @@ async def test_generic_api_callback_invalid_log_format():
             endpoint=test_endpoint,
             log_format="invalid_format",  # type: ignore  # Intentionally invalid for testing
         )
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_retries_timeout_then_succeeds():
+    """
+    Test that GenericAPILogger retries LiteLLM timeout errors when configured.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(
+        endpoint=test_endpoint,
+        max_retries=1,
+        retry_delay=0,
+        timeout=0.2,
+    )
+
+    mock_post = AsyncMock()
+    mock_post.side_effect = [
+        litellm.Timeout(
+            message="Connection timed out",
+            model="default-model-name",
+            llm_provider="litellm-httpx-handler",
+        ),
+        type("Response", (), {"status_code": 200})(),
+    ]
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "timeout-retry"}]
+
+    await generic_logger.async_send_batch()
+
+    assert mock_post.call_count == 2
+    first_call = mock_post.call_args_list[0][1]
+    assert first_call["url"] == test_endpoint
+    assert first_call["timeout"] == 0.2
+    assert json.loads(first_call["data"]) == [{"event": "timeout-retry"}]
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_retries_5xx_then_succeeds():
+    """
+    Test that GenericAPILogger retries transient HTTP 5xx errors when configured.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(
+        endpoint=test_endpoint,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    request = httpx.Request("POST", test_endpoint)
+    response = httpx.Response(status_code=503, request=request)
+    mock_post = AsyncMock()
+    mock_post.side_effect = [
+        httpx.HTTPStatusError(
+            "Server error",
+            request=request,
+            response=response,
+        ),
+        type("Response", (), {"status_code": 200})(),
+    ]
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "5xx-retry"}]
+
+    await generic_logger.async_send_batch()
+
+    assert mock_post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_generic_api_callback_does_not_retry_4xx():
+    """
+    Test that GenericAPILogger does not retry non-transient HTTP 4xx errors.
+    """
+    test_endpoint = "https://example.com/api/logs"
+    generic_logger = GenericAPILogger(
+        endpoint=test_endpoint,
+        max_retries=2,
+        retry_delay=0,
+    )
+
+    request = httpx.Request("POST", test_endpoint)
+    response = httpx.Response(status_code=401, request=request)
+    mock_post = AsyncMock()
+    mock_post.side_effect = httpx.HTTPStatusError(
+        "Unauthorized",
+        request=request,
+        response=response,
+    )
+    generic_logger.async_httpx_client.post = mock_post
+    generic_logger.log_queue = [{"event": "4xx-no-retry"}]
+
+    await generic_logger.async_send_batch()
+
+    mock_post.assert_called_once()

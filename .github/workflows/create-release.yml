@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v1.83.0-stable)"
+        description: "Release tag (e.g. 1.84.0, 1.84.0rc1, 1.84.0.dev42, 1.84.0.post1; legacy v1.83.10-stable still accepted)"
         required: true
         type: string
       commit_hash:
@@ -30,8 +30,8 @@ jobs:
             echo "::error::commit_hash must be a full 40-character commit SHA"
             exit 1
           fi
-          if ! echo "${TAG}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+'; then
-            echo "::error::tag must start with vX.Y.Z"
+          if ! echo "${TAG}" | grep -qE '^v?[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::tag must start with X.Y.Z (optional leading v), e.g. 1.84.0, 1.84.0rc1, 1.84.0.dev42, or v1.83.10-stable"
             exit 1
           fi
 
@@ -44,6 +44,11 @@ jobs:
           script: |
             const tag = process.env.TAG;
             const commitHash = process.env.COMMIT_HASH;
+
+            // Mark RC / dev / nightly / alpha / beta tags as GitHub pre-releases.
+            // PEP 440 post-releases (e.g. `1.84.0.post1`) and legacy `-stable[.patch.N]`
+            // are stable maintenance releases, not pre-releases.
+            const isPrerelease = /(?:rc|nightly|alpha|beta|\.dev)/i.test(tag);
 
             const cosignSection = [
               `## Verify Docker Image Signature`,
@@ -89,7 +94,7 @@ jobs:
                 target_commitish: commitHash,
                 name: tag,
                 owner: context.repo.owner,
-                prerelease: false,
+                prerelease: isPrerelease,
                 repo: context.repo.repo,
                 tag_name: tag,
               });
