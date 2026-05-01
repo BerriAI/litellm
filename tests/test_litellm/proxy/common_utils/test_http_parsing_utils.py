@@ -815,3 +815,41 @@ def test_safe_get_request_headers_state_unavailable():
 
     result = _safe_get_request_headers(mock_request)
     assert result == {"content-type": "application/json"}
+
+
+class TestGetTagsFromRequestBodyStringCoerce:
+    """Regression: the auth-time tag helper used `metadata.get("tags", ...)`
+    directly, which raised AttributeError when metadata arrived as a JSON
+    string (multipart/form-data or extra_body). That turned into a DoS at
+    auth time and potentially bypassed tag-based RBAC if the caller caught
+    the exception and fell through with empty tags.
+    """
+
+    def test_json_string_metadata_is_coerced_to_dict(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            get_tags_from_request_body,
+        )
+
+        metadata_json = json.dumps({"tags": ["a", "b"]})
+        # Must not raise
+        tags = get_tags_from_request_body({"metadata": metadata_json})
+        assert tags == ["a", "b"]
+
+    def test_unparseable_string_metadata_is_ignored(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            get_tags_from_request_body,
+        )
+
+        # Must not raise; must yield no metadata tags but keep root tags
+        tags = get_tags_from_request_body(
+            {"metadata": "not-json", "tags": ["root-only"]}
+        )
+        assert tags == ["root-only"]
+
+    def test_dict_metadata_still_works(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            get_tags_from_request_body,
+        )
+
+        tags = get_tags_from_request_body({"metadata": {"tags": ["x"]}})
+        assert tags == ["x"]

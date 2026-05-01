@@ -80,6 +80,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         url = f"{api_base}/{vector_store_id}/search"
         _, request_body = super().transform_search_vector_store_request(
@@ -89,5 +90,6 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
             api_base=api_base,
             litellm_logging_obj=litellm_logging_obj,
             litellm_params=litellm_params,
+            extra_body=extra_body,
         )
         return url, request_body

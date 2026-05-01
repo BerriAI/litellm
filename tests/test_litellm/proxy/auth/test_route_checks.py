@@ -152,6 +152,38 @@ def test_virtual_key_mcp_routes_allows_v1_mcp_server_subpaths(route):
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1/mcp/server",
+        "/v1/mcp/server/abc-123",
+        "/v1/mcp/server/abc-123/approve",
+    ],
+)
+def test_mcp_management_routes_classified_as_management_not_llm_api(route):
+    """MCP server CRUD must be management routes, not llm_api routes, so
+    DISABLE_LLM_API_ENDPOINTS on admin nodes does not block the Admin UI."""
+
+    assert RouteChecks.is_llm_api_route(route=route) is False
+    assert RouteChecks.is_management_route(route=route) is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/mcp/tools/call",
+        "/mcp-rest/tools/call",
+        "/mcp/tools/list",
+    ],
+)
+def test_mcp_inference_routes_classified_as_llm_api(route):
+    """MCP tool-call / passthrough routes must remain llm_api routes so they
+    continue to be blocked by DISABLE_LLM_API_ENDPOINTS on admin nodes."""
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 
@@ -1004,6 +1036,131 @@ def test_proxy_admin_viewer_can_access_global_spend_tags():
         )
 
 
+# Routes returning proxy-wide spend across every team / customer / api_key.
+# Sourced from `LiteLLMRoutes.global_spend_tracking_routes` so any future
+# additions to that list are exercised by these tests automatically.
+from litellm.proxy._types import LiteLLMRoutes
+
+GLOBAL_SPEND_ROUTES = LiteLLMRoutes.global_spend_tracking_routes.value
+
+
+@pytest.mark.parametrize("route", GLOBAL_SPEND_ROUTES)
+def test_internal_user_blocked_from_global_spend_routes(route):
+    """
+    Non-admin INTERNAL_USER role must NOT be able to read proxy-wide spend.
+    These routes return spend across every team, customer, and api_key.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("route", GLOBAL_SPEND_ROUTES)
+def test_internal_user_view_only_blocked_from_global_spend_routes(route):
+    """
+    INTERNAL_USER_VIEW_ONLY must also be blocked from proxy-wide spend routes.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("route", GLOBAL_SPEND_ROUTES)
+def test_proxy_admin_viewer_can_access_all_global_spend_routes(route):
+    """
+    PROXY_ADMIN_VIEW_ONLY ("view all keys, view all spend") must retain access
+    to every route in `global_spend_tracking_routes`.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="admin_viewer",
+        user_email="admin_viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="admin_viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize("route", GLOBAL_SPEND_ROUTES)
+def test_get_spend_routes_permission_keeps_access_for_internal_user(route):
+    """
+    A key minted with the `get_spend_routes` permission is an explicit
+    admin opt-in and must continue to grant access even though the caller's
+    role would otherwise be blocked.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user_with_permission",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user_with_permission",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        permissions={"get_spend_routes": True},
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 @pytest.mark.parametrize("route", ["/audit", "/audit/some-log-id"])
 def test_proxy_admin_viewer_can_access_audit_logs(route):
     """
@@ -1389,6 +1546,38 @@ def test_non_org_admin_with_organizations_list():
         organization_memberships=[membership],
     )
     assert _user_is_org_admin({"organizations": ["org-1"]}, user_obj) is False
+
+
+def test_org_admin_cannot_escalate_to_other_org():
+    """Regression: admin of org-A requesting [org-A, org-B] must be rejected."""
+    user_obj = _make_org_admin_user("org-A")
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is False
+
+
+def test_org_admin_of_multiple_orgs_can_operate_on_both():
+    """Admin of both org-A and org-B can operate on both."""
+    memberships = [
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-A",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+        LiteLLM_OrganizationMembershipTable(
+            user_id="multi-admin",
+            organization_id="org-B",
+            user_role=LitellmUserRoles.ORG_ADMIN.value,
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        ),
+    ]
+    user_obj = LiteLLM_UserTable(
+        user_id="multi-admin",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+        organization_memberships=memberships,
+    )
+    assert _user_is_org_admin({"organizations": ["org-A", "org-B"]}, user_obj) is True
 
 
 @pytest.mark.asyncio

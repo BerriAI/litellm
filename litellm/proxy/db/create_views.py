@@ -251,7 +251,7 @@ async def should_create_missing_views(db: _db) -> bool:
         and len(result) > 0
         and isinstance(result[0], dict)
         and "reltuples" in result[0]
-        and result[0]["reltuples"]
+        and result[0]["reltuples"] is not None
         and (result[0]["reltuples"] == 0 or result[0]["reltuples"] == -1)
     ):
         verbose_logger.debug("Should create views")
