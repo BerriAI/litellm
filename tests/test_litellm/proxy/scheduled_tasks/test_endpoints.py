@@ -271,9 +271,12 @@ def _make_app(prisma: Any) -> TestClient:
             agent_id="agent-a",
         )
 
+    from litellm.proxy.scheduled_tasks.endpoints import _require_feature_enabled
+
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[user_api_key_auth] = _auth_override
+    app.dependency_overrides[_require_feature_enabled] = lambda: None
     return TestClient(app, raise_server_exceptions=True)
 
 
