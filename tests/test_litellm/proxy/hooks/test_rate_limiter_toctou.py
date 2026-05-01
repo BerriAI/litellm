@@ -344,3 +344,71 @@ async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment():
         f"Expected model_saturation_check in atomic descriptor set. "
         f"Got: {atomic_descriptors_observed}"
     )
+
+
+@pytest.mark.asyncio
+async def test_batch_zero_token_consumes_rpm_only():
+    """
+    Zero-token batch (e.g. metadata-only call) should still increment RPM
+    counter but NOT TPM counter.
+
+    Edge case from review: `if inc_amount <= 0: continue` in
+    `atomic_check_and_increment_by_n` skips descriptor counters whose
+    increment is zero. Verifies asymmetric quota consumption is intentional
+    and observable: an RPM-bounded but TPM-free request path stays bounded
+    by RPM alone.
+    """
+    dual_cache = DualCache()
+    internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
+    rate_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=internal_usage_cache
+    )
+    batch_limiter = rate_limiter._get_batch_rate_limiter()
+    assert batch_limiter is not None
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("zero-token-key"),
+        tpm_limit=100,
+        rpm_limit=3,
+    )
+    zero_batch = BatchFileUsage(total_tokens=0, request_count=1)
+
+    # 3 zero-token batches must succeed (RPM=3 allows). 4th must hit RPM cap,
+    # NOT TPM (because token counter never increments past 0).
+    for i in range(3):
+        await batch_limiter._check_and_increment_batch_counters(
+            user_api_key_dict=user_api_key_dict,
+            data={},
+            batch_usage=zero_batch,
+        )
+
+    # Inspect counters: RPM key incremented to 3, TPM key absent (or 0).
+    rpm_key = rate_limiter.create_rate_limit_keys(
+        "api_key", user_api_key_dict.api_key or "", "requests"
+    )
+    tpm_key = rate_limiter.create_rate_limit_keys(
+        "api_key", user_api_key_dict.api_key or "", "tokens"
+    )
+    rpm_val = await internal_usage_cache.async_get_cache(
+        key=rpm_key, litellm_parent_otel_span=None, local_only=True
+    )
+    tpm_val = await internal_usage_cache.async_get_cache(
+        key=tpm_key, litellm_parent_otel_span=None, local_only=True
+    )
+    assert int(rpm_val or 0) == 3, f"RPM counter must reach 3, got {rpm_val}"
+    assert tpm_val in (
+        None,
+        0,
+        "0",
+    ), f"TPM counter must remain unset/0 for zero-token batches, got {tpm_val}"
+
+    # 4th attempt: RPM exhausted -> 429.
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await batch_limiter._check_and_increment_batch_counters(
+            user_api_key_dict=user_api_key_dict,
+            data={},
+            batch_usage=zero_batch,
+        )
+    assert exc.value.status_code == 429
