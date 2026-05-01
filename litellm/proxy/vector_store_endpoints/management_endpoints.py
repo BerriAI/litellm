@@ -16,7 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
     LiteLLM_ManagedVectorStoresTable,
     ResponseLiteLLM_ManagedVectorStore,
@@ -37,6 +39,81 @@ from litellm.types.vector_stores import (
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 router = APIRouter()
+
+_LITELLM_PARAMS_MASKER = SensitiveDataMasker()
+
+
+_REDACT_LITELLM_PARAMS_MAX_DEPTH = 10
+
+
+def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> Any:
+    """
+    Replace credential-bearing values in ``litellm_params`` with
+    ``REDACTED_BY_LITELM`` while preserving non-secret keys (``api_base``,
+    ``region``, ``model``, ``api_version``).
+
+    Handles three input shapes:
+
+    * ``dict`` — recurse into nested dicts (e.g. ``litellm_embedding_config``
+      which itself carries ``api_key`` / ``aws_*`` / ``vertex_credentials``).
+    * ``str`` — the in-memory registry occasionally holds the params as a
+      JSON-serialized string. Parse, redact, re-serialize. If parsing
+      fails, return the redaction sentinel rather than echo the value
+      back verbatim.
+    * Anything else, or ``None`` — passed through.
+
+    Recursion depth is bounded by ``_REDACT_LITELLM_PARAMS_MAX_DEPTH`` —
+    matching the convention of other allowlisted recursive helpers in the
+    repo (see ``tests/code_coverage_tests/recursive_detector.py``).
+    """
+    if _depth >= _REDACT_LITELLM_PARAMS_MAX_DEPTH:
+        return REDACTED_BY_LITELM_STRING
+    if litellm_params is None:
+        return None
+    if isinstance(litellm_params, str):
+        try:
+            parsed = json.loads(litellm_params)
+        except (TypeError, ValueError):
+            return REDACTED_BY_LITELM_STRING
+        return json.dumps(_redact_sensitive_litellm_params(parsed, _depth + 1))
+    if not isinstance(litellm_params, dict):
+        return litellm_params
+    out: Dict[str, Any] = {}
+    for k, v in litellm_params.items():
+        if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
+            out[k] = REDACTED_BY_LITELM_STRING
+        elif isinstance(v, dict):
+            out[k] = _redact_sensitive_litellm_params(v, _depth + 1)
+        else:
+            out[k] = v
+    return out
+
+
+async def _fetch_and_authorize_vector_store(
+    vector_store_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Any,
+) -> "LiteLLM_ManagedVectorStore":
+    """
+    Look up a vector store by id and confirm the caller can access it.
+    Raises HTTPException(404) on miss and HTTPException(403) on access
+    denial.
+    """
+    row = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+        where={"vector_store_id": vector_store_id}
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Vector store with ID {vector_store_id} not found",
+        )
+    typed = LiteLLM_ManagedVectorStore(**row.model_dump())
+    if not await _check_vector_store_access(typed, user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: You do not have permission to access this vector store",
+        )
+    return typed
 
 
 def _resolve_embedding_config_from_router(
@@ -555,7 +632,11 @@ async def list_vector_stores(
         accessible_vector_stores = []
         for vs in vector_store_map.values():
             if await _check_vector_store_access(vs, user_api_key_dict):
-                accessible_vector_stores.append(vs)
+                redacted = LiteLLM_ManagedVectorStore(**vs)
+                redacted["litellm_params"] = _redact_sensitive_litellm_params(
+                    vs.get("litellm_params")
+                )
+                accessible_vector_stores.append(redacted)
 
         total_count = len(accessible_vector_stores)
         total_pages = (total_count + page_size - 1) // page_size
@@ -716,33 +797,29 @@ async def get_vector_store_info(
                     created_at=vector_store.get("created_at") or None,
                     updated_at=vector_store.get("updated_at") or None,
                     litellm_credential_name=vector_store.get("litellm_credential_name"),
-                    litellm_params=vector_store.get("litellm_params") or None,
+                    litellm_params=_redact_sensitive_litellm_params(
+                        vector_store.get("litellm_params")
+                    ),
                     team_id=vector_store.get("team_id") or None,
                     user_id=vector_store.get("user_id") or None,
                 )
                 return {"vector_store": vector_store_pydantic_obj}
 
-        vector_store = (
-            await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-                where={"vector_store_id": data.vector_store_id}
-            )
+        vector_store_typed = await _fetch_and_authorize_vector_store(
+            vector_store_id=data.vector_store_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
         )
-        if vector_store is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Vector store with ID {data.vector_store_id} not found",
+        vector_store_dict = dict(vector_store_typed)
+        if "litellm_params" in vector_store_dict:
+            vector_store_dict["litellm_params"] = _redact_sensitive_litellm_params(
+                vector_store_dict["litellm_params"]
             )
-
-        # Check access control for DB vector store
-        vector_store_dict = vector_store.model_dump()  # type: ignore[attr-defined]
-        vector_store_typed = LiteLLM_ManagedVectorStore(**vector_store_dict)
-        if not await _check_vector_store_access(vector_store_typed, user_api_key_dict):
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied: You do not have permission to access this vector store",
-            )
-
         return {"vector_store": vector_store_dict}
+    except HTTPException:
+        # Preserve 403/404 from the access-control / not-found checks above;
+        # the catch-all below would otherwise rewrite them as 500.
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error getting vector store info: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -772,6 +849,15 @@ async def update_vector_store(
     try:
         update_data = data.model_dump(exclude_unset=True)
         vector_store_id = update_data.pop("vector_store_id")
+
+        # Per-store access control: anyone authenticated who passes the
+        # premium-feature gate could otherwise update *any* vector store —
+        # including stores belonging to other teams.
+        await _fetch_and_authorize_vector_store(
+            vector_store_id=vector_store_id,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+        )
 
         # Handle metadata serialization
         if update_data.get("vector_store_metadata") is not None:
@@ -820,11 +906,24 @@ async def update_vector_store(
                 f"Updated vector store {vector_store_id} in both database and in-memory registry"
             )
 
+        # The DB row is returned in full, so the response would otherwise
+        # echo the persisted ``litellm_params`` (including provider
+        # credentials) back to the caller — even when the caller only
+        # changed unrelated fields like ``vector_store_description``.
+        response_vs = LiteLLM_ManagedVectorStore(**updated_vs)
+        response_vs["litellm_params"] = _redact_sensitive_litellm_params(
+            updated_vs.get("litellm_params")
+        )
         return {
             "status": "success",
             "message": f"Vector store {vector_store_id} updated successfully",
-            "vector_store": updated_vs,
+            "vector_store": response_vs,
         }
+    except HTTPException:
+        # Preserve 403/404 responses from the access-control / not-found
+        # checks above; the catch-all below would otherwise rewrite them
+        # as 500 with the original status code embedded in the detail.
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating vector store: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

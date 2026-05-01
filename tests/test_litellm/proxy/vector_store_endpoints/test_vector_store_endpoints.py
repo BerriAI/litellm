@@ -786,7 +786,22 @@ class TestVectorStoreManagementEndpointsExist:
         - POST /vector_store/info
         - POST /vector_store/update
         """
+        import importlib
+
+        from litellm.proxy._lazy_features import LAZY_FEATURES
         from litellm.proxy.proxy_server import app
+
+        # Force-register the lazy vector_store_management routes so the
+        # assertions can find them.
+        already_registered = any(
+            getattr(r, "path", None) == "/vector_store/new" for r in app.routes
+        )
+        if not already_registered:
+            for feat in LAZY_FEATURES:
+                if feat.name == "vector_store_management":
+                    module = importlib.import_module(feat.module_path)
+                    feat.register_fn(app, module)
+                    break
 
         # Define expected endpoints
         expected_endpoints = [
@@ -1882,3 +1897,274 @@ async def test_create_vector_store_in_db_raises_when_no_db():
 
     assert exc_info.value.status_code == 500
     assert "database not connected" in exc_info.value.detail.lower()
+
+
+class TestRedactSensitiveLitellmParams:
+    """
+    ``litellm_params`` on a managed vector store carries the upstream
+    provider credential (OpenAI ``api_key``, AWS ``aws_secret_access_key``,
+    GCP ``vertex_credentials``, etc.). The list/info endpoints must redact
+    those values before returning them to any caller — including read-only
+    users and narrowly-scoped keys.
+    """
+
+    def test_redacts_well_known_credential_keys(self):
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params = {
+            "api_key": "sk-real-openai-key-12345",
+            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "vertex_credentials": (
+                '{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----..."}'
+            ),
+            "azure_authorization_token": "Bearer eyJhbGciOi...",
+        }
+        out = _redact_sensitive_litellm_params(params)
+        for k in params:
+            assert (
+                out[k] == REDACTED_BY_LITELM_STRING
+            ), f"{k} should be redacted, got {out[k]!r}"
+
+    def test_preserves_non_sensitive_keys(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params = {
+            "api_base": "https://api.openai.com/v1",
+            "model": "text-embedding-3-large",
+            "region": "us-east-1",
+            "vector_store_id": "vs_abc123",
+            "api_version": "2023-05-15",
+        }
+        out = _redact_sensitive_litellm_params(params)
+        for k, v in params.items():
+            assert out[k] == v, f"{k} should be preserved verbatim"
+
+    def test_handles_none_and_empty(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        assert _redact_sensitive_litellm_params(None) is None
+        assert _redact_sensitive_litellm_params({}) == {}
+
+    def test_redaction_does_not_mutate_input_litellm_params(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        original = {
+            "api_key": "sk-real-openai-key-12345",
+            "api_base": "https://api.openai.com/v1",
+        }
+        snapshot = dict(original)
+        _redact_sensitive_litellm_params(original)
+        assert original == snapshot, "input dict must not be mutated"
+
+    def test_redacts_nested_credentials_in_embedding_config(self):
+        """
+        ``/vector_store/new`` and ``/vector_store/update`` auto-resolve
+        ``litellm_embedding_config`` from the model registry and store it
+        as a nested dict inside ``litellm_params``. The nested dict carries
+        its own ``api_key`` / ``aws_*`` / ``vertex_credentials``, and a
+        non-recursive redactor would leak them.
+        """
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params = {
+            "model": "openai/text-embedding-3-large",
+            "api_base": "https://api.openai.com/v1",
+            "litellm_embedding_config": {
+                "api_key": "sk-nested-secret",
+                "api_base": "https://nested.example.com",
+                "vertex_credentials": '{"private_key":"-----BEGIN..."}',
+            },
+        }
+        out = _redact_sensitive_litellm_params(params)
+        nested = out["litellm_embedding_config"]
+        assert nested["api_key"] == REDACTED_BY_LITELM_STRING
+        assert nested["vertex_credentials"] == REDACTED_BY_LITELM_STRING
+        assert nested["api_base"] == "https://nested.example.com"
+        # Top-level non-secrets preserved
+        assert out["api_base"] == "https://api.openai.com/v1"
+        assert out["model"] == "openai/text-embedding-3-large"
+
+    def test_redacts_json_string_litellm_params(self):
+        """
+        The in-memory registry occasionally holds ``litellm_params`` as a
+        JSON-serialized string rather than a dict. The redactor must parse,
+        redact, and re-serialize so callers don't get the raw string back.
+        """
+        import json as _json
+
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        params_json = _json.dumps(
+            {
+                "api_key": "sk-secret-from-json-string",
+                "api_base": "https://api.openai.com/v1",
+            }
+        )
+        out = _redact_sensitive_litellm_params(params_json)
+        assert isinstance(out, str)
+        parsed = _json.loads(out)
+        assert parsed["api_key"] == REDACTED_BY_LITELM_STRING
+        assert parsed["api_base"] == "https://api.openai.com/v1"
+
+    def test_redacts_unparseable_string_litellm_params(self):
+        """
+        If ``litellm_params`` is a string that isn't valid JSON, the
+        redactor must NOT echo the value back verbatim — it could contain
+        opaque credential material.
+        """
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            _redact_sensitive_litellm_params,
+        )
+
+        out = _redact_sensitive_litellm_params(
+            "this is not json but might contain a secret"
+        )
+        assert out == REDACTED_BY_LITELM_STRING
+
+
+class TestUpdateVectorStoreAccessControlAndRedaction:
+    """
+    ``/vector_store/update`` previously skipped per-store access control
+    (only the premium-feature gate ran), letting any authenticated
+    premium principal mutate *any* vector store. It also returned the
+    full DB row including ``litellm_params``, leaking provider
+    credentials to the caller. Both are fixed at the endpoint level.
+    """
+
+    @pytest.mark.asyncio
+    async def test_update_denied_when_caller_cannot_access_store(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            update_vector_store,
+        )
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_other_team",
+                "team_id": "team-A",
+                "litellm_params": {"api_key": "sk-team-A-secret"},
+            }
+        )
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await update_vector_store(
+                    data=VectorStoreUpdateRequest(
+                        vector_store_id="vs_other_team",
+                        vector_store_description="hijacked",
+                    ),
+                    user_api_key_dict=UserAPIKeyAuth(
+                        user_id="attacker", team_id="team-B"
+                    ),
+                )
+        assert exc_info.value.status_code == 403
+        # The attacker must NOT see the existing credential in the
+        # error message either.
+        assert "sk-team-A-secret" not in str(exc_info.value.detail)
+        # And the DB update must not have been called.
+        mock_prisma_client.db.litellm_managedvectorstorestable.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_response_redacts_litellm_params(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.vector_store_endpoints.management_endpoints import (
+            update_vector_store,
+        )
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        existing_row = MagicMock()
+        existing_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_owned",
+                "team_id": "team-A",
+                "litellm_params": {
+                    "api_key": "sk-real-openai-key-123",
+                    "api_base": "https://api.openai.com/v1",
+                },
+            }
+        )
+        updated_row = MagicMock()
+        updated_row.model_dump = MagicMock(
+            return_value={
+                "vector_store_id": "vs_owned",
+                "team_id": "team-A",
+                "vector_store_description": "new desc",
+                "litellm_params": {
+                    "api_key": "sk-real-openai-key-123",
+                    "api_base": "https://api.openai.com/v1",
+                },
+            }
+        )
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
+            return_value=updated_row
+        )
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.vector_store_registry", None),
+        ):
+            response = await update_vector_store(
+                data=VectorStoreUpdateRequest(
+                    vector_store_id="vs_owned",
+                    vector_store_description="new desc",
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="owner", team_id="team-A"),
+            )
+
+        params = response["vector_store"]["litellm_params"]
+        assert params["api_key"] == REDACTED_BY_LITELM_STRING
+        assert params["api_base"] == "https://api.openai.com/v1"

@@ -41,6 +41,7 @@ class KeyManagementEventHooks:
         """
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
+            get_audit_log_changed_by,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -61,9 +62,11 @@ class KeyManagementEventHooks:
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
                         object_id=response.token_id or "",
@@ -102,6 +105,7 @@ class KeyManagementEventHooks:
         """
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
+            get_audit_log_changed_by,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -117,9 +121,11 @@ class KeyManagementEventHooks:
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
                         object_id=data.key,
@@ -140,6 +146,7 @@ class KeyManagementEventHooks:
     ):
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
+            get_audit_log_changed_by,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -189,9 +196,11 @@ class KeyManagementEventHooks:
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
                         changed_by_api_key=user_api_key_dict.token,
                         table_name=LitellmTableNames.KEY_TABLE_NAME,
                         object_id=existing_key_row.token,
@@ -220,6 +229,7 @@ class KeyManagementEventHooks:
         """
         from litellm.proxy.management_helpers.audit_logs import (
             create_audit_log_for_update,
+            get_audit_log_changed_by,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -237,9 +247,11 @@ class KeyManagementEventHooks:
                         request_data=LiteLLM_AuditLogs(
                             id=str(uuid.uuid4()),
                             updated_at=datetime.now(timezone.utc),
-                            changed_by=litellm_changed_by
-                            or user_api_key_dict.user_id
-                            or litellm_proxy_admin_name,
+                            changed_by=get_audit_log_changed_by(
+                                litellm_changed_by=litellm_changed_by,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            ),
                             changed_by_api_key=user_api_key_dict.token,
                             table_name=LitellmTableNames.KEY_TABLE_NAME,
                             object_id=key.token,

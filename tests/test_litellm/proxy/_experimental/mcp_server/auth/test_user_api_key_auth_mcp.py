@@ -551,10 +551,13 @@ class TestMCPOAuth2AuthFlow:
 
     async def test_oauth2_token_in_authorization_header_fallback(self):
         """
-        When only Authorization header is present with a non-LiteLLM OAuth2 token,
+        When only Authorization header is present with a non-LiteLLM OAuth2 token
+        AND the target server is operator-configured for ``auth_type=oauth2``,
         auth should fall back to permissive mode (OAuth2 passthrough).
         """
         from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
 
         scope = {
             "type": "http",
@@ -568,10 +571,19 @@ class TestMCPOAuth2AuthFlow:
         async def mock_user_api_key_auth_fails(api_key, request):
             raise HTTPException(status_code=401, detail="Invalid API key")
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-            side_effect=mock_user_api_key_auth_fails,
+        oauth2_server = MagicMock()
+        oauth2_server.auth_type = MCPAuth.oauth2
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
         ):
+            mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
             (
                 auth_result,
                 mcp_auth_header,
@@ -695,9 +707,11 @@ class TestMCPOAuth2AuthFlow:
     async def test_proxy_exception_oauth2_fallback(self):
         """
         user_api_key_auth raises ProxyException (not HTTPException) in production.
-        The OAuth2 fallback must catch ProxyException with code 401/403 too.
+        The OAuth2 fallback must catch ProxyException with code 401/403 too,
+        but only when the target server is operator-configured for ``auth_type=oauth2``.
         """
         from litellm.proxy._types import ProxyException
+        from litellm.types.mcp import MCPAuth
 
         scope = {
             "type": "http",
@@ -716,10 +730,19 @@ class TestMCPOAuth2AuthFlow:
                 code=401,
             )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
-            side_effect=mock_user_api_key_auth_proxy_exception,
+        oauth2_server = MagicMock()
+        oauth2_server.auth_type = MCPAuth.oauth2
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_proxy_exception,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
         ):
+            mock_mgr.get_mcp_server_by_name.return_value = oauth2_server
             (
                 auth_result,
                 mcp_auth_header,
@@ -763,6 +786,290 @@ class TestMCPOAuth2AuthFlow:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
             side_effect=mock_user_api_key_auth_500,
+        ):
+            with pytest.raises(ProxyException):
+                await MCPRequestHandler.process_mcp_request(scope)
+
+
+@pytest.mark.asyncio
+class TestMCPPublicRouteGuard:
+    """
+    Regression tests for GHSA-7cwm-3279-qf3c / HW6xR21d:
+    the public-route bypass at the top of process_mcp_request must match
+    the exact `/.well-known/` path prefix, not a substring of the URL.
+    """
+
+    async def test_well_known_substring_in_query_does_not_bypass_auth(self):
+        """
+        URL with `.well-known` smuggled into the query string must still
+        require valid LiteLLM auth.
+        """
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/private_server",
+            "query_string": b"redirect=.well-known/oauth-protected-resource",
+            "headers": [(b"authorization", b"Bearer sk-bogus")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            # Explicit unresolvable target — proves auth still fails even
+            # when the registry has no info to fall back to.
+            mock_mgr.get_mcp_server_by_name.return_value = None
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_well_known_segment_in_middle_of_path_does_not_bypass_auth(self):
+        """
+        Path containing `.well-known` as a non-prefix component (e.g. a server
+        name or sub-path) must still require auth.
+        """
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/.well-known-fake/tools",
+            "headers": [(b"authorization", b"Bearer sk-bogus")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = None
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_legitimate_well_known_path_still_bypasses_auth(self):
+        """
+        Real OAuth discovery routes registered under /.well-known/ must remain
+        public so unauthenticated clients can fetch them per RFC 8414/9728.
+        """
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/.well-known/oauth-protected-resource",
+            "headers": [],
+        }
+
+        # No mock needed — public path should not call user_api_key_auth at all
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+        ) as mock_auth:
+            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            mock_auth.assert_not_called()
+            assert isinstance(auth_result, UserAPIKeyAuth)
+
+
+@pytest.mark.asyncio
+class TestMCPOAuth2FallbackTargetGating:
+    """
+    Regression tests for GHSA-h8fm-g6wc-j228 / HW6xR21d:
+    The OAuth2 passthrough fallback must only fire when the target MCP server
+    is operator-configured for ``auth_type=oauth2``. A failed LiteLLM-auth
+    against a non-OAuth2 server (api_key, bearer_token, basic, etc.) must
+    propagate as a real auth error, not be exchanged for an anonymous session.
+    """
+
+    @staticmethod
+    def _make_server(auth_type):
+        server = MagicMock()
+        server.auth_type = auth_type
+        return server
+
+    async def test_fallback_blocked_when_target_is_not_oauth2(self):
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/api_key_server",
+            "headers": [(b"authorization", b"Bearer anything-at-all")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.api_key)
+            )
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_fallback_blocked_when_target_unresolvable(self):
+        """
+        If the target server cannot be resolved from path or x-mcp-servers,
+        we cannot prove it is OAuth2-mode, so we must fail closed.
+        """
+        from fastapi import HTTPException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/never_registered_server",
+            "headers": [(b"authorization", b"Bearer anything")],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = None
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_fallback_allowed_when_target_is_oauth2_mode(self):
+        """
+        Operator-configured OAuth2 passthrough still works: target server has
+        ``auth_type=oauth2`` → failed LiteLLM auth falls back to anonymous so
+        the bearer can be forwarded to upstream.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/atlassian_mcp",
+            "headers": [
+                (b"authorization", b"Bearer atlassian-oauth2-access-token-xyz"),
+            ],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.return_value = (
+                TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.oauth2)
+            )
+            (auth_result, *_rest) = await MCPRequestHandler.process_mcp_request(scope)
+            assert isinstance(auth_result, UserAPIKeyAuth)
+
+    async def test_fallback_blocked_when_any_target_in_header_is_not_oauth2(self):
+        """
+        x-mcp-servers can list multiple targets. If ANY of them is non-OAuth2,
+        the fallback must be blocked — otherwise an attacker can mix one
+        OAuth2-mode server in to enable bypass against the others.
+        """
+        from fastapi import HTTPException
+
+        from litellm.types.mcp import MCPAuth
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [
+                (b"authorization", b"Bearer anything"),
+                (b"x-mcp-servers", b"oauth2_server,api_key_server"),
+            ],
+        }
+
+        async def mock_user_api_key_auth_fails(api_key, request):
+            raise HTTPException(status_code=401, detail="Invalid API key")
+
+        def mock_lookup(name, client_ip=None):
+            if name == "oauth2_server":
+                return TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.oauth2)
+            return TestMCPOAuth2FallbackTargetGating._make_server(MCPAuth.api_key)
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+                side_effect=mock_user_api_key_auth_fails,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager"
+            ) as mock_mgr,
+        ):
+            mock_mgr.get_mcp_server_by_name.side_effect = mock_lookup
+            with pytest.raises(HTTPException) as exc_info:
+                await MCPRequestHandler.process_mcp_request(scope)
+            assert exc_info.value.status_code == 401
+
+    async def test_proxy_exception_with_non_numeric_code_propagates(self):
+        """
+        ``ProxyException`` normalises ``code`` via ``str()`` in its __init__,
+        so callers may produce ``"None"`` or any non-numeric string when no
+        explicit code was supplied. The exception handler must not coerce
+        with ``int(...)`` (which would raise ``ValueError`` and rewrite the
+        auth error as an unhandled 500); it must simply re-raise.
+        """
+        from litellm.proxy._types import ProxyException
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp/atlassian_mcp",
+            "headers": [(b"authorization", b"Bearer anything")],
+        }
+
+        async def mock_user_api_key_auth_no_code(api_key, request):
+            raise ProxyException(
+                message="Authentication Error",
+                type="auth_error",
+                param="api_key",
+                code=None,
+            )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            side_effect=mock_user_api_key_auth_no_code,
         ):
             with pytest.raises(ProxyException):
                 await MCPRequestHandler.process_mcp_request(scope)
