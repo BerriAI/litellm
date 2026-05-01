@@ -63,8 +63,6 @@ _VCR_INCOMPATIBLE_NODEID_SUFFIXES = frozenset(
         # Provider prompt-cache propagation isn't deterministic between two
         # back-to-back calls; the test is flaky against the live provider.
         "::test_prompt_caching",
-        # Wikipedia URL fetch through Anthropic Files API is flaky upstream.
-        "::test_async_pdf_handling_with_file_id",
         # Bedrock Nova returns tool_call vs JSON nondeterministically; the
         # base assertion expects JSON. Other providers' versions of this
         # test are healthy, so we narrow with a class-name guard below.

@@ -401,7 +401,10 @@ class BaseLLMChatTest(ABC):
             {
                 "type": "file",
                 "file": {
-                    "file_id": "https://upload.wikimedia.org/wikipedia/commons/2/20/Re_example.pdf"
+                    # GitHub-hosted fixture (small, deterministic, reliably
+                    # fetchable from Anthropic's egress) instead of a Wikipedia
+                    # URL that intermittently returns 400 "Unable to download".
+                    "file_id": "https://raw.githubusercontent.com/BerriAI/litellm/main/tests/llm_translation/fixtures/dummy.pdf"
                 },
             },
         ]
