@@ -26883,7 +26883,7 @@
       "/toolset/{toolset_name}/mcp": {
         "delete": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
               "in": "path",
@@ -26922,7 +26922,7 @@
         },
         "get": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
               "in": "path",
@@ -26961,7 +26961,7 @@
         },
         "head": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
               "in": "path",
@@ -27000,7 +27000,7 @@
         },
         "options": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
               "in": "path",
@@ -27039,7 +27039,7 @@
         },
         "patch": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
               "in": "path",
@@ -27078,7 +27078,7 @@
         },
         "post": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
               "in": "path",
@@ -27117,7 +27117,7 @@
         },
         "put": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
               "in": "path",
