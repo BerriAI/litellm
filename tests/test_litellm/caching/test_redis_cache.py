@@ -3,7 +3,6 @@ import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi.testclient import TestClient
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -517,3 +516,29 @@ async def test_async_lpop_with_float_redis_version(
 
             # Verify the method completed without error
             assert result is not None
+
+
+@pytest.mark.parametrize("namespace", [None, "myns"])
+@pytest.mark.asyncio
+async def test_delete_cache_applies_namespace(namespace, monkeypatch, redis_no_ping):
+    """async_delete_cache and delete_cache must apply the namespace prefix so that
+    DEL targets the same key that SET/GET use."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace=namespace)
+
+    raw_key = "cronjob_lock:db_spend_update_job"
+    expected_key = f"{namespace}:{raw_key}" if namespace else raw_key
+
+    # --- async path ---
+    mock_async_client = AsyncMock()
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_async_client
+    ):
+        await redis_cache.async_delete_cache(key=raw_key)
+        mock_async_client.delete.assert_called_once_with(expected_key)
+
+    # --- sync path ---
+    mock_sync_client = MagicMock()
+    redis_cache.redis_client = mock_sync_client
+    redis_cache.delete_cache(key=raw_key)
+    mock_sync_client.delete.assert_called_once_with(expected_key)
