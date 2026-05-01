@@ -50,6 +50,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import build_inspection_messages
 from litellm.types.guardrails import GuardrailEventHooks
 import litellm
 
@@ -366,7 +367,8 @@ class LassoGuardrail(CustomGuardrail):
             LassoGuardrailAPIError: If the Lasso API call fails
             HTTPException: If blocking violations are detected
         """
-        messages: List[Dict[str, str]] = data.get("messages", [])
+        # Covers multimodal list content + Responses-API input.
+        messages: List[Dict[str, str]] = build_inspection_messages(data)
         if not messages:
             return data
 

@@ -1,0 +1,160 @@
+"""
+Shared helpers for guardrail hooks: extract user-supplied text from a
+request body regardless of whether it uses Chat Completions ``messages``,
+Responses-API ``input``, or multimodal list-format ``content`` parts.
+
+Hooks that only check ``data["messages"]`` for string content silently
+skip the other shapes — these helpers normalise that so every hook sees
+every text fragment.
+"""
+
+from typing import Any, Callable, Dict, Iterator, List
+
+
+def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
+    """Yield text fragments from a ``message.content`` value (string or
+    multimodal list). Non-text parts (images, audio, …) are skipped."""
+    if isinstance(content, str):
+        if content:
+            yield content
+    elif isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    yield text
+
+
+def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
+    """Coerce a Responses-API ``data["input"]`` value into chat-style messages."""
+    if isinstance(input_value, str):
+        return [{"role": "user", "content": input_value}]
+    if isinstance(input_value, list):
+        if input_value and all(
+            isinstance(item, dict) and "role" in item for item in input_value
+        ):
+            return list(input_value)
+        if input_value and all(isinstance(item, str) for item in input_value):
+            return [{"role": "user", "content": item} for item in input_value]
+        return [{"role": "user", "content": input_value}]
+    return []
+
+
+def _resolve_messages(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return the messages list to inspect, falling back to ``input``."""
+    messages = data.get("messages")
+    if isinstance(messages, list) and messages:
+        return messages
+    return _coerce_input_to_messages(data.get("input"))
+
+
+def _iter_inspection_messages(data: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
+    """Yield every message-like dict, walking ``messages`` AND ``input``."""
+    messages = data.get("messages")
+    if isinstance(messages, list):
+        yield from messages
+    yield from _coerce_input_to_messages(data.get("input"))
+
+
+def iter_user_text(data: Dict[str, Any]) -> Iterator[str]:
+    """Yield every user-supplied text fragment from ``messages`` and ``input``."""
+    for message in _iter_inspection_messages(data):
+        if not isinstance(message, dict):
+            continue
+        yield from _iter_text_parts_in_content(message.get("content"))
+
+
+def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
+    """Rewrite every user-supplied text fragment in place via ``visit``.
+
+    Mutates ``data["messages"]`` and ``data["input"]``. Returns the number
+    of fragments visited so callers can short-circuit when nothing was
+    inspected.
+    """
+    visited = 0
+
+    def _rewrite_content(content: Any) -> Any:
+        nonlocal visited
+        if isinstance(content, str):
+            if content:
+                visited += 1
+                return visit(content)
+            return content
+        if isinstance(content, list):
+            new_parts = []
+            for part in content:
+                if (
+                    isinstance(part, dict)
+                    and part.get("type") == "text"
+                    and isinstance(part.get("text"), str)
+                    and part["text"]
+                ):
+                    visited += 1
+                    new_parts.append({**part, "text": visit(part["text"])})
+                else:
+                    new_parts.append(part)
+            return new_parts
+        return content
+
+    messages = data.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if isinstance(message, dict) and "content" in message:
+                message["content"] = _rewrite_content(message["content"])
+
+    input_value = data.get("input")
+    if isinstance(input_value, str):
+        if input_value:
+            visited += 1
+            data["input"] = visit(input_value)
+        return visited
+    if isinstance(input_value, list):
+        # List of full messages: rewrite each message's content.
+        if input_value and all(
+            isinstance(item, dict) and "role" in item for item in input_value
+        ):
+            for item in input_value:
+                if "content" in item:
+                    item["content"] = _rewrite_content(item["content"])
+            return visited
+        # List of content parts or strings: rewrite in place.
+        for idx, item in enumerate(input_value):
+            if isinstance(item, str) and item:
+                visited += 1
+                input_value[idx] = visit(item)
+            elif (
+                isinstance(item, dict)
+                and item.get("type") == "text"
+                and isinstance(item.get("text"), str)
+                and item["text"]
+            ):
+                visited += 1
+                input_value[idx] = {**item, "text": visit(item["text"])}
+        return visited
+
+    return visited
+
+
+def build_inspection_messages(data: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Synthesize a chat-style messages list for posting to a guardrail API.
+
+    Each returned message has a plain-string ``content`` — multimodal text
+    parts are joined with newlines and Responses-API ``input`` is lifted
+    into synthetic messages. Messages with no inspectable text are dropped.
+
+    Hooks that POST ``{"messages": [...]}`` to an external service should
+    call this instead of ``data.get("messages", [])`` so the Responses API
+    and multimodal content are covered.
+    """
+    flattened: List[Dict[str, str]] = []
+    for message in _iter_inspection_messages(data):
+        if not isinstance(message, dict):
+            continue
+        text = "\n".join(_iter_text_parts_in_content(message.get("content")))
+        if not text:
+            continue
+        role = message.get("role", "user") or "user"
+        flattened.append({"role": role, "content": text})
+    return flattened

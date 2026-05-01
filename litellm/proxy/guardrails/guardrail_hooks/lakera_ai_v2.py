@@ -13,6 +13,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import build_inspection_messages
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
@@ -214,10 +215,11 @@ class LakeraAIGuardrail(CustomGuardrail):
             )
             return data
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
-        if new_messages is None:
+        # Covers multimodal list content + Responses-API input.
+        new_messages = build_inspection_messages(data)
+        if not new_messages:
             verbose_proxy_logger.warning(
-                "Lakera AI: not running guardrail. No messages in data"
+                "Lakera AI: not running guardrail. No inspectable text in data"
             )
             return data
 
@@ -225,7 +227,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
-            messages=new_messages,
+            messages=new_messages,  # type: ignore[arg-type]
             request_data=data,
             event_type=GuardrailEventHooks.pre_call,
         )
@@ -280,10 +282,10 @@ class LakeraAIGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
-        if new_messages is None:
+        new_messages = build_inspection_messages(data)
+        if not new_messages:
             verbose_proxy_logger.warning(
-                "Lakera AI: not running guardrail. No messages in data"
+                "Lakera AI: not running guardrail. No inspectable text in data"
             )
             return
 
@@ -291,7 +293,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
-            messages=new_messages,
+            messages=new_messages,  # type: ignore[arg-type]
             request_data=data,
             event_type=GuardrailEventHooks.during_call,
         )

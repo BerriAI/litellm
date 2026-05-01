@@ -8,6 +8,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import iter_user_text
 
 
 class _PROXY_AzureContentSafety(
@@ -118,10 +119,10 @@ class _PROXY_AzureContentSafety(
     ):
         verbose_proxy_logger.debug("Inside Azure Content-Safety Pre-Call Hook")
         try:
-            if call_type == "completion" and "messages" in data:
-                for m in data["messages"]:
-                    if "content" in m and isinstance(m["content"], str):
-                        await self.test_violation(content=m["content"], source="input")
+            if call_type == "completion":
+                # Covers multimodal list content + Responses-API input.
+                for text in iter_user_text(data):
+                    await self.test_violation(content=text, source="input")
 
         except HTTPException as e:
             raise e
