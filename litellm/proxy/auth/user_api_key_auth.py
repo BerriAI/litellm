@@ -21,6 +21,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching import DualCache
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
@@ -472,7 +473,12 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route:
                 ## IF AUTH DISABLED
-                if endpoint.get("auth") is not True:
+                # Default to True: a config dict with no ``auth`` key
+                # otherwise produced an unauthenticated forwarder. The
+                # Pydantic ``PassThroughGenericEndpoint.auth`` default
+                # is also True, but raw config dicts skip that path —
+                # so this runtime check has to default to True too.
+                if endpoint.get("auth", True) is not True:
                     return UserAPIKeyAuth()
                 ## IF AUTH ENABLED
                 ### IF CUSTOM PARSER REQUIRED
@@ -1119,10 +1125,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
 
         if is_master_key_valid:
+            # Substitute a stable alias for the raw master key so neither the
+            # master key nor its hash propagates into spend logs, Prometheus
+            # /metrics labels, audit trails, rate-limit buckets, or any other
+            # downstream consumer of UserAPIKeyAuth.api_key.
             _user_api_key_obj = await _return_user_api_key_auth_obj(
                 user_obj=None,
                 user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=master_key,
+                api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
                 parent_otel_span=parent_otel_span,
                 valid_token_dict={
                     **end_user_params,
@@ -2140,16 +2150,20 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
             )
 
-        # Validate every fallback model name reachable by this request:
-        # top-level ``fallbacks`` AND fallbacks nested inside
-        # ``router_settings_override`` (which ``route_llm_request.py``
-        # promotes to per-request kwargs *after* this check). VERIA-44.
-        fallback_names: List[str] = list(
-            iter_router_fallback_model_names(request_data.get("fallbacks"))
-        )
+        # Validate every fallback model name reachable by this request.
+        # All three fields (``fallbacks``, ``context_window_fallbacks``,
+        # ``content_policy_fallbacks``) are forwarded to the router as
+        # per-request kwargs whether they appear at the top level of
+        # ``request_data`` or nested under ``router_settings_override``.
+        # Both surfaces must be validated against the API key's model
+        # allowlist or a caller can smuggle a restricted model. VERIA-44.
+        fallback_names: List[str] = []
         override_settings = request_data.get("router_settings_override")
-        if isinstance(override_settings, dict):
-            for _fb_key in ROUTER_FALLBACK_FIELDS:
+        for _fb_key in ROUTER_FALLBACK_FIELDS:
+            fallback_names.extend(
+                iter_router_fallback_model_names(request_data.get(_fb_key))
+            )
+            if isinstance(override_settings, dict):
                 fallback_names.extend(
                     iter_router_fallback_model_names(override_settings.get(_fb_key))
                 )
