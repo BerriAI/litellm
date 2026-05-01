@@ -934,21 +934,105 @@ async def test_health_endpoint_filters_background_cache_by_user_access():
         ep.get("model_id") for ep in cached_results["healthy_endpoints"]
     ), "test fixture invariant: every cached entry must carry a model_id"
 
+    # The non-admin caller must not see api_base on the returned cache entries.
     returned = result.get("healthy_endpoints", [])
     assert (
         len(returned) == 1
     ), f"expected exactly one cached entry after scoping, got {len(returned)}"
     assert returned[0]["model_id"] == "id-a"
-    assert returned[0]["api_base"] == "https://example-a.test"
+    assert "api_base" not in returned[0]
     assert result["healthy_count"] == 1
     assert result["unhealthy_count"] == 0
 
 
-def test_clean_endpoint_data_drops_routing_fields():
+@pytest.mark.asyncio
+async def test_health_endpoint_admin_sees_api_base_non_admin_does_not():
     """
-    _clean_endpoint_data() should drop provider routing fields like api_base
-    and api_version from the /health response, alongside the existing
-    credential redactions.
+    A proxy admin should still see the full ``api_base`` in the /health
+    response so they can tell which Vertex region / Azure resource is
+    healthy. A non-admin caller must not — the field should be stripped.
+    """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+    ]
+    cached_results = {
+        "healthy_endpoints": [
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-a",
+                "api_base": "https://us-central1-aiplatform.googleapis.com/v1/projects/p",
+            },
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+
+    admin_key = UserAPIKeyAuth(
+        api_key="hashed-admin-key",
+        models=["model-a"],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    non_admin_key = UserAPIKeyAuth(
+        api_key="hashed-user-key",
+        models=["model-a"],
+    )
+
+    common_patches = [
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ]
+
+    for p in common_patches:
+        p.start()
+    try:
+        admin_result = await health_endpoint(user_api_key_dict=admin_key)
+        non_admin_result = await health_endpoint(user_api_key_dict=non_admin_key)
+    finally:
+        for p in common_patches:
+            p.stop()
+
+    admin_eps = admin_result.get("healthy_endpoints", [])
+    non_admin_eps = non_admin_result.get("healthy_endpoints", [])
+
+    assert len(admin_eps) == 1
+    assert (
+        admin_eps[0]["api_base"]
+        == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
+    ), "admin must see the full api_base so they can identify the region"
+
+    assert len(non_admin_eps) == 1
+    assert "api_base" not in non_admin_eps[0]
+
+    # Stripping must produce a copy — the shared cache must still carry api_base
+    # so the next admin caller can read it.
+    assert (
+        cached_results["healthy_endpoints"][0]["api_base"]
+        == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
+    )
+
+
+def test_clean_endpoint_data_strips_credentials_but_keeps_api_base():
+    """
+    _clean_endpoint_data() drops credentials and api_version but leaves
+    api_base intact — the per-caller hide/show happens in the endpoint
+    layer based on user role, not in the cleaning helper.
     """
     from litellm.proxy.health_check import _clean_endpoint_data
 
@@ -964,5 +1048,5 @@ def test_clean_endpoint_data_drops_routing_fields():
 
     assert "api_key" not in cleaned
     assert "aws_access_key_id" not in cleaned
-    assert "api_base" not in cleaned
     assert "api_version" not in cleaned
+    assert cleaned.get("api_base") == "https://example.test/v1"

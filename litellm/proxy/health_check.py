@@ -28,7 +28,6 @@ ILLEGAL_DISPLAY_PARAMS = [
     "aws_secret_access_key",
     "exception",  # internal; not JSON-serializable, never for display
     "litellm_metadata",  # internal tracking metadata with auth objects; not for display
-    "api_base",  # provider routing metadata; not part of health output
     "api_version",  # provider routing metadata; not part of health output
 ]
 

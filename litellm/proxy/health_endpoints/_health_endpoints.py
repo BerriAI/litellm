@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     CallInfo,
     EnterpriseLicenseData,
     Litellm_EntityType,
+    LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
@@ -723,6 +724,51 @@ async def _save_background_health_checks_to_db(
         # Continue execution - don't let database save failure break health checks
 
 
+_PROXY_ADMIN_ROLES = frozenset(
+    {
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    }
+)
+
+
+def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Return True if the caller has a proxy-admin role (full or view-only).
+
+    user_role on UserAPIKeyAuth can be either a LitellmUserRoles enum or its
+    string value depending on how the auth path constructed the object, so we
+    compare against the raw value rather than the enum identity.
+    """
+    role = user_api_key_dict.user_role
+    if role is None:
+        return False
+    role_value = role.value if hasattr(role, "value") else role
+    return role_value in _PROXY_ADMIN_ROLES
+
+
+def _strip_api_base_from_health_result(result: dict) -> dict:
+    """
+    Return a copy of the /health response with ``api_base`` removed from each
+    healthy/unhealthy endpoint entry. Used to hide the underlying provider
+    URL from non-admin callers while still showing them which deployments
+    they own and whether each one is healthy.
+    """
+    out = dict(result)
+    for key in ("healthy_endpoints", "unhealthy_endpoints"):
+        eps = out.get(key)
+        if isinstance(eps, list):
+            out[key] = [
+                (
+                    {k: v for k, v in ep.items() if k != "api_base"}
+                    if isinstance(ep, dict)
+                    else ep
+                )
+                for ep in eps
+            ]
+    return out
+
+
 def _filter_health_check_results_by_model_ids(
     results: dict, allowed_model_ids: set
 ) -> dict:
@@ -867,11 +913,21 @@ async def health_endpoint(
                 detail={"error": f"Model with ID {model_id} not found"},
             )
 
+    is_admin = _is_proxy_admin(user_api_key_dict)
+
+    def _post_process(result: dict) -> dict:
+        # api_base reveals which provider/region/internal host the deployment
+        # talks to; only proxy admins should see it. Non-admin keys still
+        # learn whether their deployments are healthy via model/model_id.
+        if is_admin:
+            return result
+        return _strip_api_base_from_health_result(result)
+
     try:
         if llm_model_list is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
             if user_model is not None:
-                return await _perform_health_check_and_save(
+                cli_result = await _perform_health_check_and_save(
                     model_list=[],
                     target_model=None,
                     cli_model=user_model,
@@ -882,6 +938,7 @@ async def health_endpoint(
                     model_id=None,  # CLI model doesn't have model_id
                     max_concurrency=health_check_concurrency,
                 )
+                return _post_process(cli_result)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
@@ -913,12 +970,14 @@ async def health_endpoint(
                         user_api_key_dict.user_id,
                         list(user_api_key_dict.models),
                     )
-                return _filter_health_check_results_by_model_ids(
-                    health_check_results, allowed_model_ids
+                return _post_process(
+                    _filter_health_check_results_by_model_ids(
+                        health_check_results, allowed_model_ids
+                    )
                 )
-            return health_check_results
+            return _post_process(health_check_results)
         else:
-            return await _perform_health_check_and_save(
+            router_result = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
                 target_model=target_model,
                 cli_model=None,
@@ -929,6 +988,7 @@ async def health_endpoint(
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
             )
+            return _post_process(router_result)
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {}".format(
