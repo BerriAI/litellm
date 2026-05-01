@@ -988,16 +988,15 @@ def _append_model_candidates(candidates: List[str], value: Any) -> None:
     if value is None:
         return
 
-    if isinstance(value, str):
-        model_names = [model.strip() for model in value.split(",")]
-    elif isinstance(value, (list, tuple, set)):
-        for item in value:
-            _append_model_candidates(candidates=candidates, value=item)
-        return
-    else:
-        model_names = [str(value).strip()]
-
-    candidates.extend(model for model in model_names if model)
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    for item in values:
+        if item is None:
+            continue
+        if isinstance(item, str):
+            model_names = [model.strip() for model in item.split(",")]
+        else:
+            model_names = [str(item).strip()]
+        candidates.extend(model for model in model_names if model)
 
 
 def _dedupe_model_candidates(candidates: List[str]) -> List[str]:
