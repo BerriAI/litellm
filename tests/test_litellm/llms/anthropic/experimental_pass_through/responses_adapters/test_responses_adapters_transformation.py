@@ -750,6 +750,11 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["max_output_tokens"] == 512
 
+    def test_max_tokens_below_min_clamped_to_16(self):
+        req = _make_request(max_tokens=1)
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["max_output_tokens"] == 16
+
     def test_temperature_passed_through(self):
         req = _make_request(temperature=0.7)
         kwargs = _ADAPTER.translate_request(req)
