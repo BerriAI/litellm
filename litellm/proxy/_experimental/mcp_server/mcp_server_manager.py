@@ -41,6 +41,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -50,8 +51,11 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mc
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     add_server_prefix_to_name,
+    compute_short_server_prefix,
     get_server_prefix,
+    is_short_mcp_tool_prefix_enabled,
     is_tool_name_prefixed,
+    iter_known_server_prefixes,
     merge_mcp_headers,
     normalize_server_name,
     split_server_prefix_from_name,
@@ -105,6 +109,12 @@ if not _separator_probe.is_valid:
         MCP_TOOL_PREFIX_SEPARATOR,
         SEP_986_URL,
     )
+
+_AZURE_ENTRA_HOSTS = {
+    "login.microsoftonline.com",  # Global
+    "login.microsoftonline.us",  # US Government
+    "login.chinacloudapi.cn",  # China
+}
 
 
 def _warn_on_server_name_fields(
@@ -364,6 +374,7 @@ class MCPServerManager:
                 aws_session_name=server_config.get("aws_session_name", None),
                 instructions=server_config.get("instructions", None),
             )
+            self._assign_unique_short_prefix(new_server)
             self.config_mcp_servers[server_id] = new_server
 
             # Check if this is an OpenAPI-based server
@@ -726,6 +737,7 @@ class MCPServerManager:
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
+                self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Added MCP Server: {new_server.name}")
@@ -738,6 +750,12 @@ class MCPServerManager:
         try:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
+                # Carry the previously-resolved short prefix across so the
+                # tool names stay stable for clients holding cached lists.
+                existing_prefix = self.registry[mcp_server.server_id].short_prefix
+                if existing_prefix and not new_server.short_prefix:
+                    new_server.short_prefix = existing_prefix
+                self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
@@ -1236,7 +1254,11 @@ class MCPServerManager:
 
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:
-                _tools = global_mcp_tool_registry.list_tools(tool_prefix=server.name)
+                # OpenAPI tools were stored in the registry under the prefix
+                # active at registration time — fetch by that same prefix.
+                _tools = global_mcp_tool_registry.list_tools(
+                    tool_prefix=get_server_prefix(server)
+                )
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(
                     _tools
                 )
@@ -1478,6 +1500,47 @@ class MCPServerManager:
         )
         return await client.get_prompt(get_prompt_request_params)
 
+    @staticmethod
+    def _is_same_authority_metadata_url(url: str, server_url: str) -> bool:
+        """
+        Whether ``url`` shares scheme, host, and port with ``server_url``.
+
+        Same-authority metadata URLs are produced by our well-known discovery
+        construction and by resource servers that publish protected-resource
+        metadata on the resource origin. These must keep working for
+        administrator-configured internal MCP servers, so they are fetched
+        directly. Cross-origin URLs are fetched through ``async_safe_get``.
+        """
+        try:
+            target = urlparse(url)
+            base = urlparse(server_url)
+        except Exception:
+            return False
+
+        if target.scheme not in ("http", "https") or not target.hostname:
+            return False
+
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        base_port = base.port or (443 if base.scheme == "https" else 80)
+        return (
+            base.scheme == target.scheme
+            and (base.hostname or "").lower() == target.hostname.lower()
+            and base_port == target_port
+        )
+
+    async def _fetch_oauth_discovery_url(self, url: str, server_url: str) -> Any:
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.MCP,
+            params={"timeout": MCP_METADATA_TIMEOUT},
+        )
+        if self._is_same_authority_metadata_url(url, server_url):
+            # Same-authority URLs may point at administrator-configured
+            # internal MCP servers. Do not run them through user URL
+            # validation, but also do not follow redirects because the
+            # redirect target would not inherit the same-authority guarantee.
+            return await client.get(url, follow_redirects=False)
+        return await async_safe_get(client, url)
+
     async def _descovery_metadata(
         self,
         server_url: str,
@@ -1488,11 +1551,28 @@ class MCPServerManager:
             client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
             response = await client.get(server_url)
             response.raise_for_status()
-            verbose_logger.warning(
-                "MCP OAuth discovery unexpectedly succeeded for %s; server did not challenge",
-                server_url,
+            (
+                authorization_servers,
+                resource_scopes,
+            ) = await self._attempt_well_known_discovery(server_url)
+            metadata = await self._fetch_authorization_server_metadata(
+                authorization_servers, server_url
             )
-            raise RuntimeError("OAuth discovery must not succeed without a challenge")
+            if (
+                metadata is None
+                and not resource_scopes
+                and authorization_servers
+                and response.status_code == 200
+            ):
+                verbose_logger.warning(
+                    "MCP OAuth discovery for %s received 200 OK without RFC 9728 challenge and no discoverable authorization metadata.",
+                    server_url,
+                )
+            if metadata is None and resource_scopes:
+                return MCPOAuthMetadata(scopes=resource_scopes)
+            if metadata is not None and resource_scopes:
+                metadata.scopes = resource_scopes
+            return metadata
         except HTTPStatusError as exc:
             verbose_logger.debug(
                 "MCP OAuth discovery for %s received status error: %s",
@@ -1510,14 +1590,14 @@ class MCPServerManager:
                 header_value
             )
 
-            authorization_servers: List[str] = []
-            resource_scopes: Optional[List[str]] = None
+            authorization_servers = []
+            resource_scopes = None
             if resource_metadata_url:
                 (
                     authorization_servers,
                     resource_scopes,
                 ) = await self._fetch_oauth_metadata_from_resource(
-                    resource_metadata_url
+                    resource_metadata_url, server_url
                 )
             else:
                 (
@@ -1538,7 +1618,7 @@ class MCPServerManager:
 
             if authorization_servers:
                 metadata = await self._fetch_authorization_server_metadata(
-                    authorization_servers
+                    authorization_servers, server_url
                 )
 
             preferred_scopes = scopes or resource_scopes
@@ -1578,19 +1658,26 @@ class MCPServerManager:
         return resource_metadata_url, scopes
 
     async def _fetch_oauth_metadata_from_resource(
-        self, resource_metadata_url: str
+        self, resource_metadata_url: str, server_url: str
     ) -> Tuple[List[str], Optional[List[str]]]:
         if not resource_metadata_url:
             return [], None
 
         try:
-            client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": MCP_METADATA_TIMEOUT},
+            response = await self._fetch_oauth_discovery_url(
+                resource_metadata_url, server_url
             )
-            response = await client.get(resource_metadata_url)
             response.raise_for_status()
             data = response.json()
+        except SSRFError as exc:
+            verbose_logger.warning(
+                "MCP OAuth discovery: refusing to fetch resource metadata from %s "
+                "(rejected by SSRF guard for server %s): %s",
+                resource_metadata_url,
+                server_url,
+                exc,
+            )
+            return [], None
         except Exception as exc:  # pragma: no cover - network issues
             verbose_logger.debug(
                 "Failed to fetch MCP OAuth metadata from %s: %s",
@@ -1639,23 +1726,25 @@ class MCPServerManager:
             (
                 authorization_servers,
                 scopes,
-            ) = await self._fetch_oauth_metadata_from_resource(url)
+            ) = await self._fetch_oauth_metadata_from_resource(url, server_url)
             if authorization_servers:
                 return authorization_servers, scopes
 
         return [], None
 
     async def _fetch_authorization_server_metadata(
-        self, authorization_servers: List[str]
+        self, authorization_servers: List[str], server_url: str
     ) -> Optional[MCPOAuthMetadata]:
         for issuer in authorization_servers:
-            metadata = await self._fetch_single_authorization_server_metadata(issuer)
+            metadata = await self._fetch_single_authorization_server_metadata(
+                issuer, server_url
+            )
             if metadata is not None:
                 return metadata
         return None
 
     async def _fetch_single_authorization_server_metadata(
-        self, issuer_url: str
+        self, issuer_url: str, server_url: str
     ) -> Optional[MCPOAuthMetadata]:
         try:
             parsed = urlparse(issuer_url)
@@ -1674,19 +1763,27 @@ class MCPServerManager:
                 f"{base}/.well-known/oauth-authorization-server/{path}"
             )
             candidate_urls.append(f"{base}/.well-known/openid-configuration/{path}")
+            candidate_urls.append(
+                f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
+            )
         candidate_urls.append(f"{base}/.well-known/oauth-authorization-server")
         candidate_urls.append(f"{base}/.well-known/openid-configuration")
         candidate_urls.append(issuer_url.rstrip("/"))
 
         for url in candidate_urls:
             try:
-                client = get_async_httpx_client(
-                    llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": MCP_METADATA_TIMEOUT},
-                )
-                response = await client.get(url)
+                response = await self._fetch_oauth_discovery_url(url, server_url)
                 response.raise_for_status()
                 data = response.json()
+            except SSRFError as exc:
+                verbose_logger.warning(
+                    "MCP OAuth discovery: refusing to fetch authorization-server "
+                    "metadata from %s (rejected by SSRF guard for server %s): %s",
+                    url,
+                    server_url,
+                    exc,
+                )
+                continue
             except Exception as exc:  # pragma: no cover - network issues
                 verbose_logger.debug(
                     "Failed to fetch authorization metadata from %s: %s",
@@ -1713,7 +1810,28 @@ class MCPServerManager:
             ):
                 return metadata
 
-        return None
+        return self._build_azure_authorization_server_metadata(parsed)
+
+    @staticmethod
+    def _build_azure_authorization_server_metadata(
+        parsed_issuer_url: Any,
+    ) -> Optional[MCPOAuthMetadata]:
+        path_parts = [
+            part for part in (parsed_issuer_url.path or "").split("/") if part
+        ]
+        if (
+            parsed_issuer_url.netloc not in _AZURE_ENTRA_HOSTS
+            or len(path_parts) != 2
+            or path_parts[1] != "v2.0"
+        ):
+            return None
+
+        tenant = path_parts[0]
+        base = f"{parsed_issuer_url.scheme}://{parsed_issuer_url.netloc}/{tenant}"
+        return MCPOAuthMetadata(
+            authorization_url=f"{base}/oauth2/v2.0/authorize",
+            token_url=f"{base}/oauth2/v2.0/token",
+        )
 
     @staticmethod
     def _decrypt_credential_field(
@@ -1810,6 +1928,63 @@ class MCPServerManager:
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
             return []
 
+    _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
+
+    def _assign_unique_short_prefix(self, server: MCPServer) -> None:
+        """Resolve and cache a collision-free short tool prefix on ``server``.
+
+        Called at registration time for every MCP server entering the
+        registry.  Mutates ``server.short_prefix`` in place.  No-ops when
+        ``LITELLM_USE_SHORT_MCP_TOOL_PREFIX`` is disabled, when the server
+        has no ``server_id`` (synthetic temp-server objects), or when a
+        prefix is already cached.
+
+        Collision strategy: take the natural hash; if it's already used by
+        a *different* server in the combined registry, rehash with an
+        incrementing attempt counter until we find an unused slot.  The
+        attempt counter is folded into the hash so the resulting prefix is
+        still deterministic for a given (server_id, set-of-other-server-ids)
+        pair within one process.
+        """
+        if not is_short_mcp_tool_prefix_enabled():
+            return
+        if server.short_prefix:
+            return
+        if not server.server_id:
+            return
+
+        used: Dict[str, str] = {}
+        for other in self.get_registry().values():
+            if other.server_id == server.server_id:
+                continue
+            if other.short_prefix:
+                used[other.short_prefix] = other.server_id
+
+        for attempt in range(self._SHORT_PREFIX_MAX_REHASH_ATTEMPTS):
+            candidate = compute_short_server_prefix(server.server_id, attempt=attempt)
+            if candidate not in used:
+                server.short_prefix = candidate
+                if attempt > 0:
+                    verbose_logger.info(
+                        "MCP short-prefix collision resolved for server %s: "
+                        "natural hash collided with %s, using rehashed prefix "
+                        "%s (attempt=%d).",
+                        server.server_id,
+                        used.get(
+                            compute_short_server_prefix(server.server_id, attempt=0),
+                            "<unknown>",
+                        ),
+                        candidate,
+                        attempt,
+                    )
+                return
+
+        raise RuntimeError(
+            f"Unable to assign a unique short MCP tool prefix for server "
+            f"{server.server_id} after {self._SHORT_PREFIX_MAX_REHASH_ATTEMPTS} "
+            "attempts; the 3-character prefix space is too crowded."
+        )
+
     def _create_prefixed_tools(
         self, tools: List[MCPTool], server: MCPServer, add_prefix: bool = True
     ) -> List[MCPTool]:
@@ -1838,9 +2013,13 @@ class MCPServerManager:
             tool_copy.name = name_to_use
             prefixed_tools.append(tool_copy)
 
-            # Update tool to server mapping for resolution (support both forms)
+            # Register every known prefix form (alias, server_name, server_id,
+            # short ID) so call_tool can resolve regardless of which form a
+            # caller / cached client is using.
             self.tool_name_to_mcp_server_name_mapping[original_name] = prefix
-            self.tool_name_to_mcp_server_name_mapping[prefixed_name] = prefix
+            for known_prefix in iter_known_server_prefixes(server):
+                qualified = add_server_prefix_to_name(original_name, known_prefix)
+                self.tool_name_to_mcp_server_name_mapping[qualified] = prefix
 
         verbose_logger.info(
             f"Successfully fetched {len(prefixed_tools)} tools from server {server.name}"
@@ -2601,37 +2780,43 @@ class MCPServerManager:
         Returns:
             MCPServer if found, None otherwise
         """
+        registry_servers = list(self.get_registry().values())
+
+        # Build prefix → server lookup covering every known form a tool name
+        # may take (alias / server_name / server_id / short ID).  This is what
+        # makes the short-prefix mode work without breaking historical names.
+        prefix_to_server: Dict[str, MCPServer] = {}
+        for server in registry_servers:
+            for known_prefix in iter_known_server_prefixes(server):
+                normalised = normalize_server_name(known_prefix)
+                prefix_to_server.setdefault(normalised, server)
+
         # First try with the original tool name
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
             server_name = self.tool_name_to_mcp_server_name_mapping[tool_name]
-            for server in self.get_registry().values():
-                if normalize_server_name(server.name) == normalize_server_name(
-                    server_name
-                ):
+            normalised_lookup = normalize_server_name(server_name)
+            if normalised_lookup in prefix_to_server:
+                return prefix_to_server[normalised_lookup]
+            for server in registry_servers:
+                if normalize_server_name(server.name) == normalised_lookup:
                     return server
 
-        # If not found and tool name is prefixed, try extracting server name from prefix
-        known_prefixes = {
-            normalize_server_name(get_server_prefix(s))
-            for s in self.get_registry().values()
-            if get_server_prefix(s)
-        }
-        if is_tool_name_prefixed(tool_name, known_server_prefixes=known_prefixes):
+        # If not found and tool name is prefixed, extract the prefix and
+        # match against any known form.
+        if is_tool_name_prefixed(
+            tool_name, known_server_prefixes=set(prefix_to_server.keys())
+        ):
             (
                 original_tool_name,
                 server_name_from_prefix,
             ) = split_server_prefix_from_name(tool_name)
-            if original_tool_name in self.tool_name_to_mcp_server_name_mapping:
-                for server in self.get_registry().values():
-                    if server.server_name is None:
-                        if normalize_server_name(server.name) == normalize_server_name(
-                            server_name_from_prefix
-                        ):
-                            return server
-                    elif normalize_server_name(
-                        server.server_name
-                    ) == normalize_server_name(server_name_from_prefix):
-                        return server
+            normalised_prefix = normalize_server_name(server_name_from_prefix)
+            matched_server = prefix_to_server.get(normalised_prefix)
+            if matched_server is not None and (
+                original_tool_name in self.tool_name_to_mcp_server_name_mapping
+                or tool_name in self.tool_name_to_mcp_server_name_mapping
+            ):
+                return matched_server
 
         return None
 
@@ -2666,6 +2851,9 @@ class MCPServerManager:
         previous_registry = self.registry
         new_registry: Dict[str, MCPServer] = {}
 
+        # Stage one: build every server.  Stage two assigns short prefixes
+        # against the *full* set so dedup is deterministic regardless of
+        # iteration order.
         for server in db_mcp_servers:
             existing_server = previous_registry.get(server.server_id)
 
@@ -2689,10 +2877,21 @@ class MCPServerManager:
                 f"Building server from DB: {server.server_id} ({server.server_name})"
             )
             new_server = await self.build_mcp_server_from_table(server)
+            # Carry the cached short_prefix from the previous registry entry
+            # (if any) so the prefix is stable across reloads.
+            if existing_server is not None and existing_server.short_prefix:
+                new_server.short_prefix = existing_server.short_prefix
             new_registry[server.server_id] = new_server
-            await self._maybe_register_openapi_tools(new_server)
 
+        # Swap in the new registry first so _assign_unique_short_prefix
+        # sees the complete set when checking for collisions.
         self.registry = new_registry
+        for new_server in new_registry.values():
+            self._assign_unique_short_prefix(new_server)
+            # Register OpenAPI tools *after* the final short prefix is assigned
+            # so the tools are stored in the global registry under the same
+            # prefix that lookups will use.
+            await self._maybe_register_openapi_tools(new_server)
 
         verbose_logger.debug(
             "MCP registry refreshed (%s servers in registry)", len(new_registry)
