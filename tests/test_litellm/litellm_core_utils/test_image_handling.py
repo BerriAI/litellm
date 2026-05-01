@@ -7,6 +7,8 @@ import litellm
 from litellm import constants
 from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    _get_valid_media_type,
+    _infer_media_type_from_url,
     convert_url_to_base64,
 )
 
@@ -232,3 +234,232 @@ def test_image_size_limit_disabled(monkeypatch):
 
     assert "Image URL download is disabled" in str(excinfo.value)
     assert "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0" in str(excinfo.value)
+
+
+# ============================================================================
+# Tests for Content-Type handling and URL extension inference
+# ============================================================================
+
+
+class TestInferMediaTypeFromUrl:
+    """Tests for _infer_media_type_from_url function."""
+
+    def test_simple_png_url(self):
+        """Test simple PNG URL."""
+        result = _infer_media_type_from_url("https://example.com/image.png")
+        assert result == "image/png"
+
+    def test_simple_jpeg_url(self):
+        """Test simple JPEG URL with .jpeg extension."""
+        result = _infer_media_type_from_url("https://example.com/photo.jpeg")
+        assert result == "image/jpeg"
+
+    def test_jpg_extension(self):
+        """Test JPG extension maps to image/jpeg."""
+        result = _infer_media_type_from_url("https://example.com/photo.jpg")
+        assert result == "image/jpeg"
+
+    def test_gif_url(self):
+        """Test GIF URL."""
+        result = _infer_media_type_from_url("https://example.com/animation.gif")
+        assert result == "image/gif"
+
+    def test_webp_url(self):
+        """Test WebP URL."""
+        result = _infer_media_type_from_url("https://example.com/image.webp")
+        assert result == "image/webp"
+
+    def test_signed_url_with_query_params(self):
+        """Test signed URL (e.g., Aliyun OSS, AWS S3) with query parameters."""
+        result = _infer_media_type_from_url(
+            "https://bucket.oss-cn-hangzhou.aliyuncs.com/image.png"
+            "?Expires=1699999999&OSSAccessKeyId=LTAI5xxx&Signature=xxx"
+        )
+        assert result == "image/png"
+
+    def test_signed_url_complex_query(self):
+        """Test signed URL with complex query string."""
+        result = _infer_media_type_from_url(
+            "https://s3.amazonaws.com/bucket/photos/sunset.jpg"
+            "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=xxx"
+        )
+        assert result == "image/jpeg"
+
+    def test_unsupported_extension_raises(self):
+        """Test that unsupported extension raises ImageFetchError."""
+        with pytest.raises(litellm.ImageFetchError) as excinfo:
+            _infer_media_type_from_url("https://example.com/document.pdf")
+        assert "Unsupported image format" in str(excinfo.value)
+        assert "pdf" in str(excinfo.value)
+
+    def test_case_insensitive_extension(self):
+        """Test that extension matching is case-insensitive."""
+        result = _infer_media_type_from_url("https://example.com/IMAGE.PNG")
+        assert result == "image/png"
+
+    def test_url_without_extension_raises_with_clear_message(self):
+        """Test that URL without extension raises ImageFetchError with a clear message."""
+        url = "https://cdn.example.com/images/abc123"
+        with pytest.raises(litellm.ImageFetchError) as excinfo:
+            _infer_media_type_from_url(url)
+        error_msg = str(excinfo.value)
+        assert "Unsupported image format" in error_msg
+        # Should show the full URL for clarity, not just a confusing "extension"
+        assert url in error_msg
+        assert "Supported types" in error_msg
+
+    def test_url_with_trailing_slash_no_extension(self):
+        """Test URL with trailing slash and no extension raises ImageFetchError."""
+        url = "https://cdn.example.com/images/abc123/"
+        with pytest.raises(litellm.ImageFetchError) as excinfo:
+            _infer_media_type_from_url(url)
+        error_msg = str(excinfo.value)
+        assert "Unsupported image format" in error_msg
+        assert url in error_msg
+
+    def test_url_with_dots_in_path_but_no_image_extension(self):
+        """Test URL with dots in path segments but no valid image extension raises ImageFetchError."""
+        url = "https://api.example.com/v1.0/images/get"
+        with pytest.raises(litellm.ImageFetchError) as excinfo:
+            _infer_media_type_from_url(url)
+        error_msg = str(excinfo.value)
+        assert "Unsupported image format" in error_msg
+        # Should not confuse "0" from "v1.0" as the extension
+        assert url in error_msg
+
+
+class TestGetValidMediaType:
+    """Tests for _get_valid_media_type function."""
+
+    def test_valid_content_type_image_png(self):
+        """Test valid Content-Type is returned directly."""
+        result = _get_valid_media_type("image/png", "https://example.com/image.png")
+        assert result == "image/png"
+
+    def test_valid_content_type_image_jpeg(self):
+        """Test valid JPEG Content-Type."""
+        result = _get_valid_media_type("image/jpeg", "https://example.com/image.jpg")
+        assert result == "image/jpeg"
+
+    def test_content_type_with_charset_parameter(self):
+        """Test Content-Type with charset parameter is stripped."""
+        result = _get_valid_media_type(
+            "image/png; charset=utf-8", "https://example.com/image.png"
+        )
+        assert result == "image/png"
+
+    def test_content_type_with_boundary_parameter(self):
+        """Test Content-Type with boundary parameter is stripped."""
+        result = _get_valid_media_type(
+            "image/jpeg; boundary=something", "https://example.com/image.jpg"
+        )
+        assert result == "image/jpeg"
+
+    def test_invalid_content_type_application_octet_stream(self):
+        """Test that application/octet-stream falls back to URL extension."""
+        result = _get_valid_media_type(
+            "application/octet-stream", "https://example.com/image.png"
+        )
+        assert result == "image/png"
+
+    def test_invalid_content_type_urlencoded(self):
+        """
+        Test that application/x-www-form-urlencoded falls back to URL extension.
+        This is a real-world case from Aliyun OSS CDN returning wrong Content-Type.
+        """
+        result = _get_valid_media_type(
+            "application/x-www-form-urlencoded",
+            "https://bucket.oss-cn-hangzhou.aliyuncs.com/image.png"
+            "?Expires=1699999999&Signature=xxx",
+        )
+        assert result == "image/png"
+
+    def test_invalid_content_type_text_html(self):
+        """Test that text/html falls back to URL extension."""
+        result = _get_valid_media_type("text/html", "https://example.com/image.webp")
+        assert result == "image/webp"
+
+    def test_none_content_type(self):
+        """Test that None Content-Type falls back to URL extension."""
+        result = _get_valid_media_type(None, "https://example.com/photo.jpeg")
+        assert result == "image/jpeg"
+
+    def test_empty_content_type_after_strip(self):
+        """Test edge case where Content-Type is empty after stripping."""
+        result = _get_valid_media_type(
+            "; charset=utf-8", "https://example.com/image.gif"
+        )
+        assert result == "image/gif"
+
+
+class InvalidContentTypeClient:
+    """Client that returns an invalid Content-Type."""
+
+    def __init__(self, content_type: str):
+        self.content_type = content_type
+
+    def get(self, url, follow_redirects=True):
+        size_bytes = 1024
+        headers = {
+            "Content-Type": self.content_type,
+            "Content-Length": str(size_bytes),
+        }
+        return Response(
+            status_code=200,
+            headers=headers,
+            content=b"x" * size_bytes,
+            request=Request("GET", url),
+        )
+
+
+def test_convert_url_handles_invalid_content_type(monkeypatch):
+    """
+    Integration test: convert_url_to_base64 handles invalid Content-Type.
+
+    Simulates Aliyun OSS CDN returning application/x-www-form-urlencoded for a .png file.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "module_level_client",
+        InvalidContentTypeClient("application/x-www-form-urlencoded"),
+    )
+
+    result = convert_url_to_base64(
+        "https://bucket.oss-cn-hangzhou.aliyuncs.com/image.png?Expires=xxx"
+    )
+
+    assert result.startswith("data:image/png;base64,")
+
+
+def test_convert_url_handles_content_type_with_params(monkeypatch):
+    """
+    Integration test: convert_url_to_base64 handles Content-Type with parameters.
+
+    Tests that 'image/png; charset=utf-8' is properly stripped to 'image/png'.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "module_level_client",
+        InvalidContentTypeClient("image/png; charset=utf-8"),
+    )
+
+    result = convert_url_to_base64("https://example.com/image.png")
+
+    assert result.startswith("data:image/png;base64,")
+
+
+def test_convert_url_handles_application_octet_stream(monkeypatch):
+    """
+    Integration test: convert_url_to_base64 handles application/octet-stream.
+
+    Some servers return application/octet-stream for binary files including images.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "module_level_client",
+        InvalidContentTypeClient("application/octet-stream"),
+    )
+
+    result = convert_url_to_base64("https://example.com/photo.jpeg")
+
+    assert result.startswith("data:image/jpeg;base64,")

@@ -74,6 +74,28 @@ class BaseAnthropicMessagesConfig(ABC):
     ) -> Dict:
         pass
 
+    async def async_transform_anthropic_messages_request(
+        self,
+        model: str,
+        messages: List[Dict],
+        anthropic_messages_optional_request_params: Dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Dict:
+        """
+        Async version of transform_anthropic_messages_request.
+
+        Override this method to perform async operations (e.g., fetching image URLs)
+        without blocking the event loop. Default implementation calls the sync version.
+        """
+        return self.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     @abstractmethod
     def transform_anthropic_messages_response(
         self,
