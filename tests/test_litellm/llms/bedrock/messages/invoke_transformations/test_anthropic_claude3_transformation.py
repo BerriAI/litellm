@@ -625,6 +625,79 @@ def test_bedrock_messages_strips_output_config():
     assert result.get("max_tokens") == 4096
 
 
+def test_bedrock_messages_preserves_output_config_for_adaptive_thinking_models():
+    """
+    Bedrock Invoke accepts ``output_config.effort`` natively on Claude 4.6/4.7
+    adaptive-thinking models (no beta header required). The transform must
+    forward the field instead of stripping it.
+
+    Customer regression: Sonnet 4.6 ``output_config.effort`` was being dropped
+    on Bedrock Invoke and never appeared in the wire body.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+
+    for model in (
+        "anthropic.claude-sonnet-4-6-v1:0",
+        "global.anthropic.claude-sonnet-4-6-v1:0",
+        "anthropic.claude-opus-4-6-v1",
+        "us.anthropic.claude-opus-4-7-v1",
+    ):
+        optional_params = {
+            "max_tokens": 4096,
+            "output_config": {"effort": "low"},
+        }
+        result = cfg.transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert result.get("output_config") == {
+            "effort": "low"
+        }, f"output_config should be forwarded for {model}, got {result!r}"
+        # Adaptive-thinking models don't need the effort beta header.
+        betas = result.get("anthropic_beta") or []
+        assert "effort-2025-11-24" not in betas
+
+
+def test_bedrock_messages_preserves_output_config_for_opus_4_5_with_beta(
+    monkeypatch,
+):
+    """
+    Bedrock Invoke accepts ``output_config.effort`` on Claude Opus 4.5 only
+    when the ``effort-2025-11-24`` beta header is attached. The transform must
+    forward the field and auto-attach that beta.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+    import litellm.anthropic_beta_headers_manager as beta_mgr
+
+    # Force local beta-header config — the remote fetch may lag the in-tree
+    # mapping update that allows ``effort-2025-11-24`` for ``bedrock``.
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(beta_mgr, "_BETA_HEADERS_CONFIG", None)
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "medium"},
+    }
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result.get("output_config") == {"effort": "medium"}
+    betas = result.get("anthropic_beta") or []
+    assert "effort-2025-11-24" in betas
+
+
 def test_bedrock_messages_strips_output_config_with_output_format():
     """
     When both output_config and output_format are present, both should be
@@ -882,7 +955,10 @@ async def test_promote_message_start_cache_when_message_stop_omits_cache_fields(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"input_tokens": 10, "output_tokens": 181},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     merged: list[dict] = []
     async for chunk in cfg._promote_message_stop_usage(_stream()):
@@ -936,7 +1012,11 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
                 },
             },
         }
-        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }
         yield {
             "type": "content_block_delta",
             "index": 0,
@@ -948,7 +1028,10 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"output_tokens": 181, "input_tokens": 10},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     logging_obj = LiteLLMLoggingObj(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",

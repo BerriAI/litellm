@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -452,6 +453,70 @@ class AmazonConverseConfig(BaseConfig):
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort, model=model
             )
+            # Claude 4.6/4.7 adaptive thinking takes ``effort`` inside the
+            # ``thinking`` block on Bedrock Converse (Anthropic's
+            # ``output_config.effort`` is API-only). Surface the mapped
+            # effort here so it survives into ``additionalModelRequestFields``.
+            if (
+                AnthropicModelInfo._is_adaptive_thinking_model(model)
+                and isinstance(optional_params.get("thinking"), dict)
+                and optional_params["thinking"].get("type") == "adaptive"
+                and "effort" not in optional_params["thinking"]
+            ):
+                effort_map = {
+                    "low": "low",
+                    "minimal": "low",
+                    "medium": "medium",
+                    "high": "high",
+                    "xhigh": "xhigh",
+                    "max": "max",
+                }
+                optional_params["thinking"]["effort"] = effort_map.get(
+                    reasoning_effort, reasoning_effort
+                )
+
+    @staticmethod
+    def _fold_output_config_effort_into_thinking(
+        inference_params: dict, model: str
+    ) -> None:
+        """
+        Fold ``output_config.effort`` into ``thinking.effort`` for Bedrock
+        Converse on adaptive-thinking models (Claude 4.6 / 4.7).
+
+        Bedrock Converse exposes Anthropic's ``effort`` parameter inside
+        ``additionalModelRequestFields.thinking`` (per the AWS adaptive
+        thinking docs), not as a top-level ``output_config`` block. Callers
+        commonly send the Anthropic Messages API shape — ``output_config:
+        {effort: ...}`` — when chaining a Messages-style request through
+        Converse, which leaves the value on the floor.
+
+        This helper preserves caller intent: if the model accepts adaptive
+        thinking and the caller did not already set ``thinking.effort``, we
+        attach the effort there. ``output_config`` is still stripped from
+        ``inference_params`` separately so it never reaches the wire body.
+        """
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model):
+            return
+        output_config = inference_params.get("output_config")
+        if not isinstance(output_config, dict):
+            return
+        effort = output_config.get("effort")
+        if not (effort and isinstance(effort, str)):
+            return
+        thinking = inference_params.get("thinking")
+        if isinstance(thinking, dict):
+            # Don't override an explicit thinking.effort set by the caller.
+            if "effort" not in thinking:
+                thinking["effort"] = effort
+            # Make sure the type is adaptive — only adaptive thinking accepts
+            # effort. If the caller passed ``enabled``, leave it alone; the
+            # downstream `_translate_legacy_thinking_for_adaptive_model` flow
+            # owns that translation.
+        else:
+            inference_params["thinking"] = {
+                "type": "adaptive",
+                "effort": effort,
+            }
 
     @staticmethod
     def _clamp_thinking_budget_tokens(optional_params: dict) -> None:
@@ -1192,6 +1257,17 @@ class AmazonConverseConfig(BaseConfig):
             + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
+
+        # Bedrock Converse exposes the Anthropic ``effort`` parameter through
+        # ``additionalModelRequestFields.thinking.effort`` (per AWS adaptive
+        # thinking docs). If the caller supplied ``output_config.effort`` —
+        # the Anthropic Messages API shape — fold it into ``thinking`` for
+        # Claude 4.6/4.7 adaptive-thinking models so the value reaches the
+        # wire body. For all other models the field is unsupported and gets
+        # stripped below.
+        self._fold_output_config_effort_into_thinking(
+            inference_params=inference_params, model=model
+        )
         # Anthropic-only key. Bedrock expects `outputConfig` (camelCase) and
         # will reject `output_config` if it leaks through pass-through routes.
         inference_params.pop("output_config", None)
@@ -1204,9 +1280,6 @@ class AmazonConverseConfig(BaseConfig):
         output_config: Optional[OutputConfigBlock] = inference_params.pop(
             "outputConfig", None
         )
-        inference_params.pop(
-            "output_config", None
-        )  # Bedrock Converse doesn't support it
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {

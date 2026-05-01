@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
@@ -29,6 +30,21 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _supports_effort_on_bedrock_invoke(model: str) -> bool:
+    """
+    Bedrock Invoke (legacy /completion path) accepts ``output_config.effort``
+    on Claude 4.6/4.7 adaptive-thinking models (no beta header) and on Claude
+    Opus 4.5 with the ``effort-2025-11-24`` beta header. All other Claude
+    models reject the field.
+    """
+    if AnthropicModelInfo._is_adaptive_thinking_model(model):
+        return True
+    model_lower = model.lower()
+    return any(
+        p in model_lower for p in ("opus-4.5", "opus_4.5", "opus-4-5", "opus_4_5")
+    )
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -169,7 +185,12 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
         anthropic_request.pop("output_format", None)
-        anthropic_request.pop("output_config", None)
+        # Bedrock accepts ``output_config`` (carrying ``effort``) on Claude 4.6/4.7
+        # adaptive-thinking models natively, and on Claude Opus 4.5 with the
+        # ``effort-2025-11-24`` beta header. Older Claude models reject the
+        # field — strip it for them so the request signs cleanly.
+        if not _supports_effort_on_bedrock_invoke(model):
+            anthropic_request.pop("output_config", None)
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
 
