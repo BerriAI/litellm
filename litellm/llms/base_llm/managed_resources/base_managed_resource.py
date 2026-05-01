@@ -18,6 +18,11 @@ from typing import (
 )
 
 from litellm import verbose_logger
+from litellm.llms.base_llm.managed_resources.isolation import (
+    build_list_page,
+    build_owner_filter,
+    can_access_resource,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import SpecialEnums
 
@@ -169,6 +174,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             "model_mappings": model_mappings,
             "flat_model_resource_ids": list(model_mappings.values()),
             "created_by": user_api_key_dict.user_id,
+            "created_by_team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
 
@@ -190,6 +196,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             "model_mappings": json.dumps(model_mappings),
             "flat_model_resource_ids": list(model_mappings.values()),
             "created_by": user_api_key_dict.user_id,
+            "created_by_team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
 
@@ -316,15 +323,17 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         Returns:
             True if user has access, False otherwise
         """
-        user_id = user_api_key_dict.user_id
-
         # Use cached method instead of direct DB query
         resource = await self.get_unified_resource_id(
             unified_resource_id, litellm_parent_otel_span
         )
 
         if resource:
-            return resource.get("created_by") == user_id
+            return can_access_resource(
+                user_api_key_dict=user_api_key_dict,
+                created_by=resource.get("created_by"),
+                created_by_team_id=resource.get("created_by_team_id"),
+            )
 
         return False
 
@@ -549,11 +558,11 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         Returns:
             Dictionary with list of resources and pagination info
         """
-        where_clause: Dict[str, Any] = {}
+        owner_filter = build_owner_filter(user_api_key_dict)
+        if owner_filter is None:
+            return build_list_page([])
 
-        # Filter by user who created the resource
-        if user_api_key_dict.user_id:
-            where_clause["created_by"] = user_api_key_dict.user_id
+        where_clause: Dict[str, Any] = {**owner_filter}
 
         if after:
             where_clause["id"] = {"gt": after}
@@ -598,10 +607,6 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
                 )
                 continue
 
-        return {
-            "object": "list",
-            "data": resource_objects,
-            "first_id": resource_objects[0].id if resource_objects else None,
-            "last_id": resource_objects[-1].id if resource_objects else None,
-            "has_more": len(resource_objects) == (limit or 20),
-        }
+        return build_list_page(
+            resource_objects, has_more=len(resource_objects) == (limit or 20)
+        )

@@ -884,28 +884,32 @@ model LiteLLM_ManagedFileTable {
   storage_backend String? // Storage backend name (e.g., "azure_storage", "gcs", "default")
   storage_url String? // The actual storage URL where the file is stored
   created_at DateTime @default(now())
-  created_by String? 
+  created_by String?
+  created_by_team_id String? // Team that owns the resource; populated for service-account keys without a user_id so listings can isolate by team.
   updated_at DateTime @updatedAt
   updated_by String?
 
   @@index([unified_file_id])
+  @@index([created_by_team_id, created_at(sort: Desc)])
 }
 
-model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the 
+model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the
   id String @id @default(uuid())
   unified_object_id String @unique // The base64 encoded unified file ID
-  model_object_id String @unique // the id returned by the backend API provider 
+  model_object_id String @unique // the id returned by the backend API provider
   file_object Json // Stores the OpenAIFileObject
   file_purpose String // either 'batch' or 'fine-tune'
-  status String? // check if batch cost has been tracked  
+  status String? // check if batch cost has been tracked
   batch_processed Boolean @default(false) // set to true by CheckBatchCost after cost is computed
   created_at DateTime @default(now())
   created_by String?
+  created_by_team_id String?
   updated_at DateTime @updatedAt
-  updated_by String? 
+  updated_by String?
 
   @@index([unified_object_id])
   @@index([model_object_id])
+  @@index([created_by_team_id, created_at(sort: Desc)])
 }
 
 model LiteLLM_ManagedVectorStoreTable {
@@ -918,10 +922,12 @@ model LiteLLM_ManagedVectorStoreTable {
   storage_url String? // Storage URL (if applicable)
   created_at DateTime @default(now())
   created_by String?
+  created_by_team_id String?
   updated_at DateTime @updatedAt
   updated_by String?
 
   @@index([unified_resource_id])
+  @@index([created_by_team_id, created_at(sort: Desc)])
 }
 
 model LiteLLM_ManagedVectorStoresTable {
