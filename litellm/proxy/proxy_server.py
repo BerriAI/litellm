@@ -2102,8 +2102,8 @@ async def _ensure_spend_counter_initialized(
     counter_key: str,
     source_cache_key: str,
 ):
-    current = await spend_counter_cache.async_get_cache(key=counter_key)
-    if current is None:
+    is_warm = await _is_spend_counter_cache_warm(counter_key=counter_key)
+    if is_warm is False:
         # Shares the per-counter lock with get_current_spend.
         db_spend = await SpendCounterReseed.coalesced(
             prisma_client=prisma_client,
@@ -2132,8 +2132,8 @@ async def _ensure_window_spend_counter_initialized(
     entity_id: str,
     window_start: datetime,
 ):
-    current = await spend_counter_cache.async_get_cache(key=counter_key)
-    if current is None:
+    is_warm = await _is_spend_counter_cache_warm(counter_key=counter_key)
+    if is_warm is False:
         window_spend = await SpendCounterReseed.coalesced_window(
             prisma_client=prisma_client,
             spend_counter_cache=spend_counter_cache,
@@ -2144,6 +2144,29 @@ async def _ensure_window_spend_counter_initialized(
         )
         if window_spend is None:
             await _increment_spend_counter_cache(counter_key=counter_key, increment=0.0)
+
+
+async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            current_value = await spend_counter_cache.redis_cache.async_get_cache(
+                key=counter_key,
+            )
+            if current_value is None:
+                return False
+            spend_counter_cache.in_memory_cache.set_cache(
+                key=counter_key,
+                value=current_value,
+            )
+            return True
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Unable to read Redis spend counter %s before initialization, falling back to in-memory: %s",
+                counter_key,
+                e,
+            )
+
+    return spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is not None
 
 
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
