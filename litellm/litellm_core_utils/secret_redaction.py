@@ -14,6 +14,12 @@ _REDACTED = "REDACTED"
 
 def _build_secret_patterns() -> "re.Pattern[str]":
     patterns: List[str] = [
+        # PEM private key / certificate blocks
+        r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----",
+        # GCP OAuth2 access tokens (ya29.*)
+        r"\bya29\.[A-Za-z0-9_.~+/-]+",
+        # Credential %s formatting (space separator, no key= prefix)
+        r"(?:client_secret|azure_password|azure_username)\s+[^\s,'\"})\]{}>]+",
         # AWS access key IDs
         r"(?:AKIA|ASIA)[0-9A-Z]{16}",
         # AWS secrets / session tokens / access key IDs (key=value)
@@ -37,7 +43,8 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         # full "key=<secret>" fragment so the value is redacted regardless of format.
         r"(?<=[?&])key=[^\s&'\"]{8,}",
         # Password / secret params (handles key=value and 'key': 'value')
-        r"\w*(?:password|passwd|client_secret|secret_key|_secret)"
+        # Word boundary prevents O(n^2) backtracking on long word-char runs.
+        r"(?:^|(?<=\W))\w*(?:password|passwd|client_secret|secret_key|_secret)"
         r"['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+",
         # Database connection string credentials (scheme://user:pass@host)
         r"(?<=://)[^\s'\"]*:[^\s'\"@]+(?=@)",
@@ -47,13 +54,21 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         # Catches secrets inside dicts/config dumps by matching on the KEY name
         # regardless of what the value looks like.
         # e.g. 'master_key': 'any-value-here', "database_url": "postgres://..."
+        # private_key with PEM-aware value capture
+        r"""private_key['\"]?\s*[:=]\s*['\"]?(?:-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----|[^\s,'\"})\]{}>]+)""",
         r"(?:master_key|database_url|db_url|connection_string|"
-        r"private_key|signing_key|encryption_key|"
+        r"signing_key|encryption_key|"
         r"auth_token|access_token|refresh_token|"
         r"slack_webhook_url|webhook_url|"
         r"database_connection_string|"
         r"huggingface_token|jwt_secret)"
         r"""['\"]?\s*[:=]\s*['\"]?[^\s,'\"})\]{}>]+""",
+        # Raw JWTs (without Bearer prefix)
+        r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*",
+        # Azure SAS tokens in URLs
+        r"[?&]sig=[A-Za-z0-9%+/=]+",
+        # Full JSON service-account blobs (single-line and multi-line)
+        r'\{[^{}]*"type"\s*:\s*"service_account"[^{}]*(?:\{[^{}]*\}[^{}]*)*\}',
     ]
     return re.compile("|".join(patterns), re.IGNORECASE)
 
