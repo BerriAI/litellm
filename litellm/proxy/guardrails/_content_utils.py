@@ -1,7 +1,7 @@
 """
-Shared helpers for guardrail hooks: extract user-supplied text from a
-request body regardless of whether it uses Chat Completions ``messages``,
-Responses-API ``input``, or multimodal list-format ``content`` parts.
+Shared helpers for guardrail hooks: extract text from a request body
+regardless of whether it uses Chat Completions ``messages``, Responses-API
+``input``, or multimodal list-format ``content`` parts.
 
 Hooks that only check ``data["messages"]`` for string content silently
 skip the other shapes — these helpers normalise that so every hook sees
@@ -19,6 +19,12 @@ def _iter_text_parts_in_content(content: Any) -> Iterator[str]:
             yield content
     elif isinstance(content, list):
         for part in content:
+            if isinstance(part, str):
+                # A bare string in a content/input list is itself a text
+                # fragment (Responses-API mixed-list shape).
+                if part:
+                    yield part
+                continue
             if not isinstance(part, dict):
                 continue
             if part.get("type") == "text":
@@ -36,18 +42,11 @@ def _coerce_input_to_messages(input_value: Any) -> List[Dict[str, Any]]:
             isinstance(item, dict) and "role" in item for item in input_value
         ):
             return list(input_value)
-        if input_value and all(isinstance(item, str) for item in input_value):
-            return [{"role": "user", "content": item} for item in input_value]
+        # Mixed lists (content-part dicts + bare strings) and pure
+        # string/dict lists all become a single user message; the content
+        # iterator below handles each element type uniformly.
         return [{"role": "user", "content": input_value}]
     return []
-
-
-def _resolve_messages(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Return the messages list to inspect, falling back to ``input``."""
-    messages = data.get("messages")
-    if isinstance(messages, list) and messages:
-        return messages
-    return _coerce_input_to_messages(data.get("input"))
 
 
 def _iter_inspection_messages(data: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
@@ -58,8 +57,12 @@ def _iter_inspection_messages(data: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
     yield from _coerce_input_to_messages(data.get("input"))
 
 
-def iter_user_text(data: Dict[str, Any]) -> Iterator[str]:
-    """Yield every user-supplied text fragment from ``messages`` and ``input``."""
+def iter_message_text(data: Dict[str, Any]) -> Iterator[str]:
+    """Yield every text fragment from ``messages`` AND ``input``.
+
+    Walks every role (user, assistant, system, …) — guardrails inspect
+    the entire conversation, not just user turns.
+    """
     for message in _iter_inspection_messages(data):
         if not isinstance(message, dict):
             continue
@@ -67,7 +70,7 @@ def iter_user_text(data: Dict[str, Any]) -> Iterator[str]:
 
 
 def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
-    """Rewrite every user-supplied text fragment in place via ``visit``.
+    """Rewrite every text fragment in place via ``visit``.
 
     Mutates ``data["messages"]`` and ``data["input"]``. Returns the number
     of fragments visited so callers can short-circuit when nothing was
@@ -85,7 +88,10 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
         if isinstance(content, list):
             new_parts = []
             for part in content:
-                if (
+                if isinstance(part, str) and part:
+                    visited += 1
+                    new_parts.append(visit(part))
+                elif (
                     isinstance(part, dict)
                     and part.get("type") == "text"
                     and isinstance(part.get("text"), str)
@@ -119,7 +125,7 @@ def walk_user_text(data: Dict[str, Any], visit: Callable[[str], str]) -> int:
                 if "content" in item:
                     item["content"] = _rewrite_content(item["content"])
             return visited
-        # List of content parts or strings: rewrite in place.
+        # List of content parts and/or bare strings: rewrite in place.
         for idx, item in enumerate(input_value):
             if isinstance(item, str) and item:
                 visited += 1

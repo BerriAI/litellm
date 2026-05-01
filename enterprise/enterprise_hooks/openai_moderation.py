@@ -19,7 +19,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import iter_user_text
+from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.utils import CallTypesLiteral
 
 
@@ -39,7 +39,7 @@ class _ENTERPRISE_OpenAI_Moderation(CustomLogger):
         call_type: CallTypesLiteral,
     ):
         # Covers multimodal list content + Responses-API input.
-        text = "".join(iter_user_text(data))
+        text = "".join(iter_message_text(data))
 
         from litellm.proxy.proxy_server import llm_router
 
