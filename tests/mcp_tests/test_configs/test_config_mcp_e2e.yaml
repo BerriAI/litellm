@@ -15,7 +15,7 @@ model_list:
 mcp_servers:
   math_stdio:
     transport: stdio
-    command: python3
+    command: python
     args:
       - tests/mcp_tests/mcp_server.py
     allow_all_keys: true  # Needed for master_key auth when DB/object_permission not used

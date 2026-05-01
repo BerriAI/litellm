@@ -318,6 +318,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            **kwargs,
         ):
             if server.name == "github":
                 tool1 = MagicMock()
@@ -372,6 +373,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            **kwargs,
         ):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
@@ -410,6 +412,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -450,7 +453,7 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env
+            server, mcp_auth_header, extra_headers, stdio_env, **kwargs
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -1000,6 +1003,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -1860,7 +1864,6 @@ class TestMCPServerManager:
 
         # Unprefixed resolution
         resolved_server_unpref = manager._get_mcp_server_from_tool_name("create_zap")
-        print(resolved_server_unpref)
         assert resolved_server_unpref is not None
         assert resolved_server_unpref.server_id == server.server_id
 
@@ -2955,6 +2958,62 @@ class TestMCPServerManagerExpandToolPermissions:
             {"uuid-a": ["read_file"], "alias-a": ["write_file"]}
         )
         assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
+
+    @pytest.mark.asyncio
+    async def test_create_sampling_callback(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _create_sampling_callback,
+        )
+
+        callback = _create_sampling_callback(user_api_key_auth="test_auth")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message",
+            new_callable=AsyncMock,
+        ) as mock_handle:
+            mock_handle.return_value = "mocked_result"
+
+            result = await callback("mock_context", "mock_params")
+
+            mock_handle.assert_called_once()
+            called_kwargs = mock_handle.call_args.kwargs
+            assert called_kwargs["context"] == "mock_context"
+            assert called_kwargs["params"] == "mock_params"
+            assert called_kwargs["user_api_key_auth"] == "test_auth"
+            assert result == "mocked_result"
+
+    @pytest.mark.asyncio
+    async def test_create_elicitation_callback(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _create_elicitation_callback,
+        )
+
+        callback = _create_elicitation_callback()
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.elicitation_handler.handle_elicitation_request",
+                new_callable=AsyncMock,
+            ) as mock_handle,
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.get_active_mcp_session"
+            ) as mock_get_session,
+        ):
+            mock_session = MagicMock()
+            mock_session.capabilities = "test_capabilities"
+            mock_get_session.return_value = mock_session
+
+            mock_handle.return_value = "mocked_elicitation"
+
+            result = await callback("mock_context", "mock_params")
+
+            mock_handle.assert_called_once()
+            called_kwargs = mock_handle.call_args.kwargs
+            assert called_kwargs["context"] == "mock_context"
+            assert called_kwargs["params"] == "mock_params"
+            assert called_kwargs["downstream_session"] == mock_session
+            assert called_kwargs["downstream_capabilities"] == "test_capabilities"
+            assert result == "mocked_elicitation"
 
 
 class TestOAuthDiscoverySSRFGuard:

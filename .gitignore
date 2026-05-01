@@ -101,3 +101,5 @@ STABILIZATION_TODO.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
+tests/mcp_sampling_elicitation/mcp_test_config.yaml
+custom_server.log

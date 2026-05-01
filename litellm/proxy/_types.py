@@ -1219,7 +1219,16 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("args is required for stdio transport")
                 # Validate command against allowlist to prevent arbitrary execution
                 base_command = os.path.basename(values["command"])
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                # Strip .exe/.cmd/.bat/.com suffix for Windows compatibility
+                base_command_no_ext = base_command.lower()
+                for ext in [".exe", ".cmd", ".bat", ".com"]:
+                    if base_command.lower().endswith(ext):
+                        base_command_no_ext = base_command.lower()[: -len(ext)].lower()
+                        break
+                if (
+                    base_command.lower() not in MCP_STDIO_ALLOWED_COMMANDS
+                    and base_command_no_ext not in MCP_STDIO_ALLOWED_COMMANDS
+                ):
                     raise ValueError(
                         f"Command '{values['command']}' is not in the allowed commands list "
                         f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
@@ -1287,7 +1296,16 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
                     raise ValueError("args is required for stdio transport")
                 # Validate command against allowlist to prevent arbitrary execution
                 base_command = os.path.basename(values["command"])
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                # Strip .exe/.cmd/.bat/.com suffix for Windows compatibility
+                base_command_no_ext = base_command.lower()
+                for ext in [".exe", ".cmd", ".bat", ".com"]:
+                    if base_command.lower().endswith(ext):
+                        base_command_no_ext = base_command.lower()[: -len(ext)].lower()
+                        break
+                if (
+                    base_command.lower() not in MCP_STDIO_ALLOWED_COMMANDS
+                    and base_command_no_ext not in MCP_STDIO_ALLOWED_COMMANDS
+                ):
                     raise ValueError(
                         f"Command '{values['command']}' is not in the allowed commands list "
                         f"for stdio transport. Allowed commands: {sorted(MCP_STDIO_ALLOWED_COMMANDS)}"
