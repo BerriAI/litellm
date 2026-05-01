@@ -151,6 +151,7 @@ async def reserve_budget_for_request(
 async def reconcile_budget_reservation(
     budget_reservation: Optional[dict],
     actual_cost: Optional[float],
+    finalize: bool = True,
 ) -> None:
     if not budget_reservation or budget_reservation.get("finalized") is True:
         return
@@ -162,7 +163,8 @@ async def reconcile_budget_reservation(
         actual_cost=actual,
         default_reserved_cost=reserved_cost,
     )
-    budget_reservation["finalized"] = True
+    if finalize:
+        budget_reservation["finalized"] = True
 
 
 async def release_budget_reservation(budget_reservation: Optional[dict]) -> None:
