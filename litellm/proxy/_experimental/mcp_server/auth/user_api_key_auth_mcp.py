@@ -409,9 +409,12 @@ class MCPRequestHandler:
 
         Permission hierarchy (all rules are intersections):
         1. Get allowed servers from key permissions
-        2. Get allowed servers from team permissions
-        3. Get allowed servers from end_user permissions
-        4. Final result = intersection of key/team AND end_user (if end_user has permissions set)
+        2. Get allowed servers from team permissions (key inherits from team, or intersection)
+        3. Get allowed servers from end_user permissions (intersected if set)
+        4. Get allowed servers from agent permissions (intersected if set)
+        5. Get allowed servers from org permissions — org acts as a ceiling: if the org
+           has an explicit MCP server list, the combined key/team/end_user/agent result is
+           capped to that list.  If the org has no list, no extra restriction is applied.
 
         Returns:
             List[str]: List of allowed MCP servers by server id
@@ -498,6 +501,30 @@ class MCPRequestHandler:
                     ]
                     verbose_logger.debug(
                         f"Applied agent intersection filter. Final allowed servers: {allowed_mcp_servers}"
+                    )
+
+            #########################################################
+            # Apply org-level ceiling if org_id is set
+            #########################################################
+            if user_api_key_auth and user_api_key_auth.org_id:
+                allowed_mcp_servers_for_org = (
+                    await MCPRequestHandler._get_allowed_mcp_servers_for_org(
+                        user_api_key_auth
+                    )
+                )
+                if len(allowed_mcp_servers_for_org) > 0:
+                    if len(allowed_mcp_servers) > 0:
+                        # Both have explicit lists → intersection
+                        allowed_mcp_servers = [
+                            s
+                            for s in allowed_mcp_servers
+                            if s in allowed_mcp_servers_for_org
+                        ]
+                    else:
+                        # No lower-level restrictions → org list becomes the ceiling
+                        allowed_mcp_servers = allowed_mcp_servers_for_org
+                    verbose_logger.debug(
+                        f"Applied org ceiling filter. Final allowed servers: {allowed_mcp_servers}"
                     )
 
             return list(set(allowed_mcp_servers))
@@ -638,6 +665,23 @@ class MCPRequestHandler:
                         allowed_tools = list(set(allowed_tools) & set(agent_tools))
                     else:
                         allowed_tools = agent_tools
+
+            # Apply org-level tool ceiling if org_id is set
+            if user_api_key_auth.org_id:
+                org_obj_perm = await MCPRequestHandler._get_org_object_permission(
+                    user_api_key_auth
+                )
+                org_tools = (
+                    org_obj_perm.mcp_tool_permissions.get(server_id)
+                    if org_obj_perm and org_obj_perm.mcp_tool_permissions
+                    else None
+                )
+                if org_tools is not None:
+                    if allowed_tools is not None:
+                        allowed_tools = list(set(allowed_tools) & set(org_tools))
+                    else:
+                        allowed_tools = list(org_tools)
+
             return allowed_tools
 
         except Exception as e:
@@ -802,6 +846,78 @@ class MCPRequestHandler:
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for team: {str(e)}"
+            )
+            return []
+
+    @staticmethod
+    async def _get_org_object_permission(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ):
+        """
+        Get org object_permission by fetching the org row with object_permission included.
+
+        Note: get_org_object() in auth_checks.py does not include the object_permission
+        relation, so we do a targeted DB lookup here (same pattern as _get_agent_object_permission).
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if not user_api_key_auth or not user_api_key_auth.org_id:
+            return None
+
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
+            return None
+
+        try:
+            org_row = await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": user_api_key_auth.org_id},
+                include={"object_permission": True},
+            )
+            if org_row is None or org_row.object_permission is None:
+                return None
+            return org_row.object_permission
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get org object permission: {str(e)}")
+            return None
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_org(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get allowed MCP servers for an organization.
+
+        Returns the MCP servers from the org's object_permission.
+        An empty result means the org places no restriction (allow-all from this level).
+        """
+        try:
+            object_permissions = await MCPRequestHandler._get_org_object_permission(
+                user_api_key_auth
+            )
+
+            if object_permissions is None:
+                return []
+
+            # Direct server IDs
+            direct_mcp_servers = object_permissions.mcp_servers or []
+
+            # Servers from access groups
+            access_group_servers = (
+                await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    object_permissions.mcp_access_groups or []
+                )
+            )
+
+            # Servers referenced only in tool permissions should also be accessible
+            tool_perm_servers = list(
+                (object_permissions.mcp_tool_permissions or {}).keys()
+            )
+
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            return list(set(all_servers))
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get allowed MCP servers for org: {str(e)}"
             )
             return []
 
