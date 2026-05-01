@@ -2581,3 +2581,49 @@ async def test_centralized_common_checks_user_http_exception_isolates_to_user_on
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_master_key_auth_substitutes_alias_for_api_key():
+    """
+    When the master key authenticates a request, the resulting
+    ``UserAPIKeyAuth.api_key`` must be the stable alias
+    ``LITELLM_PROXY_MASTER_KEY_ALIAS`` — never the raw master key (which
+    would propagate downstream and be hashed into spend logs, Prometheus
+    ``/metrics`` labels, or audit trails) and never the master-key hash.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.proxy.utils import hash_token
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    attrs = _proxy_server_attrs_for_custom_auth(user_custom_auth=None)
+    master_key = attrs["master_key"]
+    _orig = {k: getattr(_proxy_server_mod, k, None) for k in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        result = await _user_api_key_auth_builder(
+            request=request,
+            api_key=f"Bearer {master_key}",
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data={},
+        )
+
+        assert result.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+        assert result.api_key != master_key
+        assert result.api_key != hash_token(master_key)
+    finally:
+        for k, v in _orig.items():
+            setattr(_proxy_server_mod, k, v)

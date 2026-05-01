@@ -164,13 +164,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         batch_usage: BatchFileUsage,
     ) -> None:
         """
-        Check rate limits and increment counters by the batch amounts.
+        Atomically check + increment rate-limit counters by the batch amounts.
 
-        Raises HTTPException if any limit would be exceeded.
+        Raises HTTPException if any descriptor would exceed its limit; in that
+        case no counter is modified. Backed by `atomic_check_and_increment_by_n`
+        which uses a Redis Lua script when available (multi-process atomic) and
+        falls back to a per-process asyncio.Lock + in-memory operation.
         """
-        from litellm.types.caching import RedisPipelineIncrementOperation
-
-        # Create descriptors and check if batch would exceed limits
         descriptors = self.parallel_request_limiter._create_rate_limit_descriptors(
             user_api_key_dict=user_api_key_dict,
             data=data,
@@ -179,73 +179,31 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             model_has_failures=False,
         )
 
-        # Check current usage without incrementing
-        rate_limit_response = await self.parallel_request_limiter.should_rate_limit(
-            descriptors=descriptors,
-            parent_otel_span=user_api_key_dict.parent_otel_span,
-            read_only=True,
-        )
+        increment: Dict[Literal["requests", "tokens"], int] = {
+            "requests": batch_usage.request_count,
+            "tokens": batch_usage.total_tokens,
+        }
+        increments: List[Dict[Literal["requests", "tokens"], int]] = [
+            increment for _ in descriptors
+        ]
 
-        # Verify batch won't exceed any limits
-        for status in rate_limit_response["statuses"]:
-            rate_limit_type = status["rate_limit_type"]
-            limit_remaining = status["limit_remaining"]
-
-            required_capacity = (
-                batch_usage.request_count
-                if rate_limit_type == "requests"
-                else batch_usage.total_tokens if rate_limit_type == "tokens" else 0
-            )
-
-            if required_capacity > limit_remaining:
-                self._raise_rate_limit_error(
-                    status, descriptors, batch_usage, rate_limit_type
-                )
-
-        # Build pipeline operations for batch increments
-        # Reuse the same keys that descriptors check
-        pipeline_operations: List[RedisPipelineIncrementOperation] = []
-
-        for descriptor in descriptors:
-            key = descriptor["key"]
-            value = descriptor["value"]
-            rate_limit = descriptor.get("rate_limit")
-
-            if rate_limit is None:
-                continue
-
-            # Add RPM increment if limit is set
-            if rate_limit.get("requests_per_unit") is not None:
-                rpm_key = self.parallel_request_limiter.create_rate_limit_keys(
-                    key=key, value=value, rate_limit_type="requests"
-                )
-                pipeline_operations.append(
-                    RedisPipelineIncrementOperation(
-                        key=rpm_key,
-                        increment_value=batch_usage.request_count,
-                        ttl=self.parallel_request_limiter.window_size,
-                    )
-                )
-
-            # Add TPM increment if limit is set
-            if rate_limit.get("tokens_per_unit") is not None:
-                tpm_key = self.parallel_request_limiter.create_rate_limit_keys(
-                    key=key, value=value, rate_limit_type="tokens"
-                )
-                pipeline_operations.append(
-                    RedisPipelineIncrementOperation(
-                        key=tpm_key,
-                        increment_value=batch_usage.total_tokens,
-                        ttl=self.parallel_request_limiter.window_size,
-                    )
-                )
-
-        # Execute increments
-        if pipeline_operations:
-            await self.parallel_request_limiter.async_increment_tokens_with_ttl_preservation(
-                pipeline_operations=pipeline_operations,
+        rate_limit_response = (
+            await self.parallel_request_limiter.atomic_check_and_increment_by_n(
+                descriptors=descriptors,
+                increments=increments,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
             )
+        )
+
+        if rate_limit_response["overall_code"] == "OVER_LIMIT":
+            for status in rate_limit_response["statuses"]:
+                if status["code"] == "OVER_LIMIT":
+                    self._raise_rate_limit_error(
+                        status,
+                        descriptors,
+                        batch_usage,
+                        status["rate_limit_type"],
+                    )
 
     async def count_input_file_usage(
         self,

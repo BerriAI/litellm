@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     response_schema_prompt,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.files import (
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
@@ -714,16 +715,8 @@ def _transform_request_body(  # noqa: PLR0915
         optional_params.pop("output_config", None)
         config_fields = GenerationConfig.__annotations__.keys()
 
-        # If the LiteLLM client sends Gemini-supported parameter "labels", add it
-        # as "labels" field to the request sent to the Gemini backend.
-        labels: Optional[dict[str, str]] = optional_params.pop("labels", None)
-        # If the LiteLLM client sends OpenAI-supported parameter "metadata", add it
-        # as "labels" field to the request sent to the Gemini backend.
-        if labels is None and "metadata" in litellm_params:
-            metadata = litellm_params["metadata"]
-            if metadata is not None and "requester_metadata" in metadata:
-                rm = metadata["requester_metadata"]
-                labels = {k: v for k, v in rm.items() if isinstance(v, str)}
+        # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
+        labels = pop_vertex_request_labels(optional_params, litellm_params)
 
         filtered_params = {
             k: v
@@ -750,16 +743,22 @@ def _transform_request_body(  # noqa: PLR0915
                     ]
 
         data = RequestBody(contents=content)
-        if system_instructions is not None:
-            data["system_instruction"] = system_instructions
-        if tools is not None:
-            data["tools"] = tools
-        if tool_choice is not None:
-            data["toolConfig"] = tool_choice
-        if include_server_side_tool_invocations:
-            if "toolConfig" not in data:
-                data["toolConfig"] = {}
-            data["toolConfig"]["includeServerSideToolInvocations"] = True
+        # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
+        # Treat dropping these fields as a request mutation guarded by modify_params.
+        can_send_cache_incompatible_fields = (
+            cached_content is None or litellm.modify_params is False
+        )
+        if can_send_cache_incompatible_fields:
+            if system_instructions is not None:
+                data["system_instruction"] = system_instructions
+            if tools is not None:
+                data["tools"] = tools
+            if tool_choice is not None:
+                data["toolConfig"] = tool_choice
+            if include_server_side_tool_invocations:
+                if "toolConfig" not in data:
+                    data["toolConfig"] = {}
+                data["toolConfig"]["includeServerSideToolInvocations"] = True
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:

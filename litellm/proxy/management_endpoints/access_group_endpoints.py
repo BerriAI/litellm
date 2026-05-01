@@ -247,12 +247,11 @@ async def _patch_key_caches_add_access_group(
 ) -> None:
     """Patch cached key objects to include access_group_id."""
     for token in key_tokens:
-        cached_key = await user_api_key_cache.async_get_cache(key=token)
+        cached_key = await user_api_key_cache.async_get_cache(
+            key=token,
+            model_type=UserAPIKeyAuth,
+        )
         if cached_key is None:
-            continue
-        if isinstance(cached_key, dict):
-            cached_key = UserAPIKeyAuth(**cached_key)
-        if not isinstance(cached_key, UserAPIKeyAuth):
             continue
         if cached_key.access_group_ids is None:
             cached_key.access_group_ids = [access_group_id]
@@ -278,12 +277,11 @@ async def _patch_key_caches_remove_access_group(
 ) -> None:
     """Patch cached key objects to remove access_group_id."""
     for token in key_tokens:
-        cached_key = await user_api_key_cache.async_get_cache(key=token)
-        if cached_key is None:
-            continue
-        if isinstance(cached_key, dict):
-            cached_key = UserAPIKeyAuth(**cached_key)
-        if isinstance(cached_key, UserAPIKeyAuth) and cached_key.access_group_ids:
+        cached_key = await user_api_key_cache.async_get_cache(
+            key=token,
+            model_type=UserAPIKeyAuth,
+        )
+        if cached_key is not None and cached_key.access_group_ids:
             cached_key.access_group_ids = [
                 ag for ag in cached_key.access_group_ids if ag != access_group_id
             ]
