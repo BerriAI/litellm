@@ -51,9 +51,28 @@ def test_map_developer_role_preserves_structured_leading_system_content():
         {
             "role": "system",
             "content": [
-                {"type": "text", "text": "System rules."},
-                {"type": "text", "text": "\n\n"},
-                {"type": "text", "text": "Developer rules."},
+                {"type": "text", "text": "System rules.\n\nDeveloper rules."},
+            ],
+        },
+        {"role": "user", "content": "Hello!"},
+    ]
+
+
+def test_map_developer_role_avoids_standalone_separator_blocks():
+    messages = [
+        {"role": "system", "content": [{"type": "image", "url": "policy.png"}]},
+        {"role": "developer", "content": "Developer rules."},
+        {"role": "user", "content": "Hello!"},
+    ]
+
+    result = map_developer_role_to_system_role(messages=messages)
+
+    assert result == [
+        {
+            "role": "system",
+            "content": [
+                {"type": "image", "url": "policy.png"},
+                {"type": "text", "text": "\n\nDeveloper rules."},
             ],
         },
         {"role": "user", "content": "Hello!"},

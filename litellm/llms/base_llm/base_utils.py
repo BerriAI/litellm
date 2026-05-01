@@ -272,7 +272,33 @@ def _merge_system_message_contents(contents: List[Any]) -> Union[str, List[Any]]
             continue
 
         if merged_blocks:
-            merged_blocks.append({"type": "text", "text": "\n\n"})
+            last_block = merged_blocks[-1]
+            first_block = content_blocks[0]
+            if (
+                isinstance(last_block, dict)
+                and last_block.get("type") == "text"
+                and isinstance(last_block.get("text"), str)
+                and isinstance(first_block, dict)
+                and first_block.get("type") == "text"
+                and isinstance(first_block.get("text"), str)
+            ):
+                last_block["text"] += "\n\n" + first_block["text"]
+                merged_blocks.extend(content_blocks[1:])
+                continue
+            if (
+                isinstance(last_block, dict)
+                and last_block.get("type") == "text"
+                and isinstance(last_block.get("text"), str)
+            ):
+                last_block["text"] += "\n\n"
+            elif (
+                isinstance(first_block, dict)
+                and first_block.get("type") == "text"
+                and isinstance(first_block.get("text"), str)
+            ):
+                first_block = dict(first_block)
+                first_block["text"] = "\n\n" + first_block["text"]
+                content_blocks = [first_block, *content_blocks[1:]]
         merged_blocks.extend(content_blocks)
     return merged_blocks
 
