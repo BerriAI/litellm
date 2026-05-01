@@ -27,6 +27,53 @@ class VertexAIError(BaseLLMException):
         super().__init__(message=message, status_code=status_code, headers=headers)
 
 
+def vertex_request_labels_from_litellm_params(
+    litellm_params: Optional[dict],
+) -> Optional[Dict[str, str]]:
+    """
+    Build Vertex/GCP billing labels from LiteLLM user metadata on ``litellm_params``:
+    ``metadata`` (``completion(..., metadata=...)``) or ``litellm_metadata``,
+    using ``requester_metadata`` string key-value pairs (same convention as Gemini).
+    ``metadata`` is tried first when both are present.
+    """
+    if not litellm_params:
+        return None
+    for key in ("metadata", "litellm_metadata"):
+        if key not in litellm_params:
+            continue
+        metadata = litellm_params[key]
+        if metadata is None or not isinstance(metadata, dict):
+            continue
+        if "requester_metadata" not in metadata:
+            continue
+        rm = metadata["requester_metadata"]
+        if not isinstance(rm, dict):
+            continue
+        labels = {k: v for k, v in rm.items() if isinstance(v, str)}
+        if labels:
+            return labels
+    return None
+
+
+def pop_vertex_request_labels(
+    optional_params: Optional[dict],
+    litellm_params: Optional[dict],
+) -> Optional[Dict[str, str]]:
+    """
+    Resolve labels from optional ``labels`` (Gemini-style) and/or
+    ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``
+    (``requester_metadata``). Pops ``labels`` from optional_params when present.
+    """
+    labels: Optional[Dict[str, str]] = None
+    if optional_params is not None and "labels" in optional_params:
+        raw = optional_params.pop("labels")
+        if isinstance(raw, dict):
+            labels = {k: v for k, v in raw.items() if isinstance(v, str)}
+    if not labels:
+        labels = vertex_request_labels_from_litellm_params(litellm_params)
+    return labels if labels else None
+
+
 class VertexAIModelRoute(str, Enum):
     """Enum for Vertex AI model routing"""
 
@@ -50,7 +97,7 @@ def get_vertex_ai_model_route(
     Determine which handler to use for a Vertex AI model based on the model name.
 
     Args:
-        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "openai/gpt-oss-120b")
+        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "xai/grok-4.1-fast-non-reasoning")
         litellm_params: Optional litellm parameters dict that may contain base_model for routing
 
     Returns:
@@ -66,7 +113,7 @@ def get_vertex_ai_model_route(
         >>> get_vertex_ai_model_route("gemma/gemma-3-12b-it")
         VertexAIModelRoute.GEMMA
 
-        >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
+        >>> get_vertex_ai_model_route("xai/grok-4.1-fast-non-reasoning")
         VertexAIModelRoute.MODEL_GARDEN
 
         >>> get_vertex_ai_model_route("1234567890", {"api_base": "http://10.96.32.8"})
@@ -102,8 +149,11 @@ def get_vertex_ai_model_route(
     if "gemma/" in model:
         return VertexAIModelRoute.GEMMA
 
-    # Check for model garden openai models
-    if "openai" in model:
+    # Check for model garden OpenAI-compatible publisher models.
+    # Examples:
+    # - openai/gpt-oss-120b-maas
+    # - xai/grok-4.1-fast-non-reasoning
+    if "openai" in model or model.startswith("xai/"):
         return VertexAIModelRoute.MODEL_GARDEN
 
     # Check for gemini models
@@ -209,8 +259,8 @@ def get_vertex_base_model_name(model: str) -> str:
         >>> get_vertex_base_model_name("gemma/gemma-3-12b-it")
         "gemma-3-12b-it"
 
-        >>> get_vertex_base_model_name("openai/gpt-oss-120b")
-        "gpt-oss-120b"
+        >>> get_vertex_base_model_name("xai/grok-4.1-fast-non-reasoning")
+        "grok-4.1-fast-non-reasoning"
 
         >>> get_vertex_base_model_name("1234567890")
         "1234567890"

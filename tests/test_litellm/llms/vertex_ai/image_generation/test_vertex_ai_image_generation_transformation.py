@@ -373,6 +373,20 @@ class TestVertexAIImagenImageGenerationConfig:
         assert request["parameters"]["sampleCount"] == 2
         assert request["parameters"]["aspectRatio"] == "16:9"
 
+    def test_transform_image_generation_request_labels_from_metadata(self):
+        """Billing labels from litellm_params.metadata.requester_metadata on predict body."""
+        request = self.config.transform_image_generation_request(
+            model="imagegeneration@006",
+            prompt="A cat",
+            optional_params={},
+            litellm_params={
+                "metadata": {"requester_metadata": {"team": "platform", "env": "prod"}}
+            },
+            headers={},
+        )
+        assert request["labels"] == {"team": "platform", "env": "prod"}
+        assert "labels" not in request["parameters"]
+
     def test_transform_image_generation_response(self):
         """Test response transformation"""
         mock_response = MagicMock(spec=httpx.Response)
