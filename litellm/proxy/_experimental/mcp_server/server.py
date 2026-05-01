@@ -2104,6 +2104,27 @@ if MCP_AVAILABLE:
         #########################################################
         local_tool = global_mcp_tool_registry.get_tool(name)
         if local_tool:
+            # OpenAPI-backed tools used to bypass `pre_call_tool_check` —
+            # only the managed path ran allowed/banned-tool checks, key/team
+            # tool permissions, and parameter validation. Run the same checks
+            # before dispatching to the local registry whenever we have a
+            # resolved server, so OpenAPI tools enforce the same allowlist
+            # the proxy applies to managed MCP tools.
+            if mcp_server is not None:
+                hook_result = await global_mcp_server_manager.pre_call_tool_check(
+                    name=original_tool_name,
+                    arguments=arguments or {},
+                    server_name=server_name or mcp_server.name,
+                    user_api_key_auth=user_api_key_auth,
+                    proxy_logging_obj=kwargs.get("proxy_logging_obj"),
+                    server=mcp_server,
+                    raw_headers=raw_headers,
+                )
+                # `pre_call_tool_check` may return guardrail-modified
+                # arguments; honor them on the local path too.
+                if isinstance(hook_result, dict) and "arguments" in hook_result:
+                    arguments = hook_result["arguments"]
+
             verbose_logger.debug(f"Executing local registry tool: {name}")
             # For BYOK servers the credential must be injected via a ContextVar
             # because the tool function has headers baked into its closure.
