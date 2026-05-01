@@ -10,6 +10,15 @@ from vcr.serialize import deserialize, serialize
 CASSETTE_TTL_SECONDS = 24 * 60 * 60
 REDIS_KEY_PREFIX = "litellm:vcr:cassette:"
 
+# Healthy cassettes hold 1–5 episodes (a single test rarely makes more than a
+# handful of distinct HTTP calls). When a cassette balloons past this, it
+# usually means a test produces non-deterministic request bodies (e.g. uuid)
+# under record_mode=new_episodes, and every CI run is appending fresh
+# unmatched episodes instead of replaying. That growth is unbounded over
+# time and silently inflates Redis. Refuse to persist past this threshold so
+# the pathology surfaces loudly instead.
+MAX_EPISODES_PER_CASSETTE = 50
+
 _log = logging.getLogger(__name__)
 
 
@@ -124,6 +133,23 @@ def make_redis_persister(
             # (e.g. cassette saved outside a test context) so non-test usage
             # still works.
             passed = _passed_by_cassette_key.pop(key, True)
+            episode_count = len(cassette_dict.get("requests", []) or [])
+            if episode_count > MAX_EPISODES_PER_CASSETTE:
+                # Pathology: the test is producing non-deterministic request
+                # bodies and accumulating unbounded episodes. Refuse the save
+                # so the cassette can't keep ballooning, and surface a loud
+                # warning so someone investigates / opts the test out.
+                _log.warning(
+                    "VCR redis save refused for %s; cassette has %d episodes "
+                    "(> MAX_EPISODES_PER_CASSETTE=%d). The test likely produces "
+                    "non-deterministic request bodies (e.g. uuid) and is "
+                    "appending instead of replaying. Opt it out with the "
+                    "no-vcr list in conftest, or stabilize its request body.",
+                    cassette_path,
+                    episode_count,
+                    MAX_EPISODES_PER_CASSETTE,
+                )
+                return
             if not passed:
                 _log.info(
                     "VCR redis save skipped for %s; test did not pass — "
