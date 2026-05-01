@@ -4042,13 +4042,9 @@ def _convert_to_bedrock_tool_call_result(
                     tool_result_content_blocks.append(
                         BedrockToolResultContentBlock(image=_block["image"])
                     )
-                elif content["type"] == "document":
-                    _doc_block = BedrockConverseMessagesProcessor._process_document_message(
-                        content
-                    )
-                    if "document" in _doc_block:
-                        tool_result_content_blocks.append(
-                            BedrockToolResultContentBlock(document=_doc_block["document"])
+                elif "document" in _block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_block["document"])
                     )
                 else:
                     verbose_logger.warning(
@@ -4094,6 +4090,7 @@ def _convert_to_bedrock_tool_call_result(
                         "%s for file tool-result block %s; dropping.",
                         list(_file_block.keys()),
                         content,
+                    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
