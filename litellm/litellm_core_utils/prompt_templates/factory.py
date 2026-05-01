@@ -3558,6 +3558,7 @@ from litellm.types.llms.bedrock import (
     BedrockConverseReasoningContentBlock,
     BedrockConverseReasoningTextBlock,
 )
+from litellm.types.llms.bedrock import CitationsConfig as BedrockCitationsConfig
 from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
@@ -4091,6 +4092,12 @@ def _convert_to_bedrock_tool_call_result(
                         list(_file_block.keys()),
                         content,
                     )
+            elif content["type"] == "document":
+                _doc_block = BedrockConverseMessagesProcessor._process_document_message(content)
+                if "document" in _doc_block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_doc_block["document"])
+                    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
@@ -4582,6 +4589,9 @@ class BedrockConverseMessagesProcessor:
                                     message=cast(ChatCompletionFileObject, element)
                                 )
                                 _parts.append(_part)
+                            elif element["type"] == "document":
+                                _part = BedrockConverseMessagesProcessor._process_document_message(element)
+                                _parts.append(_part)
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
                                     message_block=cast(
@@ -4845,6 +4855,63 @@ class BedrockConverseMessagesProcessor:
         )
 
     @staticmethod
+    def _process_document_message(element: dict) -> BedrockContentBlock:
+        """Convert an Anthropic-style document content block to a Bedrock DocumentBlock.
+
+        Handles: {"type": "document", "source": {"type": "base64", "media_type": "...", "data": "..."}}
+        Also forwards optional `citations` and `context` fields supported by the Bedrock Converse API.
+        """
+        source = element.get("source", {})
+        source_type = source.get("type")
+        if source_type != "base64":
+            raise litellm.BadRequestError(
+                message=f"Bedrock Converse only supports base64-encoded document sources, got '{source_type}'. "
+                "Please convert the document to base64 before sending to Bedrock.",
+                model="",
+                llm_provider="bedrock",
+            )
+
+        media_type: str = source["media_type"]
+        data: str = source["data"]
+
+        _mime_to_format: dict = {
+            "application/pdf": "pdf",
+            "text/csv": "csv",
+            "application/msword": "doc",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+            "application/vnd.ms-excel": "xls",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+            "text/html": "html",
+            "text/plain": "txt",
+            "text/markdown": "md",
+        }
+        doc_format = _mime_to_format.get(media_type, media_type.split("/")[-1])
+
+        HASH_SAMPLE_BYTES = 64 * 1024
+        normalized = "".join(data.split()).encode("utf-8")
+        sample = normalized[:HASH_SAMPLE_BYTES]
+        hasher = hashlib.sha256()
+        hasher.update(sample)
+        hasher.update(str(len(normalized)).encode("utf-8"))
+        content_hash = hasher.hexdigest()[:16]
+        document_name = f"Document_{content_hash}_{doc_format}"
+
+        doc_block = BedrockDocumentBlock(
+            source=BedrockSourceBlock(bytes=data),
+            format=doc_format,
+            name=document_name,
+        )
+
+        anthropic_citations = element.get("citations")
+        if isinstance(anthropic_citations, dict) and anthropic_citations.get("enabled"):
+            doc_block["citations"] = BedrockCitationsConfig(enabled=True)
+
+        if element.get("context"):
+            doc_block["context"] = element["context"]
+
+        return BedrockContentBlock(document=doc_block)
+
+    @staticmethod
     async def _async_process_file_message(
         message: ChatCompletionFileObject,
     ) -> BedrockContentBlock:
@@ -4960,6 +5027,9 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                     message=cast(ChatCompletionFileObject, element)
                                 )
                             )
+                            _parts.append(_part)
+                        elif element["type"] == "document":
+                            _part = BedrockConverseMessagesProcessor._process_document_message(element)
                             _parts.append(_part)
                         _cache_point_block = (
                             litellm.AmazonConverseConfig()._get_cache_point_block(
