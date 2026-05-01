@@ -684,3 +684,68 @@ class TestAnthropicBatchPassthroughCostTracking:
             mock_proxy_logging_obj.get_proxy_hook.assert_called_once_with(
                 "managed_files"
             )
+
+
+class TestBuildCompleteStreamingResponseRobustness:
+    """Test that _build_complete_streaming_response handles non-standard SSE frames gracefully."""
+
+    def _build(self, chunks: List[str]):
+        mock_logging_obj = MagicMock()
+        return AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+            all_chunks=chunks,
+            litellm_logging_obj=mock_logging_obj,
+            model="claude-3-sonnet-20240229",
+        )
+
+    def test_done_frame_is_skipped(self):
+        """[DONE] control frames should be silently skipped."""
+        chunks = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+            "data: [DONE]",
+        ]
+        result = self._build(chunks)
+        assert result is None or hasattr(result, "choices")
+
+    def test_non_json_sse_line_is_skipped(self):
+        """Non-JSON SSE lines (comments, keep-alive pings) should be skipped."""
+        chunks = [
+            ": ping",
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            "this is not json at all",
+        ]
+        result = self._build(chunks)
+        assert result is None or hasattr(result, "choices")
+
+    def test_mixed_valid_and_invalid_frames(self):
+        """Valid events should still be collected even when mixed with invalid ones."""
+        chunks = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            "data: [DONE]",
+            ": keep-alive",
+            "not-json",
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+        result = self._build(chunks)
+        assert result is not None, "Valid chunks should produce a complete response"
+        assert hasattr(result, "choices"), "Response should have choices"
+
+    def test_done_in_text_payload_is_not_dropped(self):
+        """A valid event whose text content contains '[DONE]' must NOT be skipped."""
+        chunks = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-sonnet-20240229","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+            'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The stream ends with [DONE]"}}',
+            'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":8}}',
+            'event: message_stop\ndata: {"type":"message_stop"}',
+        ]
+        result = self._build(chunks)
+        assert (
+            result is not None
+        ), "Event with [DONE] in text payload should not be dropped"

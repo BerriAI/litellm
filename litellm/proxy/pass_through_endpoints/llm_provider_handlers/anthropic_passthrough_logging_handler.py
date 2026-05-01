@@ -294,6 +294,10 @@ class AnthropicPassthroughLoggingHandler:
             # Process each individual event
             for event_str in individual_events:
                 try:
+                    if any(
+                        line.strip() == "data: [DONE]" for line in event_str.split("\n")
+                    ):
+                        continue
                     transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
                         chunk=event_str
                     )
@@ -302,6 +306,12 @@ class AnthropicPassthroughLoggingHandler:
 
                 except (StopIteration, StopAsyncIteration):
                     break
+                except json.JSONDecodeError:
+                    verbose_proxy_logger.debug(
+                        "Skipping non-JSON SSE event: %s",
+                        event_str[:200],
+                    )
+                    continue
 
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks,
