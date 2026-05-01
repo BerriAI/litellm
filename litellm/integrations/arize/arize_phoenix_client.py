@@ -15,9 +15,7 @@ def _sanitize_id(identifier: str) -> str:
             f"Invalid identifier {identifier!r}: contains disallowed characters"
         )
     if ".." in identifier:
-        raise ValueError(
-            f"Invalid identifier {identifier!r}: path traversal detected"
-        )
+        raise ValueError(f"Invalid identifier {identifier!r}: path traversal detected")
     return urllib.parse.quote(identifier, safe="")
 
 
