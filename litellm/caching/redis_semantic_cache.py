@@ -290,6 +290,7 @@ class RedisSemanticCache(BaseCache):
             messages = kwargs.get("messages", [])
             if not messages:
                 print_verbose("No messages provided for semantic cache lookup")
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
             prompt = get_str_from_messages(messages)
@@ -302,12 +303,14 @@ class RedisSemanticCache(BaseCache):
 
             # Return None if no similar prompts found
             if not results:
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
             # Process the best matching result
             cache_hit = results[0]
             if not self._cache_hit_matches_key(cache_hit=cache_hit, key=key):
                 print_verbose("Redis semantic-cache hit did not match cache key scope")
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
             vector_distance = float(cache_hit["vector_distance"])
 
@@ -319,6 +322,9 @@ class RedisSemanticCache(BaseCache):
             cached_prompt = cache_hit["prompt"]
             cached_response = cache_hit["response"]
 
+            # update kwargs["metadata"] with similarity, don't rewrite the original metadata
+            kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
+
             print_verbose(
                 f"Cache hit: similarity threshold: {self.similarity_threshold}, "
                 f"actual similarity: {similarity}, "
@@ -329,6 +335,7 @@ class RedisSemanticCache(BaseCache):
             return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
             print_verbose(f"Error retrieving from Redis semantic cache: {str(e)}")
+            kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
 
     async def _get_async_embedding(self, prompt: str, **kwargs) -> List[float]:
         """

@@ -90,12 +90,16 @@ def test_redis_semantic_cache_get_cache(monkeypatch):
             ),
         ):
             # Test get_cache with a message
+            metadata = {}
             result = redis_semantic_cache.get_cache(
-                key="test_key", messages=[{"content": "What is the capital of France?"}]
+                key="test_key",
+                messages=[{"content": "What is the capital of France?"}],
+                metadata=metadata,
             )
 
             # Verify result is properly parsed
             assert result == {"content": "Paris is the capital of France."}
+            assert metadata["semantic-similarity"] == pytest.approx(0.9)
 
             # Verify llmcache.check was called
             redis_semantic_cache.llmcache.check.assert_called_once_with(
@@ -139,12 +143,15 @@ def test_redis_semantic_cache_rejects_unscoped_cache_hit(monkeypatch):
             "_get_cache_key_filter_expression",
             return_value="cache-key-filter",
         ):
+            metadata = {}
             result = redis_semantic_cache.get_cache(
                 key="test_key",
                 messages=[{"content": "What is the capital of France?"}],
+                metadata=metadata,
             )
 
         assert result is None
+        assert metadata["semantic-similarity"] == 0.0
 
 
 def test_redis_semantic_cache_set_cache_stores_cache_key_filter(monkeypatch):
