@@ -1,9 +1,10 @@
 [project]
 name = "litellm-enterprise"
-version = "0.1.38"
+version = "0.1.39"
 description = "Package for LiteLLM Enterprise features"
 readme = "README.md"
 requires-python = ">=3.9"
+license = "LicenseRef-Proprietary"
 license-files = ["LICENSE.md"]
 authors = [
     { name = "BerriAI" },
@@ -19,13 +20,13 @@ requires = ["uv_build==0.10.7"]
 build-backend = "uv_build"
 
 [tool.uv]
-required-version = "==0.10.9"
+required-version = ">=0.10.9"
 
 [tool.uv.build-backend]
 module-root = ""
 
 [tool.commitizen]
-version = "0.1.38"
+version = "0.1.39"
 version_files = [
     "pyproject.toml:^version",
     "../pyproject.toml:litellm-enterprise==",

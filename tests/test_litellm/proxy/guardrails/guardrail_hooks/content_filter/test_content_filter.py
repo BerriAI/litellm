@@ -501,6 +501,285 @@ class TestContentFilterGuardrail:
         assert exc_info.value.status_code == 403
         assert "us_ssn" in str(exc_info.value.detail)
 
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_guardrail_information_clean(self):
+        """
+        Streaming post-call: when no detections fire, still write a success log row
+        into request_data["metadata"]["standard_logging_guardrail_information"].
+
+        Regression test for: UI-created ContentFilterGuardrail in mode=post_call
+        never produced a `standard_logging_object.guardrail_information` entry on
+        streaming responses (Branch 1 dispatcher + iterator hook had no log write).
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-logging-clean",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Hello world, nothing sensitive here."),
+                        index=0,
+                        finish_reason="stop",
+                    )
+                ],
+                model="gpt-4",
+            )
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            pass
+
+        assert "standard_logging_guardrail_information" in request_data["metadata"]
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert isinstance(entries, list)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["guardrail_name"] == "test-streaming-logging-clean"
+        assert entry["guardrail_provider"] == "litellm_content_filter"
+        assert entry["guardrail_status"] == "success"
+        assert entry["guardrail_response"] == []
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_guardrail_information_mask(self):
+        """
+        Streaming post-call with a MASK pattern: writes a success row with the
+        detection in guardrail_response and a non-zero masked_entity_count.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-logging-mask",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Contact me at test@example.com please."),
+                        index=0,
+                        finish_reason="stop",
+                    )
+                ],
+                model="gpt-4",
+            )
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        full_content = ""
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            if chunk.choices and chunk.choices[0].delta.content:
+                full_content += chunk.choices[0].delta.content
+
+        # Content was masked, not blocked
+        assert "test@example.com" not in full_content
+        assert "[EMAIL_REDACTED]" in full_content
+
+        # And the log row was written
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["guardrail_status"] == "success"
+        assert entry["guardrail_provider"] == "litellm_content_filter"
+
+        detections = entry["guardrail_response"]
+        assert isinstance(detections, list)
+        # At least one pattern detection for 'email' should be recorded
+        pattern_detections = [d for d in detections if d.get("type") == "pattern"]
+        assert pattern_detections, f"expected pattern detections, got {detections}"
+        assert any(d.get("pattern_name") == "email" for d in pattern_detections)
+        # And masked_entity_count for email should be >= 1
+        assert entry["masked_entity_count"].get("email", 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_guardrail_information_block(self):
+        """
+        Streaming post-call with a BLOCK pattern: the hook raises HTTPException,
+        but the `finally` block still writes a log row with
+        guardrail_status == "guardrail_intervened".
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="us_ssn",
+                action=ContentFilterAction.BLOCK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-logging-block",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(delta=Delta(content="SSN: 123-45-6789"), index=0)
+                ],
+                model="gpt-4",
+            )
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        with pytest.raises(HTTPException):
+            async for _ in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=request_data,
+            ):
+                pass
+
+        # Even though HTTPException bubbled up, the log row must be written.
+        assert "standard_logging_guardrail_information" in request_data["metadata"]
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["guardrail_name"] == "test-streaming-logging-block"
+        assert entry["guardrail_status"] == "guardrail_intervened"
+
+    @pytest.mark.asyncio
+    async def test_streaming_hook_logs_no_duplicate_detections_across_chunks(self):
+        """
+        Multi-chunk regression: _filter_single_text re-scans the whole accumulated
+        buffer on every chunk, so without per-chunk reset the same detection would
+        be appended once per chunk after it first appears, inflating
+        masked_entity_count and guardrail_response in the log.
+        """
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-logging-no-duplicates",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.post_call,
+        )
+
+        # The email straddles chunks 1 and 2; chunks 3 and 4 keep streaming after
+        # the match has already been found, exercising the re-scan path.
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="c1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Contact me at test@"), index=0
+                    )
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="c2",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="example.com please."), index=0
+                    )
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="c3",
+                choices=[StreamingChoices(delta=Delta(content=" Thanks!"), index=0)],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="c4",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content=""), index=0, finish_reason="stop"
+                    )
+                ],
+                model="gpt-4",
+            )
+
+        user_api_key_dict = MagicMock()
+        request_data = {
+            "messages": [{"role": "user", "content": "Hi"}],
+            "model": "gpt-4o",
+            "metadata": {},
+        }
+
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            pass
+
+        entries = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["guardrail_status"] == "success"
+
+        detections = entry["guardrail_response"]
+        pattern_detections = [d for d in detections if d.get("type") == "pattern"]
+        # Exactly one email detection — not one per chunk after the match appeared.
+        assert len(pattern_detections) == 1, (
+            f"expected exactly 1 email detection, got {len(pattern_detections)}: "
+            f"{detections}"
+        )
+        assert pattern_detections[0].get("pattern_name") == "email"
+        # masked_entity_count for email is the real count, not N×.
+        assert entry["masked_entity_count"].get("email") == 1
+
     def test_init_with_plain_dicts(self):
         """
         Test initialization with plain dicts (DB format).

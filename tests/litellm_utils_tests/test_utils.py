@@ -812,7 +812,7 @@ def test_redact_msgs_from_logs_with_dynamic_params():
     # Assert redaction occurred
     assert _redacted_response_obj.choices[0].message.content == "redacted-by-litellm"
 
-    # Test Case 3: standard_callback_dynamic_params does not override litellm.turn_off_message_logging
+    # Test Case 3: standard_callback_dynamic_params does not set turn_off_message_logging
     # since litellm.turn_off_message_logging is True redaction should occur
     standard_callback_dynamic_params = StandardCallbackDynamicParams()
     litellm_logging_obj.model_call_details["standard_callback_dynamic_params"] = (
@@ -2309,11 +2309,11 @@ def test_get_provider_audio_transcription_config():
 @pytest.mark.parametrize(
     "model, expected_bool",
     [
-        ("anthropic.claude-3-7-sonnet-20250219-v1:0", True),
-        ("us.anthropic.claude-3-7-sonnet-20250219-v1:0", True),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", True),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", True),
     ],
 )
-def test_claude_3_7_sonnet_supports_pdf_input(model, expected_bool):
+def test_claude_sonnet_4_5_supports_pdf_input(model, expected_bool):
     from litellm.utils import supports_pdf_input
 
     assert supports_pdf_input(model) == expected_bool

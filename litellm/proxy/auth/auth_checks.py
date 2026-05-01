@@ -374,7 +374,7 @@ def _guardrail_modification_check(
         coerced = _coerce_to_dict(container)
         if coerced is None:
             return False
-        return any(coerced.get(key) for key in _GUARDRAIL_MODIFICATION_KEYS)
+        return any(key in coerced for key in _GUARDRAIL_MODIFICATION_KEYS)
 
     # Check both metadata keys — callers can populate either depending on the
     # endpoint. Cover the top-level too so root-level injection is rejected.
@@ -915,7 +915,8 @@ async def get_team_member_default_budget(
     Fetches the team-level default per-member budget referenced by team.metadata["team_member_budget_id"].
 
     This budget is applied to team members whose TeamMembership row has no
-    linked budget. Results are cached for performance.
+    linked budget, or whose linked budget has max_budget=NULL. Results are
+    cached for performance.
 
     Args:
         budget_id: The budget_id pulled from team.metadata["team_member_budget_id"]
@@ -2962,6 +2963,116 @@ async def can_user_call_model(
     )
 
 
+def _search_tool_names_from_object_permission(
+    object_permission: Optional[LiteLLM_ObjectPermissionTable],
+) -> List[str]:
+    """Return allowlisted search tool names from object_permission (empty = unrestricted)."""
+    if object_permission is None:
+        return []
+    raw = object_permission.search_tools
+    if not raw:
+        return []
+    return list(raw)
+
+
+def _can_object_call_search_tool(
+    search_tool_name: str,
+    allowed_search_tools: List[str],
+    object_type: Literal["key", "team", "project"],
+) -> Literal[True]:
+    """
+    Check if an object (key/team/project) can access a specific search tool.
+
+    Similar to _can_object_call_model but for search tools.
+
+    Args:
+        search_tool_name: The search tool being requested
+        allowed_search_tools: List of allowed search tool names for this object
+        object_type: Type of object for error messaging
+
+    Returns:
+        True if access is allowed
+
+    Raises:
+        ProxyException if access is denied
+    """
+    # Empty list means all search tools are allowed
+    if not allowed_search_tools:
+        return True
+
+    # Check if the search tool is in the allowlist
+    if search_tool_name in allowed_search_tools:
+        return True
+
+    # Access denied
+    raise ProxyException(
+        message=f"{object_type.capitalize()} not allowed to access search tool: {search_tool_name}. "
+        f"Allowed search tools: {allowed_search_tools}",
+        type=ProxyErrorTypes.key_model_access_denied,
+        param="search_tool_name",
+        code=status.HTTP_403_FORBIDDEN,
+    )
+
+
+async def can_key_call_search_tool(
+    search_tool_name: str,
+    valid_token: UserAPIKeyAuth,
+) -> Literal[True]:
+    """
+    Check if a key can access a specific search tool.
+
+    Similar to can_key_call_model but for search tools.
+
+    Args:
+        search_tool_name: The search tool being requested
+        valid_token: The authenticated key
+
+    Returns:
+        True if access is allowed
+
+    Raises:
+        ProxyException if access is denied
+    """
+    return _can_object_call_search_tool(
+        search_tool_name=search_tool_name,
+        allowed_search_tools=_search_tool_names_from_object_permission(
+            valid_token.object_permission
+        ),
+        object_type="key",
+    )
+
+
+async def can_team_call_search_tool(
+    search_tool_name: str,
+    team_object: Optional[LiteLLM_TeamTable],
+) -> Literal[True]:
+    """
+    Check if a team can access a specific search tool.
+
+    Similar to can_team_access_model but for search tools.
+
+    Args:
+        search_tool_name: The search tool being requested
+        team_object: The team object
+
+    Returns:
+        True if access is allowed
+
+    Raises:
+        ProxyException if access is denied
+    """
+    if team_object is None:
+        return True
+
+    return _can_object_call_search_tool(
+        search_tool_name=search_tool_name,
+        allowed_search_tools=_search_tool_names_from_object_permission(
+            team_object.object_permission
+        ),
+        object_type="team",
+    )
+
+
 async def is_valid_fallback_model(
     model: str,
     llm_router: Optional[Router],
@@ -3293,6 +3404,7 @@ async def _check_team_member_budget(
         if (
             team_membership is not None
             and team_membership.litellm_budget_table is not None
+            and team_membership.litellm_budget_table.max_budget is not None
         ):
             team_member_budget = team_membership.litellm_budget_table.max_budget
         else:

@@ -49,6 +49,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
     add_server_prefix_to_name,
     get_server_prefix,
+    iter_known_server_prefixes,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -711,13 +712,7 @@ if MCP_AVAILABLE:
                 for server in allowed_mcp_servers:
                     if server:
                         match_list = [
-                            s.lower()
-                            for s in [
-                                server.alias,
-                                server.server_name,
-                                server.server_id,
-                            ]
-                            if s is not None
+                            s.lower() for s in iter_known_server_prefixes(server) if s
                         ]
 
                         if server_or_group.lower() in match_list:
@@ -1952,7 +1947,18 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            return
+            # Fail closed on DB unavailability: returning here previously
+            # bypassed the ownership check and let any proxy-authenticated
+            # caller invoke BYOK tools during outage windows.
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "byok_auth_unavailable",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": "BYOK credential check requires a database connection.",
+                },
+            )
 
         credential = await get_user_credential(
             prisma_client=prisma_client,
@@ -2020,11 +2026,13 @@ if MCP_AVAILABLE:
         # Remove prefix from tool name for logging and processing
         original_tool_name, server_name = split_server_prefix_from_name(name)
 
-        # If tool name is unprefixed, resolve its server so we can enforce permissions
-        if not server_name:
-            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
-            if mcp_server:
-                server_name = mcp_server.name
+        # Resolve the actual MCP server up-front so the permission check uses
+        # the canonical server.name even when the tool name is prefixed with a
+        # short ID (LITELLM_USE_SHORT_MCP_TOOL_PREFIX) that doesn't match the
+        # server's display name directly.
+        mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        if mcp_server is not None:
+            server_name = mcp_server.name
 
         # Only enforce server-level permissions when we can resolve a server
         if server_name:
