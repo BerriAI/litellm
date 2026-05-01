@@ -129,7 +129,9 @@ class SpendCounterReseed:
         """
         lock = await SpendCounterReseed._get_lock(counter_key)
         async with lock:
-            # Re-check after acquiring the lock - another waiter may have warmed it.
+            # Re-check after acquiring the lock. Skip in-memory on a clean
+            # Redis miss - in-memory is per-pod-stale.
+            redis_clean_miss = False
             if spend_counter_cache.redis_cache is not None:
                 try:
                     val = await spend_counter_cache.redis_cache.async_get_cache(
@@ -137,11 +139,13 @@ class SpendCounterReseed:
                     )
                     if val is not None:
                         return float(val)
+                    redis_clean_miss = True
                 except Exception:
                     pass
-            val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-            if val is not None:
-                return float(val)
+            if not redis_clean_miss:
+                val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+                if val is not None:
+                    return float(val)
 
             db_spend = await SpendCounterReseed.from_db(prisma_client, counter_key)
             if db_spend is None:
@@ -149,7 +153,7 @@ class SpendCounterReseed:
             # Warm even when 0 so subsequent reads hit cache, not DB.
             try:
                 await spend_counter_cache.async_increment_cache(
-                    key=counter_key, value=db_spend
+                    key=counter_key, value=db_spend, refresh_ttl=True
                 )
             except Exception:
                 verbose_proxy_logger.exception(
