@@ -589,7 +589,9 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/calculate",
         "/spend/logs",
         "/spend/logs/ui",
+        "/spend/logs/v2",
         "/spend/logs/session/ui",
+        "/spend/logs/ui/{request_id}",
         "/cost/estimate",
     ]
 
@@ -735,6 +737,11 @@ class LiteLLMRoutes(enum.Enum):
         "/tag/list",
         "/audit",
         "/audit/{id}",
+        "/spend/logs",
+        "/spend/logs/ui",
+        "/spend/logs/v2",
+        "/spend/logs/session/ui",
+        "/spend/logs/ui/{request_id}",
         "/global/activity",
         "/global/activity/model",
         "/global/activity/cache_hits",

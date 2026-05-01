@@ -1198,6 +1198,105 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
         )
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/spend/logs",
+        "/spend/logs/ui",
+        "/spend/logs/v2",
+        "/spend/logs/session/ui",
+        "/spend/logs/ui/some-request-id",
+    ],
+)
+def test_proxy_admin_viewer_can_access_spend_logs(route):
+    """
+    Test that proxy_admin_viewer can access /spend/logs endpoints.
+
+    The role description states "view all spend across the platform", so the
+    raw spend log endpoints (which back the admin Logs UI page) must be
+    reachable by proxy_admin_viewer.
+    """
+
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(
+            f"proxy_admin_viewer should be able to access {route} route. Got error: {str(e)}"
+        )
+
+
+@pytest.mark.parametrize(
+    "user_role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize(
+    "route",
+    ["/spend/logs/v2", "/spend/logs/ui/some-request-id"],
+)
+def test_internal_user_can_access_v2_spend_logs(route, user_role):
+    """
+    Test that INTERNAL_USER and INTERNAL_USER_VIEW_ONLY can pass the route
+    check for /spend/logs/v2 and /spend/logs/ui/{request_id}.
+
+    These routes share their handler with /spend/logs/ui (already in
+    spend_tracking_routes), so they must be reachable by the same roles for
+    parity. Per-user data filtering is enforced separately by
+    _can_user_view_spend_log inside the endpoint.
+    """
+
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="internal@example.com",
+        user_role=user_role,
+    )
+
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=user_role,
+    )
+
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=user_role,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(
+            f"{user_role} should be able to access {route} route. Got error: {str(e)}"
+        )
+
+
 class TestModelsRouteExemptFromDisableLLMEndpoints:
     """
     Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS.
