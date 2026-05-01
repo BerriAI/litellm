@@ -394,3 +394,61 @@ class TestHostAllowlist:
 
         monkeypatch.setattr(url_utils.socket, "getaddrinfo", fake)
         validate_url("http://internal.corp/")
+
+
+# ── assert_same_origin ────────────────────────────────────────────────────────
+
+
+from litellm.litellm_core_utils.url_utils import assert_same_origin
+
+
+def test_assert_same_origin_matches_scheme_host_port():
+    """A polling URL on the same scheme + host + port as the api_base
+    passes — the upstream is trusted; the URL it returned points back at
+    the same upstream."""
+    assert_same_origin(
+        "https://api.example.com/v1/operations/abc",
+        "https://api.example.com/v1/generate",
+    )
+
+
+def test_assert_same_origin_treats_default_ports_as_explicit():
+    """``https://x/`` and ``https://x:443/`` are the same origin."""
+    assert_same_origin("https://api.example.com/poll", "https://api.example.com:443/")
+    assert_same_origin("https://api.example.com:443/poll", "https://api.example.com/")
+    assert_same_origin("http://api.example.com/poll", "http://api.example.com:80/")
+
+
+def test_assert_same_origin_rejects_different_host():
+    with pytest.raises(SSRFError, match="host"):
+        assert_same_origin(
+            "https://attacker.example.com/poll",
+            "https://api.example.com/generate",
+        )
+
+
+def test_assert_same_origin_rejects_different_scheme():
+    with pytest.raises(SSRFError, match="scheme"):
+        assert_same_origin(
+            "http://api.example.com/poll", "https://api.example.com/generate"
+        )
+
+
+def test_assert_same_origin_rejects_different_port():
+    with pytest.raises(SSRFError, match="port"):
+        assert_same_origin(
+            "https://api.example.com:8443/poll", "https://api.example.com/generate"
+        )
+
+
+def test_assert_same_origin_rejects_non_http_scheme():
+    """``file://`` polling URLs are rejected outright — the upstream
+    should never return a non-HTTP scheme."""
+    with pytest.raises(SSRFError, match="scheme"):
+        assert_same_origin("file:///etc/passwd", "https://api.example.com/")
+
+
+def test_assert_same_origin_case_insensitive_host():
+    assert_same_origin(
+        "https://API.example.com/poll", "https://api.example.com/generate"
+    )

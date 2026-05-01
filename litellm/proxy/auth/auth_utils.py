@@ -241,7 +241,28 @@ def is_request_body_safe(
                 "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
             )
 
+    # Recurse into nested config dicts whose values get unpacked as
+    # ``**kwargs`` into outbound API calls — same SSRF / credential
+    # exfil surface as the root, but historically not covered by this
+    # banned-param check. VERIA-6.
+    for nested_key in _NESTED_CONFIG_KEYS:
+        nested = request_body.get(nested_key)
+        if isinstance(nested, dict):
+            is_request_body_safe(
+                request_body=nested,
+                general_settings=general_settings,
+                llm_router=llm_router,
+                model=model,
+            )
+
     return True
+
+
+# Config dicts whose entries are spread as ``**dict`` into outbound LLM
+# API calls. ``litellm_embedding_config`` is consumed by the Milvus
+# vector store transformer; future nested-config keys with the same
+# threat shape should be added here.
+_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config",)
 
 
 async def pre_db_read_auth_checks(
