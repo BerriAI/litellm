@@ -21,6 +21,17 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 )
 
+# Prefer the *real* mitmproxy if it's installed: that way the contract
+# tests in ``test_replay_response_contract.py`` exercise the same
+# objects this file does, and any future skew between our fake and
+# real mitmproxy can't silently hide regressions. Fall through to the
+# fake stub when mitmproxy isn't available (the typical unit-test env).
+try:
+    import mitmproxy  # noqa: F401  pre-load so setdefault below is a no-op
+    import mitmproxy.http  # noqa: F401
+except ImportError:
+    pass
+
 # Install a fake `mitmproxy` package *before* importing the addon, so the
 # real mitmproxy doesn't need to be present in the unit-test env.
 _mitmproxy_pkg = types.ModuleType("mitmproxy")
@@ -28,16 +39,64 @@ _http_mod = types.ModuleType("mitmproxy.http")
 
 
 class _FakeHeaders(dict):
-    def items(self):
+    def items(self, multi: bool = False):
+        # Real mitmproxy ``Headers.items(multi=True)`` would return one
+        # tuple per repeated header (e.g. multiple ``Set-Cookie``). The
+        # fake doesn't model duplicates, so the kwarg is a no-op — we
+        # just need to accept it without ``TypeError``.
         return list(super().items())
 
 
 class _FakeResponse:
-    def __init__(self, status_code, body=b"", headers=None, reason=""):
+    """Fake mitmproxy ``http.Response`` that accepts both the real
+    constructor signature (used by the addon's replay path) and a
+    simplified positional signature (used by these tests when faking an
+    upstream response).
+    """
+
+    def __init__(
+        self,
+        *args,
+        status_code=None,
+        body=None,
+        headers=None,
+        reason="",
+        # real-mitmproxy kwargs (the addon passes these via _build_replay_response)
+        http_version=b"HTTP/1.1",
+        content=None,
+        trailers=None,
+        timestamp_start=None,
+        timestamp_end=None,
+    ):
+        # Positional support: _FakeResponse(status_code, body=..., headers=...)
+        if args:
+            if status_code is None:
+                status_code = args[0]
+            if len(args) > 1 and body is None:
+                body = args[1]
+        # ``content`` (real mitmproxy) and ``body`` (test shorthand) are
+        # the same field — raw_content.
+        if body is None:
+            body = content if content is not None else b""
+        if isinstance(headers, list):
+            # Bytes-tuple list (real mitmproxy contract) → str dict for
+            # the fake's case-insensitive lookups.
+            headers = {
+                (k.decode("latin-1") if isinstance(k, bytes) else k): (
+                    v.decode("latin-1") if isinstance(v, bytes) else v
+                )
+                for k, v in headers
+            }
+        if isinstance(reason, bytes):
+            reason = reason.decode("latin-1")
         self.status_code = status_code
         self.raw_content = body
         self.headers = _FakeHeaders(headers or {})
         self.reason = reason
+        self.http_version = http_version
+        self.trailers = trailers
+        self.timestamp_start = timestamp_start
+        self.timestamp_end = timestamp_end
 
     @classmethod
     def make(cls, status_code, body=b"", headers=None):

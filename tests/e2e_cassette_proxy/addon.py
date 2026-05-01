@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 from mitmproxy import ctx, http  # type: ignore[import-not-found]
 
@@ -71,6 +72,54 @@ def _shape_summary(flow: http.HTTPFlow) -> str:
 
 def _is_2xx(status_code: int) -> bool:
     return 200 <= status_code < 300
+
+
+def _to_header_bytes(value: str) -> bytes:
+    """Encode a header name or value back to bytes for mitmproxy.
+
+    HTTP/1.1 header field names are 7-bit ASCII per RFC 7230 § 3.2;
+    values are also ASCII in practice but technically allow opaque
+    octets, which mitmproxy round-trips via the surrogateescape codec.
+    Latin-1 covers both cases without raising on stray high bytes that
+    might have leaked in via misbehaved upstreams.
+    """
+    return value.encode("latin-1", errors="replace")
+
+
+def _build_replay_response(cached: CachedResponse) -> http.Response:
+    """Build a mitmproxy ``Response`` from a cached payload.
+
+    We bypass ``http.Response.make`` because:
+
+    1. ``make`` requires a ``Headers`` instance or a ``dict`` to do its
+       own bytes-conversion. Passing a list of ``(str, str)`` tuples
+       falls into its iterable branch which calls ``Headers(headers)``
+       directly — and ``Headers`` raises ``TypeError: Header fields
+       must be bytes``. (This was the original bug: every cache hit
+       silently fell through to upstream because the addon raised here.)
+    2. ``make`` calls ``Message.set_content`` which re-encodes the body
+       per the cached ``Content-Encoding`` header. Since we recorded
+       ``raw_content`` (i.e. the already-encoded wire bytes), going
+       through ``set_content`` would double-gzip those payloads.
+
+    Constructing the ``Response`` directly lets us hand mitmproxy bytes
+    headers + the raw body in one shot, exactly mirroring what was on
+    the wire when we recorded it.
+    """
+    fields: Tuple[Tuple[bytes, bytes], ...] = tuple(
+        (_to_header_bytes(k), _to_header_bytes(v)) for k, v in cached.headers
+    )
+    now = time.time()
+    return http.Response(
+        http_version=b"HTTP/1.1",
+        status_code=cached.status_code,
+        reason=_to_header_bytes(cached.reason) or b"OK",
+        headers=fields,
+        content=cached.body,
+        trailers=None,
+        timestamp_start=now,
+        timestamp_end=now,
+    )
 
 
 class CassetteAddon:
@@ -151,11 +200,7 @@ class CassetteAddon:
             f"status={cached.status_code} bytes={len(cached.body)}"
         )
         self._stats["hit"] += 1
-        flow.response = http.Response.make(
-            cached.status_code,
-            cached.body,
-            list(cached.headers),
-        )
+        flow.response = _build_replay_response(cached)
 
     def response(self, flow: http.HTTPFlow) -> None:
         if self._store is None or self._should_skip(flow):
@@ -172,7 +217,11 @@ class CassetteAddon:
         key = self._key_for(flow)
         cached = CachedResponse(
             status_code=flow.response.status_code,
-            headers=tuple((k, v) for k, v in flow.response.headers.items()),
+            # ``items(multi=True)`` preserves repeated headers (e.g. multiple
+            # ``Set-Cookie``) which the plain ``items()`` flattens into a
+            # single comma-joined string. Strings are fine on the wire to
+            # Redis; we re-encode to bytes on replay.
+            headers=tuple((k, v) for k, v in flow.response.headers.items(multi=True)),
             body=flow.response.raw_content or b"",
             reason=flow.response.reason or "",
         )
