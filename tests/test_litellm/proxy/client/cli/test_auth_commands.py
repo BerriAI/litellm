@@ -1,17 +1,15 @@
 import json
 import os
 import sys
-import tempfile
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, mock_open, patch
+from unittest.mock import Mock, mock_open, patch
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 
-import pytest
 from click.testing import CliRunner
 
 from litellm.proxy.client.cli.commands.auth import (
@@ -24,6 +22,22 @@ from litellm.proxy.client.cli.commands.auth import (
     save_token,
     whoami,
 )
+
+
+def _mock_cli_sso_start_response(
+    login_id: str = "cli-session-uuid-456",
+    poll_secret: str = "poll-secret",
+    user_code: str = "ABCD-EFGH",
+) -> Mock:
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "login_id": login_id,
+        "poll_secret": poll_secret,
+        "user_code": user_code,
+    }
+    mock_response.raise_for_status = Mock()
+    return mock_response
 
 
 class TestTokenUtilities:
@@ -243,12 +257,15 @@ class TestLoginCommand:
 
         with (
             patch("webbrowser.open") as mock_browser,
+            patch(
+                "requests.post",
+                return_value=_mock_cli_sso_start_response(login_id="cli-test-uuid-123"),
+            ) as mock_post,
             patch("requests.get", return_value=mock_response) as mock_get,
             patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
             patch(
                 "litellm.proxy.client.cli.interface.show_commands"
             ) as mock_show_commands,
-            patch("litellm._uuid.uuid.uuid4", return_value="test-uuid-123"),
         ):
 
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -261,7 +278,13 @@ class TestLoginCommand:
             mock_browser.assert_called_once()
             call_args = mock_browser.call_args[0][0]
             assert "https://test.example.com/sso/key/generate" in call_args
-            assert "sk-test-uuid-123" in call_args
+            assert "cli-test-uuid-123" in call_args
+            assert "Verification code: ABCD-EFGH" in result.output
+            mock_post.assert_called_once()
+            mock_get.assert_called()
+            assert mock_get.call_args.kwargs["headers"] == {
+                "x-litellm-cli-poll-secret": "poll-secret"
+            }
 
             # Verify JWT was saved
             mock_save.assert_called_once()
@@ -284,9 +307,9 @@ class TestLoginCommand:
 
         with (
             patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch("requests.get", return_value=mock_response),
-            patch("time.sleep") as mock_sleep,
-            patch("litellm._uuid.uuid.uuid4", return_value="test-uuid-123"),
+            patch("time.sleep"),
         ):
 
             # Mock time.sleep to avoid actual delays in tests
@@ -306,9 +329,9 @@ class TestLoginCommand:
 
         with (
             patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch("requests.get", return_value=mock_response),
             patch("time.sleep"),
-            patch("litellm._uuid.uuid.uuid4", return_value="test-uuid-123"),
         ):
 
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -325,12 +348,12 @@ class TestLoginCommand:
 
         with (
             patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch(
                 "requests.get",
                 side_effect=requests.RequestException("Connection failed"),
             ),
             patch("time.sleep"),
-            patch("litellm._uuid.uuid.uuid4", return_value="test-uuid-123"),
         ):
 
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -345,8 +368,8 @@ class TestLoginCommand:
 
         with (
             patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch("requests.get", side_effect=KeyboardInterrupt),
-            patch("litellm._uuid.uuid.uuid4", return_value="test-uuid-123"),
         ):
 
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -369,9 +392,9 @@ class TestLoginCommand:
 
         with (
             patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch("requests.get", return_value=mock_response),
             patch("time.sleep"),
-            patch("litellm._uuid.uuid.uuid4", return_value="test-uuid-123"),
         ):
 
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -386,8 +409,8 @@ class TestLoginCommand:
 
         with (
             patch("webbrowser.open"),
+            patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch("requests.get", side_effect=ValueError("Invalid value")),
-            patch("litellm._uuid.uuid.uuid4", return_value="test-uuid-123"),
         ):
 
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -557,13 +580,18 @@ class TestCLIKeyRegenerationFlow:
         with (
             patch("webbrowser.open") as mock_browser,
             patch(
+                "requests.post",
+                return_value=_mock_cli_sso_start_response(
+                    login_id="cli-session-uuid-456"
+                ),
+            ),
+            patch(
                 "requests.get", side_effect=[mock_first_response, mock_second_response]
             ) as mock_get,
             patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
             patch(
                 "litellm.proxy.client.cli.interface.show_commands"
             ) as mock_show_commands,
-            patch("litellm._uuid.uuid.uuid4", return_value="session-uuid-456"),
             patch("click.prompt", return_value="2"),
         ):  # User selects index 2
 
@@ -585,8 +613,11 @@ class TestCLIKeyRegenerationFlow:
 
             # First poll should be without team_id
             first_poll_url = mock_get.call_args_list[0][0][0]
-            assert "sk-session-uuid-456" in first_poll_url
+            assert "cli-session-uuid-456" in first_poll_url
             assert "team_id=" not in first_poll_url
+            assert mock_get.call_args_list[0].kwargs["headers"] == {
+                "x-litellm-cli-poll-secret": "poll-secret"
+            }
 
             # Second poll should include team_id=team-beta
             second_poll_url = mock_get.call_args_list[1][0][0]
@@ -621,10 +652,15 @@ class TestCLIKeyRegenerationFlow:
 
         with (
             patch("webbrowser.open") as mock_browser,
+            patch(
+                "requests.post",
+                return_value=_mock_cli_sso_start_response(
+                    login_id="cli-session-uuid-solo"
+                ),
+            ),
             patch("requests.get", return_value=mock_response),
             patch("litellm.proxy.client.cli.commands.auth.save_token") as mock_save,
             patch("litellm.proxy.client.cli.interface.show_commands"),
-            patch("litellm._uuid.uuid.uuid4", return_value="session-uuid-solo"),
         ):
 
             result = self.runner.invoke(login, obj=mock_context.obj)
@@ -637,7 +673,7 @@ class TestCLIKeyRegenerationFlow:
             call_args = mock_browser.call_args[0][0]
             assert "https://test.example.com/sso/key/generate" in call_args
             assert "source=litellm-cli" in call_args
-            assert "key=sk-session-uuid-solo" in call_args
+            assert "key=cli-session-uuid-solo" in call_args
 
             # Verify JWT was saved
             mock_save.assert_called_once()
