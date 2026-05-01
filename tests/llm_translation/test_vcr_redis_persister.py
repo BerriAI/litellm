@@ -74,10 +74,6 @@ def test_load_missing_key_raises_cassette_not_found():
 
 
 def test_redis_key_normalizes_path_passed_by_pytest_recording():
-    # pytest-recording passes paths shaped like
-    # ``<test_dir>/cassettes/<module>/<test>.yaml``. The persister stores them
-    # under a clean test-identifier key — no extension, no ``cassettes/``
-    # directory segment — so ``redis-cli keys`` reads as test IDs.
     raw = "tests/llm_translation/cassettes/test_anthropic/test_streaming.yaml"
     assert (
         redis_key_for(raw)
@@ -86,8 +82,6 @@ def test_redis_key_normalizes_path_passed_by_pytest_recording():
 
 
 class _FlakyRedis:
-    """Wraps a fake redis but raises ConnectionError on the chosen op."""
-
     def __init__(self, inner, fail_on: str):
         self._inner = inner
         self._fail_on = fail_on
@@ -104,7 +98,6 @@ class _FlakyRedis:
 
 
 def test_save_swallows_connection_errors_so_teardown_does_not_fail():
-    # Persistence is a cache; an outage shouldn't fail an otherwise-passing test.
     flaky = _FlakyRedis(fakeredis.FakeStrictRedis(), fail_on="set")
     persister = make_redis_persister(client=flaky)
 
@@ -116,18 +109,15 @@ def test_save_swallows_connection_errors_so_teardown_does_not_fail():
 
 
 def test_save_skipped_when_test_marked_failed_and_prior_cassette_preserved():
-    # A flaky test that fails should NOT overwrite a previously-good cassette.
     fake, persister = _persister_with_fake_redis()
     cassette_id = "tests/llm_translation/test_x/test_flaky"
     key = redis_key_for(cassette_id)
 
-    # Seed a "known-good" recording from a prior successful run.
     good = _sample_cassette_dict()
     persister.save_cassette(cassette_id, good, yamlserializer)
     good_payload = fake.get(key)
     assert good_payload is not None
 
-    # Simulate a failed run: the hook records "did not pass" before save.
     mark_test_outcome_for_cassette(cassette_id, passed=False)
     bad_response = {
         "status": {"code": 200, "message": "OK"},
@@ -137,7 +127,6 @@ def test_save_skipped_when_test_marked_failed_and_prior_cassette_preserved():
     bad = {"requests": good["requests"], "responses": [bad_response]}
     persister.save_cassette(cassette_id, bad, yamlserializer)
 
-    # Prior good payload is still there — the bad save was suppressed.
     assert fake.get(key) == good_payload
 
 
@@ -153,8 +142,6 @@ def test_save_proceeds_when_test_marked_passed():
 
 
 def test_save_refused_when_cassette_exceeds_max_episodes():
-    # Pathological cassettes (non-deterministic body → unbounded episode growth)
-    # should be refused. Any prior good payload stays intact.
     fake, persister = _persister_with_fake_redis()
     cassette_id = "tests/llm_translation/test_x/test_runaway"
     key = redis_key_for(cassette_id)
@@ -179,7 +166,6 @@ def test_save_refused_when_cassette_exceeds_max_episodes():
     }
     persister.save_cassette(cassette_id, bloated, yamlserializer)
 
-    # Refused — the seed payload is unchanged.
     assert fake.get(key) == seed_payload
 
 
@@ -209,8 +195,6 @@ def test_save_proceeds_at_max_episodes_threshold():
 
 
 def test_save_proceeds_when_outcome_unknown():
-    # Used outside a pytest run (e.g. ad-hoc scripts), the outcome gate is
-    # bypassed so the persister still works.
     fake, persister = _persister_with_fake_redis()
     cassette_id = "tests/llm_translation/test_x/test_no_marker"
     key = redis_key_for(cassette_id)
@@ -221,8 +205,6 @@ def test_save_proceeds_when_outcome_unknown():
 
 
 def test_load_treats_connection_errors_as_cassette_miss():
-    # An outage on read should fall through to a live call (CassetteNotFound),
-    # not surface a redis exception in the test setup.
     flaky = _FlakyRedis(fakeredis.FakeStrictRedis(), fail_on="get")
     persister = make_redis_persister(client=flaky)
 
