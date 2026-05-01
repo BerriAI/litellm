@@ -163,19 +163,21 @@ def rerank(  # noqa: PLR0915
 
         model_response = RerankResponse()
 
+        rerank_litellm_params = {
+            "litellm_call_id": litellm_call_id,
+            "proxy_server_request": proxy_server_request,
+            "model_info": model_info,
+            "preset_cache_key": None,
+            "stream_response": {},
+            **optional_params.model_dump(exclude_unset=True),
+        }
+
         litellm_logging_obj.update_from_kwargs(
             kwargs=kwargs,
             model=model,
             user=user,
             optional_params=dict(optional_rerank_params),
-            litellm_params={
-                "litellm_call_id": litellm_call_id,
-                "proxy_server_request": proxy_server_request,
-                "model_info": model_info,
-                "preset_cache_key": None,
-                "stream_response": {},
-                **optional_params.model_dump(exclude_unset=True),
-            },
+            litellm_params=dict(rerank_litellm_params),
             custom_llm_provider=_custom_llm_provider,
         )
 
@@ -214,6 +216,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.AZURE_AI:
             api_base = (
@@ -235,6 +238,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.INFINITY:
             # Implement Infinity rerank logic
@@ -265,6 +269,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.TOGETHER_AI:
             # Implement Together AI rerank logic
@@ -318,6 +323,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.NVIDIA_NIM:
             if dynamic_api_key is None:
@@ -346,6 +352,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.BEDROCK:
             api_base = (
@@ -409,6 +416,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
 
         elif _custom_llm_provider == litellm.LlmProviders.DEEPINFRA:
@@ -442,6 +450,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.FIREWORKS_AI:
             api_key = (
@@ -472,6 +481,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.VOYAGE:
             api_key = (
@@ -500,6 +510,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         elif _custom_llm_provider == litellm.LlmProviders.WATSONX:
             credentials = IBMWatsonXMixin.get_watsonx_credentials(
@@ -527,6 +538,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
         else:
             # Generic handler for all providers that use base_llm_http_handler
@@ -559,6 +571,7 @@ def rerank(  # noqa: PLR0915
                 headers=headers or litellm.headers or {},
                 client=client,
                 model_response=model_response,
+                litellm_params=rerank_litellm_params,
             )
 
         # Placeholder return

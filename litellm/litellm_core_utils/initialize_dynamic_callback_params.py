@@ -23,6 +23,13 @@ def _raise_env_reference_error(param: str, *, source: str) -> None:
     )
 
 
+def validate_no_callback_env_reference(
+    param: str, value: object, *, source: str
+) -> None:
+    if _is_env_reference(value):
+        _raise_env_reference_error(param, source=source)
+
+
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
 _supported_callback_params = [
     "langfuse_public_key",
@@ -66,8 +73,9 @@ def initialize_standard_callback_dynamic_params(
         for param in _supported_callback_params:
             if param in kwargs:
                 _param_value = kwargs.get(param)
-                if _is_env_reference(_param_value):
-                    _raise_env_reference_error(param, source="request body")
+                validate_no_callback_env_reference(
+                    param, _param_value, source="request body"
+                )
                 standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
         # 2. Fallback: check "metadata" or "litellm_params" -> "metadata"
@@ -80,8 +88,9 @@ def initialize_standard_callback_dynamic_params(
             for param in _supported_callback_params:
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
-                    if _is_env_reference(_param_value):
-                        _raise_env_reference_error(param, source="metadata")
+                    validate_no_callback_env_reference(
+                        param, _param_value, source="metadata"
+                    )
                     standard_callback_dynamic_params[param] = _param_value  # type: ignore
 
     return standard_callback_dynamic_params
