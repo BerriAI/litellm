@@ -39,6 +39,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
