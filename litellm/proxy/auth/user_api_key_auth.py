@@ -2146,6 +2146,36 @@ async def _enforce_key_and_fallback_model_access(
             request_data.get("fallbacks", None),
         )
 
+        # Per-request router overrides (route_llm_request.py promotes these into
+        # the call kwargs) can also carry fallbacks. Without validating them
+        # here, a key could nest unauthorized models under
+        # router_settings_override and force them via mock_testing_fallbacks
+        # or any genuine upstream failure. These use the router-level format
+        # ({primary_model: [fallback_models]}) rather than the client-side
+        # format, so collect the fallback names separately.
+        nested_fallback_models: List[str] = []
+        override = request_data.get("router_settings_override")
+        if isinstance(override, dict):
+            for nested_key in (
+                "fallbacks",
+                "context_window_fallbacks",
+                "content_policy_fallbacks",
+            ):
+                nested = override.get(nested_key)
+                if not isinstance(nested, list):
+                    continue
+                for entry in nested:
+                    if isinstance(entry, str):
+                        nested_fallback_models.append(entry)
+                    elif isinstance(entry, dict):
+                        for value in entry.values():
+                            if isinstance(value, str):
+                                nested_fallback_models.append(value)
+                            elif isinstance(value, list):
+                                nested_fallback_models.extend(
+                                    v for v in value if isinstance(v, str)
+                                )
+
         if model is not None:
             await can_key_call_model(
                 model=model,
@@ -2167,6 +2197,19 @@ async def _enforce_key_and_fallback_model_access(
                     llm_router=llm_router,
                     user_model=None,
                 )
+
+        for nested_model in nested_fallback_models:
+            await can_key_call_model(
+                model=nested_model,
+                llm_model_list=llm_model_list,
+                valid_token=valid_token,
+                llm_router=llm_router,
+            )
+            await is_valid_fallback_model(
+                model=nested_model,
+                llm_router=llm_router,
+                user_model=None,
+            )
 
 
 async def _run_post_custom_auth_checks(

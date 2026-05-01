@@ -25,6 +25,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
+    _enforce_key_and_fallback_model_access,
     _run_centralized_common_checks,
     _run_post_custom_auth_checks,
     get_api_key,
@@ -1752,7 +1753,11 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
     from starlette.datastructures import URL
     from starlette.requests import Request
 
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        LiteLLM_TeamTableCachedObj,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
 
     api_key = "sk-test-team-metadata-refresh"
@@ -1833,16 +1838,17 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
                 request_data={},
             )
 
-        assert result.team_metadata == {"guardrails": ["test-guardrail-333"]}, (
-            f"team_metadata was not updated from fresh team object. Got: {result.team_metadata}"
-        )
+        assert result.team_metadata == {
+            "guardrails": ["test-guardrail-333"]
+        }, f"team_metadata was not updated from fresh team object. Got: {result.team_metadata}"
 
     finally:
         for k, v in _originals.items():
             setattr(_proxy_server_mod, k, v)
-            
+
+
 # ---------------------------------------------------------------------------
-            
+
 # _run_centralized_common_checks — centralized authz gate
 # ---------------------------------------------------------------------------
 
@@ -2627,3 +2633,105 @@ async def test_master_key_auth_substitutes_alias_for_api_key():
     finally:
         for k, v in _orig.items():
             setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_enforce_fallback_access_validates_router_settings_override():
+    """Fallbacks nested under ``router_settings_override`` are promoted into the
+    request kwargs by route_llm_request and can be combined with
+    ``mock_testing_fallbacks`` to force execution of an arbitrary model.
+    They must therefore be validated against the key's allowlist alongside
+    the top-level ``fallbacks`` field."""
+    valid_token = UserAPIKeyAuth(token="test_token", models=["cheap-model"])
+    request_data = {
+        "model": "cheap-model",
+        "router_settings_override": {
+            "fallbacks": [{"cheap-model": ["expensive-model"]}],
+        },
+        "mock_testing_fallbacks": True,
+    }
+
+    seen_models = []
+
+    async def fake_can_key_call_model(
+        *, model, llm_model_list, valid_token, llm_router
+    ):
+        seen_models.append(model)
+        if model not in valid_token.models:
+            raise ProxyException(
+                message=f"Key not allowed to access model={model}",
+                type=ProxyErrorTypes.key_model_access_denied,
+                param="model",
+                code=401,
+            )
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=fake_can_key_call_model,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
+            new_callable=AsyncMock,
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc:
+            await _enforce_key_and_fallback_model_access(
+                valid_token=valid_token,
+                request_data=request_data,
+                route="/v1/chat/completions",
+                llm_model_list=[],
+                llm_router=None,
+            )
+
+    assert exc.value.type == ProxyErrorTypes.key_model_access_denied
+    assert "expensive-model" in seen_models
+
+
+@pytest.mark.asyncio
+async def test_enforce_fallback_access_validates_nested_context_and_content_policy():
+    """Same bypass surface exists for ``context_window_fallbacks`` and
+    ``content_policy_fallbacks`` nested under ``router_settings_override``."""
+    valid_token = UserAPIKeyAuth(token="test_token", models=["cheap-model"])
+    request_data = {
+        "model": "cheap-model",
+        "router_settings_override": {
+            "context_window_fallbacks": [{"cheap-model": ["ctx-model"]}],
+            "content_policy_fallbacks": [{"cheap-model": ["policy-model"]}],
+        },
+    }
+
+    seen_models = []
+
+    async def fake_can_key_call_model(
+        *, model, llm_model_list, valid_token, llm_router
+    ):
+        seen_models.append(model)
+        if model not in valid_token.models:
+            raise ProxyException(
+                message=f"Key not allowed to access model={model}",
+                type=ProxyErrorTypes.key_model_access_denied,
+                param="model",
+                code=401,
+            )
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=fake_can_key_call_model,
+        ),
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.is_valid_fallback_model",
+            new_callable=AsyncMock,
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await _enforce_key_and_fallback_model_access(
+                valid_token=valid_token,
+                request_data=request_data,
+                route="/v1/chat/completions",
+                llm_model_list=[],
+                llm_router=None,
+            )
+
+    assert "ctx-model" in seen_models or "policy-model" in seen_models
