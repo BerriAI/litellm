@@ -9338,10 +9338,7 @@ class Router:
         if pattern_deployments:
             return model, pattern_deployments
 
-        if (
-            request_team_id is not None
-            and request_team_id in self.team_pattern_routers
-        ):
+        if request_team_id is not None and request_team_id in self.team_pattern_routers:
             pattern_deployments = self.team_pattern_routers[
                 request_team_id
             ].get_deployments_by_pattern(
