@@ -97,7 +97,10 @@ async def reserve_budget_for_request(
     applied_entries: List[Dict[str, Any]] = []
     try:
         for counter in counters:
-            entry = _counter_to_reservation_entry(counter)
+            entry = _counter_to_reservation_entry(
+                counter=counter,
+                reserved_cost=reservation_cost,
+            )
             reserved_value = await _reserve_counter(
                 counter=counter,
                 reservation_cost=reservation_cost,
@@ -135,9 +138,10 @@ async def reserve_budget_for_request(
                     ),
                 )
     except Exception:
-        await _set_reserved_entries_adjustment(
+        await _set_reserved_entries_actual_cost(
             entries=applied_entries,
-            target_adjustment=-reservation_cost,
+            actual_cost=0.0,
+            default_reserved_cost=reservation_cost,
         )
         raise
 
@@ -157,10 +161,10 @@ async def reconcile_budget_reservation(
 
     reserved_cost = float(budget_reservation.get("reserved_cost") or 0.0)
     actual = float(actual_cost or 0.0)
-    adjustment = actual - reserved_cost
-    await _set_reserved_entries_adjustment(
+    await _set_reserved_entries_actual_cost(
         entries=budget_reservation.get("entries") or [],
-        target_adjustment=adjustment,
+        actual_cost=actual,
+        default_reserved_cost=reserved_cost,
     )
     budget_reservation["finalized"] = True
 
@@ -624,9 +628,10 @@ async def _ensure_malformed_window_counter_initialized(
         )
 
 
-async def _set_reserved_entries_adjustment(
+async def _set_reserved_entries_actual_cost(
     entries: List[dict],
-    target_adjustment: float,
+    actual_cost: float,
+    default_reserved_cost: float,
 ) -> None:
     from litellm.proxy.proxy_server import _increment_spend_counter_cache
 
@@ -634,6 +639,11 @@ async def _set_reserved_entries_adjustment(
         counter_key = entry.get("counter_key")
         if counter_key is None:
             continue
+        reserved_cost = _get_entry_reserved_cost(
+            entry=entry,
+            default_reserved_cost=default_reserved_cost,
+        )
+        target_adjustment = actual_cost - reserved_cost
         applied_adjustment = float(entry.get("applied_adjustment") or 0.0)
         adjustment = target_adjustment - applied_adjustment
         if adjustment == 0:
@@ -650,21 +660,31 @@ async def _resize_applied_reservation(
     current_reserved_cost: float,
     new_reserved_cost: float,
 ) -> None:
-    await _set_reserved_entries_adjustment(
+    await _set_reserved_entries_actual_cost(
         entries=entries,
-        target_adjustment=new_reserved_cost - current_reserved_cost,
+        actual_cost=new_reserved_cost,
+        default_reserved_cost=current_reserved_cost,
     )
-    for entry in entries:
-        entry["applied_adjustment"] = 0.0
 
 
-def _counter_to_reservation_entry(counter: _BudgetCounter) -> Dict[str, Any]:
+def _counter_to_reservation_entry(
+    counter: _BudgetCounter,
+    reserved_cost: float,
+) -> Dict[str, Any]:
     return {
         "counter_key": counter.counter_key,
         "entity_type": counter.entity_type,
         "entity_id": counter.entity_id,
+        "reserved_cost": reserved_cost,
         "applied_adjustment": 0.0,
     }
+
+
+def _get_entry_reserved_cost(entry: dict, default_reserved_cost: float) -> float:
+    try:
+        return float(entry.get("reserved_cost", default_reserved_cost) or 0.0)
+    except (TypeError, ValueError):
+        return default_reserved_cost
 
 
 def get_budget_window_start(window: Any) -> Optional[datetime]:

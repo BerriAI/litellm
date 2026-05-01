@@ -489,11 +489,12 @@ async def _update_database_and_spend_counters(
                 await _invalidate_budget_reservation_counters(
                     budget_reservation=budget_reservation
                 )
-                budget_reservation["finalized"] = True
             except Exception:
                 verbose_proxy_logger.exception(
                     "Failed to invalidate budget reservation counters after spend counter update failed"
                 )
+            finally:
+                budget_reservation["finalized"] = True
         raise
 
 
