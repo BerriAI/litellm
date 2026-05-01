@@ -29,6 +29,9 @@ def test_qdrant_semantic_cache_initialization(monkeypatch):
 
         mock_sync_client_instance = MagicMock()
         mock_sync_client_instance.get.return_value = mock_response
+        mock_index_response = MagicMock()
+        mock_index_response.status_code = 200
+        mock_sync_client_instance.put.return_value = mock_index_response
         mock_sync_client.return_value = mock_sync_client_instance
 
         from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
@@ -46,6 +49,17 @@ def test_qdrant_semantic_cache_initialization(monkeypatch):
         assert qdrant_cache.qdrant_api_base == "http://test.qdrant.local"
         assert qdrant_cache.qdrant_api_key == "test_key"
         assert qdrant_cache.similarity_threshold == 0.8
+        mock_sync_client_instance.put.assert_called_once_with(
+            url="http://test.qdrant.local/collections/test_collection/index",
+            headers={
+                "Content-Type": "application/json",
+                "api-key": "test_key",
+            },
+            json={
+                "field_name": QdrantSemanticCache.CACHE_KEY_FIELD_NAME,
+                "field_schema": "keyword",
+            },
+        )
 
     # Test initialization with missing similarity_threshold
     with pytest.raises(Exception, match="similarity_threshold must be provided"):
@@ -137,6 +151,9 @@ def test_qdrant_semantic_cache_get_cache_hit():
 def test_qdrant_semantic_cache_rejects_unscoped_cache_hit():
     """
     Test QDRANT semantic cache rejects old or unscoped cache hits.
+
+    Legacy points have only text and response payloads, so they cannot be
+    safely migrated to a generated LiteLLM cache key.
     """
     with (
         patch(
@@ -580,9 +597,13 @@ def test_qdrant_semantic_cache_custom_vector_size():
         assert qdrant_cache.vector_size == 768
 
         # Verify the PUT call to create the collection used vector_size=768
-        put_call = mock_sync_client_instance.put.call_args
-        assert put_call is not None
-        create_payload = put_call.kwargs.get("json") or put_call[1].get("json")
+        put_call = next(
+            call
+            for call in mock_sync_client_instance.put.call_args_list
+            if call.kwargs["url"]
+            == "http://test.qdrant.local/collections/test_collection_768"
+        )
+        create_payload = put_call.kwargs["json"]
         assert create_payload["vectors"]["size"] == 768
         assert create_payload["vectors"]["distance"] == "Cosine"
 
@@ -670,6 +691,11 @@ def test_qdrant_semantic_cache_large_vector_size():
         assert qdrant_cache.vector_size == 4096
 
         # Verify the collection was created with 4096
-        put_call = mock_sync_client_instance.put.call_args
-        create_payload = put_call.kwargs.get("json") or put_call[1].get("json")
+        put_call = next(
+            call
+            for call in mock_sync_client_instance.put.call_args_list
+            if call.kwargs["url"]
+            == "http://test.qdrant.local/collections/test_collection_4096"
+        )
+        create_payload = put_call.kwargs["json"]
         assert create_payload["vectors"]["size"] == 4096
