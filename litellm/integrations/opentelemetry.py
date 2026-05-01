@@ -754,7 +754,7 @@ class OpenTelemetry(CustomLogger):
                 kwargs, response_obj, start_time, end_time, parent_span
             )
 
-        # 3. Guardrail span — ensure guardrails are always parented to an
+        # 3. Guardrail span ΓÇö ensure guardrails are always parented to an
         #    existing span so they never become orphaned root spans (Issue #5).
         guardrail_ctx = self._resolve_guardrail_context(
             span=span, parent_span=parent_span, fallback_ctx=ctx
@@ -834,7 +834,7 @@ class OpenTelemetry(CustomLogger):
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
         duration_s = (end_time - start_time).total_seconds()
         params = kwargs.get("litellm_params") or {}
-        provider = params.get("custom_llm_provider", "Unknown")
+        provider = params.get("custom_llm_provider", None) or "Unknown"
 
         common_attrs = {
             "gen_ai.operation.name": "chat",
@@ -877,7 +877,7 @@ class OpenTelemetry(CustomLogger):
                 duration_s, attributes=common_attrs
             )
             if (
-                response_obj
+                isinstance(response_obj, dict)
                 and (usage := response_obj.get("usage"))
                 and self._token_usage_histogram
             ):
@@ -966,7 +966,7 @@ class OpenTelemetry(CustomLogger):
 
         # Get completion tokens from response_obj
         completion_tokens = None
-        if response_obj and (usage := response_obj.get("usage")):
+        if isinstance(response_obj, dict) and (usage := response_obj.get("usage")):
             completion_tokens = usage.get("completion_tokens")
 
         if completion_tokens is None or completion_tokens <= 0:
@@ -1064,6 +1064,9 @@ class OpenTelemetry(CustomLogger):
         if not self.config.enable_events:
             return
 
+        if not isinstance(response_obj, dict):
+            return
+
         # NOTE: Semantic logs (gen_ai.content.prompt/completion events) have compatibility issues
         # with OTEL SDK >= 1.39.0 due to breaking changes in PR #4676:
         # - LogRecord moved from opentelemetry.sdk._logs to opentelemetry.sdk._logs._internal
@@ -1088,8 +1091,8 @@ class OpenTelemetry(CustomLogger):
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
-            "custom_llm_provider", "Unknown"
-        )
+            "custom_llm_provider", None
+        ) or "Unknown"
 
         # per-message events
         for msg in kwargs.get("messages", []):
@@ -1101,7 +1104,11 @@ class OpenTelemetry(CustomLogger):
             if role == "tool" and msg.get("id"):
                 attrs["id"] = msg["id"]
             if self.message_logging and msg.get("content"):
-                attrs["gen_ai.prompt"] = msg["content"]
+                content = msg["content"]
+                if isinstance(content, str):
+                    attrs["gen_ai.prompt"] = content
+                else:
+                    attrs["gen_ai.prompt"] = safe_dumps(content)
 
             log_record = SdkLogRecord(
                 timestamp=self._to_ns(datetime.now()),
@@ -1125,7 +1132,11 @@ class OpenTelemetry(CustomLogger):
             }
             body_msg = choice.get("message", {})
             if self.message_logging and body_msg.get("content"):
-                attrs["message.content"] = body_msg["content"]
+                completion_content = body_msg["content"]
+                if isinstance(completion_content, str):
+                    attrs["message.content"] = completion_content
+                else:
+                    attrs["message.content"] = safe_dumps(completion_content)
             body = {
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
@@ -1157,7 +1168,7 @@ class OpenTelemetry(CustomLogger):
         never orphaned (Issue #5).  Priority:
           1. The litellm_request span that was just created
           2. The parent proxy-request span
-          3. The original fallback context (may be None — last resort)
+          3. The original fallback context (may be None ΓÇö last resort)
         """
         from opentelemetry import trace as _trace
 
@@ -1293,7 +1304,7 @@ class OpenTelemetry(CustomLogger):
                 self.set_attributes(parent_otel_span, kwargs, response_obj)
                 self._record_exception_on_span(span=parent_otel_span, kwargs=kwargs)
 
-        # Create span for guardrail information — ensure proper parenting (Issue #5)
+        # Create span for guardrail information ΓÇö ensure proper parenting (Issue #5)
         guardrail_ctx = self._resolve_guardrail_context(
             span=span, parent_span=parent_otel_span, fallback_ctx=_parent_context
         )
@@ -1560,7 +1571,7 @@ class OpenTelemetry(CustomLogger):
             self.safe_set_attribute(
                 span=span,
                 key=SpanAttributes.LLM_SYSTEM.value,
-                value=litellm_params.get("custom_llm_provider", "Unknown"),
+                value=litellm_params.get("custom_llm_provider") or "Unknown",
             )
 
             # The maximum number of tokens the LLM generates for a request.
@@ -1606,7 +1617,7 @@ class OpenTelemetry(CustomLogger):
             # the litellm call ID so every call type can be correlated
             # across LiteLLM UI, Phoenix traces, and provider logs (Issue #8).
             response_id = (
-                response_obj.get("id") if response_obj else None
+                response_obj.get("id") if isinstance(response_obj, dict) else None
             ) or standard_logging_payload.get("id")
             if response_id:
                 self.safe_set_attribute(
@@ -1624,14 +1635,14 @@ class OpenTelemetry(CustomLogger):
                 )
 
             # The model used to generate the response.
-            if response_obj and response_obj.get("model"):
+            if isinstance(response_obj, dict) and response_obj.get("model"):
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.LLM_RESPONSE_MODEL.value,
                     value=response_obj.get("model"),
                 )
 
-            usage = response_obj and response_obj.get("usage")
+            usage = isinstance(response_obj, dict) and response_obj.get("usage")
             if usage:
                 self.safe_set_attribute(
                     span=span,
@@ -1709,12 +1720,11 @@ class OpenTelemetry(CustomLogger):
             #############################################
             ########## LLM Response Attributes ##########
             #############################################
-            if response_obj is not None:
-                if response_obj.get("choices"):
+            if isinstance(response_obj, dict):
+                choices = response_obj.get("choices")
+                if choices:
                     transformed_choices = (
-                        self._transform_choices_to_otel_semantic_conventions(
-                            response_obj.get("choices")
-                        )
+                        self._transform_choices_to_otel_semantic_conventions(choices)
                     )
                     self.safe_set_attribute(
                         span=span,
@@ -1723,7 +1733,7 @@ class OpenTelemetry(CustomLogger):
                     )
 
                     finish_reasons = []
-                    for idx, choice in enumerate(response_obj.get("choices")):
+                    for idx, choice in enumerate(choices):
                         if choice.get("finish_reason"):
                             finish_reasons.append(choice.get("finish_reason"))
 
@@ -1734,9 +1744,9 @@ class OpenTelemetry(CustomLogger):
                             value=safe_dumps(finish_reasons),
                         )
 
-                    for idx, choice in enumerate(response_obj.get("choices")):
+                    for idx, choice in enumerate(choices):
                         if choice.get("finish_reason"):
-                            message = choice.get("message")
+                            message = choice.get("message") or {}
                             tool_calls = message.get("tool_calls")
                             if tool_calls:
                                 kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)  # type: ignore
@@ -1846,10 +1856,10 @@ class OpenTelemetry(CustomLogger):
         try:
             # Only set provider-specific raw payload attributes on this span.
             # The parent litellm_request span already carries the standard
-            # gen_ai.* / metadata.* attributes — duplicating them here doubles
+            # gen_ai.* / metadata.* attributes ΓÇö duplicating them here doubles
             # storage and adds noise (Issue #3).
             litellm_params = kwargs.get("litellm_params", {}) or {}
-            custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")
+            custom_llm_provider = litellm_params.get("custom_llm_provider") or "Unknown"
 
             _raw_response = kwargs.get("original_response")
             _additional_args = kwargs.get("additional_args", {}) or {}
