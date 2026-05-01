@@ -1997,3 +1997,60 @@ def test_additional_costs_only_for_azure_ai():
         completion_tokens=50,
     )
     assert result is None, "Vertex AI should have no additional costs"
+
+
+def test_custom_pricing_applies_cache_read_token_cost():
+    """
+    Cached prompt tokens must be billed at cache_read_input_token_cost,
+    not at the regular input_cost_per_token, when custom pricing is provided.
+    Regression test for https://github.com/BerriAI/litellm/issues/26807
+    """
+    prompt_tokens = 6074
+    completion_tokens = 285
+    cached_tokens = 3456
+
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=cached_tokens,
+            audio_tokens=0,
+        ),
+    )
+
+    response = ModelResponse(
+        id="test-id",
+        created=1234567890,
+        model="openai/gpt-5.4",
+        object="chat.completion",
+        choices=[],
+        usage=usage,
+    )
+
+    input_cost_per_token = 0.0000025
+    output_cost_per_token = 0.000015
+    cache_read_input_token_cost = 0.00000025
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="openai/gpt-5.4",
+        custom_llm_provider="openai",
+        custom_cost_per_token={
+            "input_cost_per_token": input_cost_per_token,
+            "output_cost_per_token": output_cost_per_token,
+            "cache_read_input_token_cost": cache_read_input_token_cost,
+        },
+    )
+
+    non_cached_tokens = prompt_tokens - cached_tokens
+    expected_cost = (
+        non_cached_tokens * input_cost_per_token
+        + cached_tokens * cache_read_input_token_cost
+        + completion_tokens * output_cost_per_token
+    )
+
+    assert pytest.approx(cost, rel=1e-6) == expected_cost, (
+        f"Expected {expected_cost} but got {cost}. "
+        "Cached tokens should be billed at cache_read_input_token_cost."
+    )

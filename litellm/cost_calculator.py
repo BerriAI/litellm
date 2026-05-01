@@ -175,13 +175,25 @@ def _cost_per_token_custom_pricing_helper(
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
+    ### USAGE OBJECT ###
+    usage_object: Optional[Usage] = None,
 ) -> Optional[Tuple[float, float]]:
     """Internal helper function for calculating cost, if custom pricing given"""
     if custom_cost_per_token is None and custom_cost_per_second is None:
         return None
 
     if custom_cost_per_token is not None:
-        input_cost = custom_cost_per_token["input_cost_per_token"] * prompt_tokens
+        cache_read_cost = custom_cost_per_token.get("cache_read_input_token_cost")  # type: ignore
+        if cache_read_cost is not None and usage_object is not None:
+            details = _parse_prompt_tokens_details(usage_object)
+            cached_tokens = details["cache_hit_tokens"]
+            non_cached_tokens = prompt_tokens - cached_tokens
+            input_cost = (
+                custom_cost_per_token["input_cost_per_token"] * non_cached_tokens
+                + cache_read_cost * cached_tokens
+            )
+        else:
+            input_cost = custom_cost_per_token["input_cost_per_token"] * prompt_tokens
         output_cost = custom_cost_per_token["output_cost_per_token"] * completion_tokens
         return input_cost, output_cost
     elif custom_cost_per_second is not None:
@@ -328,6 +340,7 @@ def cost_per_token(  # noqa: PLR0915
         response_time_ms=response_time_ms,
         custom_cost_per_second=custom_cost_per_second,
         custom_cost_per_token=custom_cost_per_token,
+        usage_object=usage_block,
     )
 
     if response_cost is not None:
