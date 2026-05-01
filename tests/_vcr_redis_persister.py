@@ -91,26 +91,13 @@ _PATCHED_AIOHTTP_RECORD = False
 
 
 def patch_vcrpy_aiohttp_record_path() -> None:
-    """Make vcrpy's aiohttp record path leave the response body re-readable.
-
-    vcrpy.stubs.aiohttp_stubs.record_response calls ``await response.read()``
-    to capture the body for the cassette, which drains aiohttp's StreamReader.
-    Downstream consumers of the same ClientResponse (e.g.
-    ``litellm.llms.custom_httpx.aiohttp_transport.AiohttpResponseStream``,
-    which iterates ``response.content.iter_chunked``) then see an empty body
-    and surface as ``Expecting value: line 1 column 1 (char 0)`` JSON errors.
-
-    Re-feed the captured bytes back into the StreamReader via ``unread_data``
-    so the body remains available to whoever holds the ClientResponse next.
-    Idempotent; safe to call from multiple conftests.
-    """
+    """Re-feed the response body into aiohttp's StreamReader after vcrpy's
+    record_response drains it, so downstream consumers (e.g.
+    LiteLLMAiohttpTransport.AiohttpResponseStream) can still read it."""
     global _PATCHED_AIOHTTP_RECORD
     if _PATCHED_AIOHTTP_RECORD:
         return
-    try:
-        import vcr.stubs.aiohttp_stubs as _aiohttp_stubs
-    except ImportError:  # pragma: no cover - aiohttp not installed in env
-        return
+    import vcr.stubs.aiohttp_stubs as _aiohttp_stubs
 
     _orig_record_response = _aiohttp_stubs.record_response
 
@@ -118,13 +105,7 @@ def patch_vcrpy_aiohttp_record_path() -> None:
         await _orig_record_response(cassette, vcr_request, response)
         body = getattr(response, "_body", None) or b""
         if body:
-            try:
-                response.content.unread_data(body)
-            except Exception:
-                # If aiohttp removes unread_data in a future release we want
-                # the test to fail loudly via the original empty-body
-                # symptom rather than mask the regression here.
-                pass
+            response.content.unread_data(body)
 
     _aiohttp_stubs.record_response = _record_response_preserving_body
     _PATCHED_AIOHTTP_RECORD = True
