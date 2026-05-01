@@ -106,8 +106,21 @@ class RedisSemanticCache(BaseCache):
 
         print_verbose(f"Redis semantic-cache redis_url: {redis_url}")
 
-        # Initialize the Redis vectorizer and cache
-        cache_vectorizer = CustomTextVectorizer(self._get_embedding)
+        # Initialize the Redis vectorizer and cache.
+        # CustomTextVectorizer calls the embedding function during __init__ to
+        # validate it; if the embedding endpoint is unavailable (e.g. 429 rate
+        # limit, spend cap, network error), it raises ValueError.  We surface a
+        # clear RuntimeError so the caller can decide whether to degrade
+        # gracefully or abort.
+        try:
+            cache_vectorizer = CustomTextVectorizer(self._get_embedding)
+        except Exception as e:
+            raise RuntimeError(
+                f"RedisSemanticCache: embedding model validation failed during "
+                f"initialisation ({type(e).__name__}: {e}). "
+                "Check that the configured embedding model is reachable and "
+                "that API credentials are valid."
+            ) from e
 
         self.llmcache = SemanticCache(
             name=index_name,

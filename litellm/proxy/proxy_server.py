@@ -2941,13 +2941,15 @@ class ProxyConfig:
         global redis_usage_cache, llm_router
         from litellm import Cache
 
+        # Construct the cache first; only update global TTL defaults on success
+        # so that a failed initialisation does not leave partial global state.
+        litellm.cache = Cache(**cache_params)
+
         if "default_in_memory_ttl" in cache_params:
             litellm.default_in_memory_ttl = cache_params["default_in_memory_ttl"]
 
         if "default_redis_ttl" in cache_params:
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
-
-        litellm.cache = Cache(**cache_params)
 
         if litellm.cache is not None and isinstance(
             litellm.cache.cache, (RedisCache, RedisClusterCache)
@@ -3280,11 +3282,21 @@ class ProxyConfig:
                             cache_params[key] = get_secret(value)
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
-                    self._init_cache(cache_params=cache_params)
-                    if litellm.cache is not None:
-                        verbose_proxy_logger.debug(
-                            f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
+                    try:
+                        self._init_cache(cache_params=cache_params)
+                        if litellm.cache is not None:
+                            verbose_proxy_logger.debug(
+                                f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
+                            )
+                    except Exception as e:
+                        verbose_proxy_logger.warning(
+                            f"Cache initialisation failed - proxy will start without caching. "
+                            f"Error: {e}. "
+                            "Fix your cache configuration and restart the proxy to enable caching."
                         )
+                        litellm.cache = None
+                        litellm.default_in_memory_ttl = None
+                        litellm.default_redis_ttl = None
                 elif key == "cache" and value is False:
                     pass
                 elif key == "guardrails":
