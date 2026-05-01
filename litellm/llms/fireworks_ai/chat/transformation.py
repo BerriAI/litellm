@@ -200,9 +200,27 @@ class FireworksAIConfig(OpenAIGPTConfig):
     def _transform_tools(
         self, tools: List[OpenAIChatCompletionToolParam]
     ) -> List[OpenAIChatCompletionToolParam]:
+        import copy
+
         for tool in tools:
             if tool.get("type") == "function":
                 tool["function"].pop("strict", None)
+                # Resolve `definitions` $ref pointers inline — Fireworks
+                # rejects tool schemas with unresolved JSON Schema references.
+                params = tool["function"].get("parameters")
+                if params and "definitions" in params:
+                    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                        unpack_defs,
+                    )
+
+                    params = copy.deepcopy(params)
+                    defs: dict = {
+                        **params.pop("definitions", {}),
+                        **params.pop("$defs", {}),
+                    }
+                    if defs:
+                        unpack_defs(params, defs)
+                    tool["function"]["parameters"] = params
         return tools
 
     def _transform_messages_helper(
