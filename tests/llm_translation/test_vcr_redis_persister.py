@@ -16,6 +16,7 @@ from tests._vcr_redis_persister import (  # noqa: E402
     CASSETTE_TTL_SECONDS,
     filter_non_2xx_response,
     make_redis_persister,
+    mark_test_outcome_for_cassette,
     redis_key_for,
 )
 
@@ -111,6 +112,55 @@ def test_save_swallows_connection_errors_so_teardown_does_not_fail():
         _sample_cassette_dict(),
         yamlserializer,
     )
+
+
+def test_save_skipped_when_test_marked_failed_and_prior_cassette_preserved():
+    # A flaky test that fails should NOT overwrite a previously-good cassette.
+    fake, persister = _persister_with_fake_redis()
+    cassette_id = "tests/llm_translation/test_x/test_flaky"
+    key = redis_key_for(cassette_id)
+
+    # Seed a "known-good" recording from a prior successful run.
+    good = _sample_cassette_dict()
+    persister.save_cassette(cassette_id, good, yamlserializer)
+    good_payload = fake.get(key)
+    assert good_payload is not None
+
+    # Simulate a failed run: the hook records "did not pass" before save.
+    mark_test_outcome_for_cassette(cassette_id, passed=False)
+    bad_response = {
+        "status": {"code": 200, "message": "OK"},
+        "headers": {},
+        "body": {"string": b'{"id":"BAD","type":"message"}'},
+    }
+    bad = {"requests": good["requests"], "responses": [bad_response]}
+    persister.save_cassette(cassette_id, bad, yamlserializer)
+
+    # Prior good payload is still there — the bad save was suppressed.
+    assert fake.get(key) == good_payload
+
+
+def test_save_proceeds_when_test_marked_passed():
+    fake, persister = _persister_with_fake_redis()
+    cassette_id = "tests/llm_translation/test_x/test_passed"
+    key = redis_key_for(cassette_id)
+
+    mark_test_outcome_for_cassette(cassette_id, passed=True)
+    persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+
+    assert fake.get(key) is not None
+
+
+def test_save_proceeds_when_outcome_unknown():
+    # Used outside a pytest run (e.g. ad-hoc scripts), the outcome gate is
+    # bypassed so the persister still works.
+    fake, persister = _persister_with_fake_redis()
+    cassette_id = "tests/llm_translation/test_x/test_no_marker"
+    key = redis_key_for(cassette_id)
+
+    persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+
+    assert fake.get(key) is not None
 
 
 def test_load_treats_connection_errors_as_cassette_miss():

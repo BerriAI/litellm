@@ -13,6 +13,25 @@ REDIS_KEY_PREFIX = "litellm:vcr:cassette:"
 _log = logging.getLogger(__name__)
 
 
+# Per-process map: cassette key -> "did the test that produced this cassette
+# pass?". The conftest's pytest_runtest_makereport hook sets True when the test
+# body succeeds; save_cassette consults it to avoid persisting recordings from
+# failed runs. We key by the redis cache key so retries (which may produce a
+# fresh cassette object each time but write to the same key) interleave
+# correctly.
+_passed_by_cassette_key: dict[str, bool] = {}
+
+
+def mark_test_outcome_for_cassette(cassette_path: str, passed: bool) -> None:
+    """Record whether the test that owns ``cassette_path`` passed.
+
+    Called from a pytest hook in conftest. The recorded value is consulted by
+    ``save_cassette`` so failed-attempt recordings (e.g. a flaky test that
+    asserts on provider state) don't poison the cache for future runs.
+    """
+    _passed_by_cassette_key[redis_key_for(cassette_path)] = passed
+
+
 def redis_key_for(cassette_path: str) -> str:
     rel = os.path.relpath(str(cassette_path))
     if rel.endswith(".yaml"):
@@ -96,10 +115,26 @@ def make_redis_persister(
 
         @staticmethod
         def save_cassette(cassette_path, cassette_dict, serializer):
+            key = redis_key_for(cassette_path)
+            # Only persist successful runs. A failed test (incl. all the failed
+            # retries before a passing one) would otherwise poison the cache —
+            # e.g. a flaky test that observes provider state across two calls
+            # could capture a "bad luck" response that deterministically fails
+            # every future replay. We default to True if the hook didn't run
+            # (e.g. cassette saved outside a test context) so non-test usage
+            # still works.
+            passed = _passed_by_cassette_key.pop(key, True)
+            if not passed:
+                _log.info(
+                    "VCR redis save skipped for %s; test did not pass — "
+                    "leaving any prior cassette intact",
+                    cassette_path,
+                )
+                return
             data = serialize(cassette_dict, serializer)
             payload = data.encode("utf-8") if isinstance(data, str) else data
             try:
-                redis_client.set(redis_key_for(cassette_path), payload, ex=ttl_seconds)
+                redis_client.set(key, payload, ex=ttl_seconds)
             except _transient_errors as exc:
                 # Cassette persistence is a cache, not test correctness. A Redis
                 # outage on save should not fail an otherwise-passing test —
