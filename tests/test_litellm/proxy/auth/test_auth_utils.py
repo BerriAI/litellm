@@ -2,6 +2,7 @@
 Unit tests for auth_utils functions related to rate limiting and customer ID extraction.
 """
 
+import base64
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -256,6 +257,117 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
 def test_get_model_from_request_vertex_passthrough_still_works():
     route = "/vertex_ai/v1/projects/p/locations/l/publishers/google/models/gemini-1.5-pro:generateContent"
     assert get_model_from_request(request_data={}, route=route) == "gemini-1.5-pro"
+
+
+def test_get_model_from_request_includes_file_endpoint_header_model():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/v1/files",
+            request_headers={"X-LiteLLM-Model": "restricted-model"},
+        )
+        == "restricted-model"
+    )
+
+
+def test_get_model_from_request_ignores_routing_header_on_standard_llm_routes():
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route="/v1/chat/completions",
+            request_headers={"x-litellm-model": "restricted-model"},
+        )
+        == "allowed-model"
+    )
+
+
+def test_get_model_from_request_authorizes_all_file_routing_model_sources():
+    models = get_model_from_request(
+        request_data={"model": "body-model"},
+        route="/v1/files",
+        request_headers={"x-litellm-model": "header-model"},
+        request_query_params={"target_model_names": "query-model-a,query-model-b"},
+    )
+    assert isinstance(models, list)
+    assert set(models) == {
+        "body-model",
+        "query-model-a",
+        "query-model-b",
+        "header-model",
+    }
+
+
+def test_get_model_from_request_extracts_simple_encoded_file_id_model():
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        encode_file_id_with_model,
+    )
+
+    file_id = encode_file_id_with_model(
+        file_id="file-provider-id",
+        model="restricted-model",
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"file_id": file_id},
+            route="/v1/files/{file_id}",
+        )
+        == "restricted-model"
+    )
+
+
+def test_get_model_from_request_extracts_unified_file_id_models():
+    raw_unified_file_id = (
+        "litellm_proxy:application/octet-stream;unified_id,test-id;"
+        "target_model_names,model-a,model-b;llm_output_file_id,file-provider-id"
+    )
+    encoded_unified_file_id = (
+        base64.urlsafe_b64encode(raw_unified_file_id.encode()).decode().rstrip("=")
+    )
+
+    assert get_model_from_request(
+        request_data={"file_id": encoded_unified_file_id},
+        route="/v1/files/{file_id}",
+    ) == ["model-a", "model-b"]
+
+
+def test_get_model_from_request_extracts_eval_completion_model():
+    assert (
+        get_model_from_request(
+            request_data={"completion": {"model": "judge-model"}},
+            route="/v1/evals/{eval_id}/runs",
+        )
+        == "judge-model"
+    )
+
+
+def test_get_model_from_request_includes_fine_tuning_target_model_query():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/v1/fine_tuning/jobs",
+            request_query_params={"target_model_names": "fine-tune-model"},
+        )
+        == "fine-tune-model"
+    )
+
+
+def test_get_model_from_request_extracts_video_id_model():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    video_id = encode_video_id_with_provider(
+        video_id="video-provider-id",
+        provider="openai",
+        model_id="video-model",
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+        )
+        == "video-model"
+    )
 
 
 def test_get_customer_user_header_returns_none_when_no_customer_role():

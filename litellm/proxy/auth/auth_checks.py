@@ -61,6 +61,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _safe_get_request_headers,
+    _safe_get_request_query_params,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
@@ -485,7 +489,10 @@ async def common_checks(  # noqa: PLR0915
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     _model: Optional[Union[str, List[str]]] = get_model_from_request(
-        request_body, route
+        request_data=request_body,
+        route=route,
+        request_headers=_safe_get_request_headers(request=request),
+        request_query_params=_safe_get_request_query_params(request=request),
     )
 
     # 1. If team is blocked
