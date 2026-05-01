@@ -339,9 +339,23 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 # Re-raise if it's a different RuntimeError
                 raise
 
+        # Sanitize response headers: aiohttp decodes header values as UTF-8
+        # strings, but httpx.Headers internally calls .encode("ascii") which
+        # raises UnicodeEncodeError on non-ASCII values (e.g. Chinese characters).
+        # Re-encode via latin-1 to preserve the raw bytes for httpx.
+        sanitized_headers = []
+        for key, value in response.headers.items():
+            try:
+                value.encode("ascii")
+                sanitized_headers.append((key, value))
+            except UnicodeEncodeError:
+                sanitized_headers.append(
+                    (key, value.encode("utf-8").decode("latin-1"))
+                )
+
         return httpx.Response(
             status_code=response.status,
-            headers=response.headers,
+            headers=sanitized_headers,
             stream=AiohttpResponseStream(response),
             request=request,
         )
