@@ -5,6 +5,41 @@ import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer, MCPToolset, type MCPEvent } from "../../mcp_tools/types";
 
+function extractReasoningDeltaText(delta: any): string | undefined {
+  const legacyReasoning = delta?.reasoning_content;
+  if (typeof legacyReasoning === "string" && legacyReasoning.length > 0) {
+    return legacyReasoning;
+  }
+
+  const reasoning = delta?.reasoning;
+  if (typeof reasoning === "string" && reasoning.length > 0) {
+    return reasoning;
+  }
+
+  if (Array.isArray(reasoning)) {
+    const text = reasoning
+      .map((entry: any) => {
+        if (typeof entry === "string") return entry;
+        if (typeof entry?.text === "string") return entry.text;
+        if (typeof entry?.content === "string") return entry.content;
+        return "";
+      })
+      .join("");
+    return text.length > 0 ? text : undefined;
+  }
+
+  if (reasoning && typeof reasoning === "object") {
+    if (typeof reasoning.text === "string" && reasoning.text.length > 0) {
+      return reasoning.text;
+    }
+    if (typeof reasoning.content === "string" && reasoning.content.length > 0) {
+      return reasoning.content;
+    }
+  }
+
+  return undefined;
+}
+
 export async function makeOpenAIChatCompletionRequest(
   chatHistory: { role: string; content: string | any[] }[],
   updateUI: (chunk: string, model?: string) => void,
@@ -138,13 +173,15 @@ export async function makeOpenAIChatCompletionRequest(
 
       // Process content and measure time to first token
       const delta = chunk.choices[0]?.delta as any;
+      const reasoningDeltaText = extractReasoningDeltaText(delta);
 
       // Debug what's in the delta
       console.log("Delta content:", chunk.choices[0]?.delta?.content);
       console.log("Delta reasoning content:", delta?.reasoning_content);
+      console.log("Delta reasoning:", delta?.reasoning);
 
       // Measure time to first token for either content or reasoning_content
-      if (!firstTokenReceived && (chunk.choices[0]?.delta?.content || (delta && delta.reasoning_content))) {
+      if (!firstTokenReceived && (chunk.choices[0]?.delta?.content || reasoningDeltaText)) {
         firstTokenReceived = true;
         timeToFirstToken = Date.now() - startTime;
         console.log("First token received! Time:", timeToFirstToken, "ms");
@@ -169,9 +206,9 @@ export async function makeOpenAIChatCompletionRequest(
         onImageGenerated(delta.image.url, chunk.model);
       }
 
-      // Process reasoning content if present - using type assertion
-      if (delta && delta.reasoning_content) {
-        const reasoningContent = delta.reasoning_content;
+      // Process reasoning content if present
+      if (reasoningDeltaText) {
+        const reasoningContent = reasoningDeltaText;
         if (onReasoningContent) {
           onReasoningContent(reasoningContent);
         }
