@@ -52,18 +52,25 @@ class PrismaWrapper:
             engine = self._original_prisma._engine
             process = getattr(engine, "process", None) if engine is not None else None
             if process is not None:
-                return process.pid
+                pid = process.pid
+                if isinstance(pid, int):
+                    return pid
         except (AttributeError, TypeError):
             pass
         return 0
 
     @staticmethod
     async def _kill_engine_process(pid: int) -> None:
-        """Force-kill an orphaned engine subprocess to prevent DB connection pool leaks.
+        """Force-kill the engine subprocess to prevent DB connection pool leaks.
 
-        Called when disconnect() fails and the old engine process may still be
-        holding open connections. Sends SIGTERM for graceful shutdown, waits
-        briefly, then SIGKILL as a backstop.
+        Called on every reconnect (in `recreate_prisma_client`) to retire the
+        old query-engine subprocess without invoking prisma-client-py's
+        synchronous `disconnect()` — which blocks the asyncio event loop on
+        `subprocess.Popen.wait()` for 30-120+ seconds when the engine is
+        stuck on TCP close.
+
+        Sends SIGTERM for graceful shutdown, waits briefly, then SIGKILL as
+        a backstop.
         """
         if pid <= 0:
             return
@@ -72,7 +79,7 @@ class PrismaWrapper:
         except (ProcessLookupError, PermissionError, OSError):
             return  # Already dead or inaccessible
         verbose_proxy_logger.warning(
-            "Sent SIGTERM to orphaned prisma-query-engine PID %s after failed disconnect.",
+            "Sent SIGTERM to prisma-query-engine PID %s during reconnect.",
             pid,
         )
         # Brief wait for graceful shutdown, then force-kill
@@ -217,15 +224,18 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self, new_db_url: str, http_client: Optional[Any] = None
     ):
-        """Disconnect and reconnect the Prisma client with a new database URL."""
+        """Disconnect and reconnect the Prisma client with a new database URL.
+
+        Kills the old engine subprocess directly (SIGTERM → SIGKILL) rather than
+        calling `disconnect()`. prisma-client-py's `disconnect()` calls a
+        synchronous `subprocess.Popen.wait()` that can freeze the asyncio event
+        loop for 30-120+ seconds when the engine is stuck on TCP close,
+        breaking `/health/liveliness` and causing Kubernetes pod restarts.
+        """
         from prisma import Prisma  # type: ignore
 
         old_engine_pid = self._get_engine_pid()
-
-        try:
-            await self._original_prisma.disconnect()
-        except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to disconnect Prisma client: {e}")
+        if old_engine_pid > 0:
             await self._kill_engine_process(old_engine_pid)
 
         if http_client is not None:

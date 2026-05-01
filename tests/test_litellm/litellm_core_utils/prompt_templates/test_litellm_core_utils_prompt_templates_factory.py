@@ -77,7 +77,7 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     # test _bedrock_converse_messages_pt_async
     result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
         messages=messages,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         llm_provider="bedrock",
     )
 
@@ -2367,3 +2367,295 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     assert text_block["type"] == "text"
     assert "cache_control" in text_block
     assert text_block["cache_control"]["type"] == "ephemeral"
+
+
+def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
+    """
+    Tools with cache_control ttl should preserve the ttl in the cachePoint
+    block for Claude 4.5+ models on Bedrock, matching the behavior of system
+    block cache_control.
+
+    Without this fix, tool cachePoint is always {"type": "default"} (5m),
+    while system blocks can have ttl="1h", violating Bedrock's non-increasing
+    TTL ordering constraint (tools -> system -> messages).
+
+    Ref: https://github.com/BerriAI/litellm/issues/XXXXX
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        add_cache_point_tool_block,
+    )
+
+    tool_with_1h = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object"}},
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }
+
+    # Claude 4.5 model: ttl should be preserved
+    result = add_cache_point_tool_block(
+        tool_with_1h, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    assert result is not None
+    assert result["cachePoint"]["type"] == "default"
+    assert result["cachePoint"]["ttl"] == "1h"
+
+    # Claude 4.5 model with 5m ttl: also preserved
+    tool_with_5m = {
+        "cache_control": {"type": "ephemeral", "ttl": "5m"},
+    }
+    result_5m = add_cache_point_tool_block(
+        tool_with_5m, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    assert result_5m is not None
+    assert result_5m["cachePoint"]["ttl"] == "5m"
+
+    # Older model: ttl should be stripped
+    result_old = add_cache_point_tool_block(
+        tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+    assert result_old is not None
+    assert result_old["cachePoint"]["type"] == "default"
+    assert "ttl" not in result_old["cachePoint"]
+
+    # No model provided: ttl should be stripped (safe default)
+    result_no_model = add_cache_point_tool_block(tool_with_1h, model=None)
+    assert result_no_model is not None
+    assert "ttl" not in result_no_model["cachePoint"]
+
+    # No cache_control: returns None (unchanged behavior)
+    tool_no_cache = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object"}},
+    }
+    assert add_cache_point_tool_block(tool_no_cache) is None
+
+    # cache_control without ttl: returns default cachePoint (unchanged behavior)
+    tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
+    result_no_ttl = add_cache_point_tool_block(
+        tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    assert result_no_ttl is not None
+    assert result_no_ttl["cachePoint"]["type"] == "default"
+    assert "ttl" not in result_no_ttl["cachePoint"]
+
+
+def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
+    """
+    End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
+    for Claude 4.5+ models when tools have cache_control with ttl.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+            },
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+
+    # Claude 4.5: cachePoint should have ttl
+    result = _bedrock_tools_pt(
+        tools, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    cache_blocks = [b for b in result if "cachePoint" in b]
+    assert len(cache_blocks) == 1
+    assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"
+
+    # Older model: cachePoint should not have ttl
+    result_old = _bedrock_tools_pt(
+        tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+    cache_blocks_old = [b for b in result_old if "cachePoint" in b]
+    assert len(cache_blocks_old) == 1
+    assert "ttl" not in cache_blocks_old[0]["cachePoint"]
+
+
+def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
+    """
+    OpenAI `{type: "file", file: {file_data: "data:application/pdf;..."}}` inside
+    a tool-message content list should translate to an Anthropic document block
+    inside the tool_result content. Reuses anthropic_process_openai_file_message,
+    which already handles this for user messages.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
+    message = {
+        "tool_call_id": "toolu_pdf_1",
+        "role": "tool",
+        "name": "fetch_document",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                    "filename": "summary.pdf",
+                },
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    assert result["type"] == "tool_result"
+    assert result["tool_use_id"] == "toolu_pdf_1"
+    content = result["content"]
+    assert isinstance(content, list) and len(content) == 1
+    block = content[0]
+    assert block["type"] == "document"
+    assert block["source"]["type"] == "base64"
+    assert block["source"]["media_type"] == "application/pdf"
+    assert block["source"]["data"] == pdf_b64
+
+
+def test_convert_to_anthropic_tool_result_image_url_pdf_data_uri_becomes_document():
+    """
+    Regression: a PDF sent as an `image_url` data URI on the tool-result path
+    must translate to an Anthropic document block (not an image block — Anthropic
+    rejects image blocks whose media_type is a non-image like application/pdf).
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
+    message = {
+        "tool_call_id": "toolu_pdf_img_1",
+        "role": "tool",
+        "name": "fetch_document",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:application/pdf;base64,{pdf_b64}",
+                },
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    content = result["content"]
+    assert isinstance(content, list) and len(content) == 1
+    block = content[0]
+    assert block["type"] == "document"
+    assert block["source"]["media_type"] == "application/pdf"
+    assert block["source"]["data"] == pdf_b64
+
+
+def test_convert_to_anthropic_tool_result_image_url_unsupported_mime_stays_image_path():
+    """
+    An `image_url` data URI whose mime is neither application/pdf nor text/plain
+    (e.g. application/json) must NOT be routed through the document path. Anthropic
+    only accepts application/pdf and text/plain as base64 document media_types —
+    anything else would produce a document block the API rejects. The old
+    (pre-fix) behavior was to wrap such data as an image block, which also
+    fails but stays on the image code path; preserve that failure mode rather
+    than switching to a document path that is equally broken.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    message = {
+        "tool_call_id": "toolu_json_1",
+        "role": "tool",
+        "name": "fetch_json",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:application/json;base64,eyJrIjoidiJ9",
+                },
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    content = result["content"]
+    assert isinstance(content, list) and len(content) == 1
+    block = content[0]
+    assert block["type"] == "image", (
+        f"unsupported mime {block.get('source', {}).get('media_type')!r} "
+        f"should not be routed to document path; got {block}"
+    )
+
+
+def test_convert_to_anthropic_tool_result_image_url_text_plain_data_uri_becomes_document():
+    """
+    text/plain is one of the two mimes Anthropic accepts as a base64 document
+    media_type. Confirm it routes through the document path so tightening the
+    gate to {application/pdf, text/plain} (not "application/*") covers both.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    txt_b64 = "aGVsbG8="  # "hello"
+    message = {
+        "tool_call_id": "toolu_txt_1",
+        "role": "tool",
+        "name": "fetch_text",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:text/plain;base64,{txt_b64}",
+                },
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    content = result["content"]
+    assert isinstance(content, list) and len(content) == 1
+    block = content[0]
+    assert block["type"] == "document"
+    assert block["source"]["media_type"] == "text/plain"
+    assert block["source"]["data"] == txt_b64
+
+
+def test_convert_to_anthropic_tool_result_image_url_png_still_becomes_image():
+    """
+    Regression: image_url with a real image mime type must continue to translate
+    to an Anthropic image block. Locks in existing behavior after the
+    data-URI-mime-type branching for PDFs.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
+    message = {
+        "tool_call_id": "toolu_png_1",
+        "role": "tool",
+        "name": "fetch_image",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{png_b64}",
+                },
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    content = result["content"]
+    assert isinstance(content, list) and len(content) == 1
+    block = content[0]
+    assert block["type"] == "image"
+    assert block["source"]["media_type"] == "image/png"

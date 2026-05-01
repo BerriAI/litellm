@@ -59,6 +59,7 @@ class TestS3VectorsVectorStoreConfig:
                 api_base="https://s3vectors.us-west-2.api.aws",
                 litellm_logging_obj=mock_logging_obj,
                 litellm_params={},
+                extra_body=None,
             )
 
     def test_transform_search_response(self):

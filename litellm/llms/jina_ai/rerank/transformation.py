@@ -74,7 +74,11 @@ class JinaAIRerankConfig(BaseRerankConfig):
         return cleaned_base
 
     def transform_rerank_request(
-        self, model: str, optional_rerank_params: Dict, headers: Dict
+        self,
+        model: str,
+        optional_rerank_params: Dict,
+        headers: Dict,
+        litellm_params: Optional[dict] = None,
     ) -> Dict:
         return {"model": model, **optional_rerank_params}
 
