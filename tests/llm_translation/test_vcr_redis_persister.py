@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from tests._vcr_redis_persister import (  # noqa: E402
     CASSETTE_TTL_SECONDS,
+    MAX_EPISODES_PER_CASSETTE,
     filter_non_2xx_response,
     make_redis_persister,
     mark_test_outcome_for_cassette,
@@ -147,6 +148,62 @@ def test_save_proceeds_when_test_marked_passed():
 
     mark_test_outcome_for_cassette(cassette_id, passed=True)
     persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+
+    assert fake.get(key) is not None
+
+
+def test_save_refused_when_cassette_exceeds_max_episodes():
+    # Pathological cassettes (non-deterministic body → unbounded episode growth)
+    # should be refused. Any prior good payload stays intact.
+    fake, persister = _persister_with_fake_redis()
+    cassette_id = "tests/llm_translation/test_x/test_runaway"
+    key = redis_key_for(cassette_id)
+
+    persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+    seed_payload = fake.get(key)
+
+    request = Request(
+        method="POST",
+        uri="https://api.anthropic.com/v1/messages",
+        body=b"x",
+        headers={"content-type": "application/json"},
+    )
+    response = {
+        "status": {"code": 200, "message": "OK"},
+        "headers": {},
+        "body": {"string": b"{}"},
+    }
+    bloated = {
+        "requests": [request] * (MAX_EPISODES_PER_CASSETTE + 1),
+        "responses": [response] * (MAX_EPISODES_PER_CASSETTE + 1),
+    }
+    persister.save_cassette(cassette_id, bloated, yamlserializer)
+
+    # Refused — the seed payload is unchanged.
+    assert fake.get(key) == seed_payload
+
+
+def test_save_proceeds_at_max_episodes_threshold():
+    fake, persister = _persister_with_fake_redis()
+    cassette_id = "tests/llm_translation/test_x/test_at_threshold"
+    key = redis_key_for(cassette_id)
+
+    request = Request(
+        method="POST",
+        uri="https://api.anthropic.com/v1/messages",
+        body=b"x",
+        headers={"content-type": "application/json"},
+    )
+    response = {
+        "status": {"code": 200, "message": "OK"},
+        "headers": {},
+        "body": {"string": b"{}"},
+    }
+    at_threshold = {
+        "requests": [request] * MAX_EPISODES_PER_CASSETTE,
+        "responses": [response] * MAX_EPISODES_PER_CASSETTE,
+    }
+    persister.save_cassette(cassette_id, at_threshold, yamlserializer)
 
     assert fake.get(key) is not None
 
