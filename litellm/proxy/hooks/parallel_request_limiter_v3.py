@@ -4,6 +4,7 @@ This is a rate limiter implementation based on a similar one by Envoy proxy.
 This is currently in development and not yet ready for production.
 """
 
+import asyncio
 import binascii
 import os
 from datetime import datetime
@@ -170,6 +171,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Batch rate limiter (lazy loaded)
         self._batch_rate_limiter: Optional[Any] = None
+
+        # Serializes multi-phase check+increment sequences (batch + dynamic
+        # limiters) within this process to close the TOCTOU window between
+        # read-only check and counter increment. Multi-replica deployments
+        # additionally rely on Redis Lua atomicity for cross-process safety.
+        self._check_and_increment_lock = asyncio.Lock()
 
     def _get_batch_rate_limiter(self) -> Optional[Any]:
         """Get or lazy-load the batch rate limiter."""
