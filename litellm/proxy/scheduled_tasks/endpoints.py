@@ -8,6 +8,7 @@ accepted from the client.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -31,6 +32,13 @@ from litellm.proxy.scheduled_tasks.types import (
 )
 
 router = APIRouter()
+
+
+def _require_feature_enabled() -> None:
+    if os.environ.get("LITELLM_SCHEDULED_TASKS_ENABLED", "false").lower() != "true":
+        raise HTTPException(
+            status_code=404, detail="scheduled tasks feature is not enabled"
+        )
 
 
 def _require_token(user_api_key_dict: UserAPIKeyAuth) -> str:
@@ -90,6 +98,7 @@ def _get_prisma_client():
 async def create_scheduled_task(
     data: CreateScheduledTaskRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _feature: None = Depends(_require_feature_enabled),
 ):
     if data.action == "check" and not data.check_prompt:
         raise HTTPException(
@@ -122,6 +131,8 @@ async def create_scheduled_task(
     if data.expires_at <= now:
         raise HTTPException(status_code=400, detail="expires_at must be in the future")
 
+    fire_once = data.fire_once if data.fire_once is not None else (data.schedule_kind == "once")
+
     next_run_at = compute_next_run(
         kind=data.schedule_kind,
         spec=data.schedule_spec,
@@ -146,7 +157,7 @@ async def create_scheduled_task(
         schedule_tz=data.schedule_tz,
         next_run_at=next_run_at,
         expires_at=data.expires_at,
-        fire_once=data.fire_once,
+        fire_once=fire_once,
     )
     return _row_to_response(row)
 
@@ -159,6 +170,7 @@ async def create_scheduled_task(
 async def list_scheduled_tasks(
     include_terminal: bool = Query(False),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _feature: None = Depends(_require_feature_enabled),
 ):
     owner_token = _require_token(user_api_key_dict)
     prisma_client = _get_prisma_client()
@@ -182,6 +194,7 @@ async def get_due_tasks(
     ),
     limit: int = Query(20, ge=1, le=100),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _feature: None = Depends(_require_feature_enabled),
 ):
     """
     Atomic claim of due tasks. Returns immediately, possibly with empty list.
@@ -229,6 +242,7 @@ async def get_due_tasks(
 async def get_scheduled_task(
     task_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _feature: None = Depends(_require_feature_enabled),
 ):
     owner_token = _require_token(user_api_key_dict)
     prisma_client = _get_prisma_client()
@@ -251,6 +265,7 @@ async def update_scheduled_task(
     task_id: str,
     data: UpdateScheduledTaskRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _feature: None = Depends(_require_feature_enabled),
 ):
     owner_token = _require_token(user_api_key_dict)
     prisma_client = _get_prisma_client()
@@ -289,6 +304,16 @@ async def update_scheduled_task(
             detail="check_prompt is required when action='check'",
         )
 
+    if "expires_at" in fields:
+        now = datetime.now(timezone.utc)
+        new_expires = fields["expires_at"]
+        if new_expires.tzinfo is None:
+            new_expires = new_expires.replace(tzinfo=timezone.utc)
+        if new_expires <= now:
+            raise HTTPException(
+                status_code=400, detail="expires_at must be in the future"
+            )
+
     try:
         row = await store.update_task_for_owner(
             prisma_client,
@@ -311,6 +336,7 @@ async def update_scheduled_task(
 async def cancel_scheduled_task(
     task_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _feature: None = Depends(_require_feature_enabled),
 ):
     owner_token = _require_token(user_api_key_dict)
     prisma_client = _get_prisma_client()
@@ -333,6 +359,7 @@ async def report_task_result(
     task_id: str,
     data: ReportTaskResultRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    _feature: None = Depends(_require_feature_enabled),
 ):
     """
     Agent reports outcome of one dispatch attempt.

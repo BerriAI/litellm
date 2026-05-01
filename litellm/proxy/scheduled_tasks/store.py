@@ -209,16 +209,6 @@ async def update_task_for_owner(
     if not fields:
         raise ValueError("no fields to update")
 
-    existing = await prisma_client.db.litellm_scheduledtasktable.find_first(
-        where={
-            "task_id": task_id,
-            "owner_token": owner_token,
-            "status": "pending",
-        },
-    )
-    if existing is None:
-        return None
-
     # Mirror the create path: Json columns must be json-encoded for
     # prisma-client-python. Drop the key entirely when caller sent null;
     # passing None to a Json? column is rejected.
@@ -234,9 +224,18 @@ async def update_task_for_owner(
         raise ValueError("no fields to update")
     fields = cleaned
 
-    return await prisma_client.db.litellm_scheduledtasktable.update(
-        where={"task_id": task_id},
+    affected = await prisma_client.db.litellm_scheduledtasktable.update_many(
+        where={
+            "task_id": task_id,
+            "owner_token": owner_token,
+            "status": "pending",
+        },
         data=fields,
+    )
+    if affected == 0:
+        return None
+    return await prisma_client.db.litellm_scheduledtasktable.find_first(
+        where={"task_id": task_id, "owner_token": owner_token},
     )
 
 
@@ -246,18 +245,18 @@ async def cancel_task_for_owner(
     task_id: str,
     owner_token: str,
 ) -> Optional[Any]:
-    existing = await prisma_client.db.litellm_scheduledtasktable.find_first(
+    affected = await prisma_client.db.litellm_scheduledtasktable.update_many(
         where={
             "task_id": task_id,
             "owner_token": owner_token,
             "status": "pending",
         },
-    )
-    if existing is None:
-        return None
-    return await prisma_client.db.litellm_scheduledtasktable.update(
-        where={"task_id": task_id},
         data={"status": "cancelled"},
+    )
+    if affected == 0:
+        return None
+    return await prisma_client.db.litellm_scheduledtasktable.find_first(
+        where={"task_id": task_id, "owner_token": owner_token},
     )
 
 
@@ -297,7 +296,7 @@ async def claim_due(
              WHERE status = 'pending'
                AND next_run_at <= now()
                AND owner_token = $1
-               AND ($2::text IS NULL OR agent_id = $2)
+               AND (($2::text IS NULL AND agent_id IS NULL) OR agent_id = $2)
                AND ($3::text[] IS NULL OR action = ANY($3))
              ORDER BY next_run_at
              LIMIT $4

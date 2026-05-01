@@ -21,7 +21,13 @@ class CreateScheduledTaskRequest(BaseModel):
     schedule_tz: Optional[str] = None
 
     expires_at: datetime
-    fire_once: bool = True
+    fire_once: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Defaults to True for kind='once', False for 'interval'/'cron'. "
+            "Set explicitly to override."
+        ),
+    )
 
 
 class UpdateScheduledTaskRequest(BaseModel):
