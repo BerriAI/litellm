@@ -201,7 +201,9 @@ class TestResolveModel:
 
         with patch("litellm.model_list", []):
             # Simulate configured default model
-            with patch.object(litellm, "default_mcp_sampling_model", "claude-3-haiku", create=True):
+            with patch.object(
+                litellm, "default_mcp_sampling_model", "claude-3-haiku", create=True
+            ):
                 result = _resolve_model_from_preferences(None)
                 assert result == "claude-3-haiku"
 

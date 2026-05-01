@@ -497,37 +497,52 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
     oauth_server.auth_type = MCPAuth.oauth2
     oauth_server.needs_user_oauth_token = True
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(user_auth, None, ["repro_oauth_server"], None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
-        new_callable=AsyncMock,
-        return_value=False,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
-        new_callable=AsyncMock,
-        return_value=None,
-    ) as mock_get_stored_token, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
-        return_value=oauth_server,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        new_callable=AsyncMock,
-    ) as mock_handle_request:
-        with pytest.raises(HTTPException) as exc_info:
-            await handle_streamable_http_mcp(scope, receive, send)
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["repro_oauth_server"], None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_get_stored_token,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=oauth_server,
+        ),
+        patch.object(
+            session_manager,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
 
-    exc = exc_info.value
-    assert exc.status_code == 401
-    assert "www-authenticate" in exc.headers
+    # Verify 401 response was sent
+    assert send.called
+    # Extract status code from mock_send
+    response_start = next(
+        call.args[0]
+        for call in send.mock_calls
+        if call.args[0].get("type") == "http.response.start"
+    )
+    assert response_start["status"] == 401
+    headers = dict(response_start["headers"])
+    assert b"www-authenticate" in headers
     assert mock_get_stored_token.await_count == 1
     assert mock_handle_request.await_count == 0
 
@@ -562,31 +577,39 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
     oauth_server.auth_type = MCPAuth.oauth2
     oauth_server.needs_user_oauth_token = True
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(user_auth, None, ["repro_oauth_server"], None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
-        new_callable=AsyncMock,
-        return_value=False,
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
-        new_callable=AsyncMock,
-        return_value={"Authorization": "Bearer cached-token"},
-    ) as mock_get_stored_token, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
-        return_value=oauth_server,
-    ), patch.object(
-        session_manager,
-        "handle_request",
-        new_callable=AsyncMock,
-    ) as mock_handle_request:
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(user_auth, None, ["repro_oauth_server"], None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_stale_mcp_session",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new_callable=AsyncMock,
+            return_value={"Authorization": "Bearer cached-token"},
+        ) as mock_get_stored_token,
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            return_value=oauth_server,
+        ),
+        patch.object(
+            session_manager,
+            "handle_request",
+            new_callable=AsyncMock,
+        ) as mock_handle_request,
+    ):
         await handle_streamable_http_mcp(scope, receive, send)
 
     assert mock_get_stored_token.await_count == 1

@@ -317,6 +317,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            **kwargs,
         ):
             if server.name == "github":
                 tool1 = MagicMock()
@@ -371,6 +372,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            **kwargs,
         ):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
@@ -409,6 +411,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -990,6 +993,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"

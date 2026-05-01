@@ -2559,17 +2559,24 @@ if MCP_AVAILABLE:
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
     async def _render_mcp_error(
-        e: Exception, scope: Scope, receive: Receive, send: Send
+        e: Exception,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        error_prefix: Optional[str] = None,
     ) -> None:
         """Render an exception as a JSON response for ASGI handlers."""
         from starlette.responses import JSONResponse
 
         status_code = 500
         detail = str(e)
+        headers = {}
 
         if isinstance(e, HTTPException):
             status_code = e.status_code
             detail = e.detail
+            if e.headers:
+                headers.update(e.headers)
         elif hasattr(e, "status_code"):
             status_code = getattr(e, "status_code")
         elif hasattr(e, "code"):
@@ -2579,9 +2586,14 @@ if MCP_AVAILABLE:
             except (ValueError, TypeError):
                 status_code = 500
 
+        error_msg = error_prefix or "MCP request failed"
+        if error_prefix is None and status_code in (401, 403):
+            error_msg = "Authentication processing failed"
+
         error_response = JSONResponse(
             status_code=status_code,
-            content={"error": "MCP request failed", "details": detail},
+            content={"error": error_msg, "details": detail},
+            headers=headers,
         )
         await error_response(scope, receive, send)
 
@@ -2773,7 +2785,9 @@ if MCP_AVAILABLE:
                     _captured_session_id_container_var.reset(_capture_token)
 
         except Exception as e:
-            await _render_mcp_error(e, scope, receive, send)
+            await _render_mcp_error(
+                e, scope, receive, send, error_prefix="Authentication processing failed"
+            )
         # No need to return Response for raw ASGI app.
 
     async def handle_sse_post_messages(
@@ -2835,7 +2849,9 @@ if MCP_AVAILABLE:
             )
             await sse.handle_post_message(scope, receive, send)
         except Exception as e:
-            await _render_mcp_error(e, scope, receive, send)
+            await _render_mcp_error(
+                e, scope, receive, send, error_prefix="Authentication processing failed"
+            )
 
     def get_active_mcp_session() -> Optional[_McpServerSession]:
         """Get the active downstream MCP session from the current context."""

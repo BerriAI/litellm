@@ -239,7 +239,7 @@ class MCPClient:
             server_params = StdioServerParameters(
                 command=self.stdio_config.get("command", ""),
                 args=self.stdio_config.get("args", []),
-                env=self.stdio_config.get("env", None),
+                env=self._get_safe_stdio_env(self.stdio_config.get("env")),
             )
             return stdio_client(server_params), None
         if self.transport_type == MCPTransport.sse:
@@ -272,6 +272,53 @@ class MCPClient:
             http_client=http_client,
         )
         return transport_ctx, http_client
+
+    def _get_safe_stdio_env(
+        self, provided_env: Optional[Dict[str, str]]
+    ) -> Optional[Dict[str, str]]:
+        """
+        Return a safe environment for the stdio subprocess.
+
+        If provided_env is set, we use it as-is.
+        If provided_env is None, we return a minimal allowlist from the parent environment
+        to avoid leaking sensitive LiteLLM keys (OPENAI_API_KEY, etc.) to sub-processes.
+        """
+        if provided_env is not None:
+            return provided_env
+
+        import os
+
+        # Minimal allowlist of safe/standard environment variables
+        safe_keys = {
+            "PATH",
+            "HOME",
+            "USER",
+            "LOGNAME",
+            "TMPDIR",
+            "TMP",
+            "TEMP",
+            "SHELL",
+            "LANG",
+            "LC_ALL",
+            # Node/Package manager caches
+            "NPM_CONFIG_CACHE",
+            "PNPM_HOME",
+            "XDG_CACHE_HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            # System info
+            "SYSTEMROOT",
+            "COMSPEC",
+            "PATHEXT",
+            "WINDIR",
+        }
+
+        safe_env = {}
+        for key in safe_keys:
+            if key in os.environ:
+                safe_env[key] = os.environ[key]
+
+        return safe_env
 
     async def _execute_session_operation(
         self,
