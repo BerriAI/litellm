@@ -22,6 +22,7 @@ from tests._vcr_redis_persister import (  # noqa: E402
     filter_non_2xx_response,
     format_vcr_verdict,
     make_redis_persister,
+    mark_test_outcome_for_cassette,
     patch_vcrpy_aiohttp_record_path,
     vcr_verbose_enabled,
 )
@@ -128,16 +129,41 @@ def pytest_recording_configure(config, vcr):
     patch_vcrpy_aiohttp_record_path()
 
 
-@pytest.fixture(autouse=True)
-def _vcr_hit_miss_report(request, vcr):
-    """When LITELLM_VCR_VERBOSE=1, print a one-line cassette verdict per test.
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Attach each phase's report to the item so fixture teardown can read it.
 
-    Runs after the `vcr` fixture (which yields the active Cassette), so we can
-    inspect play_count / dirty / len in teardown."""
+    Used by ``_vcr_outcome_gate`` below to skip persisting cassettes for
+    failed test runs (incl. failed retries that pytest-rerunfailures will
+    re-attempt) so a "bad luck" recording can't poison future replays.
+    """
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
+
+
+@pytest.fixture(autouse=True)
+def _vcr_outcome_gate(request, vcr):
+    """Tell the persister whether the test that owns this cassette passed.
+
+    Runs after ``vcr`` (which yields the active Cassette). At teardown time
+    the call-phase report is attached to the item by the makereport hook
+    above, so we can mark the cassette key passed/failed before vcrpy's
+    Cassette.__exit__ triggers persister.save_cassette.
+
+    Also prints a per-test hit/miss verdict when LITELLM_VCR_VERBOSE=1.
+    """
     yield
+    cassette = vcr  # name kept for the verbose-output line
+    rep_call = getattr(request.node, "rep_call", None)
+    test_passed = bool(rep_call and rep_call.passed)
+    cassette_path = getattr(cassette, "_path", None) if cassette is not None else None
+    if cassette_path:
+        mark_test_outcome_for_cassette(cassette_path, test_passed)
+
     if not vcr_verbose_enabled():
         return
-    verdict = format_vcr_verdict(vcr)
+    verdict = format_vcr_verdict(cassette)
     reporter = request.config.pluginmanager.get_plugin("terminalreporter")
     line = f"{verdict} :: {request.node.nodeid}"
     if reporter is not None:
