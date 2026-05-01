@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -13,7 +13,6 @@ from litellm.llms.azure.containers.transformation import AzureContainerConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import (
-    ContainerFileListResponse,
     ContainerListResponse,
     ContainerObject,
     DeleteContainerResult,
@@ -556,6 +555,12 @@ class TestAzureContainerKnownFailureRegressions:
             "base_process_llm_request",
             _mock_base_process_llm_request,
         )
+        access_check = AsyncMock(return_value=("cntr_123", "azure"))
+        monkeypatch.setattr(
+            handler_factory,
+            "assert_user_can_access_container",
+            access_check,
+        )
 
         request = Request(
             {
@@ -576,6 +581,8 @@ class TestAzureContainerKnownFailureRegressions:
             path_params={"container_id": encoded_id},
         )
 
+        access_check.assert_awaited_once()
+        assert access_check.await_args.kwargs["container_id"] == encoded_id
         assert captured["route_type"] == "alist_container_files"
         assert captured["data"]["container_id"] == encoded_id
         assert captured["data"]["custom_llm_provider"] == "openai"
@@ -620,6 +627,12 @@ class TestAzureContainerKnownFailureRegressions:
             "base_process_llm_request",
             _mock_base_process_llm_request,
         )
+        access_check = AsyncMock(return_value=("cntr_123", "azure"))
+        monkeypatch.setattr(
+            handler_factory,
+            "assert_user_can_access_container",
+            access_check,
+        )
 
         request = Request(
             {
@@ -640,6 +653,8 @@ class TestAzureContainerKnownFailureRegressions:
             user_api_key_dict=MagicMock(),
         )
 
+        access_check.assert_awaited_once()
+        assert access_check.await_args.kwargs["container_id"] == encoded_id
         assert captured["route_type"] == "aretrieve_container_file_content"
         assert captured["data"]["container_id"] == encoded_id
         assert captured["data"]["file_id"] == "cfile_abc"
@@ -700,6 +715,12 @@ class TestAzureContainerKnownFailureRegressions:
             "base_process_llm_request",
             _mock_base_process_llm_request,
         )
+        access_check = AsyncMock(return_value=("cntr_123", "azure"))
+        monkeypatch.setattr(
+            handler_factory,
+            "assert_user_can_access_container",
+            access_check,
+        )
 
         request = Request(
             {
@@ -719,6 +740,8 @@ class TestAzureContainerKnownFailureRegressions:
             container_id=encoded_id,
         )
 
+        access_check.assert_awaited_once()
+        assert access_check.await_args.kwargs["container_id"] == encoded_id
         assert captured["route_type"] == "aupload_container_file"
         assert captured["data"]["container_id"] == encoded_id
         assert captured["data"]["custom_llm_provider"] == "openai"

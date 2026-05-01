@@ -630,7 +630,9 @@ async def test_should_include_memory_container_list_when_db_recovers_without_row
 
 
 @pytest.mark.asyncio
-async def test_should_forward_decoded_container_id_for_proxy_forwarding(monkeypatch):
+async def test_should_validate_owner_and_preserve_managed_id_for_proxy_forwarding(
+    monkeypatch,
+):
     from litellm.proxy.container_endpoints import handler_factory
 
     proxy_server_stub = SimpleNamespace(
@@ -665,10 +667,11 @@ async def test_should_forward_decoded_container_id_for_proxy_forwarding(monkeypa
         "ProxyBaseLLMRequestProcessing",
         FakeProcessor,
     )
+    access_check = AsyncMock(return_value=("cntr_provider", "azure"))
     monkeypatch.setattr(
         handler_factory,
         "assert_user_can_access_container",
-        AsyncMock(return_value=("cntr_provider", "azure")),
+        access_check,
     )
     encoded_id = ResponsesAPIRequestUtils._build_container_id(
         custom_llm_provider="azure",
@@ -684,13 +687,17 @@ async def test_should_forward_decoded_container_id_for_proxy_forwarding(monkeypa
         path_params={"container_id": encoded_id},
     )
 
-    assert result["container_id"] == "cntr_provider"
-    assert result["custom_llm_provider"] == "azure"
-    assert result["model_id"] == "router-gpt"
+    access_check.assert_awaited_once()
+    assert access_check.await_args.kwargs["container_id"] == encoded_id
+    assert result["container_id"] == encoded_id
+    assert result["custom_llm_provider"] == "openai"
+    assert "model_id" not in result
 
 
 @pytest.mark.asyncio
-async def test_should_forward_decoded_container_id_for_multipart_upload(monkeypatch):
+async def test_should_validate_owner_and_preserve_managed_id_for_multipart_upload(
+    monkeypatch,
+):
     from litellm.proxy.common_utils import http_parsing_utils
     from litellm.proxy.container_endpoints import handler_factory
 
@@ -726,10 +733,11 @@ async def test_should_forward_decoded_container_id_for_multipart_upload(monkeypa
         "ProxyBaseLLMRequestProcessing",
         FakeProcessor,
     )
+    access_check = AsyncMock(return_value=("cntr_provider", "azure"))
     monkeypatch.setattr(
         handler_factory,
         "assert_user_can_access_container",
-        AsyncMock(return_value=("cntr_provider", "azure")),
+        access_check,
     )
     monkeypatch.setattr(
         http_parsing_utils,
@@ -755,9 +763,11 @@ async def test_should_forward_decoded_container_id_for_multipart_upload(monkeypa
         container_id=encoded_id,
     )
 
-    assert result["container_id"] == "cntr_provider"
-    assert result["custom_llm_provider"] == "azure"
-    assert result["model_id"] == "router-gpt"
+    access_check.assert_awaited_once()
+    assert access_check.await_args.kwargs["container_id"] == encoded_id
+    assert result["container_id"] == encoded_id
+    assert result["custom_llm_provider"] == "openai"
+    assert "model_id" not in result
     assert result["file"] == "file-data"
 
 
