@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 sys.path.insert(
@@ -32,6 +33,13 @@ from litellm.proxy.auth.user_api_key_auth import (
     get_api_key,
     user_api_key_auth,
 )
+
+
+class _RoutingRequest:
+    def __init__(self, headers=None, query_params=None):
+        self.headers = headers or {}
+        self.query_params = query_params or {}
+        self.state = SimpleNamespace()
 
 
 def test_get_api_key():
@@ -171,6 +179,39 @@ async def test_custom_auth_honors_key_level_model_access_restriction_allowed_wit
         )
         mock_can_key.assert_awaited_once_with(
             model="gpt-4o-mini",
+            llm_model_list=ANY,
+            valid_token=valid_token,
+            llm_router=ANY,
+        )
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_enforces_key_model_access_from_file_route_header_with_opt_in():
+    valid_token = UserAPIKeyAuth(token="test_token", models=["allowed-model"])
+    request = _RoutingRequest(headers={"x-litellm-model": "restricted-model"})
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new_callable=AsyncMock,
+        ) as mock_can_key,
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"custom_auth_run_common_checks": True},
+        ),
+    ):
+        await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=request,
+            request_data={},
+            route="/v1/files",
+            parent_otel_span=None,
+        )
+        mock_can_key.assert_awaited_once_with(
+            model="restricted-model",
             llm_model_list=ANY,
             valid_token=valid_token,
             llm_router=ANY,
