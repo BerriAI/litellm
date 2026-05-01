@@ -32,6 +32,7 @@ class QdrantSemanticCache(BaseCache):
         embedding_model="text-embedding-ada-002",
         host_type=None,
         vector_size=None,
+        embed_api_base=None,
     ):
         import os
 
@@ -54,6 +55,7 @@ class QdrantSemanticCache(BaseCache):
             raise Exception("similarity_threshold must be provided, passed None")
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
+        self.embed_api_base = embed_api_base
         self.vector_size = (
             vector_size if vector_size is not None else QDRANT_VECTOR_SIZE
         )
@@ -181,13 +183,16 @@ class QdrantSemanticCache(BaseCache):
             prompt += message["content"]
 
         # create an embedding for prompt
+        embedding_kwargs: dict[str, Any] = {
+            "model": self.embedding_model,
+            "input": prompt,
+            "cache": {"no-store": True, "no-cache": True},
+        }
+        if getattr(self, "embed_api_base", None) is not None:
+            embedding_kwargs["api_base"] = self.embed_api_base
         embedding_response = cast(
             EmbeddingResponse,
-            litellm.embedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            ),
+            litellm.embedding(**embedding_kwargs),
         )
 
         # get the embedding
@@ -225,13 +230,16 @@ class QdrantSemanticCache(BaseCache):
             prompt += message["content"]
 
         # convert to embedding
+        embedding_kwargs: dict[str, Any] = {
+            "model": self.embedding_model,
+            "input": prompt,
+            "cache": {"no-store": True, "no-cache": True},
+        }
+        if getattr(self, "embed_api_base", None) is not None:
+            embedding_kwargs["api_base"] = self.embed_api_base
         embedding_response = cast(
             EmbeddingResponse,
-            litellm.embedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            ),
+            litellm.embedding(**embedding_kwargs),
         )
 
         # get the embedding
@@ -313,12 +321,15 @@ class QdrantSemanticCache(BaseCache):
                 },
             )
         else:
-            # convert to embedding
-            embedding_response = await litellm.aembedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            )
+            # convert to embedding, pass api_base if available
+            embedding_kwargs: dict[str, Any] = {
+                "model": self.embedding_model,
+                "input": prompt,
+                "cache": {"no-store": True, "no-cache": True},
+            }
+            if getattr(self, "embed_api_base", None) is not None:
+                embedding_kwargs["api_base"] = self.embed_api_base
+            embedding_response = await litellm.aembedding(**embedding_kwargs)
 
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]
@@ -374,12 +385,15 @@ class QdrantSemanticCache(BaseCache):
                 },
             )
         else:
-            # convert to embedding
-            embedding_response = await litellm.aembedding(
-                model=self.embedding_model,
-                input=prompt,
-                cache={"no-store": True, "no-cache": True},
-            )
+            # convert to embedding, pass api_base if available
+            embedding_kwargs: dict[str, Any] = {
+                "model": self.embedding_model,
+                "input": prompt,
+                "cache": {"no-store": True, "no-cache": True},
+            }
+            if getattr(self, "embed_api_base", None) is not None:
+                embedding_kwargs["api_base"] = self.embed_api_base
+            embedding_response = await litellm.aembedding(**embedding_kwargs)
 
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]

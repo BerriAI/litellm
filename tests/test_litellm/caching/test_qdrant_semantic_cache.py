@@ -9,6 +9,80 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
+def test_caching_handler_init_does_not_crash_on_non_redis_cache():
+    """
+    Test that LLMCachingHandler.__init__ does not crash for non-Redis backends.
+    Verifies that the production code path handles Qdrant semantic cache without
+    raising AttributeError on litellm.cache.cache.
+    """
+    import litellm
+    from litellm.caching.caching import Cache
+    from litellm.caching.caching_handler import LLMCachingHandler
+
+    with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client, \
+         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"):
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"result": {"exists": True}}
+
+        mock_sync_client_instance = MagicMock()
+        mock_sync_client_instance.get.return_value = mock_response
+        mock_sync_client.return_value = mock_sync_client_instance
+
+        cache = Cache(
+            type="qdrant-semantic",
+            qdrant_api_base="http://test.qdrant.local",
+            qdrant_api_key="test_key",
+            qdrant_collection_name="test_collection",
+            similarity_threshold=0.8,
+        )
+        litellm.cache = cache
+
+        # This should not raise AttributeError — exercises the actual production code
+        handler = LLMCachingHandler(
+            original_function=MagicMock(),
+            request_kwargs={"messages": [{"content": "test"}]},
+            start_time=None,
+        )
+        assert handler.dual_cache is None
+
+        # Cleanup
+        litellm.cache = None
+
+
+def test_qdrant_semantic_cache_embed_api_base():
+    """
+    Test that QdrantSemanticCache stores embed_api_base when provided.
+    Verifies that non-OpenAI embedding models can pass api_base for the fallback path.
+    """
+    with patch("litellm.llms.custom_httpx.http_handler._get_httpx_client") as mock_sync_client, \
+         patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"):
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"result": {"exists": True}}
+
+        mock_sync_client_instance = MagicMock()
+        mock_sync_client_instance.get.return_value = mock_response
+        mock_sync_client.return_value = mock_sync_client_instance
+
+        from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+        qdrant_cache = QdrantSemanticCache(
+            collection_name="test_collection",
+            qdrant_api_base="http://test.qdrant.local",
+            qdrant_api_key="test_key",
+            similarity_threshold=0.8,
+            embedding_model="ollama/nomic-embed-text",
+            embed_api_base="http://localhost:11434",
+        )
+
+        assert qdrant_cache.embed_api_base == "http://localhost:11434"
+        assert qdrant_cache.embedding_model == "ollama/nomic-embed-text"
+
+
+
 def test_qdrant_semantic_cache_initialization(monkeypatch):
     """
     Test QDRANT semantic cache initialization with proper parameters.
