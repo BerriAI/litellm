@@ -3616,7 +3616,7 @@
         },
         "get": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__get",
           "parameters": [
             {
               "in": "path",
@@ -3660,7 +3660,7 @@
         },
         "patch": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__patch",
           "parameters": [
             {
               "in": "path",
@@ -3704,7 +3704,7 @@
         },
         "post": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__post",
           "parameters": [
             {
               "in": "path",
@@ -3748,7 +3748,7 @@
         },
         "put": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__put",
           "parameters": [
             {
               "in": "path",
@@ -13299,7 +13299,7 @@
         },
         "get": {
           "description": "Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/langfuse)",
-          "operationId": "langfuse_proxy_route_langfuse__endpoint__delete",
+          "operationId": "langfuse_proxy_route_langfuse__endpoint__get",
           "parameters": [
             {
               "in": "path",
@@ -13338,7 +13338,7 @@
         },
         "patch": {
           "description": "Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/langfuse)",
-          "operationId": "langfuse_proxy_route_langfuse__endpoint__delete",
+          "operationId": "langfuse_proxy_route_langfuse__endpoint__patch",
           "parameters": [
             {
               "in": "path",
@@ -13377,7 +13377,7 @@
         },
         "post": {
           "description": "Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/langfuse)",
-          "operationId": "langfuse_proxy_route_langfuse__endpoint__delete",
+          "operationId": "langfuse_proxy_route_langfuse__endpoint__post",
           "parameters": [
             {
               "in": "path",
@@ -13416,7 +13416,7 @@
         },
         "put": {
           "description": "Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/langfuse)",
-          "operationId": "langfuse_proxy_route_langfuse__endpoint__delete",
+          "operationId": "langfuse_proxy_route_langfuse__endpoint__put",
           "parameters": [
             {
               "in": "path",
@@ -14008,7 +14008,7 @@
       "/mcp-rest/test/connection": {
         "post": {
           "description": "Test if we can connect to the provided MCP server before adding it",
-          "operationId": "test_connection_mcp_rest_test_connection_post",
+          "operationId": "test_connection_mcp_rest_test_connection_post_2",
           "requestBody": {
             "content": {
               "application/json": {
@@ -14053,7 +14053,7 @@
       "/mcp-rest/test/tools/list": {
         "post": {
           "description": "Preview tools available from MCP server before adding it",
-          "operationId": "test_tools_list_mcp_rest_test_tools_list_post",
+          "operationId": "test_tools_list_mcp_rest_test_tools_list_post_2",
           "requestBody": {
             "content": {
               "application/json": {
@@ -14098,7 +14098,7 @@
       "/mcp-rest/tools/call": {
         "post": {
           "description": "REST API to call a specific MCP tool with the provided arguments",
-          "operationId": "call_tool_rest_api_mcp_rest_tools_call_post",
+          "operationId": "call_tool_rest_api_mcp_rest_tools_call_post_2",
           "responses": {
             "200": {
               "content": {
@@ -14123,7 +14123,7 @@
       "/mcp-rest/tools/list": {
         "get": {
           "description": "List all available tools with information about the server they belong to.\n\nExample response:\n{\n    \"tools\": [\n        {\n            \"name\": \"create_zap\",\n            \"description\": \"Create a new zap\",\n            \"inputSchema\": \"tool_input_schema\",\n            \"mcp_info\": {\n                \"server_name\": \"zapier\",\n                \"logo_url\": \"https://www.zapier.com/logo.png\",\n            }\n        }\n    ],\n    \"error\": null,\n    \"message\": \"Successfully retrieved tools\"\n}",
-          "operationId": "list_tool_rest_api_mcp_rest_tools_list_get",
+          "operationId": "list_tool_rest_api_mcp_rest_tools_list_get_2",
           "parameters": [
             {
               "description": "The server id to list tools for",
@@ -21896,7 +21896,7 @@
       "/policies/usage/overview": {
         "get": {
           "description": "Return policy performance overview for the dashboard.",
-          "operationId": "policies_usage_overview_policies_usage_overview_get",
+          "operationId": "policies_usage_overview_policies_usage_overview_get_2",
           "parameters": [
             {
               "description": "YYYY-MM-DD",
@@ -22521,7 +22521,7 @@
       "/policies/attachments/estimate-impact": {
         "post": {
           "description": "Estimate how many keys and teams would be affected by a policy attachment.\n\nUse this before creating an attachment to preview the blast radius.\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/policies/attachments/estimate-impact\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"policy_name\": \"hipaa-compliance\",\n        \"tags\": [\"healthcare\", \"health-*\"]\n    }'\n```",
-          "operationId": "estimate_attachment_impact_policies_attachments_estimate_impact_post",
+          "operationId": "estimate_attachment_impact_policies_attachments_estimate_impact_post_2",
           "requestBody": {
             "content": {
               "application/json": {
@@ -22568,7 +22568,7 @@
       "/policies/resolve": {
         "post": {
           "description": "Resolve which policies and guardrails apply for a given context.\n\nUse this endpoint to debug \"what guardrails would apply to a request\nwith this team/key/model/tags combination?\"\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/policies/resolve\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"tags\": [\"healthcare\"],\n        \"model\": \"gpt-4\"\n    }'\n```",
-          "operationId": "resolve_policies_for_context_policies_resolve_post",
+          "operationId": "resolve_policies_for_context_policies_resolve_post_2",
           "parameters": [
             {
               "description": "Force a DB sync before resolving. Default uses in-memory cache.",
@@ -26922,7 +26922,7 @@
         },
         "get": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_get",
           "parameters": [
             {
               "in": "path",
@@ -26961,7 +26961,7 @@
         },
         "head": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
               "in": "path",
@@ -27000,7 +27000,7 @@
         },
         "options": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_options",
           "parameters": [
             {
               "in": "path",
@@ -27039,7 +27039,7 @@
         },
         "patch": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
           "parameters": [
             {
               "in": "path",
@@ -27078,7 +27078,7 @@
         },
         "post": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_post",
           "parameters": [
             {
               "in": "path",
@@ -27117,7 +27117,7 @@
         },
         "put": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_put",
           "parameters": [
             {
               "in": "path",
@@ -28329,7 +28329,7 @@
       "/v1/vector_stores": {
         "get": {
           "description": "List vector stores.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/list",
-          "operationId": "vector_store_list_v1_vector_stores_get",
+          "operationId": "vector_store_list_v1_vector_stores_get_2",
           "parameters": [
             {
               "in": "query",
@@ -28430,7 +28430,7 @@
         },
         "post": {
           "description": "Create a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/create\n\nSupports target_model_names parameter for creating vector stores across multiple models:\n```json\n{\n    \"name\": \"my-vector-store\",\n    \"target_model_names\": \"gpt-4,gemini-2.0\"\n}\n```",
-          "operationId": "vector_store_create_v1_vector_stores_post",
+          "operationId": "vector_store_create_v1_vector_stores_post_2",
           "responses": {
             "200": {
               "content": {
@@ -28455,7 +28455,7 @@
       "/v1/vector_stores/{vector_store_id}": {
         "delete": {
           "description": "Delete a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/delete",
-          "operationId": "vector_store_delete_v1_vector_stores__vector_store_id__delete",
+          "operationId": "vector_store_delete_v1_vector_stores__vector_store_id__delete_2",
           "parameters": [
             {
               "in": "path",
@@ -28499,7 +28499,7 @@
         },
         "get": {
           "description": "Retrieve a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/retrieve",
-          "operationId": "vector_store_retrieve_v1_vector_stores__vector_store_id__get",
+          "operationId": "vector_store_retrieve_v1_vector_stores__vector_store_id__get_2",
           "parameters": [
             {
               "in": "path",
@@ -28543,7 +28543,7 @@
         },
         "post": {
           "description": "Update a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/modify",
-          "operationId": "vector_store_update_v1_vector_stores__vector_store_id__post",
+          "operationId": "vector_store_update_v1_vector_stores__vector_store_id__post_2",
           "parameters": [
             {
               "in": "path",
@@ -28588,7 +28588,7 @@
       },
       "/v1/vector_stores/{vector_store_id}/files": {
         "get": {
-          "operationId": "vector_store_file_list_v1_vector_stores__vector_store_id__files_get",
+          "operationId": "vector_store_file_list_v1_vector_stores__vector_store_id__files_get_2",
           "parameters": [
             {
               "in": "path",
@@ -28631,7 +28631,7 @@
           ]
         },
         "post": {
-          "operationId": "vector_store_file_create_v1_vector_stores__vector_store_id__files_post",
+          "operationId": "vector_store_file_create_v1_vector_stores__vector_store_id__files_post_2",
           "parameters": [
             {
               "in": "path",
@@ -28676,7 +28676,7 @@
       },
       "/v1/vector_stores/{vector_store_id}/files/{file_id}": {
         "delete": {
-          "operationId": "vector_store_file_delete_v1_vector_stores__vector_store_id__files__file_id__delete",
+          "operationId": "vector_store_file_delete_v1_vector_stores__vector_store_id__files__file_id__delete_2",
           "parameters": [
             {
               "in": "path",
@@ -28728,7 +28728,7 @@
           ]
         },
         "get": {
-          "operationId": "vector_store_file_retrieve_v1_vector_stores__vector_store_id__files__file_id__get",
+          "operationId": "vector_store_file_retrieve_v1_vector_stores__vector_store_id__files__file_id__get_2",
           "parameters": [
             {
               "in": "path",
@@ -28780,7 +28780,7 @@
           ]
         },
         "post": {
-          "operationId": "vector_store_file_update_v1_vector_stores__vector_store_id__files__file_id__post",
+          "operationId": "vector_store_file_update_v1_vector_stores__vector_store_id__files__file_id__post_2",
           "parameters": [
             {
               "in": "path",
@@ -28834,7 +28834,7 @@
       },
       "/v1/vector_stores/{vector_store_id}/files/{file_id}/content": {
         "get": {
-          "operationId": "vector_store_file_content_v1_vector_stores__vector_store_id__files__file_id__content_get",
+          "operationId": "vector_store_file_content_v1_vector_stores__vector_store_id__files__file_id__content_get_2",
           "parameters": [
             {
               "in": "path",
@@ -28889,7 +28889,7 @@
       "/v1/vector_stores/{vector_store_id}/search": {
         "post": {
           "description": "Search a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/search",
-          "operationId": "vector_store_search_v1_vector_stores__vector_store_id__search_post",
+          "operationId": "vector_store_search_v1_vector_stores__vector_store_id__search_post_2",
           "parameters": [
             {
               "in": "path",
@@ -28935,7 +28935,7 @@
       "/vector_stores": {
         "get": {
           "description": "List vector stores.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/list",
-          "operationId": "vector_store_list_vector_stores_get",
+          "operationId": "vector_store_list_vector_stores_get_2",
           "parameters": [
             {
               "in": "query",
@@ -29036,7 +29036,7 @@
         },
         "post": {
           "description": "Create a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/create\n\nSupports target_model_names parameter for creating vector stores across multiple models:\n```json\n{\n    \"name\": \"my-vector-store\",\n    \"target_model_names\": \"gpt-4,gemini-2.0\"\n}\n```",
-          "operationId": "vector_store_create_vector_stores_post",
+          "operationId": "vector_store_create_vector_stores_post_2",
           "responses": {
             "200": {
               "content": {
@@ -29061,7 +29061,7 @@
       "/vector_stores/{vector_store_id}": {
         "delete": {
           "description": "Delete a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/delete",
-          "operationId": "vector_store_delete_vector_stores__vector_store_id__delete",
+          "operationId": "vector_store_delete_vector_stores__vector_store_id__delete_2",
           "parameters": [
             {
               "in": "path",
@@ -29105,7 +29105,7 @@
         },
         "get": {
           "description": "Retrieve a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/retrieve",
-          "operationId": "vector_store_retrieve_vector_stores__vector_store_id__get",
+          "operationId": "vector_store_retrieve_vector_stores__vector_store_id__get_2",
           "parameters": [
             {
               "in": "path",
@@ -29149,7 +29149,7 @@
         },
         "post": {
           "description": "Update a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/modify",
-          "operationId": "vector_store_update_vector_stores__vector_store_id__post",
+          "operationId": "vector_store_update_vector_stores__vector_store_id__post_2",
           "parameters": [
             {
               "in": "path",
@@ -29194,7 +29194,7 @@
       },
       "/vector_stores/{vector_store_id}/files": {
         "get": {
-          "operationId": "vector_store_file_list_vector_stores__vector_store_id__files_get",
+          "operationId": "vector_store_file_list_vector_stores__vector_store_id__files_get_2",
           "parameters": [
             {
               "in": "path",
@@ -29237,7 +29237,7 @@
           ]
         },
         "post": {
-          "operationId": "vector_store_file_create_vector_stores__vector_store_id__files_post",
+          "operationId": "vector_store_file_create_vector_stores__vector_store_id__files_post_2",
           "parameters": [
             {
               "in": "path",
@@ -29282,7 +29282,7 @@
       },
       "/vector_stores/{vector_store_id}/files/{file_id}": {
         "delete": {
-          "operationId": "vector_store_file_delete_vector_stores__vector_store_id__files__file_id__delete",
+          "operationId": "vector_store_file_delete_vector_stores__vector_store_id__files__file_id__delete_2",
           "parameters": [
             {
               "in": "path",
@@ -29334,7 +29334,7 @@
           ]
         },
         "get": {
-          "operationId": "vector_store_file_retrieve_vector_stores__vector_store_id__files__file_id__get",
+          "operationId": "vector_store_file_retrieve_vector_stores__vector_store_id__files__file_id__get_2",
           "parameters": [
             {
               "in": "path",
@@ -29386,7 +29386,7 @@
           ]
         },
         "post": {
-          "operationId": "vector_store_file_update_vector_stores__vector_store_id__files__file_id__post",
+          "operationId": "vector_store_file_update_vector_stores__vector_store_id__files__file_id__post_2",
           "parameters": [
             {
               "in": "path",
@@ -29440,7 +29440,7 @@
       },
       "/vector_stores/{vector_store_id}/files/{file_id}/content": {
         "get": {
-          "operationId": "vector_store_file_content_vector_stores__vector_store_id__files__file_id__content_get",
+          "operationId": "vector_store_file_content_vector_stores__vector_store_id__files__file_id__content_get_2",
           "parameters": [
             {
               "in": "path",
@@ -29495,7 +29495,7 @@
       "/vector_stores/{vector_store_id}/search": {
         "post": {
           "description": "Search a vector store.\n\nAPI Reference:\nhttps://platform.openai.com/docs/api-reference/vector-stores/search",
-          "operationId": "vector_store_search_vector_stores__vector_store_id__search_post",
+          "operationId": "vector_store_search_vector_stores__vector_store_id__search_post_2",
           "parameters": [
             {
               "in": "path",

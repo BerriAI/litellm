@@ -310,6 +310,31 @@ async def test_should_fallback_to_memory_when_owner_lookup_fails(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_should_use_memory_owner_when_db_recovers_without_row(monkeypatch):
+    table = AsyncMock()
+    table.find_first.return_value = None
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    ownership._IN_MEMORY_CONTAINER_OWNERS["container:openai:cntr_owned"] = "user-1"
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    original_id, provider = await ownership.assert_user_can_access_container(
+        container_id="cntr_owned",
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert original_id == "cntr_owned"
+    assert provider == "openai"
+
+
+@pytest.mark.asyncio
 async def test_should_fail_closed_when_owner_lookup_fails_without_memory(monkeypatch):
     table = AsyncMock()
     table.find_first.side_effect = Exception("db unavailable")
@@ -523,6 +548,38 @@ async def test_should_filter_container_list_with_memory_when_db_lookup_fails(
 ):
     table = AsyncMock()
     table.find_many.side_effect = Exception("db unavailable")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    ownership._IN_MEMORY_CONTAINER_OWNERS["container:openai:cntr_owned"] = "user-1"
+    auth = UserAPIKeyAuth(user_id="user-1")
+    response = ContainerListResponse(
+        object="list",
+        data=[_container("cntr_owned"), _container("cntr_other")],
+        has_more=True,
+    )
+
+    filtered = await ownership.filter_container_list_response(
+        response=response,
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert [item.id for item in filtered.data] == ["cntr_owned"]
+    assert filtered.has_more is False
+
+
+@pytest.mark.asyncio
+async def test_should_include_memory_container_list_when_db_recovers_without_row(
+    monkeypatch,
+):
+    table = AsyncMock()
+    table.find_many.return_value = []
     prisma_client = SimpleNamespace(
         db=SimpleNamespace(litellm_managedobjecttable=table)
     )

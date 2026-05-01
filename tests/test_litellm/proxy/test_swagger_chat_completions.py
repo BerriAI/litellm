@@ -5,7 +5,7 @@ This test ensures that the ProxyChatCompletionRequest Pydantic model is properly
 for the /chat/completions endpoint, showing all expected fields in the Swagger documentation.
 """
 
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -414,3 +414,75 @@ class TestSwaggerChatCompletions:
                 assert (
                     schema["servers"][0]["url"] == expected_url
                 ), f"Expected servers URL '{expected_url}' in custom_openapi, got '{schema['servers'][0]['url']}'"
+
+    def test_should_make_duplicate_operation_ids_unique_by_method(self):
+        from litellm.proxy.proxy_server import ensure_unique_openapi_operation_ids
+
+        schema = {
+            "paths": {
+                "/anthropic/{endpoint}": {
+                    "delete": {
+                        "operationId": "anthropic_proxy_route_anthropic__endpoint__delete"
+                    },
+                    "get": {
+                        "operationId": "anthropic_proxy_route_anthropic__endpoint__delete"
+                    },
+                    "post": {
+                        "operationId": "anthropic_proxy_route_anthropic__endpoint__delete"
+                    },
+                },
+                "/models": {
+                    "get": {
+                        "operationId": "list_models_models_get",
+                    }
+                },
+            }
+        }
+
+        result = ensure_unique_openapi_operation_ids(schema)
+
+        assert (
+            result["paths"]["/anthropic/{endpoint}"]["delete"]["operationId"]
+            == "anthropic_proxy_route_anthropic__endpoint__delete"
+        )
+        assert (
+            result["paths"]["/anthropic/{endpoint}"]["get"]["operationId"]
+            == "anthropic_proxy_route_anthropic__endpoint__get"
+        )
+        assert (
+            result["paths"]["/anthropic/{endpoint}"]["post"]["operationId"]
+            == "anthropic_proxy_route_anthropic__endpoint__post"
+        )
+        operation_ids = [
+            operation["operationId"]
+            for path_item in result["paths"].values()
+            for operation in path_item.values()
+        ]
+        assert len(operation_ids) == len(set(operation_ids))
+
+    def test_should_reserve_operation_ids_across_lazy_fragments(self):
+        from litellm.proxy.proxy_server import ensure_unique_openapi_operation_ids
+
+        used_operation_ids = set()
+        first_schema = {
+            "paths": {
+                "/tools/list": {
+                    "get": {"operationId": "list_tool_rest_api_mcp_rest_tools_list_get"}
+                }
+            }
+        }
+        second_schema = {
+            "paths": {
+                "/v1/tools/list": {
+                    "get": {"operationId": "list_tool_rest_api_mcp_rest_tools_list_get"}
+                }
+            }
+        }
+
+        ensure_unique_openapi_operation_ids(first_schema, used_operation_ids)
+        result = ensure_unique_openapi_operation_ids(second_schema, used_operation_ids)
+
+        assert (
+            result["paths"]["/v1/tools/list"]["get"]["operationId"]
+            == "list_tool_rest_api_mcp_rest_tools_list_get_2"
+        )
