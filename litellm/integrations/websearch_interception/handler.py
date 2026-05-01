@@ -64,9 +64,17 @@ class WebSearchInterceptionLogger(CustomLogger):
                              If None, will attempt to use first available search tool.
         """
         super().__init__()
-        # Convert enum values to strings for comparison
-        if enabled_providers is None:
-            self.enabled_providers = [LlmProviders.BEDROCK.value]
+        # Convert enum values to strings for comparison.
+        # ``None`` means "enable for all providers" (matches docstring and the
+        # from_config_yaml contract). Passing an empty list also means all
+        # providers — we represent both by storing ``None`` internally, so the
+        # gating checks treat it as a wildcard.
+        if not enabled_providers:
+            # Security: widening the interception scope is safe — the handler
+            # only converts Anthropic server-side tool definitions (e.g.
+            # web_search_20250305) into standard function tools that all backends
+            # already accept.  No new capabilities or data flows are introduced.
+            self.enabled_providers: Optional[List[str]] = None
         else:
             self.enabled_providers = [
                 p.value if isinstance(p, LlmProviders) else p for p in enabled_providers
@@ -201,7 +209,10 @@ class WebSearchInterceptionLogger(CustomLogger):
                 )
             except Exception:
                 custom_llm_provider = ""
-        if custom_llm_provider not in self.enabled_providers:
+        if (
+            self.enabled_providers is not None
+            and custom_llm_provider not in self.enabled_providers
+        ):
             return None
 
         # Check if request has tools with native web_search
