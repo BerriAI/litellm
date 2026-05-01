@@ -123,6 +123,16 @@ class TestProxyInitializationHelpers:
         assert args["log_config"] == "log_config.json"
         assert args["timeout_keep_alive"] == 120
 
+        class _FakeUvicornConfig:
+            def __init__(self, timeout_worker_healthcheck=None):
+                pass
+
+        with patch("uvicorn.Config", _FakeUvicornConfig):
+            args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
+                "localhost", 8000, timeout_worker_healthcheck=15
+            )
+            assert args["timeout_worker_healthcheck"] == 15
+
     @patch("asyncio.run")
     @patch("builtins.print")
     def test_init_hypercorn_server(self, mock_print, mock_asyncio_run):
@@ -401,12 +411,67 @@ class TestProxyInitializationHelpers:
                 port=4000,
                 log_config=None,
                 keepalive_timeout=30,
+                timeout_worker_healthcheck=None,
             )
             mock_uvicorn_run.assert_called_once()
 
             # Check that the uvicorn.run was called with the timeout_keep_alive parameter
             call_args = mock_uvicorn_run.call_args
             assert call_args[1]["timeout_keep_alive"] == 30
+
+    @patch("uvicorn.run")
+    @patch("builtins.print")
+    def test_timeout_worker_healthcheck_flag(self, mock_print, mock_uvicorn_run):
+        """Test that the --timeout_worker_healthcheck flag is threaded through to the uvicorn init helper."""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": MagicMock(
+                        app=mock_app,
+                        ProxyConfig=mock_proxy_config,
+                        KeyManagementSettings=mock_key_mgmt,
+                        save_worker_config=mock_save_worker_config,
+                    )
+                },
+            ),
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._get_default_unvicorn_init_args"
+            ) as mock_get_args,
+            patch(
+                "litellm.proxy.proxy_cli.ProxyInitializationHelpers._is_port_in_use",
+                return_value=False,
+            ),
+        ):
+            mock_get_args.return_value = {
+                "app": "litellm.proxy.proxy_server:app",
+                "host": "localhost",
+                "port": 8000,
+            }
+
+            result = runner.invoke(
+                run_server, ["--local", "--timeout_worker_healthcheck", "15"]
+            )
+
+            assert result.exit_code == 0
+            mock_get_args.assert_called_once_with(
+                host="0.0.0.0",
+                port=4000,
+                log_config=None,
+                keepalive_timeout=None,
+                timeout_worker_healthcheck=15,
+            )
 
     @patch("uvicorn.run")
     @patch("builtins.print")

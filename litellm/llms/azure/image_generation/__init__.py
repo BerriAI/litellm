@@ -24,6 +24,6 @@ def get_azure_image_generation_config(model: str) -> BaseImageGenerationConfig:
         return AzureDallE3ImageGenerationConfig()
     else:
         verbose_logger.debug(
-            f"Using AzureGPTImageGenerationConfig for model: {model}. This follows the gpt-image-1 model format."
+            f"Using AzureGPTImageGenerationConfig for model: {model}. This follows the gpt-image model format."
         )
         return AzureGPTImageGenerationConfig()

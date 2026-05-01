@@ -4,6 +4,7 @@ from typing import Any, Coroutine, Dict, Optional, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -224,8 +225,14 @@ class VertexAIBatchPrediction(VertexLLM):
                     },
                 )
 
-        response = sync_handler.get(
-            url=api_base,
+        # ``api_base`` here can come from caller-supplied request kwargs
+        # (clientside override). Wrap the fetch in ``safe_get`` so DNS
+        # rebind / private / cloud-metadata targets are rejected; the
+        # proxy auth gate already blocks malicious clientside ``api_base``
+        # at the boundary — this is defense-in-depth for SDK callers.
+        response = safe_get(
+            sync_handler,
+            api_base,
             headers=headers,
         )
 
@@ -270,8 +277,13 @@ class VertexAIBatchPrediction(VertexLLM):
                     },
                 )
 
-        response = await client.get(
-            url=api_base,
+        # Mirror the sync path: ``api_base`` may come from caller-supplied
+        # request kwargs, so wrap the fetch in ``async_safe_get`` to reject
+        # DNS-rebind / private / cloud-metadata targets. Defense-in-depth
+        # behind the proxy auth gate's clientside ``api_base`` check.
+        response = await async_safe_get(
+            client,
+            api_base,
             headers=headers,
         )
         if response.status_code != 200:

@@ -226,7 +226,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="xargs uv run --no-sync python -m pytest \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
                 --cov=litellm \
                 --cov-report=xml \
@@ -291,7 +291,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="xargs uv run --no-sync python -m pytest \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -vv \
                 --cov=litellm \
                 --cov-report=xml \
@@ -433,7 +433,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="xargs uv run --no-sync python -m pytest \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
                 -v \
                 -k 'router' \
                 -n 4 \
