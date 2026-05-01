@@ -2879,28 +2879,57 @@ async def _key_access_group_grants_model(
     access to `model`. Used to let a key's access group override a team's
     model restriction in `common_checks`.
 
-    A key's access group only counts if it is also assigned to the key's team
-    (i.e., present in `team_object.access_group_ids`). This preserves the
-    team-as-owner boundary: a team member cannot escalate by naming an access
-    group that belongs to a different team.
+    A key's access group only counts if the access group itself authorizes the
+    caller as an owner — that is, the group's `assigned_team_ids` includes the
+    key's `team_id`, or the group's `assigned_key_ids` includes the key's
+    token. This preserves the team-as-owner boundary (a team member cannot
+    escalate by naming a group assigned to a different team) while still
+    letting a group reach the key without first being added to the team's
+    `access_group_ids` list.
     """
-    if valid_token is None or team_object is None:
+    if valid_token is None:
         return False
-    key_access_group_ids = set(valid_token.access_group_ids or [])
-    team_access_group_ids = set(team_object.access_group_ids or [])
-    allowed_group_ids = key_access_group_ids & team_access_group_ids
-    if not allowed_group_ids:
+    key_access_group_ids = list(valid_token.access_group_ids or [])
+    if not key_access_group_ids:
         return False
-    models_from_groups = await _get_models_from_access_groups(
-        access_group_ids=list(allowed_group_ids),
+
+    from litellm.proxy.proxy_server import prisma_client as _prisma_client
+    from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
+    from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
+
+    if _prisma_client is None or _user_api_key_cache is None:
+        return False
+
+    key_team_id = valid_token.team_id or (
+        team_object.team_id if team_object is not None else None
     )
-    if not models_from_groups:
+    key_token = valid_token.token
+
+    authorized_models: List[str] = []
+    for ag_id in key_access_group_ids:
+        try:
+            ag = await get_access_object(
+                access_group_id=ag_id,
+                prisma_client=_prisma_client,
+                user_api_key_cache=_user_api_key_cache,
+                proxy_logging_obj=_proxy_logging_obj,
+            )
+        except Exception:
+            continue
+        team_authorized = bool(
+            key_team_id and key_team_id in (ag.assigned_team_ids or [])
+        )
+        key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
+        if team_authorized or key_authorized:
+            authorized_models.extend(ag.access_model_names or [])
+
+    if not authorized_models:
         return False
     try:
         _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=models_from_groups,
+            models=list(set(authorized_models)),
             team_model_aliases=valid_token.team_model_aliases,
             team_id=valid_token.team_id,
             object_type="key",
