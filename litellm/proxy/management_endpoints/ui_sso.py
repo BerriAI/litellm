@@ -76,8 +76,10 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.auth.auth_utils import _has_user_setup_sso
-from litellm.proxy.auth.auth_utils import _get_request_ip_address, _has_user_setup_sso
+from litellm.proxy.auth.auth_utils import (
+    _get_request_ip_address,
+    _has_user_setup_sso,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
