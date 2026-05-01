@@ -21,6 +21,9 @@ from base_anthropic_messages_prompt_caching_test import (
     BaseAnthropicMessagesPromptCachingTest,
 )
 
+# $BEDROCK_ANTHROPIC_{CONVERSE,INVOKE}_MODEL hold the full route-prefixed
+# model paths, set in CircleCI project env vars. EOL bumps are a CI UI change.
+
 
 class TestBedrockConversePromptCaching(BaseAnthropicMessagesPromptCachingTest):
     """
@@ -31,7 +34,7 @@ class TestBedrockConversePromptCaching(BaseAnthropicMessagesPromptCachingTest):
     """
 
     def get_model(self) -> str:
-        return "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        return os.environ["BEDROCK_ANTHROPIC_CONVERSE_MODEL"]
 
 
 class TestBedrockInvokePromptCaching(BaseAnthropicMessagesPromptCachingTest):
@@ -43,4 +46,4 @@ class TestBedrockInvokePromptCaching(BaseAnthropicMessagesPromptCachingTest):
     """
 
     def get_model(self) -> str:
-        return "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        return os.environ["BEDROCK_ANTHROPIC_INVOKE_MODEL"]

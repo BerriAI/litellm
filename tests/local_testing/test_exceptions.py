@@ -471,7 +471,7 @@ def test_completion_bedrock_invalid_role_exception():
     try:
         litellm.set_verbose = True
         response = completion(
-            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            model=os.environ["BEDROCK_ANTHROPIC_MODEL"],
             messages=[{"role": "very-bad-role", "content": "hello"}],
         )
         print(f"response: {response}")

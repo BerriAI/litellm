@@ -155,11 +155,13 @@ def test_aaparallel_function_call(model):
 # test_parallel_function_call()
 
 
+# $BEDROCK_ANTHROPIC_MODEL holds the full bedrock-prefixed model path, set in
+# CircleCI project env vars. EOL bumps are a CI UI change. Required to be set.
 @pytest.mark.parametrize(
     "model",
     [
         "anthropic/claude-4-sonnet-20250514",
-        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        os.environ["BEDROCK_ANTHROPIC_MODEL"],
     ],
 )
 @pytest.mark.flaky(retries=3, delay=1)
