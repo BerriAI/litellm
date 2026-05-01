@@ -34,9 +34,17 @@ def test_owner_filter_service_account_scoped_to_team():
     assert build_owner_filter(service_account) == {"created_by_team_id": "team-eng"}
 
 
-def test_owner_filter_user_id_takes_precedence_over_team_id():
+def test_owner_filter_user_with_team_returns_or_filter():
+    """List view must mirror `can_access_resource`: a user-keyed caller in a
+    team can also access team-shared resources, so the listing returns both
+    their own records and team records via an OR filter."""
     user = UserAPIKeyAuth(user_id="alice", team_id="team-eng")
-    assert build_owner_filter(user) == {"created_by": "alice"}
+    assert build_owner_filter(user) == {
+        "OR": [
+            {"created_by": "alice"},
+            {"created_by_team_id": "team-eng"},
+        ]
+    }
 
 
 def test_owner_filter_no_identity_returns_none():

@@ -13,6 +13,9 @@ ALTER TABLE "LiteLLM_ManagedFileTable" ADD COLUMN IF NOT EXISTS "created_by_team
 ALTER TABLE "LiteLLM_ManagedObjectTable" ADD COLUMN IF NOT EXISTS "created_by_team_id" TEXT;
 ALTER TABLE "LiteLLM_ManagedVectorStoreTable" ADD COLUMN IF NOT EXISTS "created_by_team_id" TEXT;
 
-CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedFileTable_team_owner_created_at_idx" ON "LiteLLM_ManagedFileTable" ("created_by_team_id", "created_at" DESC);
-CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedObjectTable_team_owner_created_at_idx" ON "LiteLLM_ManagedObjectTable" ("created_by_team_id", "created_at" DESC);
-CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedVectorStoreTable_team_owner_created_at_idx" ON "LiteLLM_ManagedVectorStoreTable" ("created_by_team_id", "created_at" DESC);
+-- Index names follow Prisma's auto-generated convention so `prisma migrate diff`
+-- against the schema is clean. Postgres caps identifier length at 63 chars,
+-- which truncates the vector-store name to `_created__idx`.
+CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedFileTable_created_by_team_id_created_at_idx" ON "LiteLLM_ManagedFileTable" ("created_by_team_id", "created_at" DESC);
+CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedObjectTable_created_by_team_id_created_at_idx" ON "LiteLLM_ManagedObjectTable" ("created_by_team_id", "created_at" DESC);
+CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedVectorStoreTable_created_by_team_id_created__idx" ON "LiteLLM_ManagedVectorStoreTable" ("created_by_team_id", "created_at" DESC);
