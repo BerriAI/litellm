@@ -28,6 +28,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     list_guardrail_submissions,
     list_guardrails_v2,
     patch_guardrail,
+    probe_guardrail_submission_endpoint,
     register_guardrail,
     reject_guardrail_submission,
     update_guardrail,
@@ -1693,6 +1694,89 @@ async def test_approve_guardrail_submission_not_pending(mocker):
     with pytest.raises(HTTPException) as exc_info:
         await approve_guardrail_submission("x", user)
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_test_guardrail_submission_endpoint_success(mocker):
+    """Testing a submitted guardrail delegates to the generic endpoint probe."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="sub-1",
+        guardrail_name="my-guard",
+        status="pending_review",
+        team_id="team-1",
+        litellm_params={
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "api_base": "https://g.com",
+        },
+    )
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    expected = mocker.Mock(
+        success=True,
+        action="NONE",
+        message="Guardrail endpoint responded successfully.",
+    )
+    test_submission = AsyncMock(return_value=expected)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._test_generic_guardrail_submission",
+        test_submission,
+    )
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    result = await probe_guardrail_submission_endpoint("sub-1", user)
+
+    assert result is expected
+    test_submission.assert_awaited_once_with(
+        guardrail_name="my-guard",
+        litellm_params=row.litellm_params,
+    )
+
+
+@pytest.mark.asyncio
+async def test_approve_guardrail_submission_remains_independent_when_probe_fails(
+    mocker,
+):
+    """A failing manual probe should not prevent approval."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="approve-me",
+        guardrail_name="my-guard",
+        status="pending_review",
+        team_id="team-1",
+        litellm_params={
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "api_base": "https://g.com",
+        },
+        guardrail_info={},
+    )
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    test_submission = AsyncMock(
+        side_effect=HTTPException(
+            status_code=502, detail="Guardrail endpoint check failed: timeout"
+        )
+    )
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._test_generic_guardrail_submission",
+        test_submission,
+    )
+    user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await probe_guardrail_submission_endpoint("approve-me", user)
+
+    assert exc_info.value.status_code == 502
+    assert "timeout" in exc_info.value.detail
+
+    result = await approve_guardrail_submission("approve-me", user)
+
+    assert result["status"] == "active"
+    mock_prisma.db.litellm_guardrailstable.update.assert_called_once()
+    assert test_submission.await_count == 1
 
 
 @pytest.mark.asyncio

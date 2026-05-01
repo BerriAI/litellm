@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy.common_utils.path_utils import safe_join
 
 from litellm._logging import verbose_proxy_logger
@@ -21,6 +22,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
+    GenericGuardrailAPI,
+)
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
@@ -47,6 +51,7 @@ from litellm.types.guardrails import (
     SupportedGuardrailIntegrations,
     ToolPermissionGuardrailConfigModel,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 #### GUARDRAILS ENDPOINTS ####
 
@@ -630,6 +635,12 @@ class ListGuardrailSubmissionsResponse(BaseModel):
     summary: GuardrailSubmissionSummary
 
 
+class TestGuardrailSubmissionResponse(BaseModel):
+    success: bool
+    action: str
+    message: str
+
+
 @router.post(
     "/guardrails/register",
     tags=["Guardrails"],
@@ -813,6 +824,112 @@ def _row_to_submission_item(row: Any) -> GuardrailSubmissionItem:
     )
 
 
+def _get_guardrail_test_input_type(
+    mode: Any,
+) -> Literal["request", "response"]:
+    if isinstance(mode, list):
+        modes = mode
+    elif mode is None:
+        modes = []
+    else:
+        modes = [mode]
+
+    normalized_modes = []
+    for current_mode in modes:
+        if current_mode is None:
+            continue
+        normalized_modes.append(
+            str(getattr(current_mode, "value", current_mode)).lower()
+        )
+
+    request_modes = {"pre_call", "during_call", "pre_mcp_call"}
+    response_modes = {"post_call", "post_mcp_call"}
+
+    if any(current_mode in request_modes for current_mode in normalized_modes):
+        return "request"
+    if any(current_mode in response_modes for current_mode in normalized_modes):
+        return "response"
+    return "request"
+
+
+async def _test_generic_guardrail_submission(
+    *,
+    guardrail_name: str,
+    litellm_params: Dict[str, Any],
+) -> TestGuardrailSubmissionResponse:
+    guardrail_client = GenericGuardrailAPI(
+        api_base=litellm_params.get("api_base"),
+        api_key=litellm_params.get("api_key"),
+        headers=litellm_params.get("headers"),
+        additional_provider_specific_params=litellm_params.get(
+            "additional_provider_specific_params", {}
+        ),
+        # Approval should verify the endpoint is reachable regardless of
+        # the runtime fail-open/fail-closed behavior configured later.
+        unreachable_fallback="fail_closed",
+        extra_headers=litellm_params.get("extra_headers"),
+        guardrail_name=guardrail_name,
+        event_hook=litellm_params.get("mode"),
+        default_on=bool(litellm_params.get("default_on", False)),
+    )
+
+    probe_text = "LiteLLM guardrail connectivity check"
+    model = str(litellm_params.get("model") or "test-model")
+    input_type = _get_guardrail_test_input_type(litellm_params.get("mode"))
+    test_inputs: GenericGuardrailAPIInputs = {
+        "texts": [probe_text],
+        "model": model,
+    }
+    request_data = {
+        "model": model,
+        "body": {
+            "model": model,
+            "messages": [{"role": "user", "content": probe_text}],
+        },
+        "metadata": {},
+    }
+
+    try:
+        result = await guardrail_client.apply_guardrail(
+            inputs=test_inputs,
+            request_data=request_data,
+            input_type=input_type,
+        )
+    except GuardrailRaisedException as e:
+        return TestGuardrailSubmissionResponse(
+            success=True,
+            action="BLOCKED",
+            message=e.message or "Guardrail endpoint responded and blocked the probe.",
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Guardrail submission endpoint test failed for %s: %s",
+            guardrail_name,
+            e,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Guardrail endpoint check failed: {str(e)}",
+        )
+
+    action = (
+        "GUARDRAIL_INTERVENED"
+        if result.get("texts") != test_inputs.get("texts")
+        or result.get("images") != test_inputs.get("images")
+        or result.get("tools") != test_inputs.get("tools")
+        else "NONE"
+    )
+    message = "Guardrail endpoint responded successfully."
+    if action == "GUARDRAIL_INTERVENED":
+        message = "Guardrail endpoint responded successfully and modified the probe."
+
+    return TestGuardrailSubmissionResponse(
+        success=True,
+        action=action,
+        message=message,
+    )
+
+
 @router.get(
     "/guardrails/submissions",
     tags=["Guardrails"],
@@ -960,6 +1077,61 @@ async def get_guardrail_submission(
 
 
 @router.post(
+    "/guardrails/submissions/{guardrail_id}/test",
+    tags=["Guardrails"],
+    response_model=TestGuardrailSubmissionResponse,
+)
+async def probe_guardrail_submission_endpoint(
+    guardrail_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """Send a probe request to a submitted team guardrail endpoint."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Prisma client not initialized")
+
+    try:
+        row = await prisma_client.db.litellm_guardrailstable.find_unique(
+            where={"guardrail_id": guardrail_id}
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=404, detail="Guardrail submission not found"
+            )
+        if row.team_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Only team-submitted guardrails can be tested from this endpoint",
+            )
+
+        litellm_params = _parse_json_field(row.litellm_params)
+        if not litellm_params:
+            raise HTTPException(
+                status_code=500,
+                detail="Guardrail litellm_params is missing or invalid",
+            )
+        if litellm_params.get("guardrail") != GENERIC_GUARDRAIL_API:
+            raise HTTPException(
+                status_code=400,
+                detail="Only generic_guardrail_api submissions support endpoint testing",
+            )
+
+        return await _test_generic_guardrail_submission(
+            guardrail_name=row.guardrail_name,
+            litellm_params=litellm_params,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("Error testing guardrail submission: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
     "/guardrails/submissions/{guardrail_id}/approve",
     tags=["Guardrails"],
 )
@@ -991,12 +1163,6 @@ async def approve_guardrail_submission(
                 detail=f"Guardrail is not pending review (status={row.status})",
             )
 
-        now = datetime.now(timezone.utc)
-        await prisma_client.db.litellm_guardrailstable.update(
-            where={"guardrail_id": guardrail_id},
-            data={"status": "active", "reviewed_at": now, "updated_at": now},
-        )
-
         litellm_params = _parse_json_field(row.litellm_params)
         guardrail_info = _parse_json_field(row.guardrail_info)
         if not litellm_params:
@@ -1004,6 +1170,12 @@ async def approve_guardrail_submission(
                 status_code=500,
                 detail="Guardrail litellm_params is missing or invalid",
             )
+        now = datetime.now(timezone.utc)
+        await prisma_client.db.litellm_guardrailstable.update(
+            where={"guardrail_id": guardrail_id},
+            data={"status": "active", "reviewed_at": now, "updated_at": now},
+        )
+
         guardrail_dict = {
             "guardrail_id": row.guardrail_id,
             "guardrail_name": row.guardrail_name,
