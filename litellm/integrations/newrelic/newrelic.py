@@ -105,7 +105,7 @@ class NewRelicLogger(CustomLogger):
         elif _newrelic_agent is None:
             verbose_logger.error(
                 "New Relic Python agent not installed. Use the "
-                "`litellm/litellm-newrelic` Docker image, which bundles the agent "
+                "`docker.litellm.ai/berriai/litellm-newrelic` Docker image, which bundles the agent "
                 "and wraps startup with `newrelic-admin run-program`. To run from "
                 "source, install the agent (`pip install newrelic`) and start the "
                 "proxy with `newrelic-admin run-program litellm --config config.yaml`. "
@@ -821,7 +821,7 @@ class NewRelicLogger(CustomLogger):
                     "New Relic agent application is not enabled. The process "
                     "must be started under `newrelic-admin run-program` so the "
                     "agent initializes before litellm imports. Use the "
-                    "`litellm/litellm-newrelic` Docker image (preferred) or, "
+                    "`docker.litellm.ai/berriai/litellm-newrelic` Docker image (preferred) or, "
                     "from source, run "
                     "`newrelic-admin run-program litellm --config config.yaml`."
                 ),
