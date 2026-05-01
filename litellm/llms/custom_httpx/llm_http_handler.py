@@ -2536,9 +2536,16 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = await async_httpx_client.delete(
-                url=url, headers=headers, json=data, timeout=timeout
-            )
+            # Only send a JSON body when the provider supplied request data;
+            # some providers (e.g. Azure OpenAI) reject DELETE with a body.
+            delete_kwargs: Dict[str, Any] = {
+                "url": url,
+                "headers": headers,
+                "timeout": timeout,
+            }
+            if data:
+                delete_kwargs["json"] = data
+            response = await async_httpx_client.delete(**delete_kwargs)
 
         except Exception as e:
             raise self._handle_error(
@@ -2620,9 +2627,16 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            response = sync_httpx_client.delete(
-                url=url, headers=headers, json=data, timeout=timeout
-            )
+            # Only send a JSON body when the provider supplied request data;
+            # some providers (e.g. Azure OpenAI) reject DELETE with a body.
+            delete_kwargs: Dict[str, Any] = {
+                "url": url,
+                "headers": headers,
+                "timeout": timeout,
+            }
+            if data:
+                delete_kwargs["json"] = data
+            response = sync_httpx_client.delete(**delete_kwargs)
 
         except Exception as e:
             raise self._handle_error(
