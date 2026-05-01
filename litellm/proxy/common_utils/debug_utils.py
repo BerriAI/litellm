@@ -815,7 +815,8 @@ def init_verbose_loggers():
 
                     # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
 
-                    verbose_logger.setLevel(level=logging.INFO)  # sets package logs to info
+                    # sets package logs to info
+                    verbose_logger.setLevel(level=logging.INFO)
                     verbose_router_logger.setLevel(
                         level=logging.INFO
                     )  # set router logs to info
@@ -831,7 +832,8 @@ def init_verbose_loggers():
                         verbose_router_logger,
                     )
 
-                    verbose_logger.setLevel(level=logging.DEBUG)  # set package log to debug
+                    # set package log to debug
+                    verbose_logger.setLevel(level=logging.DEBUG)
                     verbose_router_logger.setLevel(
                         level=logging.DEBUG
                     )  # set router logs to debug
