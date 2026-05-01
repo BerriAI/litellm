@@ -699,7 +699,8 @@ class RouteChecks:
             )
 
         # Legacy explicit-allow sets (kept for routes that are POST but
-        # semantically read-only, e.g. /spend/calculate).
+        # semantically read-only, e.g. /spend/calculate). Both admin_viewer_routes
+        # and global_spend_tracking_routes are reads/listings.
         if RouteChecks.check_route_access(
             route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value
         ):
@@ -708,13 +709,14 @@ class RouteChecks:
             route=route, allowed_routes=LiteLLMRoutes.global_spend_tracking_routes.value
         ):
             return
-        if RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.management_routes.value
-        ):
-            # On management routes, allow non-blocked writes (e.g. read-only
-            # info/list endpoints implemented as POST).
-            return
 
+        # NOTE: We intentionally do NOT fall back to allowing all
+        # `management_routes`. That set is a mix of reads (info/list — handled
+        # via the safe-method branch above) and writes (`/team/block`,
+        # `/team/permissions_update`, `/jwt/key/mapping/{new,update,delete}`,
+        # `/key/bulk_update`, `/key/{id}/reset_spend`). A blanket allow would
+        # let Admin Viewer POST these write endpoints — violating the
+        # "no writes, ever" rule. Default-deny instead.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
