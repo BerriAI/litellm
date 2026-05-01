@@ -449,6 +449,66 @@ class TestVertexBatchOutputTransformation:
             assert "choices" in body
             assert len(body["choices"]) > 0
 
+    def test_batch_detection_requires_candidates_or_non_empty_status(self, config):
+        """Test that JSONL with a blank status but no candidates is returned as-is."""
+        non_batch_output = {
+            "status": "",
+            "processed_time": "2024-11-01T18:13:16.826+00:00",
+            "request": {"metadata": "not a Vertex batch request"},
+            "response": {"metadata": "not a Gemini response"},
+        }
+
+        content = json.dumps(non_batch_output).encode("utf-8")
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(
+            content
+        )
+
+        assert transformed_content == content
+
+    def test_reuses_batch_transform_helpers_per_jsonl_file(self, config, monkeypatch):
+        """Test that heavy helper objects are reused while transforming a JSONL file."""
+        vertex_outputs = [
+            {
+                "status": "",
+                "processed_time": "2024-11-01T18:13:16.826+00:00",
+                "request": {"labels": {"litellm_custom_id": f"request-{i}"}},
+                "response": {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]},
+            }
+            for i in range(2)
+        ]
+        helper_ids = []
+
+        def mock_transform_single(
+            vertex_output,
+            vertex_gemini_config,
+            logging_obj,
+            mock_httpx_response,
+        ):
+            helper_ids.append(
+                (
+                    id(vertex_gemini_config),
+                    id(logging_obj),
+                    id(mock_httpx_response),
+                )
+            )
+            return {"custom_id": vertex_output["request"]["labels"]["litellm_custom_id"]}
+
+        monkeypatch.setattr(
+            config,
+            "_transform_single_vertex_batch_output_to_openai",
+            mock_transform_single,
+        )
+
+        content = "\n".join(json.dumps(output) for output in vertex_outputs).encode(
+            "utf-8"
+        )
+        transformed_content = config._try_transform_vertex_batch_output_to_openai(
+            content
+        )
+
+        assert len(transformed_content.decode("utf-8").strip().split("\n")) == 2
+        assert len(set(helper_ids)) == 1
+
     def test_non_batch_output_passthrough(self, config):
         """Test that non-batch output is returned as-is"""
         regular_content = b"This is just a regular file content"
