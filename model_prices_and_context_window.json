@@ -8092,16 +8092,17 @@
     },
     "bedrock/us-east-1/minimax.minimax-m2.5": {
         "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "output_cost_per_token": 1.2e-06
     },
     "bedrock/us-east-1/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
@@ -8709,16 +8710,17 @@
     },
     "bedrock/us-west-2/minimax.minimax-m2.5": {
         "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "output_cost_per_token": 1.2e-06
     },
     "bedrock/us-west-2/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
@@ -9489,6 +9491,7 @@
             "us": 1.1,
             "fast": 6.0
         },
+        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-opus-4-7-20260416": {
@@ -9523,6 +9526,7 @@
             "us": 1.1,
             "fast": 6.0
         },
+        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-sonnet-4-20250514": {
@@ -10708,17 +10712,17 @@
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     "databricks/databricks-claude-3-7-sonnet": {
-        "input_cost_per_token": 2.99999e-06,
+        "input_cost_per_token": 2.9999900000000002e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.500002e-05,
+        "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
@@ -10734,7 +10738,7 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
         "output_cost_per_token": 5.00003e-06,
@@ -10746,17 +10750,17 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-opus-4": {
-        "input_cost_per_token": 1.500002e-05,
+        "input_cost_per_token": 1.5000020000000002e-05,
         "input_dbu_cost_per_token": 0.000214286,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 32000,
         "max_tokens": 32000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 7.500003e-05,
+        "output_cost_per_token": 7.500003000000001e-05,
         "output_dbu_cost_per_token": 0.001071429,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
@@ -10765,17 +10769,17 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-opus-4-1": {
-        "input_cost_per_token": 1.500002e-05,
+        "input_cost_per_token": 1.5000020000000002e-05,
         "input_dbu_cost_per_token": 0.000214286,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 32000,
         "max_tokens": 32000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 7.500003e-05,
+        "output_cost_per_token": 7.500003000000001e-05,
         "output_dbu_cost_per_token": 0.001071429,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
@@ -10791,10 +10795,10 @@
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 2.500001e-05,
+        "output_cost_per_token": 2.5000010000000002e-05,
         "output_dbu_cost_per_token": 0.000357143,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
@@ -10803,17 +10807,17 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4": {
-        "input_cost_per_token": 2.99999e-06,
+        "input_cost_per_token": 2.9999900000000002e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.500002e-05,
+        "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
@@ -10822,17 +10826,17 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4-1": {
-        "input_cost_per_token": 2.99999e-06,
+        "input_cost_per_token": 2.9999900000000002e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.500002e-05,
+        "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
@@ -10841,17 +10845,17 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4-5": {
-        "input_cost_per_token": 2.99999e-06,
+        "input_cost_per_token": 2.9999900000000002e-06,
         "input_dbu_cost_per_token": 4.2857e-05,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.500002e-05,
+        "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_assistant_prefill": true,
@@ -10860,14 +10864,14 @@
         "supports_tool_choice": true
     },
     "databricks/databricks-gemini-2-5-flash": {
-        "input_cost_per_token": 3.0002e-07,
-        "input_dbu_cost_per_token": 4.286e-06,
+        "input_cost_per_token": 3.0001999999999996e-07,
+        "input_dbu_cost_per_token": 4.285999999999999e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65535,
         "max_tokens": 65535,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
         "output_cost_per_token": 2.49998e-06,
@@ -10884,24 +10888,24 @@
         "max_output_tokens": 65536,
         "max_tokens": 65536,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 9.99999e-06,
+        "output_cost_per_token": 9.999990000000002e-06,
         "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-gemma-3-12b": {
-        "input_cost_per_token": 1.5001e-07,
-        "input_dbu_cost_per_token": 2.143e-06,
+        "input_cost_per_token": 1.5000999999999998e-07,
+        "input_dbu_cost_per_token": 2.1429999999999996e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 128000,
         "max_output_tokens": 32000,
         "max_tokens": 32000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
         "output_cost_per_token": 5.0001e-07,
@@ -10916,10 +10920,10 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 9.99999e-06,
+        "output_cost_per_token": 9.999990000000002e-06,
         "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
@@ -10931,25 +10935,25 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 9.99999e-06,
+        "output_cost_per_token": 9.999990000000002e-06,
         "output_dbu_cost_per_token": 0.000142857,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     "databricks/databricks-gpt-5-mini": {
-        "input_cost_per_token": 2.4997e-07,
+        "input_cost_per_token": 2.4997000000000006e-07,
         "input_dbu_cost_per_token": 3.571e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.99997e-06,
+        "output_cost_per_token": 1.9999700000000004e-06,
         "output_dbu_cost_per_token": 2.8571e-05,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
@@ -10961,22 +10965,22 @@
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 3.9998e-07,
-        "output_dbu_cost_per_token": 5.714e-06,
+        "output_cost_per_token": 3.9998000000000007e-07,
+        "output_dbu_cost_per_token": 5.714000000000001e-06,
         "source": "https://www.databricks.com/product/pricing/proprietary-foundation-model-serving"
     },
     "databricks/databricks-gpt-oss-120b": {
-        "input_cost_per_token": 1.5001e-07,
-        "input_dbu_cost_per_token": 2.143e-06,
+        "input_cost_per_token": 1.5000999999999998e-07,
+        "input_dbu_cost_per_token": 2.1429999999999996e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
         "output_cost_per_token": 5.9997e-07,
@@ -10991,15 +10995,15 @@
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 3.0002e-07,
-        "output_dbu_cost_per_token": 4.286e-06,
+        "output_cost_per_token": 3.0001999999999996e-07,
+        "output_dbu_cost_per_token": 4.285999999999999e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     "databricks/databricks-gte-large-en": {
-        "input_cost_per_token": 1.2999e-07,
+        "input_cost_per_token": 1.2999000000000001e-07,
         "input_dbu_cost_per_token": 1.857e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 8192,
@@ -11024,7 +11028,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.50003e-06,
+        "output_cost_per_token": 1.5000300000000002e-06,
         "output_dbu_cost_per_token": 2.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
@@ -11040,7 +11044,7 @@
             "notes": "Databricks documentation now provides both DBU costs (_dbu_cost_per_token) and dollar costs(_cost_per_token)."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.50003e-06,
+        "output_cost_per_token": 1.5000300000000002e-06,
         "output_dbu_cost_per_token": 2.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
@@ -11056,24 +11060,24 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.500002e-05,
+        "output_cost_per_token": 1.5000020000000002e-05,
         "output_dbu_cost_per_token": 0.000214286,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
     },
     "databricks/databricks-meta-llama-3-1-8b-instruct": {
-        "input_cost_per_token": 1.5001e-07,
-        "input_dbu_cost_per_token": 2.143e-06,
+        "input_cost_per_token": 1.5000999999999998e-07,
+        "input_dbu_cost_per_token": 2.1429999999999996e-06,
         "litellm_provider": "databricks",
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "metadata": {
-            "notes": "Input/output cost per token is dbu cost * $0.070 Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
+            "notes": "Input/output cost per token is dbu cost * $0.070. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 4.5003e-07,
-        "output_dbu_cost_per_token": 6.429e-06,
+        "output_cost_per_token": 4.5003000000000007e-07,
+        "output_dbu_cost_per_token": 6.429000000000001e-06,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving"
     },
     "databricks/databricks-meta-llama-3-3-70b-instruct": {
@@ -11087,7 +11091,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 1.50003e-06,
+        "output_cost_per_token": 1.5000300000000002e-06,
         "output_dbu_cost_per_token": 2.1429e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
@@ -11103,7 +11107,7 @@
             "notes": "Input/output cost per token is dbu cost * $0.070, based on databricks Llama 3.1 70B conversion. Number provided for reference, '*_dbu_cost_per_token' used in actual calculation."
         },
         "mode": "chat",
-        "output_cost_per_token": 2.99999e-06,
+        "output_cost_per_token": 2.9999900000000002e-06,
         "output_dbu_cost_per_token": 4.2857e-05,
         "source": "https://www.databricks.com/product/pricing/foundation-model-serving",
         "supports_tool_choice": true
@@ -16837,7 +16841,7 @@
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "metadata": {
-            "notes": "Rate limits not documented for gemini-exp-1114 Assuming same as gemini-1.5-pro.",
+            "notes": "Rate limits not documented for gemini-exp-1114. Assuming same as gemini-1.5-pro.",
             "supports_tool_choice": true
         },
         "mode": "chat",
@@ -16866,7 +16870,7 @@
         "max_video_length": 1,
         "max_videos_per_prompt": 10,
         "metadata": {
-            "notes": "Rate limits not documented for gemini-exp-1206 Assuming same as gemini-1.5-pro.",
+            "notes": "Rate limits not documented for gemini-exp-1206. Assuming same as gemini-1.5-pro.",
             "supports_tool_choice": true
         },
         "mode": "chat",
@@ -22774,13 +22778,14 @@
     },
     "minimax.minimax-m2.5": {
         "input_cost_per_token": 3e-07,
-        "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
+        "output_cost_per_token": 1.2e-06,
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
@@ -34839,17 +34844,17 @@
     },
     "zai.glm-5": {
         "input_cost_per_token": 1e-06,
-        "output_cost_per_token": 3.2e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
+        "output_cost_per_token": 3.2e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "supports_tool_choice": true
     },
     "zai/glm-5": {
         "cache_creation_input_token_cost": 0,
@@ -39632,6 +39637,20 @@
             }
         ]
     },
+    "zai.glm-5": {
+        "input_cost_per_token": 1e-06,
+        "output_cost_per_token": 3.2e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
     "bedrock/us-east-1/zai.glm-5": {
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3.2e-06,
@@ -39656,6 +39675,45 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "minimax.minimax-m2.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/us-east-1/minimax.minimax-m2.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "source": "https://aws.amazon.com/bedrock/pricing/"
+    },
+    "bedrock/us-west-2/minimax.minimax-m2.5": {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+        "litellm_provider": "bedrock",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "source": "https://aws.amazon.com/bedrock/pricing/"
@@ -39713,13 +39771,7 @@
         "input_cost_per_token": 1.75e-06,
         "output_cost_per_token": 5.5e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/zai-org-glm-5": {
         "max_tokens": 32000,
@@ -39728,13 +39780,7 @@
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/z-ai-glm-5-turbo": {
         "max_tokens": 32768,
@@ -39743,13 +39789,7 @@
         "input_cost_per_token": 1.2e-06,
         "output_cost_per_token": 4e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/z-ai-glm-5v-turbo": {
         "max_tokens": 32768,
@@ -39758,13 +39798,7 @@
         "input_cost_per_token": 1.5e-06,
         "output_cost_per_token": 5e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/olafangensan-glm-4.7-flash-heretic": {
         "max_tokens": 24000,
@@ -39773,13 +39807,7 @@
         "input_cost_per_token": 1.4e-07,
         "output_cost_per_token": 8e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/zai-org-glm-4.7-flash": {
         "max_tokens": 16384,
@@ -39788,13 +39816,7 @@
         "input_cost_per_token": 1.25e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/zai-org-glm-4.6": {
         "max_tokens": 16384,
@@ -39803,13 +39825,7 @@
         "input_cost_per_token": 8.5e-07,
         "output_cost_per_token": 2.75e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/zai-org-glm-4.7": {
         "max_tokens": 16384,
@@ -39818,13 +39834,7 @@
         "input_cost_per_token": 5.5e-07,
         "output_cost_per_token": 2.65e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/venice-uncensored": {
         "max_tokens": 8192,
@@ -39833,13 +39843,7 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 9e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/venice-uncensored-1-2": {
         "max_tokens": 8192,
@@ -39848,13 +39852,7 @@
         "input_cost_per_token": 2e-07,
         "output_cost_per_token": 9e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/venice-uncensored-role-play": {
         "max_tokens": 4096,
@@ -39863,13 +39861,7 @@
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen-3-6-plus": {
         "max_tokens": 65536,
@@ -39878,13 +39870,7 @@
         "input_cost_per_token": 6.25e-07,
         "output_cost_per_token": 3.75e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-6-27b": {
         "max_tokens": 65536,
@@ -39893,13 +39879,7 @@
         "input_cost_per_token": 3.25e-07,
         "output_cost_per_token": 3.25e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-5-9b": {
         "max_tokens": 32768,
@@ -39908,13 +39888,7 @@
         "input_cost_per_token": 1e-07,
         "output_cost_per_token": 1.5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-5-397b-a17b": {
         "max_tokens": 32768,
@@ -39923,13 +39897,7 @@
         "input_cost_per_token": 7.5e-07,
         "output_cost_per_token": 4.5e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-5-35b-a3b": {
         "max_tokens": 65536,
@@ -39938,13 +39906,7 @@
         "input_cost_per_token": 3.125e-07,
         "output_cost_per_token": 1.25e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-235b-a22b-thinking-2507": {
         "max_tokens": 16384,
@@ -39953,13 +39915,7 @@
         "input_cost_per_token": 4.5e-07,
         "output_cost_per_token": 3.5e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-235b-a22b-instruct-2507": {
         "max_tokens": 16384,
@@ -39968,13 +39924,7 @@
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 7.5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-next-80b": {
         "max_tokens": 16384,
@@ -39983,13 +39933,7 @@
         "input_cost_per_token": 3.5e-07,
         "output_cost_per_token": 1.9e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-coder-480b-a35b-instruct": {
         "max_tokens": 65536,
@@ -39998,13 +39942,7 @@
         "input_cost_per_token": 7.5e-07,
         "output_cost_per_token": 3e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-vl-235b-a22b": {
         "max_tokens": 16384,
@@ -40013,13 +39951,7 @@
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 1.5e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/qwen3-coder-480b-a35b-instruct-turbo": {
         "max_tokens": 65536,
@@ -40028,13 +39960,7 @@
         "input_cost_per_token": 3.5e-07,
         "output_cost_per_token": 1.5e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/google-gemma-4-26b-a4b-it": {
         "max_tokens": 8192,
@@ -40043,13 +39969,7 @@
         "input_cost_per_token": 1.625e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/google-gemma-4-31b-it": {
         "max_tokens": 8192,
@@ -40058,13 +39978,7 @@
         "input_cost_per_token": 1.75e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/gemma-4-uncensored": {
         "max_tokens": 8192,
@@ -40073,13 +39987,7 @@
         "input_cost_per_token": 1.625e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/google-gemma-3-27b-it": {
         "max_tokens": 16384,
@@ -40088,13 +39996,7 @@
         "input_cost_per_token": 1.2e-07,
         "output_cost_per_token": 2e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/arcee-trinity-large-thinking": {
         "max_tokens": 65536,
@@ -40103,13 +40005,7 @@
         "input_cost_per_token": 3.125e-07,
         "output_cost_per_token": 1.125e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/grok-41-fast": {
         "max_tokens": 30000,
@@ -40118,13 +40014,7 @@
         "input_cost_per_token": 2.3e-07,
         "output_cost_per_token": 5.7e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/grok-4-3": {
         "max_tokens": 32000,
@@ -40133,13 +40023,7 @@
         "input_cost_per_token": 1.42e-06,
         "output_cost_per_token": 2.83e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/grok-4-20": {
         "max_tokens": 128000,
@@ -40148,13 +40032,7 @@
         "input_cost_per_token": 2.27e-06,
         "output_cost_per_token": 6.8e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/grok-4-20-multi-agent": {
         "max_tokens": 128000,
@@ -40163,13 +40041,7 @@
         "input_cost_per_token": 2.27e-06,
         "output_cost_per_token": 6.8e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/mistral-small-3-2-24b-instruct": {
         "max_tokens": 16384,
@@ -40178,13 +40050,7 @@
         "input_cost_per_token": 9.375e-08,
         "output_cost_per_token": 2.5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/mistral-small-2603": {
         "max_tokens": 65536,
@@ -40193,13 +40059,7 @@
         "input_cost_per_token": 1.875e-07,
         "output_cost_per_token": 7.5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/hermes-3-llama-3.1-405b": {
         "max_tokens": 16384,
@@ -40208,13 +40068,7 @@
         "input_cost_per_token": 1.1e-06,
         "output_cost_per_token": 3e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/gemini-3-1-pro-preview": {
         "max_tokens": 32768,
@@ -40223,13 +40077,7 @@
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 1.5e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": true,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/gemini-3-flash-preview": {
         "max_tokens": 65536,
@@ -40238,13 +40086,7 @@
         "input_cost_per_token": 7e-07,
         "output_cost_per_token": 3.75e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": true,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/claude-opus-4-7": {
         "max_tokens": 128000,
@@ -40253,13 +40095,7 @@
         "input_cost_per_token": 6e-06,
         "output_cost_per_token": 3e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/claude-opus-4-6": {
         "max_tokens": 128000,
@@ -40268,13 +40104,7 @@
         "input_cost_per_token": 6e-06,
         "output_cost_per_token": 3e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/claude-opus-4-6-fast": {
         "max_tokens": 128000,
@@ -40283,13 +40113,7 @@
         "input_cost_per_token": 3.6e-05,
         "output_cost_per_token": 0.00018,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/claude-opus-4-5": {
         "max_tokens": 32768,
@@ -40298,13 +40122,7 @@
         "input_cost_per_token": 6e-06,
         "output_cost_per_token": 3e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/claude-sonnet-4-6": {
         "max_tokens": 64000,
@@ -40313,13 +40131,7 @@
         "input_cost_per_token": 3.6e-06,
         "output_cost_per_token": 1.8e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/claude-sonnet-4-5": {
         "max_tokens": 64000,
@@ -40328,13 +40140,7 @@
         "input_cost_per_token": 3.75e-06,
         "output_cost_per_token": 1.875e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-oss-120b": {
         "max_tokens": 16384,
@@ -40343,13 +40149,7 @@
         "input_cost_per_token": 7e-08,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/kimi-k2-6": {
         "max_tokens": 65536,
@@ -40358,13 +40158,7 @@
         "input_cost_per_token": 8.5e-07,
         "output_cost_per_token": 4.655e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/kimi-k2-thinking": {
         "max_tokens": 65536,
@@ -40373,13 +40167,7 @@
         "input_cost_per_token": 7.5e-07,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/kimi-k2-5": {
         "max_tokens": 65536,
@@ -40388,13 +40176,7 @@
         "input_cost_per_token": 5.6e-07,
         "output_cost_per_token": 3.5e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/deepseek-v4-pro": {
         "max_tokens": 32768,
@@ -40403,13 +40185,7 @@
         "input_cost_per_token": 1.73e-06,
         "output_cost_per_token": 3.796e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/deepseek-v4-flash": {
         "max_tokens": 32768,
@@ -40418,13 +40194,7 @@
         "input_cost_per_token": 1.7e-07,
         "output_cost_per_token": 3.5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/deepseek-v3.2": {
         "max_tokens": 32768,
@@ -40433,13 +40203,7 @@
         "input_cost_per_token": 3.3e-07,
         "output_cost_per_token": 4.8e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/aion-labs-aion-2-0": {
         "max_tokens": 32768,
@@ -40448,13 +40212,7 @@
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 2e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/llama-3.2-3b": {
         "max_tokens": 4096,
@@ -40463,13 +40221,7 @@
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 6e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/llama-3.3-70b": {
         "max_tokens": 4096,
@@ -40478,13 +40230,7 @@
         "input_cost_per_token": 7e-07,
         "output_cost_per_token": 2.8e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-52": {
         "max_tokens": 65536,
@@ -40493,13 +40239,7 @@
         "input_cost_per_token": 2.19e-06,
         "output_cost_per_token": 1.75e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-52-codex": {
         "max_tokens": 65536,
@@ -40508,13 +40248,7 @@
         "input_cost_per_token": 2.19e-06,
         "output_cost_per_token": 1.75e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-53-codex": {
         "max_tokens": 128000,
@@ -40523,13 +40257,7 @@
         "input_cost_per_token": 2.19e-06,
         "output_cost_per_token": 1.75e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-54": {
         "max_tokens": 131072,
@@ -40538,13 +40266,7 @@
         "input_cost_per_token": 3.13e-06,
         "output_cost_per_token": 1.88e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-54-pro": {
         "max_tokens": 128000,
@@ -40553,13 +40275,7 @@
         "input_cost_per_token": 3.75e-05,
         "output_cost_per_token": 0.000225,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-54-mini": {
         "max_tokens": 128000,
@@ -40568,13 +40284,7 @@
         "input_cost_per_token": 9.375e-07,
         "output_cost_per_token": 5.625e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-55": {
         "max_tokens": 131072,
@@ -40583,13 +40293,7 @@
         "input_cost_per_token": 6.25e-06,
         "output_cost_per_token": 3.75e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-55-pro": {
         "max_tokens": 128000,
@@ -40598,13 +40302,7 @@
         "input_cost_per_token": 3.75e-05,
         "output_cost_per_token": 0.000225,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-4o-2024-11-20": {
         "max_tokens": 16384,
@@ -40613,13 +40311,7 @@
         "input_cost_per_token": 3.125e-06,
         "output_cost_per_token": 1.25e-05,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/openai-gpt-4o-mini-2024-07-18": {
         "max_tokens": 16384,
@@ -40628,13 +40320,7 @@
         "input_cost_per_token": 1.875e-07,
         "output_cost_per_token": 7.5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/minimax-m25": {
         "max_tokens": 32768,
@@ -40643,13 +40329,7 @@
         "input_cost_per_token": 3.4e-07,
         "output_cost_per_token": 1.19e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/minimax-m27": {
         "max_tokens": 32768,
@@ -40658,13 +40338,7 @@
         "input_cost_per_token": 3.75e-07,
         "output_cost_per_token": 1.5e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/mercury-2": {
         "max_tokens": 50000,
@@ -40673,13 +40347,7 @@
         "input_cost_per_token": 3.125e-07,
         "output_cost_per_token": 9.375e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/nvidia-nemotron-3-nano-30b-a3b": {
         "max_tokens": 16384,
@@ -40688,13 +40356,7 @@
         "input_cost_per_token": 7.5e-08,
         "output_cost_per_token": 3e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/nvidia-nemotron-cascade-2-30b-a3b": {
         "max_tokens": 32768,
@@ -40703,13 +40365,7 @@
         "input_cost_per_token": 1.4e-07,
         "output_cost_per_token": 8e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-venice-uncensored-24b-p": {
         "max_tokens": 4096,
@@ -40718,13 +40374,7 @@
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 1.15e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-gemma-3-27b-p": {
         "max_tokens": 4096,
@@ -40733,13 +40383,7 @@
         "input_cost_per_token": 1.4e-07,
         "output_cost_per_token": 5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-glm-4-7-p": {
         "max_tokens": 32768,
@@ -40748,13 +40392,7 @@
         "input_cost_per_token": 1.1e-06,
         "output_cost_per_token": 4.15e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-glm-4-7-flash-p": {
         "max_tokens": 4096,
@@ -40763,13 +40401,7 @@
         "input_cost_per_token": 1.3e-07,
         "output_cost_per_token": 5.5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-gpt-oss-20b-p": {
         "max_tokens": 32768,
@@ -40778,13 +40410,7 @@
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 1.9e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-gpt-oss-120b-p": {
         "max_tokens": 32768,
@@ -40793,13 +40419,7 @@
         "input_cost_per_token": 1.3e-07,
         "output_cost_per_token": 6.5e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-qwen-2-5-7b-p": {
         "max_tokens": 4096,
@@ -40808,13 +40428,7 @@
         "input_cost_per_token": 5e-08,
         "output_cost_per_token": 1.3e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-qwen3-30b-a3b-p": {
         "max_tokens": 32768,
@@ -40823,13 +40437,7 @@
         "input_cost_per_token": 1.9e-07,
         "output_cost_per_token": 6.9e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-qwen3-vl-30b-a3b-p": {
         "max_tokens": 4096,
@@ -40838,13 +40446,7 @@
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 9e-07,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": false,
-        "supports_response_schema": false,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-glm-5-1": {
         "max_tokens": 32768,
@@ -40853,13 +40455,7 @@
         "input_cost_per_token": 1.1e-06,
         "output_cost_per_token": 4.15e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-glm-5": {
         "max_tokens": 32768,
@@ -40868,13 +40464,7 @@
         "input_cost_per_token": 1.1e-06,
         "output_cost_per_token": 4.15e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": false,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_vision": false,
-        "supports_web_search": true
+        "mode": "chat"
     },
     "venice/e2ee-qwen3-5-122b-a10b": {
         "max_tokens": 32768,
@@ -40883,12 +40473,6 @@
         "input_cost_per_token": 5e-07,
         "output_cost_per_token": 4e-06,
         "litellm_provider": "venice",
-        "mode": "chat",
-        "supports_audio_input": false,
-        "supports_function_calling": true,
-        "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_vision": true,
-        "supports_web_search": true
+        "mode": "chat"
     }
 }
