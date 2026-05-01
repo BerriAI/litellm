@@ -161,12 +161,29 @@ class NewRelicLogger(CustomLogger):
         )
 
     def _parse_bool_env(self, var_name: str, default: bool = False) -> bool:
-        """Parse boolean environment variable. Accepts 'true' (case-insensitive) per spec."""
-        value = os.getenv(var_name, "")
-        if not value:
+        """Parse a boolean environment variable.
+
+        Accepts true/false, 1/0, yes/no, on/off (case-insensitive,
+        whitespace-tolerant) — matching the convention used in
+        ``litellm/__init__.py`` and the standard library's
+        ``configparser.BOOLEAN_STATES``. Unrecognised values log a
+        warning and fall back to ``default`` rather than silently
+        flipping user intent.
+        """
+        raw = os.getenv(var_name)
+        if not raw:
             return default
-        # Spec requires value to be either true (bool) or 'true' (string)
-        return value.lower() == "true"
+        value = raw.strip().lower()
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+        verbose_logger.warning(
+            f"{var_name}={raw!r} is not a recognised boolean "
+            f"(accepts true/false, 1/0, yes/no, on/off). "
+            f"Falling back to default ({default})."
+        )
+        return default
 
     def _get_litellm_version(self) -> str:
         """
@@ -680,7 +697,7 @@ class NewRelicLogger(CustomLogger):
                     "response.model": message["response.model"],
                     "vendor": message["vendor"],
                     "ingest_source": "litellm",
-                    "token_count": 0,
+                    "token_count": 0,  # Per-message token counts are not available from LiteLLM
                 }
 
                 # Add trace context if available

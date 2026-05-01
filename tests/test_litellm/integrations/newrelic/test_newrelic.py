@@ -226,22 +226,49 @@ class TestParseBoolEnv:
     def setup_method(self):
         self.logger = make_logger()
 
-    def test_true_string(self):
-        with patch.dict(os.environ, {"MY_VAR": "true"}):
+    @pytest.mark.parametrize("raw", ["true", "TRUE", "True", "1", "yes", "on", "ON"])
+    def test_truthy_values(self, raw):
+        with patch.dict(os.environ, {"MY_VAR": raw}):
             assert self.logger._parse_bool_env("MY_VAR") is True
 
-    def test_true_uppercase(self):
-        with patch.dict(os.environ, {"MY_VAR": "TRUE"}):
+    @pytest.mark.parametrize("raw", ["false", "FALSE", "0", "no", "off", "Off"])
+    def test_falsy_values(self, raw):
+        with patch.dict(os.environ, {"MY_VAR": raw}):
+            assert self.logger._parse_bool_env("MY_VAR") is False
+
+    @pytest.mark.parametrize("raw", [" true ", "  1\t", "\nyes"])
+    def test_whitespace_tolerance_truthy(self, raw):
+        with patch.dict(os.environ, {"MY_VAR": raw}):
             assert self.logger._parse_bool_env("MY_VAR") is True
 
-    def test_false_string(self):
-        with patch.dict(os.environ, {"MY_VAR": "false"}):
+    @pytest.mark.parametrize("raw", [" false ", "  0\t", "\nno"])
+    def test_whitespace_tolerance_falsy(self, raw):
+        with patch.dict(os.environ, {"MY_VAR": raw}):
             assert self.logger._parse_bool_env("MY_VAR") is False
 
     def test_missing_uses_default(self):
         with patch.dict(os.environ, {}, clear=True):
             assert self.logger._parse_bool_env("MY_VAR", default=True) is True
             assert self.logger._parse_bool_env("MY_VAR", default=False) is False
+
+    def test_empty_string_uses_default(self):
+        with patch.dict(os.environ, {"MY_VAR": ""}):
+            assert self.logger._parse_bool_env("MY_VAR", default=True) is True
+            assert self.logger._parse_bool_env("MY_VAR", default=False) is False
+
+    @pytest.mark.parametrize("raw", ["maybe", "2", "enabled", "tru"])
+    def test_unrecognised_value_falls_back_to_default_with_warning(self, raw):
+        with (
+            patch.dict(os.environ, {"MY_VAR": raw}),
+            patch.object(nr_module.verbose_logger, "warning") as mock_warn,
+        ):
+            assert self.logger._parse_bool_env("MY_VAR", default=True) is True
+            assert self.logger._parse_bool_env("MY_VAR", default=False) is False
+            assert mock_warn.call_count == 2
+            # Warning should mention the variable name and the raw value
+            for call in mock_warn.call_args_list:
+                assert "MY_VAR" in call.args[0]
+                assert repr(raw) in call.args[0]
 
 
 # ---------------------------------------------------------------------------
