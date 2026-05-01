@@ -213,6 +213,7 @@ LLM_CONFIG_NAMES = (
     "OpenAIImageVariationConfig",
     "DeepInfraConfig",
     "DeepgramAudioTranscriptionConfig",
+    "SonioxAudioTranscriptionConfig",
     "TopazImageVariationConfig",
     "OpenAITextCompletionConfig",
     "GroqChatConfig",
@@ -862,6 +863,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "DeepgramAudioTranscriptionConfig": (
         ".llms.deepgram.audio_transcription.transformation",
         "DeepgramAudioTranscriptionConfig",
+    ),
+    "SonioxAudioTranscriptionConfig": (
+        ".llms.soniox.audio_transcription.transformation",
+        "SonioxAudioTranscriptionConfig",
     ),
     "TopazImageVariationConfig": (
         ".llms.topaz.image_variations.transformation",
