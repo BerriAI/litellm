@@ -4725,7 +4725,7 @@ class StandardLoggingPayloadSetup:
         ):
             for key, value in litellm_params["metadata"].items():
                 # Skip non-serializable objects like UserAPIKeyAuth
-                if key == "user_api_key_auth":
+                if key in {"user_api_key_auth", "user_api_key_budget_reservation"}:
                     continue
                 merged_metadata[key] = value
 
