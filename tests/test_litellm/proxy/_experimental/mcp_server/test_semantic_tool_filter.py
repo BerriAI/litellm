@@ -5,10 +5,9 @@ Tests the core filtering logic that takes a long list of tools and returns
 an ordered set of top K tools based on semantic similarity.
 """
 
-import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -137,12 +136,6 @@ async def test_semantic_filter_basic_filtering():
             tool, "description"
         ), "Filtered result should be MCPTool with description"
 
-    filtered_names = [t.name for t in filtered]
-    print(
-        f"✅ Successfully filtered {len(tools)} tools down to top {len(filtered)}: {filtered_names}"
-    )
-    print(f"   Filter respects top_k parameter correctly")
-
 
 @pytest.mark.asyncio
 async def test_semantic_filter_top_k_limiting():
@@ -206,8 +199,6 @@ async def test_semantic_filter_top_k_limiting():
 
     # Should return at most 5 tools
     assert len(filtered) <= 5, f"Expected at most 5 tools, got {len(filtered)}"
-    print(f"Returned {len(filtered)} tools out of {len(tools)} (top_k=5)")
-
 
 @pytest.mark.asyncio
 async def test_semantic_filter_disabled():
@@ -403,8 +394,6 @@ async def test_semantic_filter_hook_triggers_on_completion():
         tools
     ), f"Hook should filter tools, got {len(result['tools'])}/{len(tools)}"
 
-    print(f"✅ Hook triggered correctly: {len(tools)} -> {len(result['tools'])} tools")
-
 
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_skips_no_tools():
@@ -449,7 +438,174 @@ async def test_semantic_filter_hook_skips_no_tools():
 
     # Should return None (no modification)
     assert result is None, "Hook should skip requests without tools"
-    print("✅ Hook correctly skips requests without tools")
+
+
+@pytest.mark.asyncio
+async def test_expand_mcp_tools_preserves_native_tools(monkeypatch):
+    """
+    MCP-reference expansion should not discard native tools that arrived in
+    the same request.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+        LiteLLM_Proxy_MCP_Handler,
+    )
+
+    async def fake_process_mcp_tools_to_openai_format(*args, **kwargs):
+        return ([{"name": "github-search", "description": "Search GitHub"}], None)
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_to_openai_format",
+        fake_process_mcp_tools_to_openai_format,
+    )
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    hook = SemanticToolFilterHook(filter_instance)
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather for a city",
+            "parameters": {"type": "object"},
+        },
+    }
+    mcp_reference = {"type": "mcp", "server_url": "litellm_proxy/mcp/github"}
+
+    expanded = await hook._expand_mcp_tools(
+        [mcp_reference, native_tool],
+        user_api_key_dict=Mock(),
+    )
+
+    assert expanded == [
+        native_tool,
+        {"name": "github-search", "description": "Search GitHub"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_native_openai_tools():
+    """
+    The MCP semantic filter must not drop native tools owned by the caller.
+
+    Native tools are not present in the MCP router map, so they should bypass
+    MCP semantic filtering and be merged back into the request unchanged.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    mcp_tool = {"name": "github-search", "description": "Search GitHub"}
+    filter_instance._tool_map = {mcp_tool["name"]: mcp_tool}
+    filter_instance.filter_tools = AsyncMock(return_value=[mcp_tool])  # type: ignore[method-assign]
+
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather for a city",
+            "parameters": {"type": "object"},
+        },
+    }
+    responses_native_tool = {
+        "type": "function",
+        "name": "calculator",
+        "description": "Evaluate an expression",
+        "parameters": {"type": "object"},
+    }
+    hook = SemanticToolFilterHook(filter_instance)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Check weather and search GitHub"}],
+        "tools": [native_tool, responses_native_tool, mcp_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is data
+    filter_instance.filter_tools.assert_awaited_once_with(
+        query="Check weather and search GitHub",
+        available_tools=[mcp_tool],
+    )
+    assert result["tools"] == [native_tool, responses_native_tool, mcp_tool]
+    assert result["metadata"]["litellm_semantic_filter_stats"] == "3->3"
+    assert (
+        result["metadata"]["litellm_semantic_filter_tools"]
+        == "weather_lookup,calculator,github-search"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_skips_all_native_openai_tools():
+    """
+    If a request contains only caller-owned native tools, the MCP semantic
+    filter should leave the request untouched and avoid emitting filter stats.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    filter_instance._tool_map = {"github-search": {"name": "github-search"}}
+    filter_instance.filter_tools = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather for a city",
+            "parameters": {"type": "object"},
+        },
+    }
+    hook = SemanticToolFilterHook(filter_instance)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Check weather"}],
+        "tools": [native_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is None
+    filter_instance.filter_tools.assert_not_awaited()
+    assert data["tools"] == [native_tool]
+    assert "litellm_semantic_filter_stats" not in data["metadata"]
 
 
 class TestGetToolsByNames:
