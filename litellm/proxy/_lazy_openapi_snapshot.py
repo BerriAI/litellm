@@ -8,16 +8,12 @@ any drift as a neutral check.
 """
 
 import json
-import re
 import sys
-from copy import copy
 from pathlib import Path
-from typing import Dict, List, Optional
-
-from fastapi.routing import APIRoute
-from starlette.routing import BaseRoute
+from typing import Dict, Optional
 
 SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
+HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
 
 
 def load_snapshot() -> Optional[Dict[str, Dict]]:
@@ -30,36 +26,37 @@ def load_snapshot() -> Optional[Dict[str, Dict]]:
         return None
 
 
-def _stable_unique_id(route: APIRoute, method: str) -> str:
-    operation_id = f"{route.name}{route.path_format}"
-    operation_id = re.sub(r"\W", "_", operation_id)
-    return f"{operation_id}_{method.lower()}"
+def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
+    """Make FastAPI-generated operation IDs stable for multi-method routes.
 
-
-def _routes_with_stable_unique_ids(routes: List[BaseRoute]) -> List[BaseRoute]:
-    stable_routes: List[BaseRoute] = []
-    for route in routes:
-        if not isinstance(route, APIRoute) or not route.methods:
-            stable_routes.append(route)
+    FastAPI derives the default operation ID suffix from the first item in the
+    route's methods set. For routes registered with several HTTP methods, that
+    set iteration order can vary between processes, which makes the snapshot
+    drift even when no routes changed.
+    """
+    for path_ops in paths.values():
+        if not isinstance(path_ops, dict):
             continue
 
-        methods = sorted(route.methods)
-        has_multiple_methods = len(methods) > 1
-        for method in methods:
-            method_route = copy(route)
-            method_route.methods = {method}
-            if route.operation_id is not None:
-                method_route.operation_id = (
-                    f"{route.operation_id}_{method.lower()}"
-                    if has_multiple_methods
-                    else route.operation_id
-                )
-                method_route.unique_id = method_route.operation_id
-            else:
-                method_route.unique_id = _stable_unique_id(route, method)
-            stable_routes.append(method_route)
+        methods = {method for method in path_ops if method in HTTP_METHODS}
+        if not methods:
+            continue
 
-    return stable_routes
+        for method, operation in path_ops.items():
+            if method not in HTTP_METHODS or not isinstance(operation, dict):
+                continue
+
+            operation_id = operation.get("operationId")
+            if not isinstance(operation_id, str):
+                continue
+
+            for suffix in methods:
+                suffix_token = f"_{suffix}"
+                if operation_id.endswith(suffix_token):
+                    operation["operationId"] = (
+                        operation_id[: -len(suffix_token)] + f"_{method}"
+                    )
+                    break
 
 
 def generate_snapshot() -> Dict[str, Dict]:
@@ -88,18 +85,16 @@ def generate_snapshot() -> Dict[str, Dict]:
         ]
         if not feat_routes:
             continue
-        full = get_openapi(
-            title=app.title,
-            version=app.version,
-            routes=_routes_with_stable_unique_ids(feat_routes),
-        )
+        full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
+        paths = full.get("paths", {})
+        _normalize_operation_ids(paths)
         # Group all of a feature's routes under one tag.
-        for path_ops in full.get("paths", {}).values():
+        for path_ops in paths.values():
             for op in path_ops.values():
                 if isinstance(op, dict):
                     op["tags"] = [feat.name]
         fragments[feat.name] = {
-            "paths": full.get("paths", {}),
+            "paths": paths,
             "components": {"schemas": full.get("components", {}).get("schemas", {})},
         }
     return fragments

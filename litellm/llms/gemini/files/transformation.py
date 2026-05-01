@@ -6,14 +6,17 @@ For vertex ai, check out the vertex_ai/files/handler.py file.
 
 import time
 from typing import Any, List, Literal, Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
+from litellm.litellm_core_utils.url_utils import (
+    encode_url_path_segment,
+    is_url_destination_allowed_by_host,
+)
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -268,11 +271,14 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             normalized_file_id = file_id
 
         normalized_file_id = normalized_file_id.strip("/")
-        if not normalized_file_id.startswith("files/"):
-            normalized_file_id = f"files/{normalized_file_id}"
-        self._validate_gemini_file_name(normalized_file_id)
+        if normalized_file_id.startswith("files/"):
+            normalized_file_id = normalized_file_id.removeprefix("files/")
 
-        return normalized_file_id
+        encoded_file_id = encode_url_path_segment(
+            normalized_file_id, field_name="file_id"
+        )
+
+        return f"files/{encoded_file_id}"
 
     @staticmethod
     def _is_allowed_gemini_file_url(
@@ -287,26 +293,6 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
         )
         return is_url_destination_allowed_by_host(file_url, allowed_hosts)
-
-    @staticmethod
-    def _validate_gemini_file_name(file_name: str) -> None:
-        parts = file_name.split("/")
-        decoded_file_id = ""
-        if len(parts) == 2:
-            decoded_file_id = parts[1]
-            while True:
-                next_decoded_file_id = unquote(decoded_file_id)
-                if next_decoded_file_id == decoded_file_id:
-                    break
-                decoded_file_id = next_decoded_file_id
-        if (
-            len(parts) != 2
-            or parts[0] != "files"
-            or not parts[1]
-            or decoded_file_id in {".", ".."}
-            or any(char in decoded_file_id for char in ("/", "\\", "?", "#"))
-        ):
-            raise ValueError("Invalid Gemini file name")
 
     def transform_retrieve_file_response(
         self,
