@@ -21,6 +21,7 @@ import litellm  # noqa: E402
 from tests._vcr_redis_persister import (  # noqa: E402
     filter_non_2xx_response,
     make_redis_persister,
+    patch_vcrpy_aiohttp_record_path,
 )
 
 
@@ -121,11 +122,10 @@ def pytest_recording_configure(config, vcr):
     if _vcr_disabled():
         return
     vcr.register_persister(make_redis_persister())
-    # vcrpy patches httpx's transport; litellm's default AiohttpTransport
-    # routes around httpx and produces empty responses under the patched
-    # transport. Force pure-httpx transport so vcrpy can record/replay.
-    litellm.disable_aiohttp_transport = True
-    os.environ["DISABLE_AIOHTTP_TRANSPORT"] = "True"
+    # vcrpy's aiohttp record path drains the response stream via
+    # ``await response.read()``; without the patch, downstream consumers
+    # (litellm's AiohttpResponseStream) see an empty body on first record.
+    patch_vcrpy_aiohttp_record_path()
 
 
 # ---------------------------------------------------------------------------
