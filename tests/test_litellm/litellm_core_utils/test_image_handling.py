@@ -232,3 +232,83 @@ def test_image_size_limit_disabled(monkeypatch):
 
     assert "Image URL download is disabled" in str(excinfo.value)
     assert "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0" in str(excinfo.value)
+
+
+class _FixedContentTypeClient:
+    def __init__(self, content_type=None):
+        self._content_type = content_type
+
+    def get(self, url, follow_redirects=True):
+        body = b"x" * 1024
+        headers = {"Content-Length": str(len(body))}
+        if self._content_type is not None:
+            headers["Content-Type"] = self._content_type
+        return Response(
+            status_code=200,
+            headers=headers,
+            content=body,
+            request=Request("GET", url),
+        )
+
+
+def test_octet_stream_pdf_falls_back_to_url_extension(monkeypatch):
+    """
+    raw.githubusercontent.com and GH releases serve PDFs as application/octet-stream.
+    The fetcher must fall back to the URL extension so OpenAI/Gemini accept the data URI.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "module_level_client",
+        _FixedContentTypeClient(content_type="application/octet-stream"),
+    )
+
+    result = convert_url_to_base64(
+        "https://raw.githubusercontent.com/example/repo/main/doc.pdf"
+    )
+
+    assert result.startswith("data:application/pdf;base64,")
+
+
+def test_octet_stream_with_unknown_extension_passes_through(monkeypatch):
+    """
+    If the URL extension is not recognized, fall through to the server-provided
+    Content-Type rather than guessing. Don't break callers that do tolerate
+    application/octet-stream.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "module_level_client",
+        _FixedContentTypeClient(content_type="application/octet-stream"),
+    )
+
+    result = convert_url_to_base64("https://example.com/file.bin")
+
+    assert result.startswith("data:application/octet-stream;base64,")
+
+
+def test_specific_content_type_is_trusted_over_extension(monkeypatch):
+    """
+    A meaningful Content-Type (e.g. image/png) must beat the URL extension —
+    we only override on generic binary types.
+    """
+    monkeypatch.setattr(
+        litellm,
+        "module_level_client",
+        _FixedContentTypeClient(content_type="image/png"),
+    )
+
+    result = convert_url_to_base64("https://example.com/photo.pdf")
+
+    assert result.startswith("data:image/png;base64,")
+
+
+def test_missing_content_type_uses_extension(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "module_level_client",
+        _FixedContentTypeClient(content_type=None),
+    )
+
+    result = convert_url_to_base64("https://example.com/photo.png")
+
+    assert result.startswith("data:image/png;base64,")
