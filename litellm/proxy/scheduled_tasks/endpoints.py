@@ -166,7 +166,7 @@ async def create_scheduled_task(
         schedule_spec=data.schedule_spec,
         schedule_tz=data.schedule_tz,
         next_run_at=next_run_at,
-        expires_at=data.expires_at,
+        expires_at=expires_at,
         fire_once=fire_once,
     )
     return _row_to_response(row)

@@ -22,7 +22,7 @@ from apscheduler.triggers.cron import (  # type: ignore[import-not-found, import
 )
 
 
-_INTERVAL_RE = re.compile(r"^\s*(\d+)\s*([smhd])\s*$", re.IGNORECASE)
+_INTERVAL_RE = re.compile(r"^\s*([1-9]\d*)\s*([smhd])\s*$", re.IGNORECASE)
 _INTERVAL_UNITS = {
     "s": "seconds",
     "m": "minutes",
