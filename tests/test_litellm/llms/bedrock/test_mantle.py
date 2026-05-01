@@ -103,3 +103,79 @@ def test_mantle_transform_request_strips_prefix_and_adds_model():
     )
     assert request["model"] == "anthropic.claude-mythos-preview"
     assert "mantle/" not in request["model"]
+
+
+# ── VERIA-88: aws_region_name SSRF guard ──────────────────────────────────────
+
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "malicious_region",
+    [
+        # ``@`` makes the URL parser treat ``bedrock-mantle.us-east-1`` as
+        # basic-auth userinfo and ``attacker.example`` as the target host.
+        "us-east-1@attacker.example",
+        # ``/`` injects path components (and could break out of the
+        # authority entirely with a leading ``//``).
+        "us-east-1/foo",
+        "us-east-1//attacker.example",
+        # Percent-encoded ``@``/``/`` reach ``httpx``'s URL parser intact.
+        "us-east-1%40attacker.example",
+        # Subdomain hop — ``.api.aws`` tail in the template is a single
+        # label, not the full registered domain. ``foo.attacker.example``
+        # rewrites the host completely.
+        "us-east-1.attacker",
+        # Userinfo with port + path.
+        "us-east-1:80@attacker.example/foo",
+        # Whitespace / control chars.
+        " us-east-1",
+        "us-east-1 ",
+        "us-east-1\nHost: attacker.example",
+        # Empty / missing.
+        "",
+    ],
+)
+def test_mantle_messages_url_rejects_malicious_region(malicious_region):
+    """``aws_region_name`` is interpolated directly into the URL authority.
+    Any character that lets the value escape the ``{region}`` slot would
+    redirect the SigV4-signed request (with the operator's AWS access-key
+    in the headers) to the attacker. VERIA-88."""
+    config = AmazonMantleMessagesConfig()
+    with pytest.raises(ValueError, match="Invalid AWS region"):
+        config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="mantle/anthropic.claude-mythos-preview",
+            optional_params={"aws_region_name": malicious_region},
+            litellm_params={},
+        )
+
+
+@pytest.mark.parametrize(
+    "valid_region",
+    [
+        "us-east-1",
+        "us-west-2",
+        "eu-west-3",
+        "ap-northeast-1",
+        # AWS GovCloud and ISO partitions.
+        "us-gov-east-1",
+        "us-gov-west-1",
+        "us-isob-east-1",
+        # Future regions with longer numeric suffixes.
+        "us-east-10",
+    ],
+)
+def test_mantle_messages_url_accepts_valid_region(valid_region):
+    """Every documented AWS region shape must continue to work."""
+    config = AmazonMantleMessagesConfig()
+    url = config.get_complete_url(
+        api_base=None,
+        api_key=None,
+        model="mantle/anthropic.claude-mythos-preview",
+        optional_params={"aws_region_name": valid_region},
+        litellm_params={},
+    )
+    assert url == f"https://bedrock-mantle.{valid_region}.api.aws/v1/messages"

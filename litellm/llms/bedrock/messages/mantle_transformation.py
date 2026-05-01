@@ -6,6 +6,7 @@ AmazonAnthropicClaudeMessagesConfig. Overrides only the URL and model-prefix
 stripping that are specific to the bedrock-mantle endpoint.
 """
 
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
@@ -21,6 +22,14 @@ else:
     LiteLLMLoggingObj = Any
 
 MANTLE_ENDPOINT_TEMPLATE = "https://bedrock-mantle.{region}.api.aws/v1/messages"
+
+# AWS region names are documented as ``[a-z]{2}(-gov|-iso[a-z]?)?-[a-z]+-\d+``
+# (e.g. ``us-east-1``, ``us-gov-east-1``, ``us-isob-east-1``). Lowercase
+# alphanumerics + hyphens covers every known region, and refuses anything
+# that could break out of the URL authority — including ``@`` (userinfo),
+# ``/`` (path), ``:`` (port), ``%`` (percent-encoded delimiters), and ``.``
+# (subdomain hop). VERIA-88.
+_AWS_REGION_PATTERN = re.compile(r"^[a-z0-9-]+$")
 
 
 class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
@@ -41,6 +50,17 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
         stream: Optional[bool] = None,
     ) -> str:
         region = self._get_aws_region_name(optional_params=optional_params, model=model)
+        # ``aws_region_name`` originates from user-supplied ``optional_params``
+        # and is interpolated directly into the URL authority. Without
+        # validation, a value like ``us-east-1@attacker.example`` makes the
+        # URL parser treat ``bedrock-mantle.us-east-1`` as basic-auth
+        # userinfo and routes the SigV4-signed request (with the operator's
+        # AWS access-key-ID in the headers) to the attacker. VERIA-88.
+        if not _AWS_REGION_PATTERN.fullmatch(region or ""):
+            raise ValueError(
+                "Invalid AWS region for Bedrock Mantle: must match "
+                "[a-z0-9-]+ (e.g. 'us-east-1')"
+            )
         return MANTLE_ENDPOINT_TEMPLATE.format(region=region)
 
     def transform_anthropic_messages_request(
