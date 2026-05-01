@@ -1064,3 +1064,29 @@ class TestIsRequestBodySafeNestedConfig:
             )
             is True
         )
+
+    def test_deeply_nested_config_does_not_recurse(self):
+        """Greptile P1: ``is_request_body_safe`` is iterative single-level —
+        a deeply-nested ``litellm_embedding_config`` cannot exhaust the
+        Python call stack to trigger a 500 ``RecursionError``. Build a
+        body 1000 levels deep; the validator must complete in O(1)
+        descent."""
+        body = {"litellm_embedding_config": {}}
+        cur = body["litellm_embedding_config"]
+        for _ in range(1000):
+            cur["litellm_embedding_config"] = {}
+            cur = cur["litellm_embedding_config"]
+        # Banned param at the deepest level shouldn't be reached — single
+        # level only.
+        cur["api_base"] = "https://attacker.example.com"
+
+        # No exception raised: deeper levels aren't checked.
+        assert (
+            is_request_body_safe(
+                request_body=body,
+                general_settings={},
+                llm_router=None,
+                model="x",
+            )
+            is True
+        )

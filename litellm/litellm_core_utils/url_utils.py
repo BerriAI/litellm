@@ -212,34 +212,32 @@ def assert_same_origin(candidate_url: str, expected_url: str) -> None:
     Hostnames are compared case-insensitively. Default ports are made
     explicit (HTTP→80, HTTPS→443) so ``https://api.example.com:443/...``
     and ``https://api.example.com/...`` are treated as the same origin.
+
+    Error messages identify *which* component mismatched but never echo
+    the operator's ``expected`` host or the candidate's hostname back to
+    the caller — in the SSRF threat model the caller is the attacker,
+    and reflecting host info would be a secondary leak of operator
+    infrastructure details.
     """
     candidate = urlparse(candidate_url)
     expected = urlparse(expected_url)
 
     if candidate.scheme not in _ALLOWED_SCHEMES:
-        raise SSRFError(f"URL scheme '{candidate.scheme}' is not allowed")
+        raise SSRFError("URL scheme is not allowed")
 
     if candidate.scheme != expected.scheme:
-        raise SSRFError(
-            "Origin mismatch: scheme "
-            f"{candidate.scheme!r} != expected {expected.scheme!r}"
-        )
+        raise SSRFError("Origin mismatch on scheme")
 
     candidate_host = _normalize_host(candidate.hostname or "")
     expected_host = _normalize_host(expected.hostname or "")
     if not candidate_host or candidate_host != expected_host:
-        raise SSRFError(
-            "Origin mismatch: host "
-            f"{candidate.hostname!r} != expected {expected.hostname!r}"
-        )
+        raise SSRFError("Origin mismatch on host")
 
     default_port = 443 if candidate.scheme == "https" else 80
     candidate_port = candidate.port if candidate.port is not None else default_port
     expected_port = expected.port if expected.port is not None else default_port
     if candidate_port != expected_port:
-        raise SSRFError(
-            "Origin mismatch: port " f"{candidate_port} != expected {expected_port}"
-        )
+        raise SSRFError("Origin mismatch on port")
 
 
 _MAX_REDIRECTS = 10
