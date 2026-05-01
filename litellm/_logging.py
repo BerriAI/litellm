@@ -24,7 +24,6 @@ _ENABLE_SECRET_REDACTION = (
 _REDACTED = "REDACTED"
 
 
-
 def _build_secret_patterns() -> re.Pattern:
     patterns: List[str] = [
         # ── PEM private key / certificate blocks ──
