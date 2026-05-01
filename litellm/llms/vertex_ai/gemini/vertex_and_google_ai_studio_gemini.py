@@ -1223,6 +1223,38 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if "temperature" not in optional_params:
                 optional_params["temperature"] = 1.0
 
+        # web_search_options can be added before function tools are mapped, so
+        # strip any pre-existing search tools here as well to keep the request
+        # valid regardless of parameter order.
+        tools = optional_params.get("tools")
+        if (
+            isinstance(tools, list)
+            and any("function_declarations" in tool for tool in tools)
+            and not optional_params.get("include_server_side_tool_invocations", False)
+        ):
+            filtered_tools = [
+                tool
+                for tool in tools
+                if not any(
+                    search_tool in tool
+                    for search_tool in [
+                        VertexToolName.GOOGLE_SEARCH.value,
+                        VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value,
+                        VertexToolName.ENTERPRISE_WEB_SEARCH.value,
+                        VertexToolName.URL_CONTEXT.value,
+                    ]
+                )
+            ]
+            if len(filtered_tools) != len(tools):
+                verbose_logger.warning(
+                    "Vertex AI does not support mixing function declarations with "
+                    "search tools (googleSearch, enterpriseWebSearch, urlContext, "
+                    "googleSearchRetrieval) in the same request. Dropping search "
+                    "tools and keeping function declarations. To use search tools, "
+                    "send a request without function calling tools."
+                )
+                optional_params["tools"] = filtered_tools
+
         return optional_params
 
     def get_mapped_special_auth_params(self) -> dict:
