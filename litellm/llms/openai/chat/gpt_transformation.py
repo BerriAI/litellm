@@ -56,6 +56,7 @@ from litellm.types.utils import (
 from litellm.utils import convert_to_model_response_object
 
 from ..common_utils import OpenAIError
+from ..deepseek_reasoning_utils import patch_deepseek_v4_reasoning_messages
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -169,6 +170,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         ]  # works across all models
 
         model_specific_params = []
+        if "deepseek" in model.lower():
+            model_specific_params.extend(["thinking", "reasoning_effort"])
         if (
             model != "gpt-3.5-turbo-16k" and model != "gpt-4"
         ):  # gpt-4 does not support 'response_format'
@@ -435,6 +438,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             dict: The transformed request. Sent as the body of the API call.
         """
         messages = self._transform_messages(messages=messages, model=model)
+        messages = patch_deepseek_v4_reasoning_messages(model=model, messages=messages)
         messages, tools = self.remove_cache_control_flag_from_messages_and_tools(
             model=model, messages=messages, tools=optional_params.get("tools", [])
         )
@@ -459,6 +463,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     ) -> dict:
         transformed_messages = await self._transform_messages(
             messages=messages, model=model, is_async=True
+        )
+        transformed_messages = patch_deepseek_v4_reasoning_messages(
+            model=model, messages=transformed_messages
         )
         (
             transformed_messages,
