@@ -204,6 +204,39 @@ def test_qdrant_semantic_cache_rejects_unscoped_cache_hit():
         assert result is None
 
 
+def test_qdrant_semantic_cache_payload_index_failure_is_non_blocking():
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    qdrant_cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    qdrant_cache.qdrant_api_base = "http://test.qdrant.local"
+    qdrant_cache.collection_name = "test_collection"
+    qdrant_cache.headers = {"Content-Type": "application/json"}
+    qdrant_cache.sync_client = MagicMock()
+    response = MagicMock()
+    response.status_code = 400
+    response.text = "bad index"
+    qdrant_cache.sync_client.put.return_value = response
+
+    qdrant_cache._ensure_cache_key_payload_index()
+
+    qdrant_cache.sync_client.put.assert_called_once()
+
+
+def test_qdrant_semantic_cache_payload_index_exception_is_non_blocking():
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    qdrant_cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    qdrant_cache.qdrant_api_base = "http://test.qdrant.local"
+    qdrant_cache.collection_name = "test_collection"
+    qdrant_cache.headers = {"Content-Type": "application/json"}
+    qdrant_cache.sync_client = MagicMock()
+    qdrant_cache.sync_client.put.side_effect = Exception("boom")
+
+    qdrant_cache._ensure_cache_key_payload_index()
+
+    qdrant_cache.sync_client.put.assert_called_once()
+
+
 def test_qdrant_semantic_cache_get_cache_miss():
     """
     Test QDRANT semantic cache get method when there's a cache miss.

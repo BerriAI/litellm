@@ -59,7 +59,7 @@ def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
                     break
 
 
-def generate_snapshot() -> Dict[str, Dict]:
+def generate_snapshot() -> Dict[str, Dict]:  # pragma: no cover
     import importlib
 
     from fastapi.openapi.utils import get_openapi
@@ -100,7 +100,7 @@ def generate_snapshot() -> Dict[str, Dict]:
     return fragments
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     fragments = generate_snapshot()
     SNAPSHOT_FILE.write_text(json.dumps(fragments, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(f"wrote {len(fragments)} feature fragments to {SNAPSHOT_FILE}\n")
