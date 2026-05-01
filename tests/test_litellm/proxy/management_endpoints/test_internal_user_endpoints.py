@@ -2654,7 +2654,13 @@ def test_enforce_user_info_access_admin_bypass():
     _enforce_user_info_access(user_id="someone_else", user_api_key_dict=admin)
 
 
-def test_enforce_user_info_access_view_only_admin_bypass():
+def test_enforce_user_info_access_view_only_admin_blocked_from_other_users():
+    """PROXY_ADMIN_VIEW_ONLY is not a true admin for /user/info — the upstream
+    route check applies the same `user_id == valid_token.user_id` rule, so the
+    re-check here must mirror that and deny cross-user lookups."""
+    import pytest
+    from fastapi import HTTPException
+
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         _enforce_user_info_access,
@@ -2664,7 +2670,22 @@ def test_enforce_user_info_access_view_only_admin_bypass():
         user_id="viewer",
         user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
     )
-    _enforce_user_info_access(user_id="someone_else", user_api_key_dict=viewer)
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_user_info_access(user_id="someone_else", user_api_key_dict=viewer)
+    assert exc_info.value.status_code == 403
+
+
+def test_enforce_user_info_access_view_only_admin_can_read_own():
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _enforce_user_info_access,
+    )
+
+    viewer = UserAPIKeyAuth(
+        user_id="viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    _enforce_user_info_access(user_id="viewer", user_api_key_dict=viewer)
 
 
 def test_enforce_user_info_access_owner_allowed():

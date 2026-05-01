@@ -635,10 +635,11 @@ def _enforce_user_info_access(
     """
     if user_id is None:
         return
-    if user_api_key_dict.user_role in (
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    ):
+    # Only true proxy admin bypasses ownership. PROXY_ADMIN_VIEW_ONLY is
+    # subject to the same `user_id == valid_token.user_id` rule that
+    # `RouteChecks.non_proxy_admin_allowed_routes_check` applies upstream
+    # for the `/user/info` route.
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return
     if user_id == user_api_key_dict.user_id:
         return
