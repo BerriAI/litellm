@@ -850,7 +850,9 @@ async def test_health_endpoint_filters_model_list_by_user_access():
             side_effect=fake_perform,
         ),
     ):
-        await health_endpoint(user_api_key_dict=user_api_key_dict)
+        from fastapi import Response
+
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
 
     assert (
         "model_list" in captured
@@ -923,7 +925,11 @@ async def test_health_endpoint_filters_background_cache_by_user_access():
         patch("litellm.proxy.proxy_server.health_check_details", True),
         patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
     ):
-        result = await health_endpoint(user_api_key_dict=user_api_key_dict)
+        from fastapi import Response
+
+        result = await health_endpoint(
+            response=Response(), user_api_key_dict=user_api_key_dict
+        )
 
     # Sanity: the source cache had two entries before scoping; the scoping
     # step is what reduces it to one. (This guards against the test passing
@@ -946,12 +952,16 @@ async def test_health_endpoint_filters_background_cache_by_user_access():
 
 
 @pytest.mark.asyncio
-async def test_health_endpoint_admin_sees_api_base_non_admin_does_not():
+async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
     """
-    A proxy admin should still see the full ``api_base`` in the /health
-    response so they can tell which Vertex region / Azure resource is
-    healthy. A non-admin caller must not — the field should be stripped.
+    A proxy admin should still see ``api_base`` and ``api_version`` in the
+    /health response so they can tell which Vertex region / Azure resource
+    + API version is healthy. A non-admin caller must not — both fields
+    should be stripped, and the response should carry a notice header so
+    non-admin clients can detect the change programmatically.
     """
+    from fastapi import Response
+
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
 
@@ -971,6 +981,7 @@ async def test_health_endpoint_admin_sees_api_base_non_admin_does_not():
                 "model": "openai/gpt-4o",
                 "model_id": "id-a",
                 "api_base": "https://us-central1-aiplatform.googleapis.com/v1/projects/p",
+                "api_version": "2024-10-21",
             },
         ],
         "unhealthy_endpoints": [],
@@ -1002,8 +1013,14 @@ async def test_health_endpoint_admin_sees_api_base_non_admin_does_not():
     for p in common_patches:
         p.start()
     try:
-        admin_result = await health_endpoint(user_api_key_dict=admin_key)
-        non_admin_result = await health_endpoint(user_api_key_dict=non_admin_key)
+        admin_response = Response()
+        non_admin_response = Response()
+        admin_result = await health_endpoint(
+            response=admin_response, user_api_key_dict=admin_key
+        )
+        non_admin_result = await health_endpoint(
+            response=non_admin_response, user_api_key_dict=non_admin_key
+        )
     finally:
         for p in common_patches:
             p.stop()
@@ -1016,23 +1033,104 @@ async def test_health_endpoint_admin_sees_api_base_non_admin_does_not():
         admin_eps[0]["api_base"]
         == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
     ), "admin must see the full api_base so they can identify the region"
+    assert (
+        admin_eps[0]["api_version"] == "2024-10-21"
+    ), "admin must see api_version so they can distinguish provider deployments"
 
     assert len(non_admin_eps) == 1
     assert "api_base" not in non_admin_eps[0]
+    assert "api_version" not in non_admin_eps[0]
 
-    # Stripping must produce a copy — the shared cache must still carry api_base
-    # so the next admin caller can read it.
+    # Non-admin response must advertise that api_base/api_version were
+    # withheld so clients that previously parsed them can detect the change.
     assert (
-        cached_results["healthy_endpoints"][0]["api_base"]
+        non_admin_response.headers.get("Litellm-Health-Field-Notice")
+        == "api_base and api_version are admin-only on this endpoint"
+    )
+    assert "Litellm-Health-Field-Notice" not in admin_response.headers
+
+    # Stripping must produce a copy — the shared cache must still carry the
+    # routing fields so the next admin caller can read them.
+    cached_first = cached_results["healthy_endpoints"][0]
+    assert (
+        cached_first["api_base"]
         == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
     )
+    assert cached_first["api_version"] == "2024-10-21"
 
 
-def test_clean_endpoint_data_strips_credentials_but_keeps_api_base():
+@pytest.mark.asyncio
+async def test_health_endpoint_warns_when_scoped_models_lack_model_id():
     """
-    _clean_endpoint_data() drops credentials and api_version but leaves
-    api_base intact — the per-caller hide/show happens in the endpoint
-    layer based on user role, not in the cleaning helper.
+    When a scoped key's accessible models exist on the proxy but none of the
+    matching deployments expose a ``model_info.id``, the cache filter drops
+    everything. The response should include a structured ``warnings`` field
+    so the caller can distinguish "no deployments configured" from
+    "deployments excluded due to missing model_info.id".
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            # Intentionally no model_info.id — this is the misconfiguration
+            # the warnings field is meant to flag.
+            "model_info": {},
+        },
+    ]
+    cached_results = {
+        "healthy_endpoints": [
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-a",
+                "api_base": "https://example-a.test",
+            },
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-user-key",
+        models=["model-a"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ):
+        result = await health_endpoint(
+            response=Response(), user_api_key_dict=user_api_key_dict
+        )
+
+    assert result["healthy_count"] == 0
+    assert result["unhealthy_count"] == 0
+    assert "warnings" in result, (
+        "empty cache result must surface a warnings field so the caller "
+        "can distinguish 'no deployments' from 'deployments excluded'"
+    )
+    assert any("model_info.id" in w for w in result["warnings"])
+
+
+def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
+    """
+    _clean_endpoint_data() drops credentials but leaves api_base /
+    api_version intact — the per-caller hide/show happens in the endpoint
+    layer based on user role, not in the cleaning helper. This guarantees
+    proxy admins continue to see those fields in the /health response.
     """
     from litellm.proxy.health_check import _clean_endpoint_data
 
@@ -1048,5 +1146,5 @@ def test_clean_endpoint_data_strips_credentials_but_keeps_api_base():
 
     assert "api_key" not in cleaned
     assert "aws_access_key_id" not in cleaned
-    assert "api_version" not in cleaned
     assert cleaned.get("api_base") == "https://example.test/v1"
+    assert cleaned.get("api_version") == "2024-10-21"

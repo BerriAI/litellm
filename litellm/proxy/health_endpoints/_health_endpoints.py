@@ -29,6 +29,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
+    ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
     perform_health_check,
@@ -747,20 +748,22 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return role_value in _PROXY_ADMIN_ROLES
 
 
-def _strip_api_base_from_health_result(result: dict) -> dict:
+def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
     """
-    Return a copy of the /health response with ``api_base`` removed from each
-    healthy/unhealthy endpoint entry. Used to hide the underlying provider
-    URL from non-admin callers while still showing them which deployments
-    they own and whether each one is healthy.
+    Return a copy of the /health response with provider routing fields
+    (``api_base``, ``api_version``) removed from each healthy/unhealthy
+    endpoint entry. Used to hide those fields from non-admin callers while
+    still showing them which deployments they own and whether each one is
+    healthy. Proxy admins receive the unmodified result.
     """
     out = dict(result)
+    drop = set(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
     for key in ("healthy_endpoints", "unhealthy_endpoints"):
         eps = out.get(key)
         if isinstance(eps, list):
             out[key] = [
                 (
-                    {k: v for k, v in ep.items() if k != "api_base"}
+                    {k: v for k, v in ep.items() if k not in drop}
                     if isinstance(ep, dict)
                     else ep
                 )
@@ -846,6 +849,7 @@ async def _perform_health_check_and_save(
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def health_endpoint(
+    response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: Optional[str] = fastapi.Query(
         None, description="Specify the model name (optional)"
@@ -916,12 +920,17 @@ async def health_endpoint(
     is_admin = _is_proxy_admin(user_api_key_dict)
 
     def _post_process(result: dict) -> dict:
-        # api_base reveals which provider/region/internal host the deployment
-        # talks to; only proxy admins should see it. Non-admin keys still
-        # learn whether their deployments are healthy via model/model_id.
+        # api_base / api_version reveal which provider/region/internal host the
+        # deployment talks to; only proxy admins receive them. Non-admin keys
+        # still see model/model_id and the healthy/unhealthy status. We also
+        # set a header so non-admin clients that previously parsed those
+        # fields can detect the change programmatically.
         if is_admin:
             return result
-        return _strip_api_base_from_health_result(result)
+        response.headers["Litellm-Health-Field-Notice"] = (
+            "api_base and api_version are admin-only on this endpoint"
+        )
+        return _strip_admin_only_fields_from_health_result(result)
 
     try:
         if llm_model_list is None:
@@ -957,24 +966,30 @@ async def health_endpoint(
                     for m in _llm_model_list
                     if (m.get("model_info") or {}).get("id")
                 }
+                filtered = _filter_health_check_results_by_model_ids(
+                    health_check_results, allowed_model_ids
+                )
                 if not allowed_model_ids:
-                    # Caller has accessible model_names but none of the matching
-                    # deployments expose a model_info.id, so the cache filter
-                    # (which keys on model_id) cannot resolve any of them and
-                    # returns an empty result. Log so operators can spot
-                    # deployments missing model_info.id.
-                    verbose_proxy_logger.debug(
+                    # Caller has accessible model_names but none of the
+                    # matching deployments expose a model_info.id, so the
+                    # cache filter (which keys on model_id) drops every
+                    # entry. Surface this both as a warning log and a
+                    # structured "warnings" field on the response so the
+                    # caller can distinguish "no deployments found" from
+                    # "deployments excluded due to missing model_info.id".
+                    verbose_proxy_logger.warning(
                         "health_endpoint: scoped key %s has accessible models %s "
                         "but none of the matching deployments carry a model_info.id; "
                         "background health-check cache will return an empty result.",
                         user_api_key_dict.user_id,
                         list(user_api_key_dict.models),
                     )
-                return _post_process(
-                    _filter_health_check_results_by_model_ids(
-                        health_check_results, allowed_model_ids
-                    )
-                )
+                    filtered["warnings"] = [
+                        "Some accessible deployments are missing model_info.id "
+                        "and were excluded from this response. Ask a proxy admin "
+                        "to populate model_info.id for these models."
+                    ]
+                return _post_process(filtered)
             return _post_process(health_check_results)
         else:
             router_result = await _perform_health_check_and_save(
