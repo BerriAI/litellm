@@ -207,6 +207,30 @@ def _build_scim_metadata(
     return metadata
 
 
+async def _get_litellm_setting(setting_name: str, default: bool) -> bool:
+    """
+    Read a boolean flag from litellm_settings in the proxy config.
+
+    Args:
+        setting_name: The key to look up in litellm_settings.
+        default: Value returned when the key is absent or on error.
+
+    Returns:
+        The boolean value of the setting, or *default* on missing key / error.
+    """
+    try:
+        from litellm.proxy.proxy_server import proxy_config
+
+        config = await proxy_config.get_config()
+        litellm_settings = config.get("litellm_settings", {}) or {}
+        return bool(litellm_settings.get(setting_name, default))
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Error reading {setting_name} setting, defaulting to {default}: {e}"
+        )
+        return default
+
+
 async def _get_scim_upsert_user_setting() -> bool:
     """
     Get the scim_upsert_user setting from litellm_settings.
@@ -215,21 +239,21 @@ async def _get_scim_upsert_user_setting() -> bool:
         True if scim_upsert_user is not set or is True (default behavior),
         False if scim_upsert_user is explicitly set to False (SCIM 2.0 strict mode)
     """
-    try:
-        from litellm.proxy.proxy_server import proxy_config
+    return await _get_litellm_setting("scim_upsert_user", default=True)
 
-        config = await proxy_config.get_config()
-        litellm_settings = config.get("litellm_settings", {}) or {}
-        scim_upsert_user = litellm_settings.get("scim_upsert_user", True)
 
-        # Default to True if not set (backward compatibility)
-        return bool(scim_upsert_user)
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Error reading scim_upsert_user setting, defaulting to True: {e}"
-        )
-        # Default to True for backward compatibility
-        return True
+async def _get_auto_create_key_for_scim_user_setting() -> bool:
+    """
+    Get the auto_create_keys_for_scim_users setting from litellm_settings.
+
+    When True, SCIM user provisioning (POST /scim/v2/Users and group-membership
+    auto-creation) will also auto-generate an API key for the new user.
+
+    Returns:
+        False by default (backward-compatible). True only when the admin
+        explicitly opts in via litellm_settings.auto_create_keys_for_scim_users.
+    """
+    return await _get_litellm_setting("auto_create_keys_for_scim_users", default=False)
 
 
 async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionResult:
@@ -364,13 +388,15 @@ async def _create_user_if_not_exists(
         if litellm.default_internal_user_params:
             default_role = litellm.default_internal_user_params.get("user_role")
 
+        auto_create_key = await _get_auto_create_key_for_scim_user_setting()
+
         new_user_request = NewUserRequest(
             user_id=user_id,
             user_email=user_id,  # We don't have email from group membership
             user_alias=None,
             teams=[],  # Teams will be added separately
             metadata={"created_via": created_via},
-            auto_create_key=False,
+            auto_create_key=auto_create_key,
             user_role=default_role,
         )
 
@@ -871,13 +897,15 @@ async def create_user(
         if litellm.default_internal_user_params:
             default_role = litellm.default_internal_user_params.get("user_role")
 
+        auto_create_key = await _get_auto_create_key_for_scim_user_setting()
+
         new_user_request = NewUserRequest(
             user_id=user_id,
             user_email=user_data["user_email"],
             user_alias=user_data["user_alias"],
             teams=user_data["teams"],
             metadata=metadata,
-            auto_create_key=False,
+            auto_create_key=auto_create_key,
             user_role=default_role,
         )
 

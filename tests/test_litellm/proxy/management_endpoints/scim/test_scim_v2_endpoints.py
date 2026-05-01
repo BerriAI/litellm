@@ -11,6 +11,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     UserProvisionerHelpers,
+    _create_user_if_not_exists,
     _extract_group_member_ids,
     _handle_team_membership_changes,
     _process_group_patch_operations,
@@ -1601,3 +1602,170 @@ async def test_process_group_patch_operations_with_flag_false_rejects(
     assert exc_info.value.status_code == 400
     assert "does not exist" in str(exc_info.value.detail)
     assert "new-user-1" in str(exc_info.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# Tests for auto_create_keys_for_scim_users setting
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_user_auto_create_key_false_by_default(mocker, monkeypatch):
+    """
+    When auto_create_keys_for_scim_users is not set (default), SCIM user
+    creation should pass auto_create_key=False to new_user.
+    """
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="scim-nokey-user",
+        name=SCIMUserName(familyName="User", givenName="NoKey"),
+        emails=[SCIMUserEmail(value="nokey@example.com")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+
+    async def mock_get_config():
+        return {"litellm_settings": {}}
+
+    from litellm.proxy.proxy_server import proxy_config
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="scim-nokey-user")),
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await create_user(user=scim_user)
+
+    called_args = new_user_mock.call_args.kwargs["data"]
+    assert called_args.auto_create_key is False
+
+
+@pytest.mark.asyncio
+async def test_create_user_auto_create_key_true_when_enabled(mocker, monkeypatch):
+    """
+    When auto_create_keys_for_scim_users is True, SCIM user creation
+    should pass auto_create_key=True to new_user.
+    """
+
+    scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        userName="scim-key-user",
+        name=SCIMUserName(familyName="User", givenName="WithKey"),
+        emails=[SCIMUserEmail(value="withkey@example.com")],
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+
+    async def mock_get_config():
+        return {"litellm_settings": {"auto_create_keys_for_scim_users": True}}
+
+    from litellm.proxy.proxy_server import proxy_config
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="scim-key-user")),
+    )
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=scim_user),
+    )
+
+    await create_user(user=scim_user)
+
+    called_args = new_user_mock.call_args.kwargs["data"]
+    assert called_args.auto_create_key is True
+
+
+@pytest.mark.asyncio
+async def test_create_user_if_not_exists_auto_create_key_false_by_default(
+    mocker, monkeypatch
+):
+    """
+    _create_user_if_not_exists should pass auto_create_key=False when
+    auto_create_keys_for_scim_users is not set (default).
+    """
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    async def mock_get_config():
+        return {"litellm_settings": {}}
+
+    from litellm.proxy.proxy_server import proxy_config
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="group-user")),
+    )
+
+    result = await _create_user_if_not_exists(
+        user_id="group-user", created_via="scim_group_membership"
+    )
+
+    assert result is not None
+    called_args = new_user_mock.call_args.kwargs["data"]
+    assert called_args.auto_create_key is False
+
+
+@pytest.mark.asyncio
+async def test_create_user_if_not_exists_auto_create_key_true_when_enabled(
+    mocker, monkeypatch
+):
+    """
+    _create_user_if_not_exists should pass auto_create_key=True when
+    auto_create_keys_for_scim_users is True.
+    """
+    monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
+
+    async def mock_get_config():
+        return {"litellm_settings": {"auto_create_keys_for_scim_users": True}}
+
+    from litellm.proxy.proxy_server import proxy_config
+
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    new_user_mock = mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.new_user",
+        AsyncMock(return_value=NewUserRequest(user_id="group-user-key")),
+    )
+
+    result = await _create_user_if_not_exists(
+        user_id="group-user-key", created_via="scim_group_membership"
+    )
+
+    assert result is not None
+    called_args = new_user_mock.call_args.kwargs["data"]
+    assert called_args.auto_create_key is True
