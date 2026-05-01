@@ -814,6 +814,28 @@ class TestHookHeaderMergePriority:
 
         assert headers == {"X-TOKEN": "request-token"}
 
+    def test_gateway_openapi_request_headers_match_manager_builder(self):
+        """Gateway OpenAPI execution uses the shared runtime header builder."""
+        manager = MCPServerManager()
+        server = self._make_server(extra_headers_config=["X-TOKEN", "X-Trace"])
+
+        manager_headers = manager._build_openapi_request_extra_headers(
+            mcp_server=server,
+            oauth2_headers={"Authorization": "Bearer oauth-token"},
+            raw_headers={"x-token": "request-token", "x-trace": "trace-from-request"},
+            hook_extra_headers=None,
+        )
+        gateway_headers = mcp_server_module._get_request_extra_headers_for_openapi_tool(
+            server=server,
+            oauth2_headers={"Authorization": "Bearer oauth-token"},
+            raw_headers={
+                "x-token": "request-token",
+                "x-trace": "trace-from-request",
+            },
+        )
+
+        assert gateway_headers == manager_headers
+
 
 class TestOpenAPIRequestContext:
     """Tests for request-scoped headers on OpenAPI-generated MCP tools."""

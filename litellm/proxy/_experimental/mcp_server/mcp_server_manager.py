@@ -51,6 +51,7 @@ from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mc
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     add_server_prefix_to_name,
+    build_mcp_runtime_extra_headers,
     compute_short_server_prefix,
     get_server_prefix,
     is_short_mcp_tool_prefix_enabled,
@@ -2522,34 +2523,16 @@ class MCPServerManager:
         server_auth_header: Optional[Union[Dict[str, str], str]],
     ) -> Optional[Dict[str, str]]:
         """Build outbound headers shared by MCP transports and OpenAPI handlers."""
-        extra_headers: Dict[str, str] = {}
-
-        if oauth2_headers:
-            extra_headers.update(oauth2_headers)
-
-        if mcp_server.extra_headers and raw_headers:
-            normalized_raw_headers = {
-                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
-            }
-            for header in mcp_server.extra_headers:
-                if not isinstance(header, str):
-                    continue
-                if (
-                    mcp_server.has_client_credentials
-                    and header.lower() == "authorization"
-                ):
-                    continue
-                header_value = normalized_raw_headers.get(header.lower())
-                if header_value is None:
-                    continue
-                extra_headers[header] = header_value
-
-        if include_static_headers and mcp_server.static_headers:
-            extra_headers.update(mcp_server.static_headers)
+        extra_headers = build_mcp_runtime_extra_headers(
+            server=mcp_server,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            include_static_headers=include_static_headers,
+        )
 
         if hook_extra_headers:
             if "Authorization" in hook_extra_headers:
-                if "Authorization" in extra_headers:
+                if extra_headers and "Authorization" in extra_headers:
                     verbose_logger.warning(
                         "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
                         "the existing Authorization header from static_headers or oauth2_headers. "
@@ -2568,9 +2551,11 @@ class MCPServerManager:
                         "the hook JWT to be the sole credential.",
                         mcp_server.server_name or mcp_server.name,
                     )
+            if extra_headers is None:
+                extra_headers = {}
             extra_headers.update(hook_extra_headers)
 
-        return extra_headers or None
+        return extra_headers
 
     async def _call_regular_mcp_tool(  # noqa: PLR0915
         self,

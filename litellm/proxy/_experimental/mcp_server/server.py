@@ -48,6 +48,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
     add_server_prefix_to_name,
+    build_mcp_runtime_extra_headers,
     get_server_prefix,
     iter_known_server_prefixes,
 )
@@ -1157,25 +1158,15 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]],
     ) -> Optional[Dict[str, str]]:
         """Build per-request headers for a local OpenAPI-generated MCP tool."""
-        extra_headers = oauth2_headers.copy() if oauth2_headers else None
+        if server is None:
+            return oauth2_headers.copy() if oauth2_headers else None
 
-        if server and server.extra_headers and raw_headers:
-            if extra_headers is None:
-                extra_headers = {}
-
-            normalized_raw_headers = {
-                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
-            }
-
-            for header in server.extra_headers:
-                if not isinstance(header, str):
-                    continue
-                header_value = normalized_raw_headers.get(header.lower())
-                if header_value is None:
-                    continue
-                extra_headers[header] = header_value
-
-        return extra_headers
+        return build_mcp_runtime_extra_headers(
+            server=server,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            include_static_headers=False,
+        )
 
     def _merge_gateway_initialize_instructions(
         allowed_mcp_servers: List[MCPServer],
