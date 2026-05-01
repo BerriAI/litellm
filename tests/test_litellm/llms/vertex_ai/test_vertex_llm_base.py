@@ -1,17 +1,14 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm.llms.vertex_ai.vertex_ai_aws_wif import VertexAIAwsWifAuth
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
@@ -71,7 +68,7 @@ class TestVertexBase:
                     project_id="different-project",
                     custom_llm_provider="vertex_ai",
                 )
-            print(f"result: {result}")
+            assert result == ("fake-token-1", "project-1")
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
     @pytest.mark.asyncio
