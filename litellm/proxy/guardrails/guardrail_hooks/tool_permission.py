@@ -606,10 +606,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
                     getattr(choice.message, "function_call", None), choice_index
                 )
                 if legacy_tool_call is not None:
-                    error_result = error_results.get(legacy_tool_call.id)
-                    if error_result is not None:
+                    legacy_error_result = error_results.get(legacy_tool_call.id)
+                    if legacy_error_result is not None:
                         choice.message.function_call = None
-                        error_messages.append(error_result.content)
+                        error_messages.append(legacy_error_result.content)
 
                 # Add error messages to content
                 if error_messages:
