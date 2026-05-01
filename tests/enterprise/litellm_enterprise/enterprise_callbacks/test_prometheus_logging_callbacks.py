@@ -289,11 +289,10 @@ async def test_increment_remaining_budget_metrics(prometheus_logger):
     future_reset_time_team = datetime.now() + timedelta(hours=10)
     future_reset_time_key = datetime.now() + timedelta(hours=12)
     # Mock the get_team_object and get_key_object functions to return objects with budget reset times
-    with patch(
-        "litellm.proxy.auth.auth_checks.get_team_object"
-    ) as mock_get_team, patch(
-        "litellm.proxy.auth.auth_checks.get_key_object"
-    ) as mock_get_key:
+    with (
+        patch("litellm.proxy.auth.auth_checks.get_team_object") as mock_get_team,
+        patch("litellm.proxy.auth.auth_checks.get_key_object") as mock_get_key,
+    ):
         mock_get_team.return_value = MagicMock(budget_reset_at=future_reset_time_team)
         mock_get_key.return_value = MagicMock(budget_reset_at=future_reset_time_key)
 
@@ -730,6 +729,51 @@ async def test_async_log_failure_event(prometheus_logger):
         ), f"Label {key}: expected {expected_val!r}, got {actual_total_labels[key]!r}"
     assert actual_total_labels.get("client_ip") == "127.0.0.1"
     prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_async_log_failure_event_litellm_side_rate_limit(prometheus_logger):
+    """LiteLLM-side reject (no deployment picked) routes the requested model
+    into `requested_model` and skips the partial-outage flag."""
+    standard_logging_object = create_standard_logging_payload()
+    standard_logging_object["model_id"] = ""
+    standard_logging_object["model_group"] = ""
+    standard_logging_object["api_base"] = ""
+
+    rate_limit_exc = Exception("LiteLLM rate limit exceeded")
+    rate_limit_exc.status_code = 429
+    kwargs = {
+        "model": "us/azure/openai/gpt-5-mini",
+        "litellm_params": {},
+        "start_time": datetime.now(),
+        "completion_start_time": datetime.now(),
+        "api_call_start_time": datetime.now(),
+        "end_time": datetime.now() + timedelta(seconds=1),
+        "standard_logging_object": standard_logging_object,
+        "exception": rate_limit_exc,
+    }
+
+    prometheus_logger.litellm_llm_api_failed_requests_metric = MagicMock()
+    prometheus_logger.litellm_deployment_failure_responses = MagicMock()
+    prometheus_logger.litellm_deployment_total_requests = MagicMock()
+    prometheus_logger.set_deployment_partial_outage = MagicMock()
+
+    await prometheus_logger.async_log_failure_event(
+        kwargs, MagicMock(), kwargs["start_time"], kwargs["end_time"]
+    )
+
+    prometheus_logger.set_deployment_partial_outage.assert_not_called()
+
+    prometheus_logger.litellm_deployment_failure_responses.labels.assert_called_once()
+    actual_failure_labels = (
+        prometheus_logger.litellm_deployment_failure_responses.labels.call_args.kwargs
+    )
+    assert actual_failure_labels["requested_model"] == "us/azure/openai/gpt-5-mini"
+    assert actual_failure_labels["litellm_model_name"] == ""
+    assert actual_failure_labels["model_id"] == ""
+    assert actual_failure_labels["api_base"] == ""
+    assert actual_failure_labels["api_provider"] == ""
+    assert actual_failure_labels["exception_status"] == "429"
 
 
 @pytest.mark.asyncio
@@ -1518,9 +1562,12 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+        ) as mock_get_teams,
+    ):
         # Create mock team data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         mock_teams = [
@@ -1613,11 +1660,15 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function to raise an exception
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
-    ) as mock_get_teams, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
-    ) as mock_list_keys:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
+        ) as mock_get_teams,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+        ) as mock_list_keys,
+    ):
         # Make get_paginated_teams raise an exception
         mock_get_teams.side_effect = Exception("Database error")
         mock_list_keys.side_effect = Exception("Key listing error")
@@ -1636,9 +1687,7 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
 
         # Mock litellm_organizationtable to raise an exception for org budget metrics
         mock_orgtable = MagicMock()
-        mock_orgtable.find_many = MagicMock(
-            side_effect=Exception("Org database error")
-        )
+        mock_orgtable.find_many = MagicMock(side_effect=Exception("Org database error"))
         mock_orgtable.count = MagicMock(side_effect=Exception("Org count error"))
 
         mock_db = MagicMock()
@@ -1699,9 +1748,12 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and _list_key_helper function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
-        "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
-    ) as mock_list_keys:
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
+        ) as mock_list_keys,
+    ):
         # Create mock key data with proper datetime objects for budget_reset_at
         future_reset = datetime.now() + timedelta(hours=24)  # Reset 24 hours from now
         key1 = UserAPIKeyAuth(
