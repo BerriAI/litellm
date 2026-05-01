@@ -10,6 +10,7 @@ See: https://datatracker.ietf.org/doc/html/rfc8693
 
 import asyncio
 import hashlib
+import weakref
 from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 import httpx
@@ -46,10 +47,18 @@ class TokenExchangeHandler:
             max_size_in_memory=MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE,
             default_ttl=MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL,
         )
-        self._locks: Dict[str, asyncio.Lock] = {}
+        # WeakValueDictionary so locks are GC'd once no coroutine holds a reference,
+        # preventing unbounded growth with many rotating user tokens.
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
 
     def _get_lock(self, cache_key: str) -> asyncio.Lock:
-        return self._locks.setdefault(cache_key, asyncio.Lock())
+        lock = self._locks.get(cache_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[cache_key] = lock
+        return lock
 
     @staticmethod
     def _cache_key(subject_token: str, server_id: str) -> str:
@@ -131,10 +140,15 @@ class TokenExchangeHandler:
             response = await client.post(endpoint, data=data)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            verbose_logger.debug(
+                "Token exchange IDP error for MCP server %s (status %d): %s",
+                server.server_id,
+                exc.response.status_code,
+                exc.response.text,
+            )
             raise ValueError(
                 f"Token exchange for MCP server '{server.server_id}' "
-                f"failed with status {exc.response.status_code}: "
-                f"{exc.response.text}"
+                f"failed with status {exc.response.status_code}"
             ) from exc
 
         body = response.json()
