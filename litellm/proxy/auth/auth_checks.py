@@ -2348,7 +2348,7 @@ async def get_key_object(
         model_type=UserAPIKeyAuth,
     )
     if user_api_key_auth is not None:
-        return user_api_key_auth
+        return user_api_key_auth.model_copy(deep=True)
 
     if check_cache_only:
         raise Exception(
@@ -2398,7 +2398,7 @@ async def get_key_object(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    return _response
+    return _response.model_copy(deep=True)
 
 
 @log_db_metrics
