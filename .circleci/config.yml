@@ -1470,15 +1470,13 @@ jobs:
               -e ANTHROPIC_BASE_URL="http://localhost:4000" \
               -e ANTHROPIC_AUTH_TOKEN="sk-1234" \
               litellm-claude-code:ci \
-              claude -p hello --model gpt-3.5-turbo-end-user-test 2>&1)
+              claude -p "Reply with exactly: gateway-ok" --model gpt-3.5-turbo-end-user-test 2>&1)
             EXIT_CODE=$?
             set -e
 
             echo "$OUTPUT"
 
-            NORMALIZED_OUTPUT="$(printf '%s' "$OUTPUT" | tr -d '\r\n\t ')"
-            
-            if [ "$EXIT_CODE" -eq 0 ] && [ -n "$NORMALIZED_OUTPUT" ]; then
+            if [ "$EXIT_CODE" -eq 0 ] && [ "$(printf '%s' "$OUTPUT" | tr -d '\r\n')" = "gateway-ok" ]; then
               cat > test-results/junit.xml \<<EOF
             <testsuite name="claude_code_gateway_e2e" tests="1" failures="0">
               <testcase classname="claude_code_gateway_e2e" name="claude_code_can_call_litellm_gateway"/>

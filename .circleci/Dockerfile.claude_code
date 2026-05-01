@@ -1,5 +1,7 @@
 FROM node:22-slim
 
-RUN npm install -g @anthropic-ai/claude-code@2.1.121
+RUN apt-get update && apt-get install -y git ca-certificates \
+  && npm install -g @anthropic-ai/claude-code@2.1.121 \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
