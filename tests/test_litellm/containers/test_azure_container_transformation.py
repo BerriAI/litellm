@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.abspath("../../../"))
 import litellm
 from litellm.llms.azure.containers.transformation import AzureContainerConfig
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import (
     ContainerFileListResponse,
     ContainerListResponse,
@@ -323,6 +324,29 @@ class TestAzureContainerConfig:
         assert url_fc == expected_fc
         assert url_fc.index("/content") < url_fc.index("?")
 
+    def test_transform_requests_encode_path_ids_before_query_string(self):
+        from litellm.types.router import GenericLiteLLMParams
+
+        api_base = (
+            "https://my-resource.openai.azure.com/openai/v1/containers"
+            "?api-version=v1"
+        )
+
+        url, _ = self.config.transform_container_file_content_request(
+            container_id="../../other",
+            file_id="file?download=1#frag",
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        expected_url = (
+            "https://my-resource.openai.azure.com/openai/v1/containers/"
+            "..%2F..%2Fother/files/file%3Fdownload%3D1%23frag/content"
+            "?api-version=v1"
+        )
+        assert url == expected_url
+
     def test_provider_config_manager_returns_azure_config(self):
         from litellm.types.utils import LlmProviders
         from litellm.utils import ProviderConfigManager
@@ -518,3 +542,206 @@ class TestAzureContainerKnownFailureRegressions:
         c2 = _get_container_provider_config("azure_text")
         assert type(c1) is type(c2)
         assert isinstance(c1, AzureContainerConfig)
+
+    @pytest.mark.asyncio
+    async def test_proxy_process_request_preserves_managed_container_id(
+        self, monkeypatch
+    ):
+        from starlette.requests import Request
+
+        from litellm.proxy.container_endpoints import handler_factory
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="model_abc123",
+            container_id="cntr_123",
+        )
+        captured = {}
+
+        async def _mock_base_process_llm_request(
+            self,
+            request,
+            fastapi_response,
+            user_api_key_dict,
+            route_type,
+            **kwargs,
+        ):
+            captured["data"] = self.data
+            captured["route_type"] = route_type
+            return {"id": "cfile_abc"}
+
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        monkeypatch.setattr(
+            ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            _mock_base_process_llm_request,
+        )
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/v1/containers/id/files/id/content",
+                "headers": [],
+                "query_string": b"",
+            }
+        )
+        fastapi_response = MagicMock()
+
+        await handler_factory._process_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=MagicMock(),
+            route_type="alist_container_files",
+            path_params={"container_id": encoded_id},
+        )
+
+        assert captured["route_type"] == "alist_container_files"
+        assert captured["data"]["container_id"] == encoded_id
+        assert captured["data"]["custom_llm_provider"] == "openai"
+        assert "model_id" not in captured["data"]
+        assert "api_base" not in captured["data"]
+
+    @pytest.mark.asyncio
+    async def test_regression_binary_file_request_routes_through_proxy_processor(
+        self, monkeypatch
+    ):
+        from fastapi import Response
+        from starlette.requests import Request
+
+        from litellm.proxy.container_endpoints import handler_factory
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="model_abc123",
+            container_id="cntr_123",
+        )
+        captured = {}
+
+        async def _mock_base_process_llm_request(
+            self,
+            request,
+            fastapi_response,
+            user_api_key_dict,
+            route_type,
+            **kwargs,
+        ):
+            captured["data"] = self.data
+            captured["route_type"] = route_type
+            fastapi_response.headers["x-litellm-call-id"] = "call-123"
+            return b"csv-bytes"
+
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        monkeypatch.setattr(
+            ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            _mock_base_process_llm_request,
+        )
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/v1/containers/id/files/id/content",
+                "headers": [],
+                "query_string": b"",
+            }
+        )
+        fastapi_response = Response()
+
+        response = await handler_factory._process_binary_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            container_id=encoded_id,
+            file_id="cfile_abc",
+            user_api_key_dict=MagicMock(),
+        )
+
+        assert captured["route_type"] == "aretrieve_container_file_content"
+        assert captured["data"]["container_id"] == encoded_id
+        assert captured["data"]["file_id"] == "cfile_abc"
+        assert captured["data"]["custom_llm_provider"] == "openai"
+        assert response.status_code == 200
+        assert response.body == b"csv-bytes"
+        assert response.headers["x-litellm-call-id"] == "call-123"
+
+    @pytest.mark.asyncio
+    async def test_regression_multipart_upload_request_uses_provider_from_managed_id(
+        self, monkeypatch
+    ):
+        from starlette.requests import Request
+
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+        from litellm.proxy.common_utils import http_parsing_utils
+        from litellm.proxy.container_endpoints import handler_factory
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="model_abc123",
+            container_id="cntr_123",
+        )
+        captured = {}
+
+        async def _mock_get_form_data(request):
+            return {"file": "ignored"}
+
+        async def _mock_convert_upload_files_to_file_data(form_data):
+            return {"file": [("data.csv", b"csv-bytes", "text/csv")]}
+
+        async def _mock_base_process_llm_request(
+            self,
+            request,
+            fastapi_response,
+            user_api_key_dict,
+            route_type,
+            **kwargs,
+        ):
+            captured["data"] = self.data
+            captured["route_type"] = route_type
+            return {"id": "cfile_abc"}
+
+        monkeypatch.setattr(
+            http_parsing_utils,
+            "get_form_data",
+            _mock_get_form_data,
+        )
+        monkeypatch.setattr(
+            http_parsing_utils,
+            "convert_upload_files_to_file_data",
+            _mock_convert_upload_files_to_file_data,
+        )
+        monkeypatch.setattr(
+            ProxyBaseLLMRequestProcessing,
+            "base_process_llm_request",
+            _mock_base_process_llm_request,
+        )
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/v1/containers/id/files",
+                "headers": [],
+                "query_string": b"",
+            }
+        )
+
+        await handler_factory._process_multipart_upload_request(
+            request=request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=MagicMock(),
+            route_type="aupload_container_file",
+            container_id=encoded_id,
+        )
+
+        assert captured["route_type"] == "aupload_container_file"
+        assert captured["data"]["container_id"] == encoded_id
+        assert captured["data"]["custom_llm_provider"] == "openai"

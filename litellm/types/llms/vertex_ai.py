@@ -6,6 +6,13 @@ from typing_extensions import (
     TypedDict,
 )
 
+from litellm.types.llms.openai import EmbeddingInput
+
+# Gemini supports nested-list inputs (e.g. [["text", "image"]]) as an explicit
+# opt-in for combined embeddings — a provider-specific extension of the
+# OpenAI-faithful EmbeddingInput shape.
+GeminiEmbeddingInput = Union[EmbeddingInput, List[List[str]]]
+
 
 class FunctionResponse(TypedDict):
     name: str
@@ -515,8 +522,9 @@ class Instance(TypedDict, total=False):
     video: InstanceVideo
 
 
-class VertexMultimodalEmbeddingRequest(TypedDict):
-    instances: List[Instance]
+class VertexMultimodalEmbeddingRequest(TypedDict, total=False):
+    instances: Required[List[Instance]]
+    parameters: dict
 
 
 class VideoEmbedding(TypedDict):

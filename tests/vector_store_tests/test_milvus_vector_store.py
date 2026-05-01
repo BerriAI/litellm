@@ -310,6 +310,139 @@ class TestMilvusVectorStore:
                     assert result["attributes"]["book_id"] == expected["book_id"]  # type: ignore
                     assert "book_intro_text" not in result["attributes"]  # type: ignore  # Should be in content, not attributes
 
+    def _extract_request_body(self, mock_post):
+        call_args = mock_post.call_args
+        request_data_str = call_args.kwargs.get("data")
+        if request_data_str:
+            return json.loads(request_data_str)
+        request_data = call_args.kwargs.get("json")
+        if (
+            request_data is None
+            and len(call_args.args) > 0
+            and isinstance(call_args.args[0], dict)
+        ):
+            request_data = call_args.args[0]
+        return request_data
+
+    def test_user_supplied_db_and_partition_are_dropped(self):
+        """User-supplied dbName / partitionNames must not be forwarded to Milvus."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = MOCK_MILVUS_SEARCH_RESPONSE
+        mock_response.text = json.dumps(MOCK_MILVUS_SEARCH_RESPONSE)
+
+        with patch("litellm.embedding") as mock_embedding:
+            mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
+
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+            ) as mock_post:
+                mock_post.return_value = mock_response
+
+                vector_store_search(
+                    query="what is machine learning?",
+                    vector_store_id="book_2",
+                    custom_llm_provider="milvus",
+                    api_base="https://in03-test.serverless.aws-eu-central-1.cloud.zilliz.com",
+                    api_key="mock_milvus_api_key",
+                    litellm_embedding_model="text-embedding-3-large",
+                    litellm_embedding_config={
+                        "api_key": "mock_openai_api_key",
+                    },
+                    outputFields=["book_intro_text"],
+                    annsField="book_intro_vector",
+                    milvus_text_field="book_intro_text",
+                    dbName="other_tenant_db",
+                    partitionNames=["other_tenant_partition"],
+                )
+
+                mock_post.assert_called_once()
+                request_data = self._extract_request_body(mock_post)
+                assert request_data is not None
+                assert "dbName" not in request_data
+                assert "partitionNames" not in request_data
+                assert request_data["collectionName"] == "book_2"
+                assert request_data["annsField"] == "book_intro_vector"
+                assert request_data["outputFields"] == ["book_intro_text"]
+
+    def test_backend_configured_db_and_partition_are_forwarded(self):
+        """milvus_db_name / milvus_partition_names from litellm_params must be sent."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = MOCK_MILVUS_SEARCH_RESPONSE
+        mock_response.text = json.dumps(MOCK_MILVUS_SEARCH_RESPONSE)
+
+        with patch("litellm.embedding") as mock_embedding:
+            mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
+
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+            ) as mock_post:
+                mock_post.return_value = mock_response
+
+                vector_store_search(
+                    query="what is machine learning?",
+                    vector_store_id="book_2",
+                    custom_llm_provider="milvus",
+                    api_base="https://in03-test.serverless.aws-eu-central-1.cloud.zilliz.com",
+                    api_key="mock_milvus_api_key",
+                    litellm_embedding_model="text-embedding-3-large",
+                    litellm_embedding_config={
+                        "api_key": "mock_openai_api_key",
+                    },
+                    outputFields=["book_intro_text"],
+                    annsField="book_intro_vector",
+                    milvus_text_field="book_intro_text",
+                    milvus_db_name="tenant_a_db",
+                    milvus_partition_names=["tenant_a_partition"],
+                )
+
+                mock_post.assert_called_once()
+                request_data = self._extract_request_body(mock_post)
+                assert request_data is not None
+                assert request_data["dbName"] == "tenant_a_db"
+                assert request_data["partitionNames"] == ["tenant_a_partition"]
+
+    def test_user_params_cannot_override_backend_db_and_partition(self):
+        """Backend-config dbName/partitionNames must win over user-supplied values."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = MOCK_MILVUS_SEARCH_RESPONSE
+        mock_response.text = json.dumps(MOCK_MILVUS_SEARCH_RESPONSE)
+
+        with patch("litellm.embedding") as mock_embedding:
+            mock_embedding.return_value = MOCK_EMBEDDING_RESPONSE
+
+            with patch(
+                "litellm.llms.custom_httpx.http_handler.HTTPHandler.post"
+            ) as mock_post:
+                mock_post.return_value = mock_response
+
+                vector_store_search(
+                    query="what is machine learning?",
+                    vector_store_id="book_2",
+                    custom_llm_provider="milvus",
+                    api_base="https://in03-test.serverless.aws-eu-central-1.cloud.zilliz.com",
+                    api_key="mock_milvus_api_key",
+                    litellm_embedding_model="text-embedding-3-large",
+                    litellm_embedding_config={
+                        "api_key": "mock_openai_api_key",
+                    },
+                    outputFields=["book_intro_text"],
+                    annsField="book_intro_vector",
+                    milvus_text_field="book_intro_text",
+                    milvus_db_name="tenant_a_db",
+                    milvus_partition_names=["tenant_a_partition"],
+                    dbName="other_tenant_db",
+                    partitionNames=["other_tenant_partition"],
+                )
+
+                mock_post.assert_called_once()
+                request_data = self._extract_request_body(mock_post)
+                assert request_data is not None
+                assert request_data["dbName"] == "tenant_a_db"
+                assert request_data["partitionNames"] == ["tenant_a_partition"]
+
 
 # @pytest.mark.parametrize("sync_mode", [True, False])
 # @pytest.mark.asyncio

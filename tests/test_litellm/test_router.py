@@ -1078,6 +1078,69 @@ def test_cached_get_model_group_info():
     assert result5 is result6
 
 
+def test_model_group_info_cost_from_db_model_info():
+    """
+    When get_deployment_model_info fails (model_info is None fallback),
+    input_cost_per_token and output_cost_per_token should be read from db model_info.
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model",
+                "litellm_params": {
+                    "model": "openai/my-custom-model",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {
+                    "input_cost_per_token": 0.0001,
+                    "output_cost_per_token": 0.0002,
+                },
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-custom-model")
+        assert result is not None
+        assert result.input_cost_per_token == 0.0001
+        assert result.output_cost_per_token == 0.0002
+
+
+def test_model_group_info_cost_none_when_db_model_info_has_no_cost():
+    """
+    When get_deployment_model_info fails and db model_info has no cost fields,
+    input/output_cost_per_token should be None.
+    """
+    from unittest.mock import patch
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "my-custom-model-no-cost",
+                "litellm_params": {
+                    "model": "openai/my-custom-model-no-cost",
+                    "api_key": "fake",
+                    "api_base": "https://my-custom-endpoint.com",
+                },
+                "model_info": {},
+            },
+        ]
+    )
+
+    with patch.object(
+        router, "get_deployment_model_info", side_effect=Exception("not found")
+    ):
+        result = router._cached_get_model_group_info("my-custom-model-no-cost")
+        assert result is not None
+        assert result.input_cost_per_token is None
+        assert result.output_cost_per_token is None
+
+
 def test_get_model_access_groups_caching():
     """
     Test that get_model_access_groups caches the no-args result
