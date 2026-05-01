@@ -3719,69 +3719,6 @@ def test_build_anthropic_tool_name_maps_three_way_collision():
     assert reverse == {"foo_bar_2": "foo/bar", "foo_bar_3": "foo.bar"}
 
 
-def test_map_tools_sanitizes_function_tool_name():
-    """``_map_tools`` does NOT sanitize on its own (sanitization happens in
-    ``transform_request``). When given a forward map, it applies it; when not,
-    it passes names through. This test pins the explicit-map behavior."""
-    import re as _re
-
-    config = AnthropicConfig()
-    bad_name = "github_openapi_mcp-actions/download-job-logs-for-workflow-run"
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": bad_name,
-                "description": "desc",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"x": {"type": "string"}},
-                },
-            },
-        }
-    ]
-    forward, _ = config._build_request_tool_name_maps(tools)
-
-    anthropic_tools, _ = config._map_tools(tools, name_forward_map=forward)
-
-    assert len(anthropic_tools) == 1
-    sent_name = anthropic_tools[0]["name"]
-    assert _re.fullmatch(
-        r"[a-zA-Z0-9_-]{1,128}", sent_name
-    ), f"sanitized name {sent_name!r} still violates Anthropic's regex"
-    assert sent_name == "github_openapi_mcp-actions_download-job-logs-for-workflow-run"
-
-
-def test_map_tool_choice_sanitizes_named_tool():
-    config = AnthropicConfig()
-    forward = {
-        "actions/download-job-logs-for-workflow-run": (
-            "actions_download-job-logs-for-workflow-run"
-        )
-    }
-    tool_choice = {
-        "type": "function",
-        "function": {"name": "actions/download-job-logs-for-workflow-run"},
-    }
-    out = config._map_tool_choice(
-        tool_choice=tool_choice, parallel_tool_use=None, name_forward_map=forward
-    )
-    assert out is not None
-    assert out["type"] == "tool"
-    assert out["name"] == "actions_download-job-logs-for-workflow-run"
-
-
-def test_map_tool_choice_no_forward_map_passes_through_valid_name():
-    """tool_choice with an already-valid name and no map -> unchanged."""
-    config = AnthropicConfig()
-    tool_choice = {"type": "function", "function": {"name": "plain_tool"}}
-    out = config._map_tool_choice(
-        tool_choice=tool_choice, parallel_tool_use=None, name_forward_map=None
-    )
-    assert out is not None
-    assert out["name"] == "plain_tool"
-
-
 def test_map_openai_params_does_not_pollute_optional_params_with_internal_keys():
     """REGRESSION: ``optional_params`` is what becomes the JSON body sent to
     Anthropic (``data = {**optional_params}``). It MUST NOT carry LiteLLM-
@@ -3913,6 +3850,60 @@ def test_rewrite_tool_names_in_messages_leaves_unmapped_names_alone():
     assert out[0]["tool_calls"][0]["function"]["name"] == "foo_bar"
     # input list must not be mutated either way
     assert messages[0]["tool_calls"][0]["function"]["name"] == "foo_bar"
+
+
+def test_rewrite_tool_names_in_messages_with_tool_calls_and_none_function_call():
+    """When a message has tool_calls but function_call is explicitly None,
+    the rewrite must still apply to tool_calls and leave function_call as
+    None. Pins behavior at the boundary where ``new_msg = dict(msg)``
+    copies the explicit-None key forward."""
+    config = AnthropicConfig()
+    forward_map = {"foo/bar": "foo_bar"}
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "foo/bar", "arguments": "{}"},
+                }
+            ],
+            "function_call": None,
+        },
+    ]
+    out = config._rewrite_tool_names_in_messages(messages, forward_map)
+    assert out[0]["tool_calls"][0]["function"]["name"] == "foo_bar"
+    assert out[0]["function_call"] is None
+    # input list must not be mutated
+    assert messages[0]["tool_calls"][0]["function"]["name"] == "foo/bar"
+
+
+def test_sanitize_tool_names_in_request_does_not_mutate_caller_tool_dicts():
+    """REGRESSION: a caller reusing the same tool list/dicts across requests
+    must not see its inputs permanently rewritten. _sanitize_tool_names_in_request
+    builds a new list with copy-on-change entries."""
+    config = AnthropicConfig()
+    original_name = "actions/download-job-logs-for-workflow-run"
+    caller_tool = {
+        "type": "custom",
+        "name": original_name,
+        "input_schema": {"type": "object", "properties": {}},
+    }
+    caller_tools = [caller_tool]
+    optional_params: dict = {"tools": caller_tools}
+
+    forward, reverse = config._sanitize_tool_names_in_request(
+        optional_params=optional_params
+    )
+
+    assert forward.get(original_name)
+    sanitized = forward[original_name]
+    assert optional_params["tools"][0]["name"] == sanitized
+    # caller's original dict + list must not be touched
+    assert caller_tool["name"] == original_name
+    assert caller_tools[0] is caller_tool
 
 
 def test_transform_parsed_response_reverse_maps_tool_names():

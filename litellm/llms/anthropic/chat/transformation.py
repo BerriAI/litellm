@@ -186,17 +186,6 @@ def _build_anthropic_tool_name_maps(
     return forward, reverse
 
 
-def _apply_anthropic_tool_name_forward(
-    name: str, forward: Optional[Dict[str, str]]
-) -> str:
-    """Look up `name` in the forward map; return as-is if absent."""
-    if not isinstance(name, str) or not name:
-        return name
-    if forward and name in forward:
-        return forward[name]
-    return name
-
-
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -486,7 +475,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         tool_choice: Optional[str],
         parallel_tool_use: Optional[bool],
-        name_forward_map: Optional[Dict[str, str]] = None,
     ) -> Optional[AnthropicMessagesToolChoice]:
         _tool_choice: Optional[AnthropicMessagesToolChoice] = None
         if tool_choice == "auto":
@@ -510,12 +498,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _tool_name = tool_choice.get("function", {}).get("name")
                 if _tool_name is not None:
                     _tool_choice = AnthropicMessagesToolChoice(type="tool")
-                    # Apply the per-request forward map. If the original
-                    # name was already valid (and thus not in the map),
-                    # this is a no-op pass-through.
-                    _tool_choice["name"] = _apply_anthropic_tool_name_forward(
-                        _tool_name, name_forward_map
-                    )
+                    _tool_choice["name"] = _tool_name
 
         if parallel_tool_use is not None:
             # Anthropic uses 'disable_parallel_tool_use' flag to determine if parallel tool use is allowed
@@ -534,7 +517,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_tool_helper(  # noqa: PLR0915
         self,
         tool: ChatCompletionToolParam,
-        name_forward_map: Optional[Dict[str, str]] = None,
     ) -> Tuple[Optional[AllAnthropicToolsValues], Optional[AnthropicMcpServerTool]]:
         returned_tool: Optional[AllAnthropicToolsValues] = None
         mcp_server: Optional[AnthropicMcpServerTool] = None
@@ -572,9 +554,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
             _tool = AnthropicMessagesTool(
-                name=_apply_anthropic_tool_name_forward(
-                    tool["function"]["name"], name_forward_map
-                ),
+                name=tool["function"]["name"],
                 input_schema=input_anthropic_schema,
                 type="custom",
             )
@@ -794,7 +774,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_tools(
         self,
         tools: List,
-        name_forward_map: Optional[Dict[str, str]] = None,
     ) -> Tuple[List[AllAnthropicToolsValues], List[AnthropicMcpServerTool]]:
         anthropic_tools = []
         mcp_servers = []
@@ -802,9 +781,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
-                new_tool, mcp_server_tool = self._map_tool_helper(
-                    tool, name_forward_map=name_forward_map
-                )
+                new_tool, mcp_server_tool = self._map_tool_helper(tool)
 
                 if new_tool is not None:
                     anthropic_tools.append(new_tool)
@@ -838,7 +815,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_messages.append(msg)
                 continue
             new_msg = dict(msg)
-            if tool_calls:
+            if isinstance(tool_calls, list):
                 new_calls = []
                 for tc in tool_calls:
                     if not isinstance(tc, dict):
@@ -879,9 +856,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> Tuple[Dict[str, str], Dict[str, str]]:
         """Build the (forward, reverse) tool-name maps for an OpenAI tools list.
 
-        See _build_anthropic_tool_name_maps for the rules. Pulls the original
-        name out of either ``{"function": {"name": ...}}`` (legacy OpenAI shape)
-        or ``{"name": ...}`` (rare top-level shape).
+        Operates on **OpenAI-format** tool dicts (pre-``_map_tools``). The
+        production sanitization path uses ``_sanitize_tool_names_in_request``
+        instead, which operates on **Anthropic-format** tools (post-
+        ``_map_tools``, where ``type == "custom"``). This helper exists for
+        callers that need to compute the maps from the raw OpenAI shape --
+        e.g. test setup or future pre-mapping consumers.
+
+        See _build_anthropic_tool_name_maps for the collision rules. Pulls
+        the original name out of either ``{"function": {"name": ...}}``
+        (legacy OpenAI shape) or ``{"name": ...}`` (rare top-level shape).
         """
         original_names: List[str] = []
         for tool in tools or []:
@@ -943,20 +927,33 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             # Every name was already valid -- nothing to do.
             return forward, reverse
 
-        # 2. Apply forward map in place to custom-tool names.
+        # 2. Apply forward map. Build a new list with copy-on-change entries
+        #    so a caller reusing the same tool list/dicts across requests
+        #    doesn't see its inputs permanently rewritten (which would also
+        #    drop the original key from `forward` on the next request).
+        new_tools: List[Any] = []
         for t in tools:
-            if not isinstance(t, dict) or t.get("type") != "custom":
-                continue
-            name = t.get("name")
-            if isinstance(name, str) and name in forward:
-                t["name"] = forward[name]
+            if (
+                isinstance(t, dict)
+                and t.get("type") == "custom"
+                and isinstance(t.get("name"), str)
+                and t["name"] in forward
+            ):
+                new_tools.append({**t, "name": forward[t["name"]]})
+            else:
+                new_tools.append(t)
+        optional_params["tools"] = new_tools
 
-        # 3. Apply forward map to ``tool_choice`` when it targets a named tool.
+        # 3. Same for ``tool_choice`` when it targets a named tool. Copy
+        #    rather than mutate for the same reason as above.
         tool_choice = optional_params.get("tool_choice")
         if isinstance(tool_choice, dict) and tool_choice.get("type") == "tool":
             tc_name = tool_choice.get("name")
             if isinstance(tc_name, str) and tc_name in forward:
-                tool_choice["name"] = forward[tc_name]
+                optional_params["tool_choice"] = {
+                    **tool_choice,
+                    "name": forward[tc_name],
+                }
 
         return forward, reverse
 

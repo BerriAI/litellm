@@ -65,7 +65,7 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
-from .transformation import AnthropicConfig
+from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -242,7 +242,7 @@ class AnthropicChatCompletion(BaseLLM):
             json_mode=json_mode,
             speed=optional_params.get("speed") if optional_params else None,
             tool_name_reverse_map=(
-                litellm_params.get("_anthropic_tool_name_map")
+                litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
                 if isinstance(litellm_params, dict)
                 else None
             ),
@@ -472,7 +472,7 @@ class AnthropicChatCompletion(BaseLLM):
                     json_mode=json_mode,
                     speed=optional_params.get("speed") if optional_params else None,
                     tool_name_reverse_map=(
-                        litellm_params.get("_anthropic_tool_name_map")
+                        litellm_params.get(ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY)
                         if isinstance(litellm_params, dict)
                         else None
                     ),
