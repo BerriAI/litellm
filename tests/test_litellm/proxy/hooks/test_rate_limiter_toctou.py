@@ -19,7 +19,7 @@ check-and-increment becomes atomic.
 import asyncio
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import List
 
 import pytest
 
@@ -102,9 +102,7 @@ async def test_batch_limiter_concurrent_bypasses_tpm_via_toctou():
         tpm_limit=TPM_LIMIT,
         rpm_limit=1000,
     )
-    batch_usage = BatchFileUsage(
-        total_tokens=BATCH_TOKENS, request_count=1
-    )
+    batch_usage = BatchFileUsage(total_tokens=BATCH_TOKENS, request_count=1)
 
     barrier = _make_phase1_barrier(NUM_CONCURRENT)
     rate_limiter.should_rate_limit = barrier(rate_limiter.should_rate_limit)
@@ -136,15 +134,13 @@ async def test_batch_limiter_concurrent_bypasses_tpm_via_toctou():
 
 
 @pytest.mark.asyncio
-async def test_batch_limiter_check_and_increment_is_two_separate_calls():
+async def test_batch_limiter_uses_atomic_check_and_increment():
     """
-    Structural test: _check_and_increment_batch_counters issues a read_only=True
-    check followed by a separate increment call — non-atomic by construction.
+    Regression test: batch limiter routes through
+    `atomic_check_and_increment_by_n` rather than the legacy two-phase
+    pattern (read_only=True check + separate async_increment_tokens_with_ttl_preservation).
 
-    Records call ordering on parallel_request_limiter to prove Phase 1 (check)
-    and Phase 3 (increment) are not wrapped in a single Redis transaction /
-    Lua script. After the fix, this pattern should be replaced with one
-    atomic_check_and_increment call.
+    Ensures future refactors don't reintroduce the TOCTOU window.
     """
     dual_cache = DualCache()
     internal_usage_cache = InternalUsageCache(dual_cache=dual_cache)
@@ -154,25 +150,23 @@ async def test_batch_limiter_check_and_increment_is_two_separate_calls():
     batch_limiter = rate_limiter._get_batch_rate_limiter()
     assert batch_limiter is not None
 
-    call_log: List[Dict[str, Any]] = []
+    call_log: List[str] = []
+    original_atomic = rate_limiter.atomic_check_and_increment_by_n
     original_should = rate_limiter.should_rate_limit
-    original_inc = rate_limiter.async_increment_tokens_with_ttl_preservation
+
+    async def logging_atomic(*args, **kwargs):
+        call_log.append("atomic_check_and_increment_by_n")
+        return await original_atomic(*args, **kwargs)
 
     async def logging_should(*args, **kwargs):
-        call_log.append(
-            {"method": "should_rate_limit", "read_only": kwargs.get("read_only")}
-        )
+        call_log.append(f"should_rate_limit(read_only={kwargs.get('read_only')})")
         return await original_should(*args, **kwargs)
 
-    async def logging_inc(*args, **kwargs):
-        call_log.append({"method": "async_increment_tokens_with_ttl_preservation"})
-        return await original_inc(*args, **kwargs)
-
+    rate_limiter.atomic_check_and_increment_by_n = logging_atomic
     rate_limiter.should_rate_limit = logging_should
-    rate_limiter.async_increment_tokens_with_ttl_preservation = logging_inc
 
     user_api_key_dict = UserAPIKeyAuth(
-        api_key=hash_token("structural-test-key"),
+        api_key=hash_token("atomic-test-key"),
         tpm_limit=10000,
         rpm_limit=1000,
     )
@@ -183,29 +177,14 @@ async def test_batch_limiter_check_and_increment_is_two_separate_calls():
         batch_usage=BatchFileUsage(total_tokens=50, request_count=1),
     )
 
-    method_sequence = [c["method"] for c in call_log]
-    assert "should_rate_limit" in method_sequence, "Expected Phase 1 check"
-    phase1 = [
-        c
-        for c in call_log
-        if c["method"] == "should_rate_limit" and c.get("read_only") is True
-    ]
-    phase3 = [
-        c
-        for c in call_log
-        if c["method"] == "async_increment_tokens_with_ttl_preservation"
-    ]
-    assert len(phase1) >= 1 and len(phase3) >= 1, (
-        f"Expected non-atomic Phase1+Phase3 pattern. call_log={call_log}"
+    assert "atomic_check_and_increment_by_n" in call_log, (
+        f"Batch limiter must route through atomic_check_and_increment_by_n. "
+        f"Calls observed: {call_log}"
     )
-    phase1_idx = method_sequence.index("should_rate_limit")
-    phase3_idx = method_sequence.index(
-        "async_increment_tokens_with_ttl_preservation"
-    )
-    assert phase1_idx < phase3_idx, (
-        "TOCTOU evidence: read-only check precedes increment as separate awaits — "
-        "no atomic Lua script wraps both. Sequence: "
-        f"{method_sequence}"
+    legacy_calls = [c for c in call_log if c.startswith("should_rate_limit(")]
+    assert not legacy_calls, (
+        f"Batch limiter must not call should_rate_limit directly (legacy "
+        f"two-phase pattern). Observed: {legacy_calls}"
     )
 
 
@@ -295,15 +274,15 @@ async def test_dynamic_rate_limiter_v3_concurrent_bypasses_model_capacity():
 
 
 @pytest.mark.asyncio
-async def test_dynamic_rate_limiter_v3_phase1_phase3_are_separate_awaits():
+async def test_dynamic_rate_limiter_v3_uses_atomic_check_and_increment():
     """
-    Structural proof of TOCTOU: dynamic_rate_limiter_v3._check_rate_limits
-    issues a read_only=True call (Phase 1, line 464-468) followed by separate
-    read_only=False calls (Phase 3, lines 526-530 + 534-538).
+    Regression test: dynamic limiter's enforced descriptors flow through
+    `atomic_check_and_increment_by_n`, not the legacy
+    read_only=True check followed by a separate read_only=False increment.
 
-    Records each invocation of v3_limiter.should_rate_limit and asserts the
-    Phase1→Phase3 sequence. After fix, both phases must collapse into a single
-    atomic operation.
+    When priority is enforced (saturation >= threshold), priority_model is
+    bundled into the atomic call alongside model_saturation_check. When not
+    enforced, priority counter is incremented for tracking only.
     """
     os.environ["LITELLM_LICENSE"] = "test-license-key"
     litellm.priority_reservation = {"high": 0.9, "low": 0.1}
@@ -311,7 +290,7 @@ async def test_dynamic_rate_limiter_v3_phase1_phase3_are_separate_awaits():
     dual_cache = DualCache()
     handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
 
-    model = "structural-dyn-model"
+    model = "atomic-dyn-model"
     llm_router = Router(
         model_list=[
             {
@@ -327,18 +306,19 @@ async def test_dynamic_rate_limiter_v3_phase1_phase3_are_separate_awaits():
     )
     handler.update_variables(llm_router=llm_router)
 
-    read_only_flags: List[Optional[bool]] = []
-    original = handler.v3_limiter.should_rate_limit
+    atomic_descriptors_observed: List[List[str]] = []
+    original_atomic = handler.v3_limiter.atomic_check_and_increment_by_n
 
-    async def logging_should(*args, **kwargs):
-        read_only_flags.append(kwargs.get("read_only"))
-        return await original(*args, **kwargs)
+    async def logging_atomic(*args, **kwargs):
+        ds = kwargs.get("descriptors") or (args[0] if args else [])
+        atomic_descriptors_observed.append([d["key"] for d in ds])
+        return await original_atomic(*args, **kwargs)
 
-    handler.v3_limiter.should_rate_limit = logging_should
+    handler.v3_limiter.atomic_check_and_increment_by_n = logging_atomic
 
     from litellm.types.router import ModelGroupInfo
 
-    user = UserAPIKeyAuth(api_key=hash_token("dyn-structural-key"))
+    user = UserAPIKeyAuth(api_key=hash_token("dyn-atomic-key"))
     user.metadata = {"priority": "high"}
 
     await handler._check_rate_limits(
@@ -355,21 +335,12 @@ async def test_dynamic_rate_limiter_v3_phase1_phase3_are_separate_awaits():
         data={},
     )
 
-    assert True in read_only_flags or any(
-        f is True for f in read_only_flags
-    ), f"Expected read_only=True (Phase 1) call. Got: {read_only_flags}"
-    assert any(f is False for f in read_only_flags), (
-        f"Expected read_only=False (Phase 3) call. Got: {read_only_flags}"
+    assert atomic_descriptors_observed, (
+        "Dynamic limiter must route enforced descriptors through "
+        "atomic_check_and_increment_by_n (no legacy read_only=True / "
+        "separate-increment pattern)."
     )
-
-    first_read_only = next(
-        (i for i, f in enumerate(read_only_flags) if f is True), None
-    )
-    first_write = next(
-        (i for i, f in enumerate(read_only_flags) if f is False), None
-    )
-    assert first_read_only is not None and first_write is not None
-    assert first_read_only < first_write, (
-        f"TOCTOU evidence: Phase 1 (read_only) precedes Phase 3 (increment) "
-        f"as separate non-atomic calls. read_only sequence: {read_only_flags}"
+    assert "model_saturation_check" in atomic_descriptors_observed[0], (
+        f"Expected model_saturation_check in atomic descriptor set. "
+        f"Got: {atomic_descriptors_observed}"
     )

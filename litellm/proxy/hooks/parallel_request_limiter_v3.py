@@ -81,6 +81,85 @@ end
 return results
 """
 
+CHECK_AND_INCREMENT_BY_N_SCRIPT = """
+-- Atomic check-and-increment-by-N across one or more descriptors.
+-- All-or-nothing: if any descriptor would exceed its limit, no counter is
+-- modified.
+--
+-- KEYS layout: pairs of (window_key, counter_key), one pair per descriptor.
+-- ARGV layout:
+--   ARGV[1] = now (unix seconds)
+--   ARGV[2] = window_size (seconds)
+--   For each descriptor i (1..N), starting at ARGV[3]:
+--     ARGV[3 + (i-1)*3 + 0] = limit
+--     ARGV[3 + (i-1)*3 + 1] = increment
+--     ARGV[3 + (i-1)*3 + 2] = ttl (counter TTL when window resets)
+--
+-- Return on success: { 0, new_counter_1, new_counter_2, ... }
+-- Return on over-limit: { 1, descriptor_index, current_counter, limit }
+local now = tonumber(ARGV[1])
+local window_size = tonumber(ARGV[2])
+local descriptor_count = #KEYS / 2
+
+-- Pass 1: read state, validate. Abort without writing if any over limit.
+local descriptor_state = {}
+for i = 1, descriptor_count do
+    local window_key = KEYS[(i - 1) * 2 + 1]
+    local counter_key = KEYS[(i - 1) * 2 + 2]
+    local arg_base = 3 + (i - 1) * 3
+    local limit = tonumber(ARGV[arg_base])
+    local increment = tonumber(ARGV[arg_base + 1])
+
+    local window_start = redis.call('GET', window_key)
+    local window_expired = (not window_start) or
+        ((now - tonumber(window_start)) >= window_size)
+
+    local current_counter
+    if window_expired then
+        current_counter = 0
+    else
+        current_counter = tonumber(redis.call('GET', counter_key) or 0)
+    end
+
+    if current_counter + increment > limit then
+        return { 1, i, current_counter, limit }
+    end
+
+    descriptor_state[i] = { window_expired, current_counter }
+end
+
+-- Pass 2: all checks passed. Apply increments.
+local results = { 0 }
+for i = 1, descriptor_count do
+    local window_key = KEYS[(i - 1) * 2 + 1]
+    local counter_key = KEYS[(i - 1) * 2 + 2]
+    local arg_base = 3 + (i - 1) * 3
+    local increment = tonumber(ARGV[arg_base + 1])
+    local ttl = tonumber(ARGV[arg_base + 2])
+
+    local window_expired = descriptor_state[i][1]
+
+    if window_expired then
+        redis.call('SET', window_key, tostring(now))
+        redis.call('SET', counter_key, increment)
+        redis.call('EXPIRE', window_key, window_size)
+        if ttl > 0 then
+            redis.call('EXPIRE', counter_key, ttl)
+        end
+        table.insert(results, increment)
+    else
+        local new_counter = redis.call('INCRBY', counter_key, increment)
+        local current_ttl = redis.call('TTL', counter_key)
+        if current_ttl == -1 and ttl > 0 then
+            redis.call('EXPIRE', counter_key, ttl)
+        end
+        table.insert(results, new_counter)
+    end
+end
+
+return results
+"""
+
 TOKEN_INCREMENT_SCRIPT = """
 local results = {}
 
@@ -163,9 +242,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     TOKEN_INCREMENT_SCRIPT
                 )
             )
+            self.check_and_increment_by_n_script = (
+                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                    CHECK_AND_INCREMENT_BY_N_SCRIPT
+                )
+            )
         else:
             self.batch_rate_limiter_script = None
             self.token_increment_script = None
+            self.check_and_increment_by_n_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
 
@@ -594,6 +679,233 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             keys_to_fetch, cache_values, key_metadata
         )
         return rate_limit_response
+
+    async def atomic_check_and_increment_by_n(
+        self,
+        descriptors: List[RateLimitDescriptor],
+        increments: List[Dict[Literal["requests", "tokens"], int]],
+        parent_otel_span: Optional[Span] = None,
+    ) -> RateLimitResponse:
+        """
+        Atomic check-and-increment-by-N across one or more descriptors.
+
+        All-or-nothing: if any descriptor would exceed its limit, no counter is
+        modified and the response carries `overall_code = "OVER_LIMIT"` with
+        the offending descriptor's status. Closes the TOCTOU window between
+        read and increment in both single-process and multi-process (Redis)
+        deployments.
+
+        Args:
+            descriptors: rate-limit descriptors to check
+            increments: per-descriptor increment amounts, indexed parallel to
+                `descriptors`. Each entry is `{"requests": int, "tokens": int}`
+                — values default to 0 when a descriptor has no matching limit.
+
+        Returns:
+            RateLimitResponse with one status per (descriptor, rate_limit_type)
+            counter, mirroring `should_rate_limit`'s shape.
+        """
+        if len(descriptors) != len(increments):
+            raise ValueError(
+                "atomic_check_and_increment_by_n: descriptors and increments "
+                "must have the same length"
+            )
+
+        keys: List[str] = []
+        per_counter_meta: List[Dict[str, Any]] = []
+        script_args: List[Any] = []
+
+        for descriptor, increment_amounts in zip(descriptors, increments):
+            descriptor_key = descriptor["key"]
+            descriptor_value = descriptor["value"]
+            rate_limit: RateLimitDescriptorRateLimitObject = (
+                descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
+            )
+            window_size = rate_limit.get("window_size") or self.window_size
+            window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
+
+            for rate_limit_type in ("requests", "tokens"):
+                rlt: Literal["requests", "tokens"] = cast(
+                    Literal["requests", "tokens"], rate_limit_type
+                )
+                if rlt == "requests":
+                    limit_value = rate_limit.get("requests_per_unit")
+                    inc_amount = int(increment_amounts.get("requests", 0) or 0)
+                else:
+                    limit_value = rate_limit.get("tokens_per_unit")
+                    inc_amount = int(increment_amounts.get("tokens", 0) or 0)
+                if limit_value is None or inc_amount <= 0:
+                    continue
+                counter_key = self.create_rate_limit_keys(
+                    descriptor_key, descriptor_value, rlt
+                )
+                keys.extend([window_key, counter_key])
+                script_args.extend([int(limit_value), inc_amount, int(window_size)])
+                per_counter_meta.append(
+                    {
+                        "descriptor_key": descriptor_key,
+                        "current_limit": int(limit_value),
+                        "rate_limit_type": rlt,
+                        "window_key": window_key,
+                        "counter_key": counter_key,
+                        "increment": inc_amount,
+                        "ttl": int(window_size),
+                    }
+                )
+
+        if not keys:
+            return RateLimitResponse(overall_code="OK", statuses=[])
+
+        current_time = self._get_current_time()
+        now_int = int(current_time.timestamp())
+
+        # Multi-process atomicity via Redis Lua. Single-process atomicity
+        # falls back to the asyncio.Lock + in-memory sliding window below.
+        if self.check_and_increment_by_n_script is not None:
+            try:
+                raw = await self.check_and_increment_by_n_script(
+                    keys=keys,
+                    args=[now_int, self.window_size] + script_args,
+                )
+                return self._build_atomic_response(raw, per_counter_meta)
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"atomic_check_and_increment_by_n Lua failed, falling back "
+                    f"to in-memory: {str(e)}"
+                )
+
+        async with self._check_and_increment_lock:
+            return await self._atomic_check_and_increment_in_memory(
+                per_counter_meta=per_counter_meta,
+                now_int=now_int,
+                parent_otel_span=parent_otel_span,
+            )
+
+    def _build_atomic_response(
+        self,
+        raw: List[Any],
+        per_counter_meta: List[Dict[str, Any]],
+    ) -> RateLimitResponse:
+        """Convert Lua script return value to RateLimitResponse."""
+        if not raw:
+            return RateLimitResponse(overall_code="OK", statuses=[])
+
+        status_code = int(raw[0])
+        if status_code == 1:
+            # Over limit: { 1, descriptor_index (1-based), current_counter, limit }
+            descriptor_index = int(raw[1]) - 1
+            current_counter = int(raw[2])
+            limit = int(raw[3])
+            meta = per_counter_meta[descriptor_index]
+            return RateLimitResponse(
+                overall_code="OVER_LIMIT",
+                statuses=[
+                    RateLimitStatus(
+                        code="OVER_LIMIT",
+                        current_limit=limit,
+                        limit_remaining=max(0, limit - current_counter),
+                        rate_limit_type=meta["rate_limit_type"],
+                        descriptor_key=meta["descriptor_key"],
+                    )
+                ],
+            )
+
+        statuses: List[RateLimitStatus] = []
+        for meta, new_counter in zip(per_counter_meta, raw[1:]):
+            statuses.append(
+                RateLimitStatus(
+                    code="OK",
+                    current_limit=meta["current_limit"],
+                    limit_remaining=max(0, meta["current_limit"] - int(new_counter)),
+                    rate_limit_type=meta["rate_limit_type"],
+                    descriptor_key=meta["descriptor_key"],
+                )
+            )
+        return RateLimitResponse(overall_code="OK", statuses=statuses)
+
+    async def _atomic_check_and_increment_in_memory(
+        self,
+        per_counter_meta: List[Dict[str, Any]],
+        now_int: int,
+        parent_otel_span: Optional[Span] = None,
+    ) -> RateLimitResponse:
+        """In-memory all-or-nothing check-and-increment. Caller holds lock."""
+        # Pass 1: read state, validate.
+        descriptor_state: List[Dict[str, Any]] = []
+        for meta in per_counter_meta:
+            window_start = await self.internal_usage_cache.async_get_cache(
+                key=meta["window_key"],
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
+            window_expired = (
+                window_start is None
+                or (now_int - int(window_start)) >= self.window_size
+            )
+            current_counter = (
+                0
+                if window_expired
+                else int(
+                    await self.internal_usage_cache.async_get_cache(
+                        key=meta["counter_key"],
+                        litellm_parent_otel_span=parent_otel_span,
+                        local_only=True,
+                    )
+                    or 0
+                )
+            )
+            if current_counter + meta["increment"] > meta["current_limit"]:
+                return RateLimitResponse(
+                    overall_code="OVER_LIMIT",
+                    statuses=[
+                        RateLimitStatus(
+                            code="OVER_LIMIT",
+                            current_limit=meta["current_limit"],
+                            limit_remaining=max(
+                                0, meta["current_limit"] - current_counter
+                            ),
+                            rate_limit_type=meta["rate_limit_type"],
+                            descriptor_key=meta["descriptor_key"],
+                        )
+                    ],
+                )
+            descriptor_state.append(
+                {"window_expired": window_expired, "current": current_counter}
+            )
+
+        # Pass 2: apply increments.
+        statuses: List[RateLimitStatus] = []
+        for meta, state in zip(per_counter_meta, descriptor_state):
+            new_counter = (
+                meta["increment"]
+                if state["window_expired"]
+                else state["current"] + meta["increment"]
+            )
+            if state["window_expired"]:
+                await self.internal_usage_cache.async_set_cache(
+                    key=meta["window_key"],
+                    value=str(now_int),
+                    ttl=self.window_size,
+                    litellm_parent_otel_span=parent_otel_span,
+                    local_only=True,
+                )
+            await self.internal_usage_cache.async_set_cache(
+                key=meta["counter_key"],
+                value=new_counter,
+                ttl=meta["ttl"],
+                litellm_parent_otel_span=parent_otel_span,
+                local_only=True,
+            )
+            statuses.append(
+                RateLimitStatus(
+                    code="OK",
+                    current_limit=meta["current_limit"],
+                    limit_remaining=max(0, meta["current_limit"] - new_counter),
+                    rate_limit_type=meta["rate_limit_type"],
+                    descriptor_key=meta["descriptor_key"],
+                )
+            )
+        return RateLimitResponse(overall_code="OK", statuses=statuses)
 
     def create_organization_rate_limit_descriptor(
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: Optional[str] = None
