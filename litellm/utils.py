@@ -7862,10 +7862,17 @@ def validate_and_fix_openai_messages(messages: List):
     for message in messages:
         if not message.get("role"):
             message["role"] = "assistant"
-        if message.get("tool_calls"):
-            message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
+        # Convert to dict first so we don't assign dict-shaped tool_calls back
+        # to a pydantic Message whose declared type is
+        # List[ChatCompletionMessageToolCall].  Assigning dicts to that field
+        # and then calling model_dump() on the Message triggers
+        # PydanticSerializationUnexpectedValue warnings for every tool_call.
         convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        if convert_msg_to_dict.get("tool_calls"):
+            convert_msg_to_dict["tool_calls"] = jsonify_tools(
+                tools=convert_msg_to_dict["tool_calls"]
+            )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)
