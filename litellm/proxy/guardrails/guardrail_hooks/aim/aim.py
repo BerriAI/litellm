@@ -266,6 +266,9 @@ class AimGuardrail(CustomGuardrail):
         choices_to_inspect = [c for c in response.choices if isinstance(c, Choices)]
         if not choices_to_inspect:
             return response
+        # ``return_exceptions=True`` lets every inspection finish even if
+        # one fails — without it, the first exception would propagate and
+        # leave the remaining tasks running in the background.
         results = await asyncio.gather(
             *(
                 self.call_aim_guardrail_on_output(
@@ -275,9 +278,12 @@ class AimGuardrail(CustomGuardrail):
                     key_alias=user_api_key_dict.key_alias,
                 )
                 for choice in choices_to_inspect
-            )
+            ),
+            return_exceptions=True,
         )
         for choice, aim_output_guardrail_result in zip(choices_to_inspect, results):
+            if isinstance(aim_output_guardrail_result, BaseException):
+                raise aim_output_guardrail_result
             if aim_output_guardrail_result and aim_output_guardrail_result.get(
                 "detection_message"
             ):
