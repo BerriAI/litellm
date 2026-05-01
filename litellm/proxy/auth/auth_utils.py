@@ -1030,7 +1030,9 @@ def _route_uses_model_routing_sources(route: str) -> bool:
     return _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_ROUTE_MARKERS)
 
 
-def _extract_models_from_managed_resource_id(resource_id: Any) -> List[str]:
+def _extract_models_from_managed_resource_id(
+    resource_id: Any, resource_id_field: Optional[str] = None
+) -> List[str]:
     if not isinstance(resource_id, str) or not resource_id:
         return []
 
@@ -1078,24 +1080,29 @@ def _extract_models_from_managed_resource_id(resource_id: Any) -> List[str]:
             "Unable to extract model from unified managed resource ID: %s", str(e)
         )
 
-    try:
-        from litellm.types.videos.utils import (
-            decode_character_id_with_provider,
-            decode_video_id_with_provider,
-        )
+    if resource_id_field in ("video_id", "character_id"):
+        try:
+            from litellm.types.videos.utils import (
+                decode_character_id_with_provider,
+                decode_video_id_with_provider,
+            )
 
-        _append_model_candidates(
-            candidates=candidates,
-            value=decode_video_id_with_provider(resource_id).get("model_id"),
-        )
-        _append_model_candidates(
-            candidates=candidates,
-            value=decode_character_id_with_provider(resource_id).get("model_id"),
-        )
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            "Unable to extract model from managed video/character ID: %s", str(e)
-        )
+            if resource_id_field == "video_id":
+                _append_model_candidates(
+                    candidates=candidates,
+                    value=decode_video_id_with_provider(resource_id).get("model_id"),
+                )
+            else:
+                _append_model_candidates(
+                    candidates=candidates,
+                    value=decode_character_id_with_provider(resource_id).get(
+                        "model_id"
+                    ),
+                )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Unable to extract model from managed video/character ID: %s", str(e)
+            )
 
     return _dedupe_model_candidates(candidates)
 
@@ -1153,7 +1160,9 @@ def _extract_model_candidates_from_request(
         for field in _MODEL_ROUTING_ID_FIELDS:
             _append_model_candidates(
                 candidates,
-                _extract_models_from_managed_resource_id(request_data.get(field)),
+                _extract_models_from_managed_resource_id(
+                    request_data.get(field), resource_id_field=field
+                ),
             )
 
     return _dedupe_model_candidates(candidates)
