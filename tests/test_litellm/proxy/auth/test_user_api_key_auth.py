@@ -2218,6 +2218,7 @@ async def test_centralized_common_checks_reserves_request_end_user_budget():
             "counter_key": "spend:end_user:alice",
             "entity_type": "EndUser",
             "entity_id": "alice",
+            "reserved_cost": 0.6,
             "applied_adjustment": 0.0,
         }
     ]
