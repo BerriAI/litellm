@@ -11,11 +11,12 @@ import pytest
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
+    abbreviate_api_key,
     check_complete_credentials,
     get_end_user_id_from_request_body,
-    get_model_from_request,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_model_from_request,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
     is_request_body_safe,
@@ -259,6 +260,16 @@ def test_get_model_from_request_vertex_passthrough_still_works():
     assert get_model_from_request(request_data={}, route=route) == "gemini-1.5-pro"
 
 
+def test_get_model_from_request_openai_deployment_route_still_works():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/openai/deployments/my-azure-deployment/chat/completions",
+        )
+        == "my-azure-deployment"
+    )
+
+
 def test_get_model_from_request_includes_file_endpoint_header_model():
     assert (
         get_model_from_request(
@@ -368,6 +379,34 @@ def test_get_model_from_request_extracts_video_id_model():
         )
         == "video-model"
     )
+
+
+def test_get_model_from_request_handles_managed_id_decoder_failures():
+    with (
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.decode_model_from_file_id",
+            side_effect=Exception("decode failed"),
+        ),
+        patch(
+            "litellm.llms.base_llm.managed_resources.utils.parse_unified_id",
+            side_effect=Exception("parse failed"),
+        ),
+        patch(
+            "litellm.types.videos.utils.decode_video_id_with_provider",
+            side_effect=Exception("video decode failed"),
+        ),
+    ):
+        assert (
+            get_model_from_request(
+                request_data={"file_id": "not-a-managed-resource-id"},
+                route="/v1/files/{file_id}",
+            )
+            is None
+        )
+
+
+def test_abbreviate_api_key():
+    assert abbreviate_api_key("sk-test-1234") == "sk-...1234"
 
 
 def test_get_customer_user_header_returns_none_when_no_customer_role():
