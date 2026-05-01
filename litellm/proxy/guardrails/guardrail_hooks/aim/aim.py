@@ -22,7 +22,10 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import build_inspection_messages
+from litellm.proxy.guardrails._content_utils import (
+    build_inspection_messages,
+    has_non_string_content,
+)
 from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
@@ -139,6 +142,20 @@ class AimGuardrail(CustomGuardrail):
         redacted_chat = res.get("redacted_chat")
         if not redacted_chat:
             return data
+        # Aim returns text-only redacted messages. Overwriting
+        # ``data["messages"]`` with that would silently strip image/audio
+        # parts from a multimodal request — degrade to block so the
+        # multimodal payload is never silently rewritten.
+        if has_non_string_content(data):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Aim: anonymize action requested for multimodal input "
+                    "but mask-in-place would drop non-text parts. Send the "
+                    "request with plain string content to use anonymize, "
+                    "or rely on block-mode policies."
+                ),
+            )
         data["messages"] = [
             {
                 "role": message["role"],

@@ -50,7 +50,10 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import build_inspection_messages
+from litellm.proxy.guardrails._content_utils import (
+    build_inspection_messages,
+    has_non_string_content,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 import litellm
 
@@ -372,12 +375,14 @@ class LassoGuardrail(CustomGuardrail):
         if not messages:
             return data
 
-        if self.mask:
+        # Lasso's classifix endpoint returns masked text that we copy back
+        # into ``data["messages"]``. For multimodal/Responses-API input we
+        # would silently strip image/audio parts, so fall back to the
+        # classify endpoint (which still raises on BLOCK actions) and
+        # leave the original payload intact.
+        if self.mask and not has_non_string_content(data):
             return await self._handle_masking(data, cache, message_type, messages)
-        else:
-            return await self._handle_classification(
-                data, cache, message_type, messages
-            )
+        return await self._handle_classification(data, cache, message_type, messages)
 
     async def _handle_classification(
         self,
