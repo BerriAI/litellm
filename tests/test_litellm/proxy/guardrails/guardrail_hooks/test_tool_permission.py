@@ -530,6 +530,10 @@ class TestToolPermissionGuardrail:
             "Hook must yield at least one chunk for plain-text responses; "
             "got none — bare return bug"
         )
+        assert chunks[0].choices[0].delta.content == "Hello, world!", (
+            "Hook must preserve the original response content; "
+            f"got: {chunks[0].choices[0].delta.content!r}"
+        )
 
     def test_modify_response_with_permission_errors(self):
         # Setup a response with one tool_call
