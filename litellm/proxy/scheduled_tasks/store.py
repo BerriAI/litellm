@@ -175,7 +175,11 @@ async def report_task_result(
 
     if result == "success":
         affected = await prisma_client.db.litellm_scheduledtasktable.update_many(
-            where={"task_id": task_id, "owner_token": owner_token},
+            where={
+                "task_id": task_id,
+                "owner_token": owner_token,
+                "status": "pending",
+            },
             data={"consecutive_errors": 0, "last_error": None},
         )
         if affected == 0:
