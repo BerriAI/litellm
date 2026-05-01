@@ -295,6 +295,54 @@ async def test_agent_activity_non_admin_intersects_explicit_agent_ids():
 
 
 @pytest.mark.asyncio
+async def test_agent_activity_keyless_caller_does_not_query_created_by_null():
+    """Guard against the `WHERE created_by IS NULL` pitfall: a non-admin
+    caller without a user_id (e.g. a service-account key with no
+    explicit agent allowlist) must NOT trigger a fallback DB query that
+    would expose every ownerless agent."""
+    from litellm.proxy.agent_endpoints import endpoints
+
+    user = UserAPIKeyAuth(
+        api_key="sk-svc",
+        # NOTE: no user_id
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    prisma = MagicMock()
+    prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+
+    fake_get_daily = AsyncMock()
+
+    with (
+        patch.object(endpoints, "prisma_client", prisma, create=True),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch(
+            "litellm.proxy.agent_endpoints.endpoints.check_feature_access_for_user",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.get_allowed_agents",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "litellm.proxy.agent_endpoints.endpoints.get_daily_activity",
+            new=fake_get_daily,
+        ),
+    ):
+        result = await endpoints.get_agent_daily_activity(
+            agent_ids=None,
+            start_date="2026-01-01",
+            end_date="2026-01-02",
+            user_api_key_dict=user,
+        )
+
+    # Empty page; the owned-agents fallback must NOT have been queried.
+    assert result.results == []
+    prisma.db.litellm_agentstable.find_many.assert_not_called()
+    fake_get_daily.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_agent_activity_non_admin_no_access_returns_empty_page():
     """Non-admin with no permitted agents and no owned agents must get an
     empty paginated response without an unscoped DB query."""
