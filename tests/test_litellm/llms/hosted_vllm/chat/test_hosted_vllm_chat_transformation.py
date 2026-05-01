@@ -289,3 +289,33 @@ def test_hosted_vllm_custom_tools_are_converted_to_function_tools():
     assert tools[0]["function"]["description"] == "Apply text patch"
     assert tools[0]["function"]["parameters"]["type"] == "object"
     assert "input" in tools[0]["function"]["parameters"]["properties"]
+
+
+def test_hosted_vllm_custom_tools_use_top_level_input_schema():
+    config = HostedVLLMChatConfig()
+    input_schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "search",
+                    "description": "Search docs",
+                    "input_schema": input_schema,
+                }
+            ]
+        },
+        optional_params={},
+        model="hosted_vllm/gpt-oss-120b",
+        drop_params=False,
+    )
+
+    tools = optional_params["tools"]
+    assert len(tools) == 1
+    assert tools[0]["function"]["name"] == "search"
+    assert tools[0]["function"]["description"] == "Search docs"
+    assert tools[0]["function"]["parameters"] == input_schema
