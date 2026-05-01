@@ -146,3 +146,42 @@ def patch_vcrpy_aiohttp_record_path() -> None:
 
     _aiohttp_stubs.record_response = _record_response_preserving_body
     _PATCHED_AIOHTTP_RECORD = True
+
+
+VCR_VERBOSE_ENV = "LITELLM_VCR_VERBOSE"
+
+
+def vcr_verbose_enabled() -> bool:
+    return os.environ.get(VCR_VERBOSE_ENV) == "1"
+
+
+def format_vcr_verdict(cassette: Any) -> str:
+    """Build a one-line hit/miss verdict for a vcrpy Cassette.
+
+    HIT  — at least one request was served from cache and nothing new was
+           recorded. (Pure replay.)
+    MISS — nothing from cache; one or more requests went live and were
+           recorded. (Cold cache.)
+    PARTIAL — mix of replay and new recordings. Usually means the cassette
+              matches some but not all requests for this test (e.g. retries,
+              new branches, or vcrpy match_on too strict).
+    NOOP — test made no HTTP calls (or VCR not engaged for it).
+    """
+    if cassette is None:
+        return "[VCR NOOP]"
+    played = getattr(cassette, "play_count", 0) or 0
+    # cassette.data is the recorded request/response list; len(cassette) counts
+    # recorded episodes. New recordings during this test = len - prior_len, but
+    # we don't have prior_len here, so we use cassette.dirty (set when an append
+    # happened during this run) as the "new recording" signal.
+    dirty = getattr(cassette, "dirty", False)
+    total = len(cassette) if hasattr(cassette, "__len__") else 0
+    if played == 0 and not dirty:
+        return "[VCR NOOP] (no http traffic)"
+    if played > 0 and not dirty:
+        return f"[VCR HIT] {played} replayed, 0 new ({total} cassette entries)"
+    if played == 0 and dirty:
+        return f"[VCR MISS] 0 replayed, recorded new ({total} cassette entries)"
+    return (
+        f"[VCR PARTIAL] {played} replayed + new recordings ({total} cassette entries)"
+    )
