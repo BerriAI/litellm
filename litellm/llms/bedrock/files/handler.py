@@ -1,10 +1,15 @@
 import asyncio
 import base64
+import os
 from typing import Any, Coroutine, Optional, Tuple, Union
 
 import httpx
 
 from litellm import LlmProviders
+from litellm.litellm_core_utils.cloud_storage_security import (
+    BEDROCK_MANAGED_S3_PREFIXES,
+    validate_managed_cloud_file_id,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.openai import (
     FileContentRequest,
@@ -35,7 +40,7 @@ class BedrockFilesHandler(BaseAWSLLM):
 
         The file ID can be in two formats:
         1. Base64-encoded unified file ID containing: llm_output_file_id,s3://bucket/path
-        2. Direct S3 URI: s3://bucket/path
+        2. Direct S3 URI: s3://bucket/litellm-managed-prefix/path
 
         Args:
             file_id: Encoded file ID or direct S3 URI
@@ -58,14 +63,16 @@ class BedrockFilesHandler(BaseAWSLLM):
         except Exception:
             pass
 
-        # If not base64 encoded or doesn't contain llm_output_file_id, assume it's already an S3 URI
+        # If not base64 encoded or doesn't contain llm_output_file_id, accept only
+        # explicit S3 URIs. Bucket and key validation happens before any S3 call.
         if file_id.startswith("s3://"):
             return file_id
 
-        # If it doesn't start with s3://, assume it's a direct S3 URI and add the prefix
-        return f"s3://{file_id}"
+        raise ValueError("file_id must be a managed LiteLLM S3 file id")
 
-    def _parse_s3_uri(self, s3_uri: str) -> Tuple[str, str]:
+    def _parse_s3_uri(
+        self, s3_uri: str, configured_bucket_name: str
+    ) -> Tuple[str, str]:
         """
         Parse S3 URI to extract bucket name and object key.
 
@@ -75,21 +82,22 @@ class BedrockFilesHandler(BaseAWSLLM):
         Returns:
             Tuple of (bucket_name, object_key)
         """
-        if not s3_uri.startswith("s3://"):
+        return validate_managed_cloud_file_id(
+            file_id=s3_uri,
+            scheme="s3://",
+            configured_bucket_name=configured_bucket_name,
+            allowed_object_prefixes=BEDROCK_MANAGED_S3_PREFIXES,
+        )
+
+    def _get_configured_s3_bucket_name(self, optional_params: dict) -> str:
+        bucket_name = optional_params.get("s3_bucket_name") or os.getenv(
+            "AWS_S3_BUCKET_NAME"
+        )
+        if not bucket_name:
             raise ValueError(
-                f"Invalid S3 URI format: {s3_uri}. Expected format: s3://bucket-name/path/to/file"
+                "S3 bucket_name is required. Set 's3_bucket_name' or AWS_S3_BUCKET_NAME."
             )
-
-        # Remove 's3://' prefix
-        path = s3_uri[5:]
-
-        if "/" in path:
-            bucket_name, object_key = path.split("/", 1)
-        else:
-            bucket_name = path
-            object_key = ""
-
-        return bucket_name, object_key
+        return bucket_name
 
     async def afile_content(
         self,
@@ -119,7 +127,11 @@ class BedrockFilesHandler(BaseAWSLLM):
 
         # Extract S3 URI from file ID
         s3_uri = self._extract_s3_uri_from_file_id(file_id)
-        bucket_name, object_key = self._parse_s3_uri(s3_uri)
+        configured_bucket_name = self._get_configured_s3_bucket_name(optional_params)
+        bucket_name, object_key = self._parse_s3_uri(
+            s3_uri=s3_uri,
+            configured_bucket_name=configured_bucket_name,
+        )
 
         # Get AWS credentials
         aws_region_name = self._get_aws_region_name(
