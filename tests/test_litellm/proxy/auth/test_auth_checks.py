@@ -922,19 +922,21 @@ async def test_get_tag_objects_batch():
     # Simulate 5 tags: 2 cached, 3 uncached
     tag_names = ["cached-1", "uncached-1", "cached-2", "uncached-2", "uncached-3"]
 
-    # Mock cached tags
-    cached_tag_1 = {
-        "tag_name": "cached-1",
-        "spend": 10.0,
-        "models": [],
-        "litellm_budget_table": None,
-    }
-    cached_tag_2 = {
-        "tag_name": "cached-2",
-        "spend": 20.0,
-        "models": [],
-        "litellm_budget_table": None,
-    }
+    # Mock cached tags — must be LiteLLM_TagTable instances: the mocked async_get_cache
+    # bypasses UserApiKeyCache deserialization, so returning plain dicts would flow through
+    # as dict (production returns models after Codec.deserialize inside the cache).
+    cached_tag_1 = LiteLLM_TagTable(
+        tag_name="cached-1",
+        spend=10.0,
+        models=[],
+        litellm_budget_table=None,
+    )
+    cached_tag_2 = LiteLLM_TagTable(
+        tag_name="cached-2",
+        spend=20.0,
+        models=[],
+        litellm_budget_table=None,
+    )
 
     # Mock DB response for uncached tags
     uncached_tag_1 = MagicMock()
@@ -980,13 +982,13 @@ async def test_get_tag_objects_batch():
     )
 
     # Mock cache behavior - return cached tags, None for uncached
-    async def mock_get_cache(key):
+    async def mock_get_cache(*args, **kwargs):
+        key = kwargs.get("key")
         if key == "tag:cached-1":
             return cached_tag_1
-        elif key == "tag:cached-2":
+        if key == "tag:cached-2":
             return cached_tag_2
-        else:
-            return None
+        return None
 
     mock_cache.async_get_cache = AsyncMock(side_effect=mock_get_cache)
     mock_cache.async_set_cache = AsyncMock()
