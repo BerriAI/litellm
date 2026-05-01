@@ -1179,7 +1179,7 @@ class MCPServerManager:
             auth_value = normalized.get("authorization")
         if auth_value and auth_value.startswith("Bearer "):
             return auth_value[len("Bearer "):]
-        return auth_value
+        return None
 
     def _build_stdio_env(
         self,
