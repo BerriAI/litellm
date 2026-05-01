@@ -114,7 +114,7 @@ def get_vertex_ai_model_route(
         VertexAIModelRoute.GEMMA
 
         >>> get_vertex_ai_model_route("google/gemma-4-26b-a4b-it-maas")
-        VertexAIModelRoute.GEMMA
+        VertexAIModelRoute.MODEL_GARDEN
 
         >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
         VertexAIModelRoute.MODEL_GARDEN
@@ -152,14 +152,19 @@ def get_vertex_ai_model_route(
         return VertexAIModelRoute.BGE
 
     # Check for gemma models
-    if "gemma/" in model or model.startswith("google/gemma-"):
+    if "gemma/" in model:
         return VertexAIModelRoute.GEMMA
 
     # Check for model garden OpenAI-compatible publisher models.
     # Examples:
+    # - google/gemma-4-26b-a4b-it-maas
     # - openai/gpt-oss-120b-maas
     # - xai/grok-4.1-fast-non-reasoning
-    if "openai" in model or model.startswith("xai/"):
+    if (
+        "openai" in model
+        or model.startswith("google/gemma-")
+        or model.startswith("xai/")
+    ):
         return VertexAIModelRoute.MODEL_GARDEN
 
     # Check for gemini models
