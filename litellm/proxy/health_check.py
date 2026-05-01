@@ -13,6 +13,7 @@ import litellm
 logger = logging.getLogger(__name__)
 from litellm.constants import (
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS,
+    BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING,
     DEFAULT_HEALTH_CHECK_PROMPT,
     HEALTH_CHECK_TIMEOUT_SECONDS,
 )
@@ -292,6 +293,68 @@ def build_deployment_health_states(
     return states
 
 
+def _deployment_model_string_for_health_check(litellm_params: dict) -> str:
+    """Deployment model from litellm_params (before Bedrock rewrite).
+
+    Used for reasoning vs non-reasoning max_tokens and wildcard detection only.
+    Does not use ``health_check_model``; that override applies later to the request.
+    """
+    return litellm_params.get("model") or ""
+
+
+def _health_check_deployment_is_wildcard(litellm_params: dict) -> bool:
+    return "*" in _deployment_model_string_for_health_check(litellm_params)
+
+
+def _resolve_health_check_max_tokens(
+    model_info: dict, litellm_params: dict
+) -> Optional[int]:
+    """
+    Pick max_tokens for the health check request.
+
+    Priority:
+    1. model_info.health_check_max_tokens (explicit override)
+    2. For non-wildcard routes: health_check_max_tokens_reasoning / _non_reasoning
+       from model_info based on litellm.supports_reasoning(litellm_params["model"])
+    3. For non-wildcard reasoning routes: BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING
+       from env (if set)
+    4. BACKGROUND_HEALTH_CHECK_MAX_TOKENS (global, any route including wildcards)
+    5. Non-wildcard default: 5
+    6. Wildcard and nothing from (1)(4): leave unset (caller omits max_tokens)
+    """
+    explicit = model_info.get("health_check_max_tokens", None)
+    if explicit is not None:
+        return int(explicit)
+
+    is_wildcard = _health_check_deployment_is_wildcard(litellm_params)
+    deployment_model = _deployment_model_string_for_health_check(litellm_params)
+
+    if not is_wildcard:
+        try:
+            is_reasoning = litellm.supports_reasoning(deployment_model)
+        except Exception:
+            is_reasoning = False
+        tokens_reasoning = model_info.get("health_check_max_tokens_reasoning", None)
+        tokens_non_reasoning = model_info.get(
+            "health_check_max_tokens_non_reasoning", None
+        )
+        if tokens_reasoning is not None or tokens_non_reasoning is not None:
+            if is_reasoning and tokens_reasoning is not None:
+                return int(tokens_reasoning)
+            if not is_reasoning and tokens_non_reasoning is not None:
+                return int(tokens_non_reasoning)
+        if is_reasoning and BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING is not None:
+            return int(BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING)
+
+    if BACKGROUND_HEALTH_CHECK_MAX_TOKENS is not None:
+        return int(BACKGROUND_HEALTH_CHECK_MAX_TOKENS)
+
+    if not is_wildcard:
+        return 5
+
+    return None
+
+
 def _update_litellm_params_for_health_check(
     model_info: dict, litellm_params: dict
 ) -> dict:
@@ -304,15 +367,9 @@ def _update_litellm_params_for_health_check(
     - for Bedrock models with region routing (bedrock/region/model), strips the litellm routing prefix but preserves the model ID
     """
     litellm_params["messages"] = _get_random_llm_message()
-    _health_check_max_tokens = model_info.get("health_check_max_tokens", None)
-    if _health_check_max_tokens is not None:
-        litellm_params["max_tokens"] = _health_check_max_tokens
-    elif BACKGROUND_HEALTH_CHECK_MAX_TOKENS is not None:
-        litellm_params["max_tokens"] = BACKGROUND_HEALTH_CHECK_MAX_TOKENS
-    elif "*" not in (
-        model_info.get("health_check_model") or litellm_params.get("model") or ""
-    ):
-        litellm_params["max_tokens"] = 1
+    _resolved_max_tokens = _resolve_health_check_max_tokens(model_info, litellm_params)
+    if _resolved_max_tokens is not None:
+        litellm_params["max_tokens"] = _resolved_max_tokens
 
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:

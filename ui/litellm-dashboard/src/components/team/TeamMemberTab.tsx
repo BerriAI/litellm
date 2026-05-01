@@ -1,6 +1,7 @@
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Member } from "@/components/networking";
+import { formatBudgetReset } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -45,11 +46,16 @@ export default function TeamMemberTab({
     return "0";
   };
 
-  // Helper function to get spend for a user
-  const getUserSpend = (userId: string | null): number | null => {
+  const getUserCurrentCycleSpend = (userId: string | null): number => {
     if (!userId) return 0;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.spend || 0;
+    return membership?.spend ?? 0;
+  };
+
+  const getUserTotalSpend = (userId: string | null): number => {
+    if (!userId) return 0;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return membership?.total_spend ?? 0;
   };
 
   const getUserBudget = (userId: string | null): string | null => {
@@ -89,6 +95,12 @@ export default function TeamMemberTab({
     return models && models.length > 0 ? models : null;
   };
 
+  const getUserBudgetReset = (userId: string | null): string | null => {
+    if (!userId) return null;
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return formatBudgetReset(membership?.litellm_budget_table?.budget_reset_at);
+  };
+
   const extraColumns: ColumnsType<Member> = [
     {
       title: (
@@ -124,15 +136,29 @@ export default function TeamMemberTab({
     {
       title: (
         <Space direction="horizontal">
-          Team Member Spend (USD)
-          <Tooltip title="This is the amount spent by a user in the team.">
+          Current Cycle Spend (USD)
+          <Tooltip title="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
       ),
       key: "spend",
       render: (_: unknown, record: Member) => (
-        <Typography.Text>${formatNumberWithCommas(getUserSpend(record.user_id), 4)}</Typography.Text>
+        <Typography.Text>${formatNumberWithCommas(getUserCurrentCycleSpend(record.user_id), 4)}</Typography.Text>
+      ),
+    },
+    {
+      title: (
+        <Space direction="horizontal">
+          Total Spend (USD)
+          <Tooltip title="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
+            <InfoCircleOutlined />
+          </Tooltip>
+        </Space>
+      ),
+      key: "total_spend",
+      render: (_: unknown, record: Member) => (
+        <Typography.Text>${formatNumberWithCommas(getUserTotalSpend(record.user_id), 4)}</Typography.Text>
       ),
     },
     {
@@ -144,6 +170,18 @@ export default function TeamMemberTab({
           <Typography.Text>
             {budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}
           </Typography.Text>
+        );
+      },
+    },
+    {
+      title: "Budget Reset",
+      key: "budget_reset",
+      render: (_: unknown, record: Member) => {
+        const reset = getUserBudgetReset(record.user_id);
+        return reset ? (
+          <Typography.Text>{reset}</Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
         );
       },
     },
