@@ -988,6 +988,66 @@ async def test_should_skip_reservation_when_counter_initialization_fails(
 
 
 @pytest.mark.asyncio
+async def test_should_release_tracked_entry_when_reservation_fails_after_increment(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-reserve-after-increment-failure",
+        spend=0.0,
+        max_budget=1.0,
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    original_increment_counter = ps._increment_spend_counter_cache
+    first_increment = True
+
+    async def fail_after_increment(counter_key: str, increment: float):
+        nonlocal first_increment
+        if first_increment:
+            first_increment = False
+            await counter_cache.async_increment_cache(key=counter_key, value=increment)
+            raise RuntimeError("lost increment response")
+        return await original_increment_counter(
+            counter_key=counter_key,
+            increment=increment,
+        )
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=0.5,
+        ),
+        patch(
+            "litellm.proxy.proxy_server._increment_spend_counter_cache",
+            side_effect=fail_after_increment,
+        ),
+        patch(
+            "litellm.proxy.proxy_server._invalidate_spend_counter",
+            side_effect=RuntimeError("invalidate unavailable"),
+        ),
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is None
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:key:key-budget-reserve-after-increment-failure"
+    ) == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
 async def test_should_not_re_read_uncapped_budget_after_reservation_fallback(
     spend_counter_state,
     monkeypatch,
