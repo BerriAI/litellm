@@ -4920,11 +4920,12 @@ def embedding(  # noqa: PLR0915
             if headers is not None and headers != {}:
                 optional_params["extra_headers"] = headers
 
-            if encoding_format is not None:
-                optional_params["encoding_format"] = encoding_format
-            else:
-                # Omiting causes openai sdk to add default value of "float"
-                optional_params["encoding_format"] = None
+            optional_params["encoding_format"] = (
+                encoding_format
+                or optional_params.get("encoding_format")
+                or get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
+                or "float"
+            )
 
             api_version = None
 
