@@ -1994,17 +1994,32 @@ async def _reconcile_budget_reservation_for_counter_update(
 
     from litellm.proxy.spend_tracking.budget_reservation import (
         get_reserved_counter_keys,
+        invalidate_budget_reservation_counters,
         reconcile_budget_reservation,
     )
 
     reserved_counter_keys = get_reserved_counter_keys(
         budget_reservation=budget_reservation
     )
-    await reconcile_budget_reservation(
-        budget_reservation=budget_reservation,
-        actual_cost=response_cost or 0.0,
-        finalize=False,
-    )
+    try:
+        await reconcile_budget_reservation(
+            budget_reservation=budget_reservation,
+            actual_cost=response_cost or 0.0,
+            finalize=False,
+        )
+    except Exception:
+        verbose_proxy_logger.warning(
+            "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and continuing",
+            exc_info=True,
+        )
+        try:
+            await invalidate_budget_reservation_counters(
+                budget_reservation=budget_reservation
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Failed to invalidate reserved counters after reservation reconciliation failed"
+            )
     return reserved_counter_keys
 
 

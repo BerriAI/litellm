@@ -5533,6 +5533,54 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation():
 
 
 @pytest.mark.asyncio
+async def test_increment_spend_counters_invalidates_bad_reserved_counter_without_failing():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    counter_cache = DualCache()
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [
+            {
+                "counter_key": "spend:key:key-bad-reserved-counter",
+                "entity_type": "Key",
+                "entity_id": "key-bad-reserved-counter",
+                "reserved_cost": 0.5,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter = ps.spend_counter_cache
+    ps.spend_counter_cache = counter_cache
+    try:
+        with patch(
+            "litellm.proxy.proxy_server.verbose_proxy_logger.warning"
+        ) as mock_warning:
+            await increment_spend_counters(
+                token="key-bad-reserved-counter",
+                team_id=None,
+                user_id=None,
+                response_cost=0.25,
+                budget_reservation=budget_reservation,
+            )
+
+        mock_warning.assert_called_once()
+        assert budget_reservation["finalized"] is True
+        assert (
+            counter_cache.in_memory_cache.get_cache(
+                key="spend:key:key-bad-reserved-counter"
+            )
+            is None
+        )
+    finally:
+        ps.spend_counter_cache = orig_counter
+
+
+@pytest.mark.asyncio
 async def test_increment_spend_counter_invalidates_stale_cache_on_redis_failure():
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import _increment_spend_counter_cache
