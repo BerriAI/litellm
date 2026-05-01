@@ -1,9 +1,10 @@
 # Builds and pushes the LiteLLM database image to ECR when a maintainer applies
-# `build-ecr-artifact-` + the first 5 hexadecimal characters of the PR head commit
-# (lowercase), e.g. head e21326b… → label `build-ecr-artifact-e2132`.
+# the `build-ecr-artifact` label.
 #
-# Weaker than full-SHA or PR-approval gates: 5 hex chars can collide across commits;
-# add an approval check later if you need stronger TOCTOU protection.
+# TOCTOU mitigation: GitHub stores commit_id on each review. The workflow requires
+# at least one APPROVED review whose commit_id matches the current PR head, from a
+# reviewer who is not the PR author and has write+ access. If the branch is
+# force-pushed, re-approve the new tip before labeling.
 name: PR Build Artifact
 
 on:
@@ -29,14 +30,16 @@ jobs:
 
     # Least privilege for this job only (HIGH fix: job-scoped id-token, not workflow).
     # - contents: read — checkout + collaborator permission API for the actor check
+    # - pull-requests: read — list PR reviews (commit_id for approval gate)
     # - id-token: write — mint OIDC JWT for AWS role assumption (no long-lived keys)
     permissions:
       contents: read
+      pull-requests: read
       id-token: write
 
     if: >
       github.event.action == 'labeled' &&
-      startsWith(github.event.label.name, 'build-ecr-artifact-') &&
+      github.event.label.name == 'build-ecr-artifact' &&
       github.event.pull_request.head.repo.full_name == github.repository
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -44,30 +47,45 @@ jobs:
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
 
     steps:
-      - name: Verify label prefix matches first 5 hex chars of PR head
+      - name: Verify PR head has maintainer approval on this commit
         env:
-          LABEL_NAME: ${{ github.event.label.name }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
-          prefix="build-ecr-artifact-"
-          suffix="${LABEL_NAME#"${prefix}"}"
-          if [[ "${LABEL_NAME}" == "${suffix}" ]]; then
-            echo "::error::Label must be ${prefix}<first-5-hex-chars-of-head-sha> (e.g. ${prefix}e2132 for tip starting with e21326…)."
-            exit 1
-          fi
           lc_head="$(printf '%s' "${HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
-          head5="${lc_head:0:5}"
-          lc_suffix="$(printf '%s' "${suffix}" | tr '[:upper:]' '[:lower:]')"
-          if [[ "${#lc_suffix}" -ne 5 ]]; then
-            echo "::error::Expected exactly 5 hex characters after '${prefix}', got length ${#lc_suffix}."
+          mapfile -t reviewers < <(gh api "/repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate \
+            --jq --arg sha "${lc_head}" --arg author "${PR_AUTHOR}" -r '
+              [ .[]
+                | select(.state == "APPROVED")
+                | select((.commit_id // "") | ascii_downcase == $sha)
+                | select(.user.login != null)
+                | select(.user.login != $author)
+                | .user.login
+              ] | unique | .[]')
+
+          if [[ "${#reviewers[@]}" -eq 0 ]] || [[ -z "${reviewers[0]:-}" ]]; then
+            echo "::error::Need an APPROVED review on the current head (${HEAD_SHA}) from someone other than the PR author. If the branch changed, approve again, then apply the label."
             exit 1
           fi
-          if [[ ! "${lc_suffix}" =~ ^[0-9a-f]{5}$ ]]; then
-            echo "::error::Suffix must be 5 hexadecimal characters."
-            exit 1
-          fi
-          if [[ "${lc_suffix}" != "${head5}" ]]; then
-            echo "::error::Label suffix '${lc_suffix}' does not match head prefix '${head5}' (full head ${HEAD_SHA}). Update or recreate the label."
+
+          found=0
+          for login in "${reviewers[@]}"; do
+            [[ -z "${login}" ]] && continue
+            perm="$(gh api "/repos/${REPOSITORY}/collaborators/${login}/permission" --jq '.permission')"
+            case "${perm}" in
+              admin|maintain|write)
+                echo "Qualifying approval: ${login} (${perm}) on ${HEAD_SHA}"
+                found=1
+                break
+                ;;
+            esac
+          done
+
+          if [[ "${found}" -ne 1 ]]; then
+            echo "::error::Approvals on this commit were found, but no approver has write, maintain, or admin."
             exit 1
           fi
 
@@ -158,5 +176,5 @@ jobs:
             echo "- Head SHA: \`${PR_HEAD_SHA}\`"
             echo "- **Immutable** image URI (pin by digest in production): \`${TRACE_URI}\`"
             echo
-            echo "Label format: \`build-ecr-artifact-\` + first 5 hex chars of head (lowercase)."
+            echo "Requires label \`build-ecr-artifact\` and an **Approve** on the current head from a non-author reviewer with write+ access."
           } >> "${GITHUB_STEP_SUMMARY}"
