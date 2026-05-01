@@ -19,7 +19,6 @@ sys.path.insert(
 import litellm  # noqa: E402
 
 from tests._vcr_redis_persister import (  # noqa: E402
-    emit_vcr_verbose_line,
     filter_non_2xx_response,
     format_vcr_verdict,
     make_redis_persister,
@@ -27,6 +26,16 @@ from tests._vcr_redis_persister import (  # noqa: E402
     patch_vcrpy_aiohttp_record_path,
     vcr_verbose_enabled,
 )
+
+
+# Controller-side handles for writing per-test VCR verdicts to the live
+# terminal. ``pytest_configure`` stashes the pluginmanager (workers don't get
+# a TerminalReporter — their output is captured and aggregated by the
+# controller), and ``pytest_runtest_logreport`` resolves the TerminalReporter
+# lazily on first use because it isn't registered yet at conftest configure
+# time.
+_controller_pluginmanager = None
+_controller_terminal_reporter = None
 
 
 # vcrpy and respx both patch the httpx transport — applying both makes one
@@ -182,10 +191,14 @@ def _vcr_outcome_gate(request, vcr):
     above, so we can mark the cassette key passed/failed before vcrpy's
     Cassette.__exit__ triggers persister.save_cassette.
 
-    Also prints a per-test hit/miss verdict when LITELLM_VCR_VERBOSE=1.
+    Stashes a per-test hit/miss verdict on ``user_properties`` so the
+    controller-side ``pytest_runtest_logreport`` hook can surface it to the
+    live terminal. xdist serializes ``user_properties`` on each phase's
+    report back to the controller, which is the only process that has a
+    TerminalReporter wired to CI's live log.
     """
     yield
-    cassette = vcr  # name kept for the verbose-output line
+    cassette = vcr
     rep_call = getattr(request.node, "rep_call", None)
     test_passed = bool(rep_call and rep_call.passed)
     cassette_path = getattr(cassette, "_path", None) if cassette is not None else None
@@ -195,7 +208,57 @@ def _vcr_outcome_gate(request, vcr):
     if not vcr_verbose_enabled():
         return
     verdict = format_vcr_verdict(cassette)
-    emit_vcr_verbose_line(f"{verdict} :: {request.node.nodeid}")
+    request.node.user_properties.append(("vcr_verdict", verdict))
+
+
+def pytest_configure(config):
+    """Stash the pluginmanager so the logreport hook can find TerminalReporter.
+
+    We can't grab TerminalReporter directly here — it's not registered until
+    pytest's own ``pytest_configure`` runs, and conftest hooks may run first.
+    Stashing the config is enough; the hook resolves on first use.
+    """
+    global _controller_pluginmanager
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return  # workers don't have a live-log TerminalReporter
+    _controller_pluginmanager = config.pluginmanager
+
+
+def _resolve_terminal_reporter():
+    """Lazy-resolve the TerminalReporter once it's been registered."""
+    global _controller_terminal_reporter
+    if _controller_terminal_reporter is not None:
+        return _controller_terminal_reporter
+    if _controller_pluginmanager is None:
+        return None
+    _controller_terminal_reporter = _controller_pluginmanager.getplugin(
+        "terminalreporter"
+    )
+    return _controller_terminal_reporter
+
+
+def pytest_runtest_logreport(report):
+    """Print VCR verdicts on the controller, alongside PASSED/FAILED markers.
+
+    Runs once per phase per test. We pick teardown so the verdict (appended
+    in ``_vcr_outcome_gate`` teardown) is present in ``report.user_properties``.
+    """
+    if report.when != "teardown":
+        return
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return  # only the controller has a live-log TerminalReporter
+    if not vcr_verbose_enabled():
+        return
+    reporter = _resolve_terminal_reporter()
+    if reporter is None:
+        return
+    verdict = next(
+        (v for k, v in (report.user_properties or []) if k == "vcr_verdict"),
+        None,
+    )
+    if not verdict:
+        return
+    reporter.write_line(f"{verdict} :: {report.nodeid}")
 
 
 # ---------------------------------------------------------------------------
