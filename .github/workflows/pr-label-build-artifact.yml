@@ -1,9 +1,9 @@
-# Builds and pushes the LiteLLM database image to ECR when a maintainer applies a
-# label that pins the exact PR head commit SHA.
+# Builds and pushes the LiteLLM database image to ECR when a maintainer applies
+# `build-ecr-artifact-` + the first 5 hexadecimal characters of the PR head commit
+# (lowercase), e.g. head e21326b… → label `build-ecr-artifact-e2132`.
 #
-# Maintainer usage: add label `build-ecr-artifact-<full40CharCommitSha>` to the PR
-# (use the PR tip SHA shown in the UI). This ties the build to the commit you
-# reviewed and fails if the branch was force-pushed afterward (TOCTOU mitigation).
+# Weaker than full-SHA or PR-approval gates: 5 hex chars can collide across commits;
+# add an approval check later if you need stronger TOCTOU protection.
 name: PR Build Artifact
 
 on:
@@ -44,7 +44,7 @@ jobs:
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
 
     steps:
-      - name: Verify label pins PR head SHA (mitigates force-push / label race)
+      - name: Verify label prefix matches first 5 hex chars of PR head
         env:
           LABEL_NAME: ${{ github.event.label.name }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -52,21 +52,22 @@ jobs:
           prefix="build-ecr-artifact-"
           suffix="${LABEL_NAME#"${prefix}"}"
           if [[ "${LABEL_NAME}" == "${suffix}" ]]; then
-            echo "::error::Label must be ${prefix}<full-40-char-commit-sha> matching the PR tip you reviewed."
-            exit 1
-          fi
-          if [[ "${#suffix}" -ne 40 ]]; then
-            echo "::error::Expected a 40-character commit SHA after '${prefix}', got length ${#suffix}."
-            exit 1
-          fi
-          lc_suffix="$(printf '%s' "${suffix}" | tr '[:upper:]' '[:lower:]')"
-          if [[ ! "${lc_suffix}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::SHA suffix must be hexadecimal."
+            echo "::error::Label must be ${prefix}<first-5-hex-chars-of-head-sha> (e.g. ${prefix}e2132 for tip starting with e21326…)."
             exit 1
           fi
           lc_head="$(printf '%s' "${HEAD_SHA}" | tr '[:upper:]' '[:lower:]')"
-          if [[ "${lc_suffix}" != "${lc_head}" ]]; then
-            echo "::error::Label SHA does not match current PR head (${HEAD_SHA}). Remove the label and add ${prefix}${lc_head} after verifying the tip."
+          head5="${lc_head:0:5}"
+          lc_suffix="$(printf '%s' "${suffix}" | tr '[:upper:]' '[:lower:]')"
+          if [[ "${#lc_suffix}" -ne 5 ]]; then
+            echo "::error::Expected exactly 5 hex characters after '${prefix}', got length ${#lc_suffix}."
+            exit 1
+          fi
+          if [[ ! "${lc_suffix}" =~ ^[0-9a-f]{5}$ ]]; then
+            echo "::error::Suffix must be 5 hexadecimal characters."
+            exit 1
+          fi
+          if [[ "${lc_suffix}" != "${head5}" ]]; then
+            echo "::error::Label suffix '${lc_suffix}' does not match head prefix '${head5}' (full head ${HEAD_SHA}). Update or recreate the label."
             exit 1
           fi
 
@@ -157,5 +158,5 @@ jobs:
             echo "- Head SHA: \`${PR_HEAD_SHA}\`"
             echo "- **Immutable** image URI (pin by digest in production): \`${TRACE_URI}\`"
             echo
-            echo "Label format: \`build-ecr-artifact-<40-char-sha>\` must match the PR tip when labeled."
+            echo "Label format: \`build-ecr-artifact-\` + first 5 hex chars of head (lowercase)."
           } >> "${GITHUB_STEP_SUMMARY}"
