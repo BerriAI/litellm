@@ -510,6 +510,37 @@ async def test_should_seed_org_counter_from_with_budget_cache(spend_counter_stat
 
 
 @pytest.mark.asyncio
+async def test_should_seed_org_counter_from_plain_org_cache(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    await key_cache.async_set_cache(
+        key="org_id:org-counter-plain",
+        value=LiteLLM_OrganizationTable(
+            organization_id="org-counter-plain",
+            organization_alias="shared-org",
+            budget_id="org-budget-id",
+            spend=2.0,
+            models=[],
+            created_by="test",
+            updated_by="test",
+        ).model_dump(),
+    )
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        org_id="org-counter-plain",
+        response_cost=0.25,
+    )
+
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:org:org-counter-plain"
+    ) == pytest.approx(2.25)
+
+
+@pytest.mark.asyncio
 async def test_should_cap_known_estimate_to_remaining_budget(
     spend_counter_state,
 ):
