@@ -10,7 +10,7 @@ any drift as a neutral check.
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
 HTTP_METHOD_SUFFIXES = {
@@ -35,13 +35,46 @@ def load_snapshot() -> Optional[Dict[str, Dict]]:
         return None
 
 
+def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
+    """Make FastAPI-generated operation IDs stable for multi-method routes.
+
+    FastAPI derives the default operation ID suffix from the first item in the
+    route's methods set. For routes registered with several HTTP methods, that
+    set iteration order can vary between processes, which makes the snapshot
+    drift even when no routes changed.
+    """
+    for path_ops in paths.values():
+        if not isinstance(path_ops, dict):
+            continue
+
+        methods = {method for method in path_ops if method in HTTP_METHODS}
+        if not methods:
+            continue
+
+        for method, operation in path_ops.items():
+            if method not in HTTP_METHODS or not isinstance(operation, dict):
+                continue
+
+            operation_id = operation.get("operationId")
+            if not isinstance(operation_id, str):
+                continue
+
+            for suffix in methods:
+                suffix_token = f"_{suffix}"
+                if operation_id.endswith(suffix_token):
+                    operation["operationId"] = (
+                        operation_id[: -len(suffix_token)] + f"_{method}"
+                    )
+                    break
+
+
 def generate_snapshot() -> Dict[str, Dict]:
     import importlib
 
     from fastapi.openapi.utils import get_openapi
 
     from litellm.proxy._lazy_features import LAZY_FEATURES
-    from litellm.proxy.proxy_server import app
+    from litellm.proxy.proxy_server import app, ensure_unique_openapi_operation_ids
 
     for feat in LAZY_FEATURES:
         if feat.module_path in sys.modules:
@@ -53,6 +86,7 @@ def generate_snapshot() -> Dict[str, Dict]:
             sys.stderr.write(f"warning: skip {feat.name}: {exc}\n")
 
     fragments: Dict[str, Dict] = {}
+    used_operation_ids: Set[str] = set()
     for feat in LAZY_FEATURES:
         feat_routes = [
             r
@@ -62,6 +96,8 @@ def generate_snapshot() -> Dict[str, Dict]:
         if not feat_routes:
             continue
         full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
+        paths = full.get("paths", {})
+        _normalize_operation_ids(paths)
         # Group all of a feature's routes under one tag.
         for path_ops in full.get("paths", {}).values():
             for method, op in path_ops.items():
@@ -75,8 +111,9 @@ def generate_snapshot() -> Dict[str, Dict]:
                                 )
                                 break
                     op["tags"] = [feat.name]
+        full = ensure_unique_openapi_operation_ids(full, used_operation_ids)
         fragments[feat.name] = {
-            "paths": full.get("paths", {}),
+            "paths": paths,
             "components": {"schemas": full.get("components", {}).get("schemas", {})},
         }
     return fragments
