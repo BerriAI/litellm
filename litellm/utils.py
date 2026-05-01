@@ -3545,7 +3545,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         else:
             optional_params = non_default_params
     else:
-        optional_params = non_default_params
+        # openai_compatible_providers (e.g. hosted_vllm, openrouter, etc.)
+        # When drop_params=True, silently drop `dimensions` for models whose
+        # names do not contain "text-embedding-3", because many compatible
+        # endpoints (vLLM, etc.) return 422 when the parameter is present.
+        # When drop_params is not set we forward the parameter as-is: some
+        # compatible providers (Jina AI, Cohere via OpenRouter, …) do support
+        # `dimensions`, so raising unconditionally would break them.
+        optional_params = non_default_params.copy()
+        if (
+            "dimensions" in optional_params
+            and model is not None
+            and "text-embedding-3" not in model
+            and (litellm.drop_params is True or drop_params is True)
+        ):
+            optional_params.pop("dimensions")
 
     final_params = add_provider_specific_params_to_optional_params(
         optional_params=optional_params,

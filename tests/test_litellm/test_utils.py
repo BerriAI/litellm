@@ -565,6 +565,47 @@ def test_cohere_embedding_optional_params():
     assert optional_params is not None
 
 
+@pytest.mark.parametrize(
+    "model,custom_llm_provider,drop_params,expect_dimensions",
+    [
+        ("intfloat/e5-large-v2", "groq", True, False),   # drop when drop_params=True
+        ("intfloat/e5-large-v2", "groq", False, True),   # keep when drop_params=False
+        ("text-embedding-3-small", "groq", True, True),  # text-embedding-3 always kept
+        ("text-embedding-3-small", "groq", False, True),
+        ("jina-embeddings-v3", "groq", True, False),
+        ("jina-embeddings-v3", "groq", False, True),
+    ],
+)
+def test_openai_compatible_embedding_dimensions_drop_params(
+    model, custom_llm_provider, drop_params, expect_dimensions
+):
+    """dimensions should only be dropped for non-text-embedding-3 models when drop_params=True.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/23119 — hosted_vllm
+    endpoints return 422 when `dimensions` is forwarded, but other compatible providers
+    (Jina AI, Cohere via OpenRouter) legitimately support the parameter.
+    """
+    from litellm import get_optional_params_embeddings
+
+    result = get_optional_params_embeddings(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        input="hello",
+        dimensions=512,
+        drop_params=drop_params,
+    )
+    if expect_dimensions:
+        assert "dimensions" in result, (
+            f"Expected 'dimensions' to be present for model={model!r}, "
+            f"drop_params={drop_params}"
+        )
+    else:
+        assert "dimensions" not in result, (
+            f"Expected 'dimensions' to be dropped for model={model!r}, "
+            f"drop_params={drop_params}"
+        )
+
+
 def validate_model_cost_values(model_data, exceptions=None):
     """
     Validates that cost values in model data do not exceed 1.
