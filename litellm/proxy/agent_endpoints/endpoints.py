@@ -992,11 +992,17 @@ async def get_agent_daily_activity(
         # and team carry no agent restrictions. For activity scoping that's
         # not "see everything" — fall back to the agents the caller
         # created so they cannot enumerate other tenants' agents.
+        # Guard against `user_id is None`: a literal None in Prisma
+        # `where={"created_by": None}` resolves to ``created_by IS NULL``
+        # and would expose every ownerless agent's rows.
         if not permitted_agent_ids:
-            owned_records = await prisma_client.db.litellm_agentstable.find_many(
-                where={"created_by": user_api_key_dict.user_id}
-            )
-            permitted_agent_ids = [a.agent_id for a in owned_records]
+            if user_api_key_dict.user_id is None:
+                permitted_agent_ids = []
+            else:
+                owned_records = await prisma_client.db.litellm_agentstable.find_many(
+                    where={"created_by": user_api_key_dict.user_id}
+                )
+                permitted_agent_ids = [a.agent_id for a in owned_records]
 
         if agent_ids_list:
             agent_ids_list = [
