@@ -528,6 +528,37 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         },
                     )
 
+            # Fail-closed guard: overall_code says OVER_LIMIT but no status
+            # matched a descriptor key we know how to translate into a 429.
+            # Refuse the request rather than silently fall through and let an
+            # over-limit request proceed to the model. Without this, a future
+            # caller wiring an unfamiliar descriptor into enforced_descriptors
+            # would silently bypass the rate limit.
+            offending = next(
+                (s for s in atomic_response["statuses"] if s["code"] == "OVER_LIMIT"),
+                None,
+            )
+            verbose_proxy_logger.error(
+                f"Dynamic rate limiter: OVER_LIMIT response with unknown "
+                f"descriptor_key(s) — refusing request. response={atomic_response}"
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "Rate limit exceeded",
+                    "descriptor_key": (
+                        offending["descriptor_key"] if offending else "unknown"
+                    ),
+                    "rate_limit_type": (
+                        str(offending["rate_limit_type"]) if offending else "unknown"
+                    ),
+                },
+                headers={
+                    "retry-after": str(self.v3_limiter.window_size),
+                    "x-litellm-priority": priority or "default",
+                },
+            )
+
         # If priority is NOT enforced (saturation below threshold) but
         # priority_descriptors exist, increment them for tracking only — no
         # check, no rollback. This matches the prior tracking semantics.

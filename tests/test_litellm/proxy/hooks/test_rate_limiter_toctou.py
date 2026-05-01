@@ -412,3 +412,78 @@ async def test_batch_zero_token_consumes_rpm_only():
             batch_usage=zero_batch,
         )
     assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_dynamic_rate_limiter_v3_fails_closed_on_unknown_descriptor():
+    """
+    Fail-closed guard: when atomic_check_and_increment_by_n returns
+    overall_code=OVER_LIMIT but with a descriptor_key the dispatcher does
+    not recognize, the dynamic limiter must raise 429 rather than silently
+    fall through.
+
+    Reproduces by patching atomic_check_and_increment_by_n to return an
+    OVER_LIMIT response carrying an unknown descriptor_key.
+    """
+    from fastapi import HTTPException
+
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"high": 0.9, "low": 0.1}
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "fail-closed-model"
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": 1000,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    async def fake_atomic(*args, **kwargs):
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 100,
+                    "limit_remaining": 0,
+                    "rate_limit_type": "tokens",
+                    "descriptor_key": "future_unrecognized_descriptor",
+                }
+            ],
+        }
+
+    handler.v3_limiter.atomic_check_and_increment_by_n = fake_atomic
+
+    from litellm.types.router import ModelGroupInfo
+
+    user = UserAPIKeyAuth(api_key=hash_token("fail-closed-key"))
+    user.metadata = {"priority": "high"}
+
+    with pytest.raises(HTTPException) as exc:
+        await handler._check_rate_limits(
+            model=model,
+            model_group_info=ModelGroupInfo(
+                model_group=model,
+                providers=["openai"],
+                rpm=None,
+                tpm=1000,
+            ),
+            user_api_key_dict=user,
+            priority="high",
+            saturation=0.0,
+            data={},
+        )
+    assert (
+        exc.value.status_code == 429
+    ), f"Expected 429 fail-closed on unknown descriptor; got {exc.value.status_code}"
