@@ -460,6 +460,31 @@ class TestSwaggerChatCompletions:
         ]
         assert len(operation_ids) == len(set(operation_ids))
 
+    def test_should_not_add_method_suffix_to_multi_method_route_base_id(self):
+        from types import SimpleNamespace
+
+        from litellm.proxy.proxy_server import _generate_stable_operation_id
+
+        multi_method_route = SimpleNamespace(
+            name="anthropic_proxy_route",
+            path_format="/anthropic/{endpoint}",
+            methods={"DELETE", "GET", "POST"},
+        )
+        single_method_route = SimpleNamespace(
+            name="list_models",
+            path_format="/models",
+            methods={"GET"},
+        )
+
+        assert (
+            _generate_stable_operation_id(multi_method_route)
+            == "anthropic_proxy_route_anthropic__endpoint_"
+        )
+        assert (
+            _generate_stable_operation_id(single_method_route)
+            == "list_models_models_get"
+        )
+
     def test_should_reserve_operation_ids_across_lazy_fragments(self):
         from litellm.proxy.proxy_server import ensure_unique_openapi_operation_ids
 
