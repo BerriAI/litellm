@@ -12,14 +12,13 @@ Run checks for:
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import HTTPException, Request, status
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.constants import (
     CLI_JWT_EXPIRATION_HOURS,
@@ -66,6 +65,8 @@ from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
 )
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
 from litellm.router import Router
@@ -846,7 +847,7 @@ def get_actual_routes(allowed_routes: list) -> list:
 
 async def get_default_end_user_budget(
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
 ) -> Optional[LiteLLM_BudgetTable]:
     """
@@ -869,9 +870,12 @@ async def get_default_end_user_budget(
     cache_key = f"default_end_user_budget:{litellm.max_end_user_budget_id}"
 
     # Check cache first
-    cached_budget = await user_api_key_cache.async_get_cache(key=cache_key)
+    cached_budget = await user_api_key_cache.async_get_cache(
+        key=cache_key,
+        model_type=LiteLLM_BudgetTable,
+    )
     if cached_budget is not None:
-        return LiteLLM_BudgetTable(**cached_budget)
+        return cached_budget
 
     # Fetch from database
     try:
@@ -885,14 +889,16 @@ async def get_default_end_user_budget(
             )
             return None
 
+        _budget_obj = LiteLLM_BudgetTable(**budget_record.dict())
         # Cache the budget for 60 seconds
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=budget_record.dict(),
+            value=_budget_obj,
+            model_type=LiteLLM_BudgetTable,
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
 
-        return LiteLLM_BudgetTable(**budget_record.dict())
+        return _budget_obj
 
     except Exception as e:
         verbose_proxy_logger.error(f"Error fetching default end user budget: {str(e)}")
@@ -903,7 +909,7 @@ async def get_default_end_user_budget(
 async def get_team_member_default_budget(
     budget_id: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> Optional[LiteLLM_BudgetTable]:
     """
     Fetches the team-level default per-member budget referenced by team.metadata["team_member_budget_id"].
@@ -960,7 +966,7 @@ async def get_team_member_default_budget(
 async def _apply_default_budget_to_end_user(
     end_user_obj: LiteLLM_EndUserTable,
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
 ) -> LiteLLM_EndUserTable:
     """
@@ -1042,7 +1048,7 @@ async def _check_end_user_budget(
 async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     route: str,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
@@ -1073,10 +1079,12 @@ async def get_end_user_object(
     _key = "end_user_id:{}".format(end_user_id)
 
     # Check cache first
-    cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
+    cached_user_obj = await user_api_key_cache.async_get_cache(
+        key=_key,
+        model_type=LiteLLM_EndUserTable,
+    )
     if cached_user_obj is not None:
-        return_obj = LiteLLM_EndUserTable(**cached_user_obj)
-
+        return_obj = cached_user_obj
         # Apply default budget if needed
         return_obj = await _apply_default_budget_to_end_user(
             end_user_obj=return_obj,
@@ -1111,9 +1119,11 @@ async def get_end_user_object(
             parent_otel_span=parent_otel_span,
         )
 
-        # Save to cache (always store as dict for consistency)
+        # Save to cache
         await user_api_key_cache.async_set_cache(
-            key="end_user_id:{}".format(end_user_id), value=_response.dict()
+            key="end_user_id:{}".format(end_user_id),
+            value=_response,
+            model_type=LiteLLM_EndUserTable,
         )
 
         # Check budget limits
@@ -1131,7 +1141,7 @@ async def get_end_user_object(
 async def get_tag_objects_batch(
     tag_names: List[str],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Dict[str, LiteLLM_TagTable]:
@@ -1164,12 +1174,12 @@ async def get_tag_objects_batch(
     # Try to get all tags from cache first
     for tag_name in tag_names:
         cache_key = f"tag:{tag_name}"
-        cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
+        cached_tag = await user_api_key_cache.async_get_cache(
+            key=cache_key,
+            model_type=LiteLLM_TagTable,
+        )
         if cached_tag is not None:
-            if isinstance(cached_tag, dict):
-                tag_objects[tag_name] = LiteLLM_TagTable(**cached_tag)
-            else:
-                tag_objects[tag_name] = cached_tag
+            tag_objects[tag_name] = cached_tag
         else:
             uncached_tags.append(tag_name)
 
@@ -1185,11 +1195,13 @@ async def get_tag_objects_batch(
             for db_tag in db_tags:
                 tag_name = db_tag.tag_name
                 cache_key = f"tag:{tag_name}"
-                # Cache with default TTL (same as end_user objects)
+                _tag_obj = LiteLLM_TagTable(**db_tag.dict())
                 await user_api_key_cache.async_set_cache(
-                    key=cache_key, value=db_tag.dict()
+                    key=cache_key,
+                    value=_tag_obj,
+                    model_type=LiteLLM_TagTable,
                 )
-                tag_objects[tag_name] = LiteLLM_TagTable(**db_tag.dict())
+                tag_objects[tag_name] = _tag_obj
         except Exception as e:
             verbose_proxy_logger.debug(f"Error batch fetching tags from database: {e}")
 
@@ -1200,7 +1212,7 @@ async def get_tag_objects_batch(
 async def get_tag_object(
     tag_name: Optional[str],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_TagTable]:
@@ -1239,7 +1251,7 @@ async def get_team_membership(
     user_id: str,
     team_id: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional["LiteLLM_TeamMembership"]:
@@ -1259,9 +1271,12 @@ async def get_team_membership(
     _key = "team_membership:{}:{}".format(user_id, team_id)
 
     # check if in cache
-    cached_membership_obj = await user_api_key_cache.async_get_cache(key=_key)
+    cached_membership_obj = await user_api_key_cache.async_get_cache(
+        key=_key,
+        model_type=LiteLLM_TeamMembership,
+    )
     if cached_membership_obj is not None:
-        return LiteLLM_TeamMembership(**cached_membership_obj)
+        return cached_membership_obj
 
     # else, check db
     try:
@@ -1273,10 +1288,12 @@ async def get_team_membership(
         if response is None:
             return None
 
-        # save the team membership object to cache (store as dict)
-        await user_api_key_cache.async_set_cache(key=_key, value=response.dict())
-
         _response = LiteLLM_TeamMembership(**response.dict())
+        await user_api_key_cache.async_set_cache(
+            key=_key,
+            value=_response,
+            model_type=LiteLLM_TeamMembership,
+        )
 
         return _response
     except Exception:
@@ -1444,7 +1461,7 @@ async def _get_fuzzy_user_object(
 async def get_user_object(
     user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_id_upsert: bool,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
@@ -1463,12 +1480,12 @@ async def get_user_object(
 
     # check if in cache
     if not check_db_only:
-        cached_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
+        cached_user_obj = await user_api_key_cache.async_get_cache(
+            key=user_id,
+            model_type=LiteLLM_UserTable,
+        )
         if cached_user_obj is not None:
-            if isinstance(cached_user_obj, dict):
-                return LiteLLM_UserTable(**cached_user_obj)
-            elif isinstance(cached_user_obj, LiteLLM_UserTable):
-                return cached_user_obj
+            return cached_user_obj
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
@@ -1530,7 +1547,8 @@ async def get_user_object(
         # save the user object to cache
         await user_api_key_cache.async_set_cache(
             key=user_id,
-            value=response_dict,
+            value=_response,
+            model_type=LiteLLM_UserTable,
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
 
@@ -1551,13 +1569,21 @@ async def get_user_object(
 
 async def _cache_management_object(
     key: str,
-    value: BaseModel,
-    user_api_key_cache: DualCache,
+    value: Union[BaseModel, Dict[str, Any]],
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
+    *,
+    model_type: Type[BaseModel],
 ):
+    """
+    Persist management objects via ``UserApiKeyCache`` (in-memory + optional Redis).
+
+    ``UserApiKeyCache`` serializes with ``model_type`` so Redis and in-memory stay aligned.
+    """
     await user_api_key_cache.async_set_cache(
         key=key,
         value=value,
+        model_type=model_type,
         ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     )
 
@@ -1565,7 +1591,7 @@ async def _cache_management_object(
 async def _cache_team_object(
     team_id: str,
     team_table: LiteLLM_TeamTableCachedObj,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
     key = "team_id:{}".format(team_id)
@@ -1578,13 +1604,14 @@ async def _cache_team_object(
         value=team_table,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        model_type=LiteLLM_TeamTableCachedObj,
     )
 
 
 async def _cache_key_object(
     hashed_token: str,
     user_api_key_obj: UserAPIKeyAuth,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
     key = hashed_token
@@ -1600,12 +1627,13 @@ async def _cache_key_object(
         value=cached_key_obj,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        model_type=UserAPIKeyAuth,
     )
 
 
 async def _delete_cache_key_object(
     hashed_token: str,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging],
 ):
     key = hashed_token
@@ -1653,7 +1681,7 @@ async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient):
 async def _get_team_object_from_user_api_key_cache(
     team_id: str,
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     last_db_access_time: LimitedSizeOrderedDict,
     db_cache_expiry: int,
     proxy_logging_obj: Optional[ProxyLogging],
@@ -1714,38 +1742,38 @@ async def _get_team_object_from_user_api_key_cache(
 async def _get_team_object_from_cache(
     key: str,
     proxy_logging_obj: Optional[ProxyLogging],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span],
 ) -> Optional[LiteLLM_TeamTableCachedObj]:
-    cached_team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
-
-    ## CHECK REDIS CACHE ##
+    ## INTERNAL USAGE CACHE (plain DualCache) — checked before UserApiKeyCache stores ##
     if (
         proxy_logging_obj is not None
         and proxy_logging_obj.internal_usage_cache.dual_cache
     ):
-        cached_team_obj = (
+        cached_raw = (
             await proxy_logging_obj.internal_usage_cache.dual_cache.async_get_cache(
                 key=key, parent_otel_span=parent_otel_span
             )
         )
+        if cached_raw is not None:
+            from_internal = CacheCodec.deserialize(
+                cached_raw, LiteLLM_TeamTableCachedObj
+            )
+            if from_internal is not None:
+                return from_internal
 
-    if cached_team_obj is None:
-        cached_team_obj = await user_api_key_cache.async_get_cache(key=key)
-
-    if cached_team_obj is not None:
-        if isinstance(cached_team_obj, dict):
-            return LiteLLM_TeamTableCachedObj(**cached_team_obj)
-        elif isinstance(cached_team_obj, LiteLLM_TeamTableCachedObj):
-            return cached_team_obj
-
-    return None
+    decoded = await user_api_key_cache.async_get_cache(
+        key=key,
+        parent_otel_span=parent_otel_span,
+        model_type=LiteLLM_TeamTableCachedObj,
+    )
+    return decoded
 
 
 async def get_team_object(
     team_id: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
     check_cache_only: Optional[bool] = None,
@@ -1811,20 +1839,21 @@ async def get_team_object(
 async def _cache_access_object(
     access_group_id: str,
     access_group_table: LiteLLM_AccessGroupTable,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ):
     key = "access_group_id:{}".format(access_group_id)
     await user_api_key_cache.async_set_cache(
         key=key,
         value=access_group_table,
+        model_type=LiteLLM_AccessGroupTable,
         ttl=DEFAULT_ACCESS_GROUP_CACHE_TTL,
     )
 
 
 async def _delete_cache_access_object(
     access_group_id: str,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ):
     key = "access_group_id:{}".format(access_group_id)
@@ -1842,7 +1871,7 @@ async def _delete_cache_access_object(
 async def get_access_object(
     access_group_id: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> LiteLLM_AccessGroupTable:
     """
@@ -1864,13 +1893,12 @@ async def get_access_object(
 
     key = "access_group_id:{}".format(access_group_id)
 
-    # Always check cache first
-    cached_access_obj = await user_api_key_cache.async_get_cache(key=key)
+    cached_access_obj = await user_api_key_cache.async_get_cache(
+        key=key,
+        model_type=LiteLLM_AccessGroupTable,
+    )
     if cached_access_obj is not None:
-        if isinstance(cached_access_obj, dict):
-            return LiteLLM_AccessGroupTable(**cached_access_obj)
-        elif isinstance(cached_access_obj, LiteLLM_AccessGroupTable):
-            return cached_access_obj
+        return cached_access_obj
 
     # Not in cache - fetch from DB
     try:
@@ -1916,7 +1944,7 @@ async def get_access_object(
 async def get_team_object_by_alias(
     team_alias: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional["Span"] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> LiteLLM_TeamTableCachedObj:
@@ -1998,6 +2026,7 @@ async def get_team_object_by_alias(
         await user_api_key_cache.async_set_cache(
             key=cache_key,
             value=team_obj,
+            model_type=LiteLLM_TeamTableCachedObj,
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
         # Also cache by team_id for consistency
@@ -2005,6 +2034,7 @@ async def get_team_object_by_alias(
         await user_api_key_cache.async_set_cache(
             key=team_id_cache_key,
             value=team_obj,
+            model_type=LiteLLM_TeamTableCachedObj,
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
 
@@ -2026,7 +2056,7 @@ async def get_team_object_by_alias(
 async def get_org_object_by_alias(
     org_alias: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional["Span"] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_OrganizationTable]:
@@ -2053,12 +2083,12 @@ async def get_org_object_by_alias(
 
     # Check cache first (keyed by alias)
     cache_key = "org_alias:{}".format(org_alias)
-    cached_org_obj = await user_api_key_cache.async_get_cache(key=cache_key)
+    cached_org_obj = await user_api_key_cache.async_get_cache(
+        key=cache_key,
+        model_type=LiteLLM_OrganizationTable,
+    )
     if cached_org_obj is not None:
-        if isinstance(cached_org_obj, dict):
-            return LiteLLM_OrganizationTable(**cached_org_obj)
-        elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
-            return cached_org_obj
+        return cached_org_obj
 
     # Query database by organization_alias
     try:
@@ -2088,13 +2118,15 @@ async def get_org_object_by_alias(
         # Cache the result
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=org_obj.model_dump(),
+            value=org_obj,
+            model_type=LiteLLM_OrganizationTable,
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
         # Also cache by org_id for consistency
         await user_api_key_cache.async_set_cache(
             key="org_id:{}".format(org_obj.organization_id),
-            value=org_obj.model_dump(),
+            value=org_obj,
+            model_type=LiteLLM_OrganizationTable,
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
 
@@ -2297,7 +2329,7 @@ async def get_jwt_key_mapping_object(
 async def get_key_object(
     hashed_token: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
     check_cache_only: Optional[bool] = None,
@@ -2315,17 +2347,14 @@ async def get_key_object(
     # check if in cache
     key = hashed_token
 
-    cached_key_obj: Optional[UserAPIKeyAuth] = await user_api_key_cache.async_get_cache(
-        key=key
+    # Same flow as before: use cache only when we have a hit we can turn into UserAPIKeyAuth
+    # (dict from Redis / model_dump, or UserAPIKeyAuth from in-memory). Otherwise fall through to DB.
+    user_api_key_auth = await user_api_key_cache.async_get_cache(
+        key=key,
+        model_type=UserAPIKeyAuth,
     )
-
-    if cached_key_obj is not None:
-        if isinstance(cached_key_obj, dict):
-            return _copy_user_api_key_auth_for_cache(
-                user_api_key_obj=UserAPIKeyAuth(**cached_key_obj)
-            )
-        elif isinstance(cached_key_obj, UserAPIKeyAuth):
-            return _copy_user_api_key_auth_for_cache(user_api_key_obj=cached_key_obj)
+    if user_api_key_auth is not None:
+        return _copy_user_api_key_auth_for_cache(user_api_key_obj=user_api_key_auth)
 
     if check_cache_only:
         raise Exception(
@@ -2392,7 +2421,7 @@ def _copy_user_api_key_auth_for_cache(
 async def get_object_permission(
     object_permission_id: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_ObjectPermissionTable]:
@@ -2408,12 +2437,12 @@ async def get_object_permission(
 
     # check if in cache
     key = "object_permission_id:{}".format(object_permission_id)
-    cached_obj_permission = await user_api_key_cache.async_get_cache(key=key)
-    if cached_obj_permission is not None:
-        if isinstance(cached_obj_permission, dict):
-            return LiteLLM_ObjectPermissionTable(**cached_obj_permission)
-        elif isinstance(cached_obj_permission, LiteLLM_ObjectPermissionTable):
-            return cached_obj_permission
+    deserialized_perm = await user_api_key_cache.async_get_cache(
+        key=key,
+        model_type=LiteLLM_ObjectPermissionTable,
+    )
+    if deserialized_perm is not None:
+        return deserialized_perm
 
     # else, check db
     try:
@@ -2424,14 +2453,15 @@ async def get_object_permission(
         if response is None:
             return None
 
-        # save the object permission to cache
+        _perm_obj = LiteLLM_ObjectPermissionTable(**response.dict())
         await user_api_key_cache.async_set_cache(
             key=key,
-            value=response.model_dump(),
+            value=_perm_obj,
+            model_type=LiteLLM_ObjectPermissionTable,
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
 
-        return LiteLLM_ObjectPermissionTable(**response.dict())
+        return _perm_obj
     except Exception:
         return None
 
@@ -2440,7 +2470,7 @@ async def get_object_permission(
 async def get_managed_vector_store_rows_by_uuids(
     uuids: List[str],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> List[LiteLLM_ManagedVectorStoresTable]:
@@ -2460,14 +2490,12 @@ async def get_managed_vector_store_rows_by_uuids(
 
     for uuid in uuids:
         key = "managed_vector_store_id:{}".format(uuid)
-        cached = await user_api_key_cache.async_get_cache(key=key)
-        if cached is not None:
-            if isinstance(cached, dict):
-                result.append(LiteLLM_ManagedVectorStoresTable(**cached))
-            elif isinstance(cached, LiteLLM_ManagedVectorStoresTable):
-                result.append(cached)
-            else:
-                cache_misses.append(uuid)
+        deserialized_vs = await user_api_key_cache.async_get_cache(
+            key=key,
+            model_type=LiteLLM_ManagedVectorStoresTable,
+        )
+        if deserialized_vs is not None:
+            result.append(deserialized_vs)
         else:
             cache_misses.append(uuid)
 
@@ -2493,7 +2521,8 @@ async def get_managed_vector_store_rows_by_uuids(
         key = "managed_vector_store_id:{}".format(cached_obj.vector_store_id)
         await user_api_key_cache.async_set_cache(
             key=key,
-            value=row_dict,
+            value=cached_obj,
+            model_type=LiteLLM_ManagedVectorStoresTable,
             ttl=DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
         )
         result.append(cached_obj)
@@ -2505,7 +2534,7 @@ async def get_managed_vector_store_rows_by_uuids(
 async def get_org_object(
     org_id: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
     include_budget_table: bool = False,
@@ -2536,12 +2565,12 @@ async def get_org_object(
         cache_key = "org_id:{}:with_budget".format(org_id)
 
     # check if in cache
-    cached_org_obj = user_api_key_cache.async_get_cache(key=cache_key)
-    if cached_org_obj is not None:
-        if isinstance(cached_org_obj, dict):
-            return LiteLLM_OrganizationTable(**cached_org_obj)
-        elif isinstance(cached_org_obj, LiteLLM_OrganizationTable):
-            return cached_org_obj
+    deserialized_org = await user_api_key_cache.async_get_cache(
+        key=cache_key,
+        model_type=LiteLLM_OrganizationTable,
+    )
+    if deserialized_org is not None:
+        return deserialized_org
     # else, check db
     try:
         query_kwargs: Dict[str, Any] = {"where": {"organization_id": org_id}}
@@ -2555,16 +2584,16 @@ async def get_org_object(
         if response is None:
             raise Exception
 
+        _org_obj = LiteLLM_OrganizationTable(**response.model_dump())
         # Cache the result
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=(
-                response.model_dump() if hasattr(response, "model_dump") else response
-            ),
+            value=_org_obj,
+            model_type=LiteLLM_OrganizationTable,
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
 
-        return response
+        return _org_obj
     except Exception:
         raise Exception(
             f"Organization doesn't exist in db. Organization={org_id}. Create organization via `/organization/new` call."
@@ -2577,7 +2606,7 @@ async def _get_resources_from_access_groups(
         "access_model_names", "access_mcp_server_ids", "access_agent_ids"
     ],
     prisma_client: Optional[PrismaClient] = None,
-    user_api_key_cache: Optional[DualCache] = None,
+    user_api_key_cache: Optional[UserApiKeyCache] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> List[str]:
     """
@@ -2635,7 +2664,7 @@ async def _get_resources_from_access_groups(
 async def _get_models_from_access_groups(
     access_group_ids: List[str],
     prisma_client: Optional[PrismaClient] = None,
-    user_api_key_cache: Optional[DualCache] = None,
+    user_api_key_cache: Optional[UserApiKeyCache] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> List[str]:
     """
@@ -2654,7 +2683,7 @@ async def _get_models_from_access_groups(
 async def _get_mcp_server_ids_from_access_groups(
     access_group_ids: List[str],
     prisma_client: Optional[PrismaClient] = None,
-    user_api_key_cache: Optional[DualCache] = None,
+    user_api_key_cache: Optional[UserApiKeyCache] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> List[str]:
     """
@@ -2673,7 +2702,7 @@ async def _get_mcp_server_ids_from_access_groups(
 async def _get_agent_ids_from_access_groups(
     access_group_ids: List[str],
     prisma_client: Optional[PrismaClient] = None,
-    user_api_key_cache: Optional[DualCache] = None,
+    user_api_key_cache: Optional[UserApiKeyCache] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> List[str]:
     """
@@ -3397,7 +3426,7 @@ async def _check_team_member_budget(
     user_object: Optional[LiteLLM_UserTable],
     valid_token: Optional[UserAPIKeyAuth],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ):
     """Check if team member is over their max budget within the team."""
@@ -3465,7 +3494,7 @@ async def _check_team_member_model_access(
     valid_token: UserAPIKeyAuth,
     llm_router: Optional[Router],
     prisma_client: Optional["PrismaClient"],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> None:
     """
@@ -3772,7 +3801,7 @@ async def _project_soft_budget_check(
 async def get_project_object(
     project_id: str,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_ProjectTableCachedObj]:
     """
@@ -3787,12 +3816,12 @@ async def get_project_object(
 
     # Check cache first
     cache_key = "project_id:{}".format(project_id)
-    cached_obj = await user_api_key_cache.async_get_cache(key=cache_key)
-    if cached_obj is not None:
-        if isinstance(cached_obj, dict):
-            return LiteLLM_ProjectTableCachedObj(**cached_obj)
-        elif isinstance(cached_obj, LiteLLM_ProjectTableCachedObj):
-            return cached_obj
+    deserialized_project = await user_api_key_cache.async_get_cache(
+        key=cache_key,
+        model_type=LiteLLM_ProjectTableCachedObj,
+    )
+    if deserialized_project is not None:
+        return deserialized_project
 
     # Fetch from DB
     project_row = await prisma_client.db.litellm_projecttable.find_unique(
@@ -3811,6 +3840,7 @@ async def get_project_object(
         value=project_obj,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        model_type=LiteLLM_ProjectTableCachedObj,
     )
 
     return project_obj
@@ -3820,7 +3850,7 @@ async def _organization_max_budget_check(
     valid_token: Optional[UserAPIKeyAuth],
     team_object: Optional[LiteLLM_TeamTable],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ):
     """
@@ -3914,7 +3944,7 @@ async def _organization_max_budget_check(
 async def _tag_max_budget_check(
     request_body: dict,
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     valid_token: Optional[UserAPIKeyAuth],
 ):
