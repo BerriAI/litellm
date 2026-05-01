@@ -5,7 +5,7 @@ import sys
 
 import redis
 
-from tests._vcr_redis_persister import _redis_url_from_env
+from tests._vcr_redis_persister import CASSETTE_REDIS_URL_ENV, _redis_url_from_env
 
 PREFIX = "litellm:vcr:cassette:"
 SCAN_BATCH = 500
@@ -14,9 +14,7 @@ SCAN_BATCH = 500
 def _client() -> redis.Redis:
     url = _redis_url_from_env()
     if not url:
-        sys.exit(
-            "Set REDIS_URL, REDIS_SSL_URL, or REDIS_HOST to flush the VCR cache"
-        )
+        sys.exit(f"Set {CASSETTE_REDIS_URL_ENV} to flush the VCR cache")
     return redis.Redis.from_url(
         url,
         socket_timeout=5,
