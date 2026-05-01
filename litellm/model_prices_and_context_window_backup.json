@@ -39754,7 +39754,8 @@
         "input_cost_per_token": 4.5e-07,
         "output_cost_per_token": 3.5e-06,
         "litellm_provider": "venice",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_reasoning": true
     },
     "venice/qwen3-235b-a22b-instruct-2507": {
         "max_tokens": 16384,
@@ -39845,7 +39846,8 @@
         "input_cost_per_token": 3.125e-07,
         "output_cost_per_token": 1.125e-06,
         "litellm_provider": "venice",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_reasoning": true
     },
     "venice/grok-41-fast": {
         "max_tokens": 30000,
@@ -40009,7 +40011,8 @@
         "input_cost_per_token": 7.5e-07,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "venice",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_reasoning": true
     },
     "venice/kimi-k2-5": {
         "max_tokens": 65536,
