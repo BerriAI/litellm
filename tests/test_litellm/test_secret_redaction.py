@@ -277,7 +277,7 @@ _SAMPLE_SA_JSON = (
 
 
 def test_pem_private_key_redacted_in_json():
-    result = _redact_string(_SAMPLE_SA_JSON)
+    result = redact_string(_SAMPLE_SA_JSON)
     assert "MIIEvQIBADA" not in result
     assert "-----BEGIN" not in result
 
@@ -286,12 +286,12 @@ def test_pem_private_key_redacted_in_dict_repr():
     import json
 
     sa = json.loads(_SAMPLE_SA_JSON)
-    result = _redact_string(str(sa))
+    result = redact_string(str(sa))
     assert "MIIEvQIBADA" not in result
 
 
 def test_service_account_blob_fully_redacted():
-    result = _redact_string(f"Got={_SAMPLE_SA_JSON}")
+    result = redact_string(f"Got={_SAMPLE_SA_JSON}")
     assert "my-proj-123" not in result
     assert "sa@my-proj.iam.gserviceaccount.com" not in result
     assert "abc123def" not in result
@@ -320,22 +320,22 @@ def test_vertex_traceback_redacts_pem():
         "Unable to load vertex credentials from environment. "
         f"Got={_SAMPLE_SA_JSON}"
     )
-    result = _redact_string(traceback_text)
+    result = redact_string(traceback_text)
     assert "MIIEvQIBADA" not in result
     assert "-----BEGIN" not in result
 
 
 def test_gcp_oauth_token_redacted():
-    result = _redact_string("access token ya29.c.c0ASRK0GZvXlongtokenhere")
+    result = redact_string("access token ya29.c.c0ASRK0GZvXlongtokenhere")
     assert "ya29." not in result
     assert "REDACTED" in result
 
 
 def test_non_pem_private_key_value_redacted():
-    result = _redact_string("'private_key': 'some-non-pem-secret-value'")
+    result = redact_string("'private_key': 'some-non-pem-secret-value'")
     assert "some-non-pem-secret" not in result
 
 
 def test_normal_vertex_log_not_redacted():
     msg = "Vertex: Loading vertex credentials, is_file_path=True, current dir /app"
-    assert _redact_string(msg) == msg
+    assert redact_string(msg) == msg
