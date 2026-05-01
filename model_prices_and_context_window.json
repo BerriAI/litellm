@@ -8104,7 +8104,8 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_reasoning": true
     },
     "bedrock/us-east-1/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
@@ -8721,7 +8722,8 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_reasoning": true
     },
     "bedrock/us-west-2/moonshotai.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
@@ -22792,7 +22794,8 @@
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_reasoning": true
     },
     "minimax/speech-02-hd": {
         "input_cost_per_character": 0.0001,
