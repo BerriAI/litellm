@@ -808,12 +808,15 @@ def init_verbose_loggers():
                     import logging
 
                     from litellm._logging import (
+                        verbose_logger,
                         verbose_proxy_logger,
                         verbose_router_logger,
                     )
 
                     # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
 
+                    # sets package logs to info
+                    verbose_logger.setLevel(level=logging.INFO)
                     verbose_router_logger.setLevel(
                         level=logging.INFO
                     )  # set router logs to info
@@ -824,13 +827,16 @@ def init_verbose_loggers():
                     import logging
 
                     from litellm._logging import (
+                        verbose_logger,
                         verbose_proxy_logger,
                         verbose_router_logger,
                     )
 
+                    # set package log to debug
+                    verbose_logger.setLevel(level=logging.DEBUG)
                     verbose_router_logger.setLevel(
                         level=logging.DEBUG
-                    )  # set router logs to info
+                    )  # set router logs to debug
                     verbose_proxy_logger.setLevel(
                         level=logging.DEBUG
                     )  # set proxy logs to debug
