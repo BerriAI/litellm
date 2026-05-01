@@ -224,6 +224,16 @@ AIOHTTP_CONNECTOR_LIMIT_PER_HOST = int(
 )
 AIOHTTP_KEEPALIVE_TIMEOUT = int(os.getenv("AIOHTTP_KEEPALIVE_TIMEOUT", 120))
 AIOHTTP_TTL_DNS_CACHE = int(os.getenv("AIOHTTP_TTL_DNS_CACHE", 300))
+# TCP keep-alive (SO_KEEPALIVE) — opt-in. Required when running behind NAT/LBs
+# whose idle timeout is shorter than provider response timeouts (e.g. AWS NAT
+# Gateway: 350s vs OpenAI/Azure: 600s). Without this, the kernel sends nothing
+# during a long provider call and the NAT reaps the flow before the response
+# arrives. Enabling SO_KEEPALIVE makes the kernel emit TCP probes that reset
+# the NAT idle timer.
+AIOHTTP_SO_KEEPALIVE = os.getenv("AIOHTTP_SO_KEEPALIVE", "False").lower() == "true"
+AIOHTTP_TCP_KEEPIDLE = int(os.getenv("AIOHTTP_TCP_KEEPIDLE", 60))
+AIOHTTP_TCP_KEEPINTVL = int(os.getenv("AIOHTTP_TCP_KEEPINTVL", 30))
+AIOHTTP_TCP_KEEPCNT = int(os.getenv("AIOHTTP_TCP_KEEPCNT", 5))
 # enable_cleanup_closed is only needed for Python versions with the SSL leak bug
 # Fixed in Python 3.12.7+ and 3.13.1+ (see https://github.com/python/cpython/pull/118960)
 # Reference: https://github.com/aio-libs/aiohttp/blob/master/aiohttp/connector.py#L74-L78
@@ -1383,6 +1393,10 @@ except (ValueError, TypeError):
 LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME = "litellm-internal-health-check"
 LITTELM_CLI_SERVICE_ACCOUNT_NAME = "litellm-cli"
 LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
+# Stable identifier substituted in place of the master key on UserAPIKeyAuth
+# objects so the master key (or its hash) never propagates to spend logs,
+# Prometheus metrics, audit trails, or any other downstream consumer.
+LITELLM_PROXY_MASTER_KEY_ALIAS = "litellm_proxy_master_key"
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
@@ -1396,12 +1410,22 @@ LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS = int(
     os.getenv("LITELLM_KEY_ROTATION_LOCK_TTL_SECONDS", 600)
 )  # 10 minutes default — caps the deadlock window if a pod crashes mid-rotation
 UI_SESSION_TOKEN_TEAM_ID = "litellm-dashboard"
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED = os.getenv(
+    "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED", "false"
+)
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS = int(
+    os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS", 86400)
+)  # 24 hours default
+LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE = int(
+    os.getenv("LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE", 1000)
+)
 LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 
 ########################### CLI SSO AUTHENTICATION CONSTANTS ###########################
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
+CLI_SSO_SESSION_TTL_SECONDS = 600
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
 # Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
 CLI_JWT_EXPIRATION_HOURS = int(
@@ -1425,6 +1449,7 @@ CLOUDZERO_MAX_FETCHED_DATA_RECORDS = int(
 )
 SPEND_LOG_CLEANUP_JOB_NAME = "spend_log_cleanup"
 KEY_ROTATION_JOB_NAME = "litellm_key_rotation_job"
+EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME = "litellm_expired_ui_session_key_cleanup_job"
 SPEND_LOG_RUN_LOOPS = int(os.getenv("SPEND_LOG_RUN_LOOPS", 500))
 SPEND_LOG_CLEANUP_BATCH_SIZE = int(os.getenv("SPEND_LOG_CLEANUP_BATCH_SIZE", 1000))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))

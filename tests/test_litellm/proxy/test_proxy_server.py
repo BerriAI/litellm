@@ -457,6 +457,59 @@ def test_fallback_login_has_no_deprecation_banner(client_no_auth):
     assert "<form" in html
 
 
+@pytest.mark.parametrize(
+    "ui_logo_path",
+    [
+        "/etc/litellm/secret-config.json",
+        "/var/secrets/admin.key",
+        "/proc/self/environ",
+        "relative/path/logo.png",
+    ],
+)
+def test_get_logo_url_does_not_disclose_local_paths(
+    client_no_auth, monkeypatch, ui_logo_path
+):
+    # ``/get_logo_url`` is unauthenticated. Returning a local filesystem
+    # path verbatim discloses admin-only config to any caller. Only
+    # browser-loadable HTTP(S) URLs should be returned; for local paths
+    # the dashboard falls back to ``/get_image``.
+    monkeypatch.setenv("UI_LOGO_PATH", ui_logo_path)
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": ""}
+
+
+def test_get_logo_url_returns_https_url(client_no_auth, monkeypatch):
+    monkeypatch.setenv("UI_LOGO_PATH", "https://cdn.public.example/logo.png")
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": "https://cdn.public.example/logo.png"}
+
+
+def test_get_logo_url_returns_http_url(client_no_auth, monkeypatch):
+    # HTTP URLs (typically internal CDN) are still returned — those are
+    # intended to be loaded directly by the browser.
+    monkeypatch.setenv("UI_LOGO_PATH", "http://internal-cdn.corp:8080/logo.png")
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": "http://internal-cdn.corp:8080/logo.png"}
+
+
+def test_get_logo_url_returns_empty_when_unset(client_no_auth, monkeypatch):
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": ""}
+
+
 def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
     # Ensure the route returns the HTML form instead of redirecting
     monkeypatch.setattr(
@@ -2544,6 +2597,14 @@ class TestPriceDataReloadAPI:
 class TestPriceDataReloadIntegration:
     """Integration tests for the complete price data reload feature"""
 
+    @pytest.fixture(autouse=True)
+    def _flush_litellm_config_cache(self):
+        from litellm.proxy.utils import litellm_config_cache
+
+        litellm_config_cache.flush_cache()
+        yield
+        litellm_config_cache.flush_cache()
+
     @pytest.fixture
     def client_with_auth(self):
         """Create a test client with authentication"""
@@ -2601,6 +2662,7 @@ class TestPriceDataReloadIntegration:
     def test_distributed_reload_check_function(self):
         """Test the _check_and_reload_model_cost_map function"""
         from litellm.proxy.proxy_server import ProxyConfig
+        from litellm.proxy.utils import litellm_config_cache
 
         proxy_config = ProxyConfig()
 
@@ -2609,14 +2671,19 @@ class TestPriceDataReloadIntegration:
 
         # Test case 1: No config in database
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        # _check_and_reload_model_cost_map routes through get_config_param,
+        # which calls prisma.get_generic_data on a cache miss.
+        mock_prisma.get_generic_data = AsyncMock(return_value=None)
 
         # Should return early without reloading
         asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
         # Test case 2: Config with interval but not time to reload
+        litellm_config_cache.flush_cache()
         mock_config = MagicMock()
         mock_config.param_value = {"interval_hours": 6, "force_reload": False}
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
 
         # Mock current time and last reload time
         with patch(
@@ -2632,8 +2699,10 @@ class TestPriceDataReloadIntegration:
                 asyncio.run(proxy_config._check_and_reload_model_cost_map(mock_prisma))
 
         # Test case 3: Config with force reload
+        litellm_config_cache.flush_cache()
         mock_config.param_value = {"interval_hours": 6, "force_reload": True}
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
         original_model_cost = litellm.model_cost.copy()
@@ -2675,6 +2744,8 @@ class TestPriceDataReloadIntegration:
         mock_config = MagicMock()
         mock_config.param_value = {"interval_hours": 24, "force_reload": True}
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        # _check_and_reload_model_cost_map now reads through get_generic_data.
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
         original_model_cost = litellm.model_cost.copy()
@@ -2770,6 +2841,8 @@ class TestPriceDataReloadIntegration:
         mock_config = MagicMock()
         mock_config.param_value = {"interval_hours": 12, "force_reload": True}
         mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=mock_config)
+        # _check_and_reload_anthropic_beta_headers now reads through get_generic_data.
+        mock_prisma.get_generic_data = AsyncMock(return_value=mock_config)
         mock_prisma.db.litellm_config.upsert = AsyncMock(return_value=None)
 
         with patch(
@@ -3960,7 +4033,7 @@ async def test_get_image_root_case_uses_current_dir(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
+async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch, tmp_path):
     """
     Test that when UI_LOGO_PATH is set to a local file, get_image serves it
     directly and does not return a stale cached_logo.jpg.
@@ -3969,11 +4042,11 @@ async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
     so a pre-existing cached_logo.jpg (e.g. from the base Docker image) would
     always be returned, ignoring the user's custom logo.
     """
-    from unittest.mock import patch
-
     from litellm.proxy.proxy_server import get_image
 
-    monkeypatch.setenv("UI_LOGO_PATH", "/app/custom_logo.jpg")
+    custom_logo = tmp_path / "custom_logo.jpg"
+    custom_logo.write_bytes(b"\xff\xd8\xff custom logo")
+    monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo))
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
     monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
 
@@ -3984,8 +4057,6 @@ async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
         return MagicMock()
 
     with (
-        patch("litellm.proxy.proxy_server.os.path.exists", return_value=True),
-        patch("litellm.proxy.proxy_server.os.access", return_value=True),
         patch(
             "litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response
         ),
@@ -3995,25 +4066,27 @@ async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
     assert (
         len(calls_to_file_response) == 1
     ), "FileResponse should be called exactly once"
-    assert calls_to_file_response[0] == "/app/custom_logo.jpg", (
+    assert calls_to_file_response[0] == str(custom_logo.resolve()), (
         f"Expected custom logo path, got {calls_to_file_response[0]}. "
         "A stale cached_logo.jpg may have been returned instead."
     )
 
 
 @pytest.mark.asyncio
-async def test_get_image_default_logo_still_uses_cache(monkeypatch):
+async def test_get_image_default_logo_ignores_stale_cache(monkeypatch, tmp_path):
     """
-    Test that when UI_LOGO_PATH is NOT set (default logo), the cache
-    optimization still works — cached_logo.jpg is returned if it exists.
+    Test that when UI_LOGO_PATH is NOT set, stale pre-fix cached_logo.jpg
+    files are ignored and the default logo is served.
     """
     from unittest.mock import patch
 
     from litellm.proxy.proxy_server import get_image
 
+    cache_path = tmp_path / "cached_logo.jpg"
+    cache_path.write_bytes(b"\xff\xd8\xff cached logo")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
-    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+    monkeypatch.setenv("LITELLM_ASSETS_PATH", str(tmp_path))
 
     calls_to_file_response = []
 
@@ -4022,8 +4095,6 @@ async def test_get_image_default_logo_still_uses_cache(monkeypatch):
         return MagicMock()
 
     with (
-        patch("litellm.proxy.proxy_server.os.path.exists", return_value=True),
-        patch("litellm.proxy.proxy_server.os.access", return_value=True),
         patch(
             "litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response
         ),
@@ -4034,24 +4105,26 @@ async def test_get_image_default_logo_still_uses_cache(monkeypatch):
         len(calls_to_file_response) == 1
     ), "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
-    assert served_path.endswith(
-        "cached_logo.jpg"
-    ), f"Expected cached_logo.jpg for default logo, got {served_path}"
+    assert served_path != str(cache_path.resolve())
+    assert served_path.endswith("logo.jpg")
 
 
 @pytest.mark.asyncio
-async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatch):
+async def test_get_image_custom_logo_missing_falls_through_to_default(
+    monkeypatch, tmp_path
+):
     """
     Test that when UI_LOGO_PATH points to a non-existent local file,
-    get_image falls through to the cache/default logo instead of failing.
+    get_image falls through to the default logo instead of failing.
     """
     from unittest.mock import patch
 
     from litellm.proxy.proxy_server import get_image
 
-    monkeypatch.setenv("UI_LOGO_PATH", "/app/nonexistent_logo.jpg")
+    custom_logo_path = tmp_path / "nonexistent_logo.jpg"
+    monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo_path))
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
-    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+    monkeypatch.setenv("LITELLM_ASSETS_PATH", str(tmp_path))
 
     calls_to_file_response = []
 
@@ -4059,17 +4132,7 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatc
         calls_to_file_response.append(path)
         return MagicMock()
 
-    def exists_side_effect(path):
-        # The custom logo does NOT exist; cache and default DO exist
-        if path == "/app/nonexistent_logo.jpg":
-            return False
-        return True
-
     with (
-        patch(
-            "litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect
-        ),
-        patch("litellm.proxy.proxy_server.os.access", return_value=True),
         patch(
             "litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response
         ),
@@ -4080,28 +4143,29 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatc
         len(calls_to_file_response) == 1
     ), "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
-    assert (
-        served_path != "/app/nonexistent_logo.jpg"
+    assert served_path != str(
+        custom_logo_path
     ), "Should not attempt to serve a non-existent custom logo"
-    assert served_path.endswith(
-        "cached_logo.jpg"
-    ), f"Expected fallback to cached_logo.jpg, got {served_path}"
+    assert served_path.endswith("logo.jpg")
 
 
 @pytest.mark.asyncio
-async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch):
+async def test_get_image_custom_logo_missing_no_cache_serves_default(
+    monkeypatch, tmp_path
+):
     """
     Test that when UI_LOGO_PATH points to a non-existent file AND there is no
-    cached_logo.jpg, get_image serves the default logo instead of the
-    non-existent custom path.
+    cached_logo.jpg, get_image serves the default logo instead of the non-existent
+    custom path.
     """
     from unittest.mock import patch
 
     from litellm.proxy.proxy_server import get_image
 
-    monkeypatch.setenv("UI_LOGO_PATH", "/app/nonexistent_logo.jpg")
+    custom_logo_path = tmp_path / "nonexistent_logo.jpg"
+    monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo_path))
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
-    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+    monkeypatch.setenv("LITELLM_ASSETS_PATH", str(tmp_path))
 
     calls_to_file_response = []
 
@@ -4109,19 +4173,7 @@ async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch
         calls_to_file_response.append(path)
         return MagicMock()
 
-    def exists_side_effect(path):
-        # Neither the custom logo nor the cache exist
-        if path == "/app/nonexistent_logo.jpg":
-            return False
-        if "cached_logo.jpg" in path:
-            return False
-        return True
-
     with (
-        patch(
-            "litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect
-        ),
-        patch("litellm.proxy.proxy_server.os.access", return_value=True),
         patch(
             "litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response
         ),
@@ -4132,8 +4184,8 @@ async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch
         len(calls_to_file_response) == 1
     ), "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
-    assert (
-        served_path != "/app/nonexistent_logo.jpg"
+    assert served_path != str(
+        custom_logo_path
     ), "Should not attempt to serve a non-existent custom logo"
     assert served_path.endswith(
         "logo.jpg"
@@ -5448,6 +5500,340 @@ async def test_reseed_warms_cache_even_on_zero_db_spend():
             db_call_count == 1
         ), f"second read should hit warmed cache, got {db_call_count} DB queries"
         assert redis_store.get(counter_key) == 0.0, "cache must be warmed at 0"
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+# ---------------------------------------------------------------------------
+# Lazy feature loading (LazyFeatureMiddleware) — verifies that optional
+# routers are NOT imported at module load and ARE imported on first request
+# to a matching path prefix. The same module isn't re-imported on subsequent
+# requests.
+# ---------------------------------------------------------------------------
+
+
+import sys
+
+
+class TestLazyFeatureRegistry:
+    """Sanity checks on the registry shape — guards against accidental edits."""
+
+    def test_registry_entries_have_required_fields(self):
+        from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature
+
+        assert len(LAZY_FEATURES) > 0
+        for feat in LAZY_FEATURES:
+            assert isinstance(feat, LazyFeature)
+            assert feat.name
+            assert feat.module_path
+            assert feat.path_prefixes
+            assert all(p.startswith("/") for p in feat.path_prefixes)
+            assert callable(feat.register_fn)
+
+    def test_registry_names_unique(self):
+        from litellm.proxy._lazy_features import LAZY_FEATURES
+
+        names = [f.name for f in LAZY_FEATURES]
+        assert len(names) == len(set(names)), "duplicate feature names"
+
+
+class TestLazyFeaturesNotImportedAtStartup:
+    """
+    The whole point of the refactor: gated feature modules must NOT be
+    present in `sys.modules` immediately after `proxy_server` imports.
+    """
+
+    def test_heavy_modules_absent_at_startup(self):
+        # Static scan of proxy_server.py source — catches any top-level
+        # `from <lazy_module> import` that would defeat lazy loading.
+        # Importing proxy_server in a subprocess and diffing sys.modules
+        # would also work, but takes 60-120 s and flakes on slow CI runners.
+        import re
+        from pathlib import Path
+
+        from litellm.proxy._lazy_features import LAZY_FEATURES
+
+        proxy_server_src = (
+            Path(__file__).resolve().parents[3] / "litellm/proxy/proxy_server.py"
+        ).read_text()
+
+        leaks = []
+        for feat in LAZY_FEATURES:
+            # Anchor at column 0 — indented imports inside function bodies
+            # are fine (deferred until the function runs).
+            pattern = (
+                rf"^(from\s+{re.escape(feat.module_path)}\s+import|"
+                rf"import\s+{re.escape(feat.module_path)})"
+            )
+            if re.search(pattern, proxy_server_src, re.MULTILINE):
+                leaks.append(feat.module_path)
+
+        assert not leaks, (
+            "proxy_server.py top-level imports a lazy feature module — these "
+            f"should be loaded via LazyFeatureMiddleware: {leaks}"
+        )
+
+
+class TestLazyFeatureMiddleware:
+    """Behavior of the middleware itself, exercised in isolation."""
+
+    @pytest.mark.asyncio
+    async def test_first_request_triggers_load_subsequent_does_not(self):
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import (
+            LazyFeature,
+            LazyFeatureMiddleware,
+        )
+
+        loads = []
+
+        def fake_register(app, module):
+            loads.append(getattr(module, "__name__", "?"))
+
+        feat = LazyFeature(
+            name="dummy",
+            module_path="json",  # any always-importable stdlib module
+            path_prefixes=("/dummy",),
+            register_fn=fake_register,
+        )
+
+        # Build a minimal ASGI receiver to satisfy the middleware contract
+        async def downstream(scope, receive, send):
+            # echo back; no-op handler
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(downstream, fastapi_app=target_app, features=(feat,))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        sent: list = []
+
+        async def send(message):
+            sent.append(message)
+
+        # First request matching the prefix triggers register
+        await mw(
+            {"type": "http", "path": "/dummy/x", "method": "GET", "headers": []},
+            receive,
+            send,
+        )
+        assert loads == ["json"]
+
+        # Second matching request must NOT re-register
+        sent.clear()
+        await mw(
+            {"type": "http", "path": "/dummy/y", "method": "GET", "headers": []},
+            receive,
+            send,
+        )
+        assert loads == ["json"], "register_fn called twice for the same feature"
+
+        # Non-matching path must not trigger anything
+        await mw(
+            {"type": "http", "path": "/unrelated", "method": "GET", "headers": []},
+            receive,
+            send,
+        )
+        assert loads == ["json"]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_first_requests_only_register_once(self):
+        """
+        Two requests to the same prefix arriving in parallel must result in
+        exactly one `register_fn` invocation — the lock prevents the import +
+        register from racing with itself.
+        """
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import (
+            LazyFeature,
+            LazyFeatureMiddleware,
+        )
+
+        loads = []
+
+        def slow_register(app, module):
+            loads.append(getattr(module, "__name__", "?"))
+
+        feat = LazyFeature(
+            name="dummy_concurrent",
+            module_path="json",
+            path_prefixes=("/dummy_c",),
+            register_fn=slow_register,
+        )
+
+        async def downstream(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(downstream, fastapi_app=target_app, features=(feat,))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        sent: list = []
+
+        async def send(message):
+            sent.append(message)
+
+        async def hit():
+            await mw(
+                {
+                    "type": "http",
+                    "path": "/dummy_c/x",
+                    "method": "GET",
+                    "headers": [],
+                },
+                receive,
+                send,
+            )
+
+        await asyncio.gather(hit(), hit(), hit(), hit(), hit())
+        assert loads == [
+            "json"
+        ], f"expected one registration despite concurrent first hits, got {loads}"
+
+    @pytest.mark.asyncio
+    async def test_failing_import_does_not_loop(self):
+        """
+        If a feature's module can't be imported, the middleware should mark it
+        loaded anyway so subsequent requests don't repeatedly retry the failing
+        import (which would amplify the cost on every request).
+        """
+        from fastapi import FastAPI
+
+        from litellm.proxy._lazy_features import (
+            LazyFeature,
+            LazyFeatureMiddleware,
+        )
+
+        attempts = []
+
+        def fail_register(app, module):
+            attempts.append("called")
+            raise RuntimeError("boom")
+
+        feat = LazyFeature(
+            name="failing",
+            module_path="json",
+            path_prefixes=("/fail",),
+            register_fn=fail_register,
+        )
+
+        async def downstream(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+
+        target_app = FastAPI()
+        mw = LazyFeatureMiddleware(downstream, fastapi_app=target_app, features=(feat,))
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        sent: list = []
+
+        async def send(message):
+            sent.append(message)
+
+        for _ in range(3):
+            await mw(
+                {"type": "http", "path": "/fail/x", "method": "GET", "headers": []},
+                receive,
+                send,
+            )
+        assert attempts == [
+            "called"
+        ], f"failing register_fn should be invoked once, not on every request; got {attempts}"
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_redis_clean_miss_skips_stale_in_memory():
+    """When Redis is reachable and cleanly returns None (TTL expired,
+    counter genuinely absent), the read must reseed from DB - NOT fall
+    through to per-pod in-memory which only contains this pod's writes.
+
+    Pre-fix in multi-pod deployments, in-memory contained a stale local
+    subset (e.g. $30) while DB had the true cross-pod total ($500). The
+    fall-through returned $30, enforcement passed, bypass.
+    """
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-1"
+
+    # Per-pod stale in-memory: only this pod's writes, not cross-pod truth.
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=30.0)
+
+    # Redis cleanly returns None (key expired or never written on this pod).
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(return_value=None)
+    fake_redis.async_increment = AsyncMock(return_value=500.0)
+    counter_cache.redis_cache = fake_redis
+
+    # DB has the authoritative cross-pod spend.
+    db_row = MagicMock()
+    db_row.spend = 500.0
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=db_row)
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        spend = await get_current_spend(counter_key=counter_key, fallback_spend=0.0)
+        assert spend == 500.0, (
+            f"expected DB-authoritative 500.0 on clean Redis miss, got {spend} "
+            f"(stale per-pod in-memory $30 would have caused multi-pod bypass)"
+        )
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_redis_error_falls_back_to_in_memory():
+    """When Redis raises, the read should still degrade to in-memory rather
+    than going straight to DB - in-memory is at least same-pod-fresh and
+    cheaper than a DB query during a Redis outage."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import get_current_spend
+
+    counter_cache = DualCache()
+    counter_key = "spend:team_member:user-1:team-1"
+
+    counter_cache.in_memory_cache.set_cache(key=counter_key, value=42.0)
+
+    fake_redis = AsyncMock()
+    fake_redis.async_get_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    counter_cache.redis_cache = fake_redis
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_teammembership.find_unique = AsyncMock(
+        return_value=MagicMock(spend=999.0)
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = fake_prisma
+    try:
+        spend = await get_current_spend(counter_key=counter_key, fallback_spend=0.0)
+        assert spend == 42.0, (
+            f"expected in-memory fallback 42.0 on Redis error, got {spend} "
+            f"(should not have hit DB when Redis errored)"
+        )
+        # DB query should NOT have fired - in-memory short-circuits.
+        fake_prisma.db.litellm_teammembership.find_unique.assert_not_awaited()
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma

@@ -237,6 +237,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # Vector Store Params
     vector_store_id: Optional[str] = None
     milvus_text_field: Optional[str] = None
+    milvus_db_name: Optional[str] = None
+    milvus_partition_names: Optional[List[str]] = None
 
     @model_validator(mode="before")
     @classmethod

@@ -277,6 +277,7 @@ model LiteLLM_ObjectPermissionTable {
   models                String[]       @default([])
   blocked_tools         String[]       @default([]) // Tool names blocked for any key/team/user with this permission
   mcp_toolsets          String[]       @default([]) // Toolset IDs granted to this key/team/user
+  search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -1289,4 +1290,81 @@ model LiteLLM_AdaptiveRouterSession {
 
   @@id([session_id, router_name, model_name])
   @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
+}
+
+// ---------------------------------------------------------------------------
+// Workflow Run Tracking
+//
+// Generic durable state tracking for any agent or automated workflow.
+// Design: three tables — run (header + materialized status), event (append-only
+// source of truth for state transitions), message (conversation inbox/outbox).
+//
+// Usage:
+//   - Set `workflow_type` to identify the owning system (e.g. "shin-builder").
+//   - Store domain-specific fields in `metadata` (worktree_path, pr_url, etc.).
+//   - `session_id` on WorkflowRun matches `x-litellm-session-id` header sent to
+//     the proxy — all spend logs for this run are automatically tagged.
+// ---------------------------------------------------------------------------
+
+// One instance of work being done. `status` is a materialized cache of the
+// latest event; the event log is the authoritative source of truth.
+model LiteLLM_WorkflowRun {
+  run_id        String   @id @default(uuid())
+  session_id    String   @unique @default(uuid())
+  workflow_type String
+  status        String   @default("pending")
+  created_by    String?  // user_id of the key that created this run; null = created by master key
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+  input         Json?
+  output        Json?
+  metadata      Json?
+
+  events   LiteLLM_WorkflowEvent[]
+  messages LiteLLM_WorkflowMessage[]
+
+  @@index([workflow_type, status])
+  @@index([session_id])
+  @@index([created_at])
+  @@index([created_by])
+}
+
+// Append-only log of state transitions. Never mutate rows here.
+// `step_name` and `event_type` are caller-defined strings — no hardcoded enums.
+// Status auto-update rules (applied by the append endpoint):
+//   step.started   → run.status = running
+//   step.failed    → run.status = failed
+//   hook.waiting   → run.status = paused
+//   hook.received  → run.status = running
+model LiteLLM_WorkflowEvent {
+  event_id        String   @id @default(uuid())
+  run_id          String
+  event_type      String
+  step_name       String
+  sequence_number Int
+  data            Json?
+  created_at      DateTime @default(now())
+
+  run LiteLLM_WorkflowRun @relation(fields: [run_id], references: [run_id])
+
+  @@unique([run_id, sequence_number])
+  @@index([run_id])
+}
+
+// Conversation inbox/outbox — full message content, separate from the durable
+// event log. Spend logs truncate messages; this table stores them in full.
+// `session_id` here is the Claude --resume session ID (or similar).
+model LiteLLM_WorkflowMessage {
+  message_id      String   @id @default(uuid())
+  run_id          String
+  role            String
+  content         String
+  sequence_number Int
+  session_id      String?
+  created_at      DateTime @default(now())
+
+  run LiteLLM_WorkflowRun @relation(fields: [run_id], references: [run_id])
+
+  @@unique([run_id, sequence_number])
+  @@index([run_id])
 }

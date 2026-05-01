@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import urllib.parse
 from datetime import datetime
 from typing import (
@@ -35,6 +36,11 @@ if TYPE_CHECKING:
 else:
     Credentials = Any
     AWSPreparedRequest = Any
+
+
+# Real AWS region names are lowercase letters, digits, and hyphens
+# (e.g. "us-east-1", "eu-west-2", "us-gov-west-1", "cn-north-1").
+_VALID_AWS_REGION_PATTERN = re.compile(r"\A[a-z0-9-]+\Z")
 
 
 class Boto3CredentialsInfo(BaseModel):
@@ -284,6 +290,9 @@ class BaseAWSLLM:
             if not region:  # Check if region is empty
                 return None
 
+            if not _VALID_AWS_REGION_PATTERN.match(region):
+                return None
+
             return region
         except Exception:
             # Catch any unexpected errors and return None
@@ -481,6 +490,7 @@ class BaseAWSLLM:
             str: The AWS region name
         """
         aws_region_name = optional_params.get("aws_region_name", None)
+        self._validate_aws_region_name(aws_region_name)
         ### SET REGION NAME ###
         if aws_region_name is None:
             # check model arn #
@@ -519,7 +529,24 @@ class BaseAWSLLM:
             except Exception:
                 aws_region_name = "us-west-2"
 
+        self._validate_aws_region_name(aws_region_name)
         return aws_region_name
+
+    @staticmethod
+    def _validate_aws_region_name(aws_region_name: Optional[str]) -> None:
+        """
+        Validate that an AWS region name conforms to the expected format
+        (lowercase alphanumerics and hyphens). Raises ValueError otherwise.
+        """
+        if aws_region_name is None:
+            return
+        if not isinstance(aws_region_name, str) or not _VALID_AWS_REGION_PATTERN.match(
+            aws_region_name
+        ):
+            raise ValueError(
+                f"Invalid AWS region format: {aws_region_name!r}. "
+                "Region names must contain only lowercase letters, digits, and hyphens."
+            )
 
     def get_aws_region_name_for_non_llm_api_calls(
         self,
@@ -532,6 +559,7 @@ class BaseAWSLLM:
 
         For non-llm api calls eg. Guardrails, Vector Stores we just need to check the dynamic param or env vars.
         """
+        self._validate_aws_region_name(aws_region_name)
         if aws_region_name is None:
             # check env #
             litellm_aws_region_name = get_secret("AWS_REGION_NAME", None)
@@ -549,6 +577,8 @@ class BaseAWSLLM:
 
             if aws_region_name is None:
                 aws_region_name = "us-west-2"
+
+        self._validate_aws_region_name(aws_region_name)
         return aws_region_name
 
     @staticmethod
