@@ -128,10 +128,19 @@ async def create_scheduled_task(
         )
 
     now = datetime.now(timezone.utc)
-    if data.expires_at <= now:
+    expires_at = data.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= now:
         raise HTTPException(status_code=400, detail="expires_at must be in the future")
 
     fire_once = data.fire_once if data.fire_once is not None else (data.schedule_kind == "once")
+
+    if data.schedule_kind == "once" and not fire_once:
+        raise HTTPException(
+            status_code=400,
+            detail="fire_once=False is invalid with schedule_kind='once'",
+        )
 
     next_run_at = compute_next_run(
         kind=data.schedule_kind,
@@ -295,6 +304,24 @@ async def update_scheduled_task(
             validate_schedule(kind=merged_kind, spec=merged_spec, tz=merged_tz)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    if (
+        any(k in fields for k in ("schedule_kind", "schedule_spec", "schedule_tz"))
+        and "next_run_at" not in fields
+    ):
+        fields["next_run_at"] = compute_next_run(
+            kind=merged_kind,
+            spec=merged_spec,
+            tz=merged_tz,
+            from_time=datetime.now(timezone.utc),
+        )
+
+    merged_fire_once = fields.get("fire_once", existing.fire_once)
+    if merged_kind == "once" and not merged_fire_once:
+        raise HTTPException(
+            status_code=400,
+            detail="fire_once=False is invalid with schedule_kind='once'",
+        )
 
     merged_action = fields.get("action", existing.action)
     merged_check = fields.get("check_prompt", existing.check_prompt)
