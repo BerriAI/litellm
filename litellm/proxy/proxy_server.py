@@ -12404,9 +12404,20 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
 
 @app.get("/get_logo_url", include_in_schema=False)
 def get_logo_url():
-    """Get the current logo URL from environment"""
+    """Get the current logo URL from environment.
+
+    Only HTTP(S) URLs are returned — those are intended to be loaded
+    directly by the browser from a public/internal CDN. Local file
+    paths set via ``UI_LOGO_PATH`` are NOT returned: they are admin-
+    only filesystem details, the dashboard falls back to ``/get_image``
+    which serves the file only when it is a supported image. Without
+    this filter, the unauthenticated endpoint would disclose internal
+    hostnames or filesystem paths to any caller.
+    """
     logo_path = os.getenv("UI_LOGO_PATH", "")
-    return {"logo_url": logo_path}
+    if logo_path.startswith(("http://", "https://")):
+        return {"logo_url": logo_path}
+    return {"logo_url": ""}
 
 
 @app.get("/get_image", include_in_schema=False)
@@ -12445,61 +12456,44 @@ async def get_image():
     if assets_dir != current_dir and not os.path.exists(default_logo):
         default_logo = default_site_logo
 
-    cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
-    cache_path = os.path.join(cache_dir, "cached_logo.jpg")
-
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
-    # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
+    from litellm.proxy.common_utils.static_asset_utils import (
+        resolve_validated_local_image_path,
+    )
+
     if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
-        if os.path.exists(logo_path):
-            return FileResponse(logo_path, media_type="image/jpeg")
-        # Custom path doesn't exist — fall back to default
+        safe_logo = resolve_validated_local_image_path(logo_path)
+        if safe_logo is not None:
+            safe_logo_path, media_type = safe_logo
+            return FileResponse(safe_logo_path, media_type=media_type)
         verbose_proxy_logger.warning(
-            f"UI_LOGO_PATH '{logo_path}' does not exist, falling back to default logo"
+            "UI_LOGO_PATH %r is not a supported image file or does not exist, "
+            "falling back to default logo",
+            logo_path,
         )
         logo_path = default_logo
 
-    # [OPTIMIZATION] For HTTP URLs and default logo, check if the cached image exists
-    if os.path.exists(cache_path):
-        return FileResponse(cache_path, media_type="image/jpeg")
-
-    # Check if the logo path is an HTTP/HTTPS URL
+    # Remote logo URLs are loaded by the browser. The proxy should not fetch
+    # arbitrary admin-configured URLs server-side.
     if logo_path.startswith(("http://", "https://")):
-        try:
-            # Download the image and cache it
-            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-            from litellm.types.llms.custom_http import httpxSpecialProvider
+        return RedirectResponse(url=logo_path)
 
-            async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.UI,
-                params={"timeout": 5.0},
-            )
-            response = await async_client.get(logo_path)
-            if response.status_code == 200:
-                # Save the image to a local file
-                with open(cache_path, "wb") as f:
-                    f.write(response.content)
-
-                # Return the cached image as a FileResponse
-                return FileResponse(cache_path, media_type="image/jpeg")
-            else:
-                # Handle the case when the image cannot be downloaded
-                return FileResponse(default_logo, media_type="image/jpeg")
-        except Exception as e:
-            # Handle any exceptions during the download (e.g., timeout, connection error)
-            verbose_proxy_logger.debug(f"Error downloading logo from {logo_path}: {e}")
-            return FileResponse(default_logo, media_type="image/jpeg")
-    else:
-        # Return the local image file if the logo path is not an HTTP/HTTPS URL
-        return FileResponse(logo_path, media_type="image/jpeg")
+    # Default logo (resolved from the bundled asset, not user-controlled).
+    safe_logo = resolve_validated_local_image_path(logo_path)
+    if safe_logo is not None:
+        safe_logo_path, media_type = safe_logo
+        return FileResponse(safe_logo_path, media_type=media_type)
+    return FileResponse(default_site_logo, media_type="image/jpeg")
 
 
 @app.get("/get_favicon", include_in_schema=False)
 async def get_favicon():
     """Get custom favicon for the admin UI."""
-    from fastapi.responses import Response
+    from litellm.proxy.common_utils.static_asset_utils import (
+        resolve_validated_local_image_path,
+    )
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     default_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
@@ -12512,42 +12506,17 @@ async def get_favicon():
         raise HTTPException(status_code=404, detail="Default favicon not found")
 
     if favicon_url.startswith(("http://", "https://")):
-        try:
-            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-            from litellm.types.llms.custom_http import httpxSpecialProvider
-
-            async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.UI,
-                params={"timeout": 5.0},
-            )
-            response = await async_client.get(favicon_url)
-            if response.status_code == 200:
-                content_type = response.headers.get("content-type", "image/x-icon")
-                return Response(
-                    content=response.content,
-                    media_type=content_type,
-                )
-            else:
-                verbose_proxy_logger.warning(
-                    "Failed to fetch favicon from %s: status %s",
-                    favicon_url,
-                    response.status_code,
-                )
-                if os.path.exists(default_favicon):
-                    return FileResponse(default_favicon, media_type="image/x-icon")
-                raise HTTPException(status_code=404, detail="Favicon not found")
-        except HTTPException:
-            raise
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "Error downloading favicon from %s: %s", favicon_url, e
-            )
-            if os.path.exists(default_favicon):
-                return FileResponse(default_favicon, media_type="image/x-icon")
-            raise HTTPException(status_code=404, detail="Favicon not found")
+        return RedirectResponse(url=favicon_url)
     else:
-        if os.path.exists(favicon_url):
-            return FileResponse(favicon_url, media_type="image/x-icon")
+        safe_favicon = resolve_validated_local_image_path(favicon_url)
+        if safe_favicon is not None:
+            safe_favicon_path, media_type = safe_favicon
+            return FileResponse(safe_favicon_path, media_type=media_type)
+        verbose_proxy_logger.warning(
+            "LITELLM_FAVICON_URL %r is not a supported image file or does not "
+            "exist, falling back to default favicon",
+            favicon_url,
+        )
         if os.path.exists(default_favicon):
             return FileResponse(default_favicon, media_type="image/x-icon")
         raise HTTPException(status_code=404, detail="Favicon not found")

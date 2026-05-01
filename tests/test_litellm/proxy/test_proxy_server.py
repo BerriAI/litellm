@@ -457,6 +457,59 @@ def test_fallback_login_has_no_deprecation_banner(client_no_auth):
     assert "<form" in html
 
 
+@pytest.mark.parametrize(
+    "ui_logo_path",
+    [
+        "/etc/litellm/secret-config.json",
+        "/var/secrets/admin.key",
+        "/proc/self/environ",
+        "relative/path/logo.png",
+    ],
+)
+def test_get_logo_url_does_not_disclose_local_paths(
+    client_no_auth, monkeypatch, ui_logo_path
+):
+    # ``/get_logo_url`` is unauthenticated. Returning a local filesystem
+    # path verbatim discloses admin-only config to any caller. Only
+    # browser-loadable HTTP(S) URLs should be returned; for local paths
+    # the dashboard falls back to ``/get_image``.
+    monkeypatch.setenv("UI_LOGO_PATH", ui_logo_path)
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": ""}
+
+
+def test_get_logo_url_returns_https_url(client_no_auth, monkeypatch):
+    monkeypatch.setenv("UI_LOGO_PATH", "https://cdn.public.example/logo.png")
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": "https://cdn.public.example/logo.png"}
+
+
+def test_get_logo_url_returns_http_url(client_no_auth, monkeypatch):
+    # HTTP URLs (typically internal CDN) are still returned — those are
+    # intended to be loaded directly by the browser.
+    monkeypatch.setenv("UI_LOGO_PATH", "http://internal-cdn.corp:8080/logo.png")
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": "http://internal-cdn.corp:8080/logo.png"}
+
+
+def test_get_logo_url_returns_empty_when_unset(client_no_auth, monkeypatch):
+    monkeypatch.delenv("UI_LOGO_PATH", raising=False)
+
+    response = client_no_auth.get("/get_logo_url")
+
+    assert response.status_code == 200
+    assert response.json() == {"logo_url": ""}
+
+
 def test_sso_key_generate_shows_deprecation_banner(client_no_auth, monkeypatch):
     # Ensure the route returns the HTML form instead of redirecting
     monkeypatch.setattr(
@@ -3980,7 +4033,7 @@ async def test_get_image_root_case_uses_current_dir(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
+async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch, tmp_path):
     """
     Test that when UI_LOGO_PATH is set to a local file, get_image serves it
     directly and does not return a stale cached_logo.jpg.
@@ -3989,11 +4042,11 @@ async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
     so a pre-existing cached_logo.jpg (e.g. from the base Docker image) would
     always be returned, ignoring the user's custom logo.
     """
-    from unittest.mock import patch
-
     from litellm.proxy.proxy_server import get_image
 
-    monkeypatch.setenv("UI_LOGO_PATH", "/app/custom_logo.jpg")
+    custom_logo = tmp_path / "custom_logo.jpg"
+    custom_logo.write_bytes(b"\xff\xd8\xff custom logo")
+    monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo))
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
     monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
 
@@ -4004,8 +4057,6 @@ async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
         return MagicMock()
 
     with (
-        patch("litellm.proxy.proxy_server.os.path.exists", return_value=True),
-        patch("litellm.proxy.proxy_server.os.access", return_value=True),
         patch(
             "litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response
         ),
@@ -4015,25 +4066,27 @@ async def test_get_image_custom_local_logo_bypasses_cache(monkeypatch):
     assert (
         len(calls_to_file_response) == 1
     ), "FileResponse should be called exactly once"
-    assert calls_to_file_response[0] == "/app/custom_logo.jpg", (
+    assert calls_to_file_response[0] == str(custom_logo.resolve()), (
         f"Expected custom logo path, got {calls_to_file_response[0]}. "
         "A stale cached_logo.jpg may have been returned instead."
     )
 
 
 @pytest.mark.asyncio
-async def test_get_image_default_logo_still_uses_cache(monkeypatch):
+async def test_get_image_default_logo_ignores_stale_cache(monkeypatch, tmp_path):
     """
-    Test that when UI_LOGO_PATH is NOT set (default logo), the cache
-    optimization still works — cached_logo.jpg is returned if it exists.
+    Test that when UI_LOGO_PATH is NOT set, stale pre-fix cached_logo.jpg
+    files are ignored and the default logo is served.
     """
     from unittest.mock import patch
 
     from litellm.proxy.proxy_server import get_image
 
+    cache_path = tmp_path / "cached_logo.jpg"
+    cache_path.write_bytes(b"\xff\xd8\xff cached logo")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
-    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+    monkeypatch.setenv("LITELLM_ASSETS_PATH", str(tmp_path))
 
     calls_to_file_response = []
 
@@ -4042,8 +4095,6 @@ async def test_get_image_default_logo_still_uses_cache(monkeypatch):
         return MagicMock()
 
     with (
-        patch("litellm.proxy.proxy_server.os.path.exists", return_value=True),
-        patch("litellm.proxy.proxy_server.os.access", return_value=True),
         patch(
             "litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response
         ),
@@ -4054,24 +4105,26 @@ async def test_get_image_default_logo_still_uses_cache(monkeypatch):
         len(calls_to_file_response) == 1
     ), "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
-    assert served_path.endswith(
-        "cached_logo.jpg"
-    ), f"Expected cached_logo.jpg for default logo, got {served_path}"
+    assert served_path != str(cache_path.resolve())
+    assert served_path.endswith("logo.jpg")
 
 
 @pytest.mark.asyncio
-async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatch):
+async def test_get_image_custom_logo_missing_falls_through_to_default(
+    monkeypatch, tmp_path
+):
     """
     Test that when UI_LOGO_PATH points to a non-existent local file,
-    get_image falls through to the cache/default logo instead of failing.
+    get_image falls through to the default logo instead of failing.
     """
     from unittest.mock import patch
 
     from litellm.proxy.proxy_server import get_image
 
-    monkeypatch.setenv("UI_LOGO_PATH", "/app/nonexistent_logo.jpg")
+    custom_logo_path = tmp_path / "nonexistent_logo.jpg"
+    monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo_path))
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
-    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+    monkeypatch.setenv("LITELLM_ASSETS_PATH", str(tmp_path))
 
     calls_to_file_response = []
 
@@ -4079,17 +4132,7 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatc
         calls_to_file_response.append(path)
         return MagicMock()
 
-    def exists_side_effect(path):
-        # The custom logo does NOT exist; cache and default DO exist
-        if path == "/app/nonexistent_logo.jpg":
-            return False
-        return True
-
     with (
-        patch(
-            "litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect
-        ),
-        patch("litellm.proxy.proxy_server.os.access", return_value=True),
         patch(
             "litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response
         ),
@@ -4100,28 +4143,29 @@ async def test_get_image_custom_logo_missing_falls_through_to_default(monkeypatc
         len(calls_to_file_response) == 1
     ), "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
-    assert (
-        served_path != "/app/nonexistent_logo.jpg"
+    assert served_path != str(
+        custom_logo_path
     ), "Should not attempt to serve a non-existent custom logo"
-    assert served_path.endswith(
-        "cached_logo.jpg"
-    ), f"Expected fallback to cached_logo.jpg, got {served_path}"
+    assert served_path.endswith("logo.jpg")
 
 
 @pytest.mark.asyncio
-async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch):
+async def test_get_image_custom_logo_missing_no_cache_serves_default(
+    monkeypatch, tmp_path
+):
     """
     Test that when UI_LOGO_PATH points to a non-existent file AND there is no
-    cached_logo.jpg, get_image serves the default logo instead of the
-    non-existent custom path.
+    cached_logo.jpg, get_image serves the default logo instead of the non-existent
+    custom path.
     """
     from unittest.mock import patch
 
     from litellm.proxy.proxy_server import get_image
 
-    monkeypatch.setenv("UI_LOGO_PATH", "/app/nonexistent_logo.jpg")
+    custom_logo_path = tmp_path / "nonexistent_logo.jpg"
+    monkeypatch.setenv("UI_LOGO_PATH", str(custom_logo_path))
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
-    monkeypatch.delenv("LITELLM_ASSETS_PATH", raising=False)
+    monkeypatch.setenv("LITELLM_ASSETS_PATH", str(tmp_path))
 
     calls_to_file_response = []
 
@@ -4129,19 +4173,7 @@ async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch
         calls_to_file_response.append(path)
         return MagicMock()
 
-    def exists_side_effect(path):
-        # Neither the custom logo nor the cache exist
-        if path == "/app/nonexistent_logo.jpg":
-            return False
-        if "cached_logo.jpg" in path:
-            return False
-        return True
-
     with (
-        patch(
-            "litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect
-        ),
-        patch("litellm.proxy.proxy_server.os.access", return_value=True),
         patch(
             "litellm.proxy.proxy_server.FileResponse", side_effect=fake_file_response
         ),
@@ -4152,8 +4184,8 @@ async def test_get_image_custom_logo_missing_no_cache_serves_default(monkeypatch
         len(calls_to_file_response) == 1
     ), "FileResponse should be called exactly once"
     served_path = calls_to_file_response[0]
-    assert (
-        served_path != "/app/nonexistent_logo.jpg"
+    assert served_path != str(
+        custom_logo_path
     ), "Should not attempt to serve a non-existent custom logo"
     assert served_path.endswith(
         "logo.jpg"
