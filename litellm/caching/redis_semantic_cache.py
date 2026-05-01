@@ -35,6 +35,11 @@ class RedisSemanticCache(BaseCache):
     """
 
     DEFAULT_REDIS_INDEX_NAME: str = "litellm_semantic_cache_index"
+    CACHE_KEY_FIELD_NAME: str = "litellm_cache_key"
+    CACHE_KEY_FILTERABLE_FIELD: Dict[str, str] = {
+        "name": CACHE_KEY_FIELD_NAME,
+        "type": "tag",
+    }
 
     def __init__(
         self,
@@ -66,8 +71,8 @@ class RedisSemanticCache(BaseCache):
             Exception: If similarity_threshold is not provided or required Redis
                 connection information is missing
         """
-        from redisvl.extensions.llmcache import SemanticCache
-        from redisvl.utils.vectorize import CustomTextVectorizer
+        from redisvl.extensions.llmcache import SemanticCache  # type: ignore[import-not-found, import-untyped]
+        from redisvl.utils.vectorize import CustomTextVectorizer  # type: ignore[import-not-found, import-untyped]
 
         if index_name is None:
             index_name = self.DEFAULT_REDIS_INDEX_NAME
@@ -109,13 +114,60 @@ class RedisSemanticCache(BaseCache):
         # Initialize the Redis vectorizer and cache
         cache_vectorizer = CustomTextVectorizer(self._get_embedding)
 
-        self.llmcache = SemanticCache(
-            name=index_name,
+        self.llmcache = self._init_semantic_cache(
+            semantic_cache_cls=SemanticCache,
+            index_name=index_name,
             redis_url=redis_url,
-            vectorizer=cache_vectorizer,
-            distance_threshold=self.distance_threshold,
-            overwrite=False,
+            cache_vectorizer=cache_vectorizer,
         )
+
+    def _init_semantic_cache(
+        self,
+        semantic_cache_cls: Any,
+        index_name: str,
+        redis_url: str,
+        cache_vectorizer: Any,
+    ) -> Any:
+        try:
+            return semantic_cache_cls(
+                name=index_name,
+                redis_url=redis_url,
+                vectorizer=cache_vectorizer,
+                distance_threshold=self.distance_threshold,
+                filterable_fields=[self.CACHE_KEY_FILTERABLE_FIELD],
+                overwrite=False,
+            )
+        except ValueError as exc:
+            if "schema does not match" not in str(exc):
+                raise
+
+            isolated_index_name = f"{index_name}_isolated"
+            print_verbose(
+                "Redis semantic-cache existing index schema is not isolated; "
+                f"using isolated index - {isolated_index_name}"
+            )
+            return semantic_cache_cls(
+                name=isolated_index_name,
+                redis_url=redis_url,
+                vectorizer=cache_vectorizer,
+                distance_threshold=self.distance_threshold,
+                filterable_fields=[self.CACHE_KEY_FILTERABLE_FIELD],
+                overwrite=False,
+            )
+
+    def _get_cache_filters(self, key: str) -> Dict[str, str]:
+        return {self.CACHE_KEY_FIELD_NAME: str(key)}
+
+    def _get_cache_key_filter_expression(self, key: str) -> Any:
+        from redisvl.query.filter import Tag  # type: ignore[import-not-found, import-untyped]
+
+        return Tag(self.CACHE_KEY_FIELD_NAME) == str(key)
+
+    def _cache_hit_matches_key(self, cache_hit: Dict[str, Any], key: str) -> bool:
+        cached_key = cache_hit.get(self.CACHE_KEY_FIELD_NAME)
+        if isinstance(cached_key, bytes):
+            cached_key = cached_key.decode("utf-8")
+        return cached_key is not None and str(cached_key) == str(key)
 
     def _get_ttl(self, **kwargs) -> Optional[int]:
         """
@@ -188,7 +240,7 @@ class RedisSemanticCache(BaseCache):
         Store a value in the semantic cache.
 
         Args:
-            key: The cache key (not directly used in semantic caching)
+            key: The cache key used to isolate semantic cache entries
             value: The response value to cache
             **kwargs: Additional arguments including 'messages' for the prompt
                 and optional 'ttl' for time-to-live
@@ -206,12 +258,15 @@ class RedisSemanticCache(BaseCache):
             prompt = get_str_from_messages(messages)
             value_str = str(value)
 
+            store_kwargs: Dict[str, Any] = {"filters": self._get_cache_filters(key)}
+
             # Get TTL and store in Redis semantic cache
             ttl = self._get_ttl(**kwargs)
             if ttl is not None:
-                self.llmcache.store(prompt, value_str, ttl=int(ttl))
+                store_kwargs["ttl"] = int(ttl)
+                self.llmcache.store(prompt, value_str, **store_kwargs)
             else:
-                self.llmcache.store(prompt, value_str)
+                self.llmcache.store(prompt, value_str, **store_kwargs)
         except Exception as e:
             print_verbose(
                 f"Error setting {value_str or value} in the Redis semantic cache: {str(e)}"
@@ -222,7 +277,7 @@ class RedisSemanticCache(BaseCache):
         Retrieve a semantically similar cached response.
 
         Args:
-            key: The cache key (not directly used in semantic caching)
+            key: The cache key used to isolate semantic cache entries
             **kwargs: Additional arguments including 'messages' for the prompt
 
         Returns:
@@ -238,8 +293,12 @@ class RedisSemanticCache(BaseCache):
                 return None
 
             prompt = get_str_from_messages(messages)
-            # Check the cache for semantically similar prompts
-            results = self.llmcache.check(prompt=prompt)
+            # Check the cache for semantically similar prompts in this exact
+            # LiteLLM cache-key scope.
+            results = self.llmcache.check(
+                prompt=prompt,
+                filter_expression=self._get_cache_key_filter_expression(key),
+            )
 
             # Return None if no similar prompts found
             if not results:
@@ -247,6 +306,9 @@ class RedisSemanticCache(BaseCache):
 
             # Process the best matching result
             cache_hit = results[0]
+            if not self._cache_hit_matches_key(cache_hit=cache_hit, key=key):
+                print_verbose("Redis semantic-cache hit did not match cache key scope")
+                return None
             vector_distance = float(cache_hit["vector_distance"])
 
             # Convert vector distance back to similarity score
@@ -321,7 +383,7 @@ class RedisSemanticCache(BaseCache):
         Asynchronously store a value in the semantic cache.
 
         Args:
-            key: The cache key (not directly used in semantic caching)
+            key: The cache key used to isolate semantic cache entries
             value: The response value to cache
             **kwargs: Additional arguments including 'messages' for the prompt
                 and optional 'ttl' for time-to-live
@@ -341,20 +403,25 @@ class RedisSemanticCache(BaseCache):
             # Generate embedding for the value (response) to cache
             prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
 
+            store_kwargs: Dict[str, Any] = {
+                "vector": prompt_embedding,
+                "filters": self._get_cache_filters(key),
+            }
+
             # Get TTL and store in Redis semantic cache
             ttl = self._get_ttl(**kwargs)
             if ttl is not None:
+                store_kwargs["ttl"] = ttl
                 await self.llmcache.astore(
                     prompt,
                     value_str,
-                    vector=prompt_embedding,  # Pass through custom embedding
-                    ttl=ttl,
+                    **store_kwargs,
                 )
             else:
                 await self.llmcache.astore(
                     prompt,
                     value_str,
-                    vector=prompt_embedding,  # Pass through custom embedding
+                    **store_kwargs,
                 )
         except Exception as e:
             print_verbose(f"Error in async_set_cache: {str(e)}")
@@ -364,7 +431,7 @@ class RedisSemanticCache(BaseCache):
         Asynchronously retrieve a semantically similar cached response.
 
         Args:
-            key: The cache key (not directly used in semantic caching)
+            key: The cache key used to isolate semantic cache entries
             **kwargs: Additional arguments including 'messages' for the prompt
 
         Returns:
@@ -385,8 +452,13 @@ class RedisSemanticCache(BaseCache):
             # Generate embedding for the prompt
             prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
 
-            # Check the cache for semantically similar prompts
-            results = await self.llmcache.acheck(prompt=prompt, vector=prompt_embedding)
+            # Check the cache for semantically similar prompts in this exact
+            # LiteLLM cache-key scope.
+            results = await self.llmcache.acheck(
+                prompt=prompt,
+                vector=prompt_embedding,
+                filter_expression=self._get_cache_key_filter_expression(key),
+            )
 
             # handle results / cache hit
             if not results:
@@ -396,6 +468,10 @@ class RedisSemanticCache(BaseCache):
                 return None
 
             cache_hit = results[0]
+            if not self._cache_hit_matches_key(cache_hit=cache_hit, key=key):
+                print_verbose("Redis semantic-cache hit did not match cache key scope")
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
+                return None
             vector_distance = float(cache_hit["vector_distance"])
 
             # Convert vector distance back to similarity
