@@ -224,9 +224,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         except Exception as e:
             verbose_logger.debug(f"Error extracting X.AI web search usage: {e}")
 
-        self._normalize_openai_compatible_usage_totals(
-            getattr(response, "usage", None)
-        )
+        self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
         return response
 
     def _enhance_usage_with_xai_web_search_fields(
