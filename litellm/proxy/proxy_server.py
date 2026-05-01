@@ -10285,6 +10285,101 @@ def _paginate_models_response(
     }
 
 
+def _team_models_resolve_to_names(
+    team_models: List[str], access_groups: Dict[str, Any]
+) -> List[str]:
+    """Expand team model entries (including access group names) to concrete model names."""
+    resolved: List[str] = []
+    for name in team_models:
+        if name in access_groups:
+            resolved.extend(access_groups[name])
+        else:
+            resolved.append(name)
+    return resolved
+
+
+async def _load_team_object_for_model_filter(
+    team_id: str, prisma_client: PrismaClient
+) -> Optional[LiteLLM_TeamTable]:
+    """Load team row from DB; returns None if missing or on error."""
+    try:
+        team_db_object = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": team_id}
+        )
+        if team_db_object is None:
+            verbose_proxy_logger.warning(f"Team {team_id} not found in database")
+            return None
+        return LiteLLM_TeamTable(**team_db_object.model_dump())
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
+        return None
+
+
+async def _gather_team_accessible_model_ids(
+    team_object: LiteLLM_TeamTable,
+    team_id: str,
+    prisma_client: PrismaClient,
+    llm_router: Router,
+) -> Set[str]:
+    """Collect model IDs the team can use from router config and DB."""
+    team_accessible_model_ids: Set[str] = set()
+    access_groups = llm_router.get_model_access_groups() if llm_router else {}
+
+    if (
+        not team_object.models
+        or SpecialModelNames.all_proxy_models.value in team_object.models
+    ):
+        model_list = llm_router.get_model_list() if llm_router else []
+        if model_list is not None:
+            for model in model_list:
+                model_id = model.get("model_info", {}).get("id", None)
+                if model_id is None:
+                    continue
+                team_model_id = model.get("model_info", {}).get("team_id", None)
+                if team_model_id is None or team_model_id == team_id:
+                    team_accessible_model_ids.add(model_id)
+    else:
+        resolved_model_names: Set[str] = set()
+        for model_name in team_object.models:
+            if model_name in access_groups:
+                resolved_model_names.update(access_groups[model_name])
+            else:
+                resolved_model_names.add(model_name)
+
+        for model_name in resolved_model_names:
+            _models = (
+                llm_router.get_model_list(model_name=model_name, team_id=team_id)
+                if llm_router
+                else []
+            )
+            if _models is not None:
+                for model in _models:
+                    model_id = model.get("model_info", {}).get("id", None)
+                    if model_id is not None:
+                        team_accessible_model_ids.add(model_id)
+
+    try:
+        if (
+            team_object.models
+            and SpecialModelNames.all_proxy_models.value not in team_object.models
+        ):
+            _resolved_names = _team_models_resolve_to_names(
+                team_object.models, access_groups
+            )
+            db_models = await prisma_client.db.litellm_proxymodeltable.find_many(
+                where={"model_name": {"in": _resolved_names}}
+            )
+            for db_model in db_models:
+                if db_model.model_id:
+                    team_accessible_model_ids.add(db_model.model_id)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"Error querying database models for team {team_id}: {str(e)}"
+        )
+
+    return team_accessible_model_ids
+
+
 async def _filter_models_by_team_id(
     all_models: List[Dict[str, Any]],
     team_id: str,
@@ -10307,78 +10402,13 @@ async def _filter_models_by_team_id(
     Returns:
         Filtered list of models
     """
-    # Get team from database
-    try:
-        team_db_object = await prisma_client.db.litellm_teamtable.find_unique(
-            where={"team_id": team_id}
-        )
-        if team_db_object is None:
-            verbose_proxy_logger.warning(f"Team {team_id} not found in database")
-            # If team doesn't exist, return empty list
-            return []
-
-        team_object = LiteLLM_TeamTable(**team_db_object.model_dump())
-    except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
+    team_object = await _load_team_object_for_model_filter(team_id, prisma_client)
+    if team_object is None:
         return []
 
-    # Get models accessible to this team (similar to _add_team_models_to_all_models)
-    team_accessible_model_ids: Set[str] = set()
-
-    if (
-        not team_object.models  # empty list = all model access
-        or SpecialModelNames.all_proxy_models.value in team_object.models
-    ):
-        # Team has access to all models
-        model_list = llm_router.get_model_list() if llm_router else []
-        if model_list is not None:
-            for model in model_list:
-                model_id = model.get("model_info", {}).get("id", None)
-                if model_id is None:
-                    continue
-                # if team model id set, check if team id matches
-                team_model_id = model.get("model_info", {}).get("team_id", None)
-                can_add_model = False
-                if team_model_id is None:
-                    can_add_model = True
-                elif team_model_id == team_id:
-                    can_add_model = True
-
-                if can_add_model:
-                    team_accessible_model_ids.add(model_id)
-    else:
-        # Team has access to specific models
-        for model_name in team_object.models:
-            _models = (
-                llm_router.get_model_list(model_name=model_name, team_id=team_id)
-                if llm_router
-                else []
-            )
-            if _models is not None:
-                for model in _models:
-                    model_id = model.get("model_info", {}).get("id", None)
-                    if model_id is not None:
-                        team_accessible_model_ids.add(model_id)
-
-    # Also search database for models accessible to this team
-    # This complements the config search done above
-    try:
-        if (
-            team_object.models
-            and SpecialModelNames.all_proxy_models.value not in team_object.models
-        ):
-            # Team has specific models - check database for those model names
-            db_models = await prisma_client.db.litellm_proxymodeltable.find_many(
-                where={"model_name": {"in": team_object.models}}
-            )
-            for db_model in db_models:
-                model_id = db_model.model_id
-                if model_id:
-                    team_accessible_model_ids.add(model_id)
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Error querying database models for team {team_id}: {str(e)}"
-        )
+    team_accessible_model_ids = await _gather_team_accessible_model_ids(
+        team_object, team_id, prisma_client, llm_router
+    )
 
     # Filter models based on direct_access or access_via_team_ids
     # Models are already enriched with these fields before this function is called
