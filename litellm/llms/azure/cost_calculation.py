@@ -12,7 +12,9 @@ from litellm.utils import get_model_info
 
 
 def cost_per_token(
-    model: str, usage: Usage, response_time_ms: Optional[float] = 0.0,
+    model: str,
+    usage: Usage,
+    response_time_ms: Optional[float] = 0.0,
     service_tier: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
