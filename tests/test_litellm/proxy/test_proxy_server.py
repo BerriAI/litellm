@@ -5084,25 +5084,23 @@ async def test_init_and_increment_spend_counter_reseeds_from_db_on_counter_miss(
 
 @pytest.mark.asyncio
 async def test_reseed_spend_from_db_user_and_org_prefixes():
-    """User and org counters must reseed from their own DB tables, not
-    fall through to 0.0 like the other counters do today."""
+    """User and org counters reseed from their own DB tables.
+
+    End-user and tag counters use the already fetched auth objects passed as
+    fallback_spend, so this reseed helper must not add extra per-request DB
+    reads for them.
+    """
     from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
     user_row = MagicMock()
     user_row.spend = 17.0
-    end_user_row = MagicMock()
-    end_user_row.spend = 21.0
-    tag_row = MagicMock()
-    tag_row.spend = 8.0
     org_row = MagicMock()
     org_row.spend = 305.0
 
     fake_prisma = MagicMock()
     fake_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=user_row)
-    fake_prisma.db.litellm_endusertable.find_unique = AsyncMock(
-        return_value=end_user_row
-    )
-    fake_prisma.db.litellm_tagtable.find_unique = AsyncMock(return_value=tag_row)
+    fake_prisma.db.litellm_endusertable.find_unique = AsyncMock()
+    fake_prisma.db.litellm_tagtable.find_unique = AsyncMock()
     fake_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
         return_value=org_row
     )
@@ -5113,36 +5111,16 @@ async def test_reseed_spend_from_db_user_and_org_prefixes():
     )
 
     assert (
-        await SpendCounterReseed.from_db(fake_prisma, "spend:end_user:customer-1")
-        == 21.0
-    )
-    fake_prisma.db.litellm_endusertable.find_unique.assert_awaited_once_with(
-        where={"user_id": "customer-1"}
-    )
-
-    fake_prisma.db.litellm_endusertable.find_unique.reset_mock()
-    assert (
         await SpendCounterReseed.from_db(
-            fake_prisma, "spend:end_user:customer:window:1h"
+            fake_prisma,
+            "spend:end_user:customer-1",
         )
-        == 21.0
+        is None
     )
-    fake_prisma.db.litellm_endusertable.find_unique.assert_awaited_once_with(
-        where={"user_id": "customer:window:1h"}
-    )
+    fake_prisma.db.litellm_endusertable.find_unique.assert_not_awaited()
 
-    assert await SpendCounterReseed.from_db(fake_prisma, "spend:tag:paid-tag") == 8.0
-    fake_prisma.db.litellm_tagtable.find_unique.assert_awaited_once_with(
-        where={"tag_name": "paid-tag"}
-    )
-
-    fake_prisma.db.litellm_tagtable.find_unique.reset_mock()
-    assert (
-        await SpendCounterReseed.from_db(fake_prisma, "spend:tag:paid:window:1h") == 8.0
-    )
-    fake_prisma.db.litellm_tagtable.find_unique.assert_awaited_once_with(
-        where={"tag_name": "paid:window:1h"}
-    )
+    assert await SpendCounterReseed.from_db(fake_prisma, "spend:tag:paid-tag") is None
+    fake_prisma.db.litellm_tagtable.find_unique.assert_not_awaited()
 
     assert await SpendCounterReseed.from_db(fake_prisma, "spend:org:acme") == 305.0
     fake_prisma.db.litellm_organizationtable.find_unique.assert_awaited_once_with(
@@ -5352,6 +5330,33 @@ async def test_window_spend_counter_skips_invalid_window_start():
         )
     finally:
         ps.spend_counter_cache = orig_counter
+
+
+@pytest.mark.asyncio
+async def test_window_spend_counter_does_not_seed_zero_when_db_unavailable():
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.proxy_server import _ensure_window_spend_counter_initialized
+
+    counter_cache = DualCache()
+    counter_key = "spend:key:key-window-db-unavailable:window:1h"
+
+    import litellm.proxy.proxy_server as ps
+
+    orig_counter, orig_prisma = ps.spend_counter_cache, ps.prisma_client
+    ps.spend_counter_cache = counter_cache
+    ps.prisma_client = None
+    try:
+        await _ensure_window_spend_counter_initialized(
+            counter_key=counter_key,
+            entity_type="Key",
+            entity_id="key-window-db-unavailable",
+            window_start=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
+
+        assert counter_cache.in_memory_cache.get_cache(key=counter_key) is None
+    finally:
+        ps.spend_counter_cache = orig_counter
+        ps.prisma_client = orig_prisma
 
 
 @pytest.mark.asyncio

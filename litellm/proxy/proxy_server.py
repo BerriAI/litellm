@@ -2178,7 +2178,10 @@ async def _ensure_window_spend_counter_initialized(
             window_start=window_start,
         )
         if window_spend is None:
-            await _increment_spend_counter_cache(counter_key=counter_key, increment=0.0)
+            verbose_proxy_logger.warning(
+                "Skipping cold spend counter seed for %s because window spend could not be loaded",
+                counter_key,
+            )
 
 
 async def _is_spend_counter_cache_warm(counter_key: str) -> bool:

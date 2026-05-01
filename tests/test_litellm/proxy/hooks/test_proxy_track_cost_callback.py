@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     _ProxyDBLogger,
+    _get_budget_reservation_from_metadata,
     _update_database_and_spend_counters,
 )
 
@@ -296,6 +297,46 @@ async def test_track_cost_callback_releases_budget_reservation_when_response_cos
         mock_release_budget_reservation.assert_awaited_once_with(
             budget_reservation=budget_reservation,
         )
+
+
+def test_get_budget_reservation_from_metadata_handles_dict_auth_object():
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:test_api_key"}],
+    }
+
+    assert (
+        _get_budget_reservation_from_metadata(
+            metadata={"user_api_key_auth": dict(UserAPIKeyAuth())}
+        )
+        is None
+    )
+    assert (
+        _get_budget_reservation_from_metadata(
+            metadata={
+                "user_api_key_auth": UserAPIKeyAuth(
+                    budget_reservation=budget_reservation
+                )
+            }
+        )
+        == budget_reservation
+    )
+    assert (
+        _get_budget_reservation_from_metadata(
+            metadata={
+                "user_api_key_auth": dict(
+                    UserAPIKeyAuth(budget_reservation=budget_reservation)
+                )
+            }
+        )
+        == budget_reservation
+    )
+    assert (
+        _get_budget_reservation_from_metadata(
+            metadata={"user_api_key_budget_reservation": budget_reservation}
+        )
+        is budget_reservation
+    )
 
 
 @pytest.mark.asyncio
