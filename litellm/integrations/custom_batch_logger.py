@@ -30,6 +30,8 @@ class CustomBatchLogger(CustomLogger):
         self.batch_size: int = batch_size or litellm.DEFAULT_BATCH_SIZE
         self.last_flush_time = time.time()
         self.flush_lock = flush_lock
+        # Track health transition so we emit one metric when callback goes unhealthy.
+        self._is_in_failure_state: bool = False
 
         super().__init__(**kwargs)
 
@@ -50,9 +52,33 @@ class CustomBatchLogger(CustomLogger):
                 verbose_logger.debug(
                     "CustomLogger: Flushing batch of %s events", len(self.log_queue)
                 )
-                await self.async_send_batch()
+                try:
+                    await self.async_send_batch()
+                except Exception as e:
+                    callback_name = self._get_callback_failure_name()
+                    verbose_logger.debug(
+                        "CustomBatchLogger: batch flush failed for %s: %s",
+                        callback_name,
+                        str(e),
+                    )
+                    if not self._is_in_failure_state:
+                        self._report_callback_failure(callback_name=callback_name)
+                        self._is_in_failure_state = True
+                    else:
+                        verbose_logger.debug(
+                            "CustomBatchLogger: callback %s already in failure state, skipping duplicate metric",
+                            callback_name,
+                        )
+                    return
                 self.log_queue.clear()
                 self.last_flush_time = time.time()
+                self._is_in_failure_state = False
+
+    def _get_callback_failure_name(self) -> str:
+        """
+        Default callback name for batch failures.
+        """
+        return self.__class__.__name__
 
     async def async_send_batch(self, *args, **kwargs):
         pass

@@ -155,55 +155,41 @@ class DatadogMetricsLogger(CustomBatchLogger):
         self.log_queue.append(series_count)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object", None
+        )
 
-            if standard_logging_object is None:
-                return
+        if standard_logging_object is None:
+            return
 
-            self._add_metrics_from_log(
-                log=standard_logging_object, kwargs=kwargs, status_code="200"
-            )
+        self._add_metrics_from_log(
+            log=standard_logging_object, kwargs=kwargs, status_code="200"
+        )
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.flush_queue()
-
-        except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Metrics: Error in async_log_success_event: {str(e)}"
-            )
+        if len(self.log_queue) >= self.batch_size:
+            await self.flush_queue()
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        try:
-            standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
-                "standard_logging_object", None
-            )
+        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object", None
+        )
 
-            if standard_logging_object is None:
-                return
+        if standard_logging_object is None:
+            return
 
-            # Extract status code from error information
-            status_code = "500"  # default
-            error_information = (
-                standard_logging_object.get("error_information", {}) or {}
-            )
-            error_code = error_information.get("error_code")  # type: ignore
-            if error_code is not None:
-                status_code = str(error_code)
+        # Extract status code from error information
+        status_code = "500"  # default
+        error_information = standard_logging_object.get("error_information", {}) or {}
+        error_code = error_information.get("error_code")  # type: ignore
+        if error_code is not None:
+            status_code = str(error_code)
 
-            self._add_metrics_from_log(
-                log=standard_logging_object, kwargs=kwargs, status_code=status_code
-            )
+        self._add_metrics_from_log(
+            log=standard_logging_object, kwargs=kwargs, status_code=status_code
+        )
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.flush_queue()
-
-        except Exception as e:
-            verbose_logger.exception(
-                f"Datadog Metrics: Error in async_log_failure_event: {str(e)}"
-            )
+        if len(self.log_queue) >= self.batch_size:
+            await self.flush_queue()
 
     async def async_send_batch(self):
         if not self.log_queue:
