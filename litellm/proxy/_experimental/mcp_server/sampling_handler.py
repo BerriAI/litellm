@@ -484,12 +484,15 @@ async def handle_sampling_create_message(
 
             completion_kwargs["user"] = getattr(user_api_key_auth, "user_id", None)
 
-            # We need a dummy FastAPI request object because add_litellm_data_to_request expects it
             _dummy_request = Request(
                 scope={
                     "type": "http",
                     "method": "POST",
                     "path": "/mcp/sampling/createMessage",
+                    "scheme": "http",
+                    "server": ("localhost", 4000),
+                    "query_string": b"",
+                    "root_path": "",
                     "headers": [(b"content-type", b"application/json")],
                 }
             )
