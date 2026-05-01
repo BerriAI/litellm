@@ -162,6 +162,81 @@ async def test_lakera_v2_inspects_responses_api_input(user_api_key, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_lakera_v2_responses_api_input_redacted_writeback(
+    user_api_key, monkeypatch
+):
+    """Greptile P1: when input arrives via Responses-API ``data["input"]``
+    (string) and Lakera flags PII, the redacted content must be written
+    back to ``data["input"]`` — the Responses-API backend reads from
+    ``input``, so writing only to ``messages`` would let unredacted PII
+    reach the LLM."""
+    monkeypatch.setenv("LAKERA_API_KEY", "lk-test")
+    from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
+        LakeraAIGuardrail,
+    )
+
+    guard = LakeraAIGuardrail(api_key="lk-test", on_flagged="block")
+
+    async def fake_call_v2_guard(messages, request_data, event_type):
+        return ({"flagged": True, "payload": []}, {"EMAIL": 1})
+
+    def fake_mask(messages, lakera_response, masked_entity_count):
+        return [{"role": "user", "content": "[REDACTED EMAIL]"}]
+
+    with (
+        patch.object(guard, "call_v2_guard", side_effect=fake_call_v2_guard),
+        patch.object(guard, "_is_only_pii_violation", return_value=True),
+        patch.object(guard, "_mask_pii_in_messages", side_effect=fake_mask),
+    ):
+        data = {"input": "user@example.com leaked"}
+        await guard.async_pre_call_hook(
+            user_api_key_dict=user_api_key,
+            cache=DualCache(),
+            data=data,
+            call_type="responses",
+        )
+
+    assert data["input"] == "[REDACTED EMAIL]"
+
+
+@pytest.mark.asyncio
+async def test_aim_responses_api_input_anonymize_writeback(user_api_key, monkeypatch):
+    """Greptile P1: Aim's anonymize action must redact ``data["input"]``
+    for Responses-API requests, not just ``data["messages"]``."""
+    monkeypatch.setenv("AIM_API_KEY", "hs-aim-key")
+    from litellm.proxy.guardrails.guardrail_hooks.aim.aim import AimGuardrail
+
+    guard = AimGuardrail()
+
+    aim_response_body = {
+        "required_action": {"action_type": "anonymize_action"},
+        "redacted_chat": {
+            "all_redacted_messages": [
+                {"role": "user", "content": "[REDACTED] anonymised"}
+            ]
+        },
+    }
+
+    async def capture(url, headers, json):
+        return Response(
+            status_code=200,
+            json=aim_response_body,
+            request=Request("POST", "https://api.aim.security/fw/v1/analyze"),
+        )
+
+    with patch.object(guard.async_handler, "post", side_effect=capture):
+        data = {"input": "user@example.com leaked"}
+        await guard.async_pre_call_hook(
+            user_api_key_dict=user_api_key,
+            cache=DualCache(),
+            data=data,
+            call_type="responses",
+        )
+
+    assert data["input"] == "[REDACTED] anonymised"
+
+
+@pytest.mark.asyncio
 async def test_lakera_v2_multimodal_pii_degrades_to_block(user_api_key, monkeypatch):
     """Mask-in-place uses Lakera offsets and cannot preserve image/audio
     parts of multimodal input. When PII is detected on a multimodal

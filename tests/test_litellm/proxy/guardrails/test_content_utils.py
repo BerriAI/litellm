@@ -1,6 +1,7 @@
 """Tests for the shared guardrail content extraction helpers."""
 
 from litellm.proxy.guardrails._content_utils import (
+    apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
     iter_message_text,
@@ -263,3 +264,40 @@ def test_has_non_string_content_empty_data():
     assert has_non_string_content({}) is False
     assert has_non_string_content({"messages": []}) is False
     assert has_non_string_content({"input": ""}) is False
+
+
+# ── apply_redacted_messages_back ──────────────────────────────────────────────
+
+
+def test_apply_redacted_messages_back_chat_completion():
+    data = {"messages": [{"role": "user", "content": "secret"}]}
+    apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
+    assert data["messages"] == [{"role": "user", "content": "[REDACTED]"}]
+    assert "input" not in data
+
+
+def test_apply_redacted_messages_back_responses_api_string_input():
+    """A Responses-API request reads ``data["input"]``; writing only to
+    ``messages`` would let unredacted text reach the LLM."""
+    data = {"input": "secret payload"}
+    apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
+    assert data["input"] == "[REDACTED]"
+
+
+def test_apply_redacted_messages_back_both_fields():
+    """Defensive: when both fields are present, both are updated."""
+    data = {
+        "messages": [{"role": "user", "content": "old"}],
+        "input": "old",
+    }
+    apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
+    assert data["messages"] == [{"role": "user", "content": "[REDACTED]"}]
+    assert data["input"] == "[REDACTED]"
+
+
+def test_apply_redacted_messages_back_skips_input_when_not_string():
+    """List ``input`` (multimodal Responses-API) is left alone — the
+    multimodal-degrades-to-block guard runs upstream."""
+    data = {"input": [{"type": "text", "text": "leak"}]}
+    apply_redacted_messages_back(data, [{"role": "user", "content": "[REDACTED]"}])
+    assert data["input"] == [{"type": "text", "text": "leak"}]

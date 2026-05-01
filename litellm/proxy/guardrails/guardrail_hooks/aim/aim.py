@@ -23,6 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import (
+    apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
 )
@@ -156,13 +157,17 @@ class AimGuardrail(CustomGuardrail):
                     "or rely on block-mode policies."
                 ),
             )
-        data["messages"] = [
+        redacted_messages = [
             {
                 "role": message["role"],
                 "content": message["content"],
             }
             for message in redacted_chat["all_redacted_messages"]
         ]
+        # Write back to ``messages`` AND ``input``. The Responses-API
+        # backend reads ``input``; writing only to ``messages`` would let
+        # unredacted text reach the LLM for ``/v1/responses`` calls.
+        apply_redacted_messages_back(data, redacted_messages)
         return data
 
     async def call_aim_guardrail_on_output(
