@@ -39798,7 +39798,8 @@
         "input_cost_per_token": 1.5e-06,
         "output_cost_per_token": 5e-06,
         "litellm_provider": "venice",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_vision": true
     },
     "venice/olafangensan-glm-4.7-flash-heretic": {
         "max_tokens": 24000,
@@ -39951,7 +39952,8 @@
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 1.5e-06,
         "litellm_provider": "venice",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_vision": true
     },
     "venice/qwen3-coder-480b-a35b-instruct-turbo": {
         "max_tokens": 65536,
@@ -40104,7 +40106,8 @@
         "input_cost_per_token": 6e-06,
         "output_cost_per_token": 3e-05,
         "litellm_provider": "venice",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_vision": true
     },
     "venice/claude-opus-4-6-fast": {
         "max_tokens": 128000,
@@ -40113,7 +40116,8 @@
         "input_cost_per_token": 3.6e-05,
         "output_cost_per_token": 0.00018,
         "litellm_provider": "venice",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_vision": true
     },
     "venice/claude-opus-4-5": {
         "max_tokens": 32768,
@@ -40446,7 +40450,8 @@
         "input_cost_per_token": 2.5e-07,
         "output_cost_per_token": 9e-07,
         "litellm_provider": "venice",
-        "mode": "chat"
+        "mode": "chat",
+        "supports_vision": true
     },
     "venice/e2ee-glm-5-1": {
         "max_tokens": 32768,
