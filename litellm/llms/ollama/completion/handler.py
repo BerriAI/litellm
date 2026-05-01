@@ -13,6 +13,8 @@ from litellm.types.utils import EmbeddingResponse
 def _prepare_ollama_embedding_payload(
     model: str, prompts: List[str], optional_params: Dict[str, Any]
 ) -> Dict[str, Any]:
+    if model.startswith("ollama/"):
+        model = model[len("ollama/"):]
     data: Dict[str, Any] = {"model": model, "input": prompts}
     special_optional_params = ["truncate", "options", "keep_alive", "dimensions"]
 
