@@ -20,6 +20,7 @@ import litellm  # noqa: E402
 
 from tests._vcr_redis_persister import (  # noqa: E402
     filter_non_2xx_response,
+    log_redis_target_banner,
     make_redis_persister,
     patch_vcrpy_aiohttp_record_path,
 )
@@ -120,7 +121,9 @@ def _vcr_disabled() -> bool:
 
 def pytest_recording_configure(config, vcr):
     if _vcr_disabled():
+        log_redis_target_banner()
         return
+    log_redis_target_banner()
     vcr.register_persister(make_redis_persister())
     patch_vcrpy_aiohttp_record_path()
 
