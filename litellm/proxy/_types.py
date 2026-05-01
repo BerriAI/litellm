@@ -668,6 +668,8 @@ class LiteLLMRoutes(enum.Enum):
             "/models/{model_id}",
             "/guardrails/list",
             "/v2/guardrails/list",
+            "/project/list",
+            "/project/info",
         ]
         + spend_tracking_routes
         + key_management_routes
