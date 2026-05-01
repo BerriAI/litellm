@@ -19,6 +19,7 @@ sys.path.insert(
 import litellm  # noqa: E402
 
 from tests._vcr_redis_persister import (  # noqa: E402
+    emit_vcr_verbose_line,
     filter_non_2xx_response,
     format_vcr_verdict,
     make_redis_persister,
@@ -194,12 +195,7 @@ def _vcr_outcome_gate(request, vcr):
     if not vcr_verbose_enabled():
         return
     verdict = format_vcr_verdict(cassette)
-    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
-    line = f"{verdict} :: {request.node.nodeid}"
-    if reporter is not None:
-        reporter.write_line(line)
-    else:  # pragma: no cover - reporter is always present in normal runs
-        print(line)
+    emit_vcr_verbose_line(f"{verdict} :: {request.node.nodeid}")
 
 
 # ---------------------------------------------------------------------------
