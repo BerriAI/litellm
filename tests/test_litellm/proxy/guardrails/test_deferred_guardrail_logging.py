@@ -811,7 +811,7 @@ class TestDeferredStreamingClosure:
             "Guardrails that implement async_post_call_streaming_iterator_hook "
             "must be SKIPPED in deferred path — the iterator hook already ran"
         )
- 
+
     @pytest.mark.asyncio
     async def test_hooks_receive_merged_guardrail_data(self):
         """Hooks must receive guardrail_data (the merged dict from
