@@ -32,42 +32,81 @@ churn):
 
 ## How to opt a CI job in
 
-Two changes to the job in `.circleci/config.yml`:
+There are two patterns depending on where the upstream HTTP traffic
+originates.
 
-1. Add the `start_cassette_proxy` reusable command after your other
-   sidecars (postgres, redis, etc.) and *before* you start the
-   container under test:
+### Pattern A — System-under-test runs in a Docker container
 
-   ```yaml
-   - start_postgres
-   - start_cassette_proxy
-   ```
-
-2. When you `docker run` the container under test, route its egress
-   through the sidecar and trust its CA:
-
-   ```yaml
-   docker run -d \
-     ...your existing env...
-     -e HTTP_PROXY="$CASSETTE_PROXY_URL" \
-     -e HTTPS_PROXY="$CASSETTE_PROXY_URL" \
-     -e NO_PROXY="localhost,127.0.0.1,host.docker.internal" \
-     -e SSL_CERT_FILE=/etc/litellm-cassette-proxy-ca.crt \
-     -e REQUESTS_CA_BUNDLE=/etc/litellm-cassette-proxy-ca.crt \
-     -e CURL_CA_BUNDLE=/etc/litellm-cassette-proxy-ca.crt \
-     -e AWS_CA_BUNDLE=/etc/litellm-cassette-proxy-ca.crt \
-     -e NODE_EXTRA_CA_CERTS=/etc/litellm-cassette-proxy-ca.crt \
-     -v "$CASSETTE_PROXY_CA":/etc/litellm-cassette-proxy-ca.crt:ro \
-     ...your image and command...
-   ```
-
-`e2e_openai_endpoints` is the canonical example in this PR. To opt the
-others (`proxy_e2e_anthropic_messages_tests`,
-`proxy_pass_through_endpoint_tests`, `e2e_ui_testing`,
-`google_generate_content_endpoint_testing`,
+Used by `e2e_openai_endpoints`, `build_and_test`,
+`proxy_e2e_anthropic_messages_tests`, `proxy_pass_through_endpoint_tests`,
 `proxy_logging_guardrails_model_info_tests`,
-`proxy_multi_instance_tests`, `proxy_spend_accuracy_tests`,
-`proxy_store_model_in_db_tests`) in, copy the same two changes.
+`proxy_spend_accuracy_tests`, `proxy_build_from_pip_tests`,
+`proxy_store_model_in_db_tests`.
+
+Two-step opt-in. Add the two reusable commands after your other
+sidecars (postgres, redis, etc.) and *before* you start the SUT
+container, then splice `$CASSETTE_PROXY_DOCKER_ARGS` into the
+`docker run`:
+
+```yaml
+- start_postgres
+- start_cassette_proxy
+- export_cassette_proxy_docker_args
+- run:
+    name: Run Docker container
+    command: |
+      docker run -d \
+        ...your existing env...
+        $CASSETTE_PROXY_DOCKER_ARGS \
+        --name my-app \
+        ...your image and command...
+```
+
+`$CASSETTE_PROXY_DOCKER_ARGS` is a single string composed by
+`export_cassette_proxy_docker_args` that sets every Python / curl /
+boto3 / node trust-store env var, the proxy URL, and `AIOHTTP_TRUST_ENV`
+in one shot.
+
+### Pattern B — pytest runs in-process (no Docker container hosting the SUT)
+
+Used by `llm_translation_testing`, `realtime_translation_testing`,
+`agent_testing`, `guardrails_testing`,
+`google_generate_content_endpoint_testing`,
+`llm_responses_api_testing`, `ocr_testing`, `search_testing`,
+`litellm_mapped_enterprise_tests`, `batches_testing`,
+`litellm_utils_testing`, `pass_through_unit_testing`,
+`image_gen_testing`, `logging_testing`, `audio_testing`,
+`local_testing_part1`, `local_testing_part2`,
+`langfuse_logging_unit_tests`.
+
+Two-step opt-in. After install, before the test step:
+
+```yaml
+- run:
+    name: Install Dependencies
+    command: |
+      uv sync --frozen --all-groups --all-extras --python 3.12
+- start_cassette_proxy
+- enable_cassette_proxy_for_pytest
+- run:
+    name: Run tests
+    command: |
+      uv run --no-sync python -m pytest ...
+```
+
+`enable_cassette_proxy_for_pytest` patches certifi's bundled
+`cacert.pem` in every venv on the runner, exports
+`HTTPS_PROXY` / `NO_PROXY` / `SSL_CERT_FILE` for every subsequent step,
+and crucially flips `AIOHTTP_TRUST_ENV=true` — without that flag
+litellm's aiohttp transport ignores the proxy variables (see
+`litellm/llms/custom_httpx/http_handler.py`).
+
+### Why `NO_PROXY` includes the Redis host
+
+`mitmproxy` only proxies HTTP/HTTPS. The Redis client's TCP+TLS
+connection to the project's managed Redis would be broken if it were
+sent through the proxy. Both opt-in commands automatically append
+`$REDIS_HOST` to `NO_PROXY` when it's set in the env.
 
 ## Knobs
 
