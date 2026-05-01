@@ -5,6 +5,7 @@ Maps to: litellm/llms/vertex_ai/vertex_gemma_models/transformation.py
 """
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -18,6 +19,40 @@ def _reset_litellm_http_client_cache():
     from litellm import in_memory_llm_clients_cache
 
     in_memory_llm_clients_cache.flush_cache()
+
+
+def test_gemma_4_26b_pricing_metadata_uses_vertex_gemma_route():
+    from litellm.llms.vertex_ai.common_utils import (
+        VertexAIModelRoute,
+        get_vertex_ai_model_route,
+    )
+
+    model = "google/gemma-4-26b-a4b-it-maas"
+    litellm_model = f"vertex_ai/{model}"
+
+    assert get_vertex_ai_model_route(model=model) == VertexAIModelRoute.GEMMA
+    assert (
+        get_vertex_ai_model_route(model="gemma/gemma-3-12b-it")
+        == VertexAIModelRoute.GEMMA
+    )
+
+    repo_root = Path(litellm.__file__).resolve().parents[1]
+    model_cost_files = [
+        repo_root / "model_prices_and_context_window.json",
+        repo_root / "litellm" / "model_prices_and_context_window_backup.json",
+    ]
+
+    for model_cost_file in model_cost_files:
+        model_cost = json.loads(model_cost_file.read_text(encoding="utf-8"))
+
+        assert "vertex_ai/gemma/gemma-4-26b-a4b-it-maas" not in model_cost
+        model_info = model_cost[litellm_model]
+
+        assert model_info["max_input_tokens"] == 262144
+        assert model_info["max_output_tokens"] == 128000
+        assert model_info["max_tokens"] == 128000
+        assert model_info["supports_function_calling"] is True
+        assert model_info["supports_tool_choice"] is True
 
 
 class TestVertexGemmaCompletion:

@@ -32789,14 +32789,15 @@
     "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai",
-        "max_input_tokens": 256000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_input_tokens": 262144,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supports_function_calling": true,
         "supports_system_messages": true,
+        "supports_tool_choice": true,
         "supports_vision": true
     },
     "vertex_ai/deep-research-pro-preview-12-2025": {

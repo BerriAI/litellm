@@ -50,7 +50,7 @@ def get_vertex_ai_model_route(
     Determine which handler to use for a Vertex AI model based on the model name.
 
     Args:
-        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "openai/gpt-oss-120b")
+        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "google/gemma-4-26b-a4b-it-maas", "openai/gpt-oss-120b")
         litellm_params: Optional litellm parameters dict that may contain base_model for routing
 
     Returns:
@@ -64,6 +64,9 @@ def get_vertex_ai_model_route(
         VertexAIModelRoute.GEMINI
 
         >>> get_vertex_ai_model_route("gemma/gemma-3-12b-it")
+        VertexAIModelRoute.GEMMA
+
+        >>> get_vertex_ai_model_route("google/gemma-4-26b-a4b-it-maas")
         VertexAIModelRoute.GEMMA
 
         >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
@@ -99,7 +102,7 @@ def get_vertex_ai_model_route(
         return VertexAIModelRoute.BGE
 
     # Check for gemma models
-    if "gemma/" in model:
+    if "gemma/" in model or model.startswith("google/gemma-"):
         return VertexAIModelRoute.GEMMA
 
     # Check for model garden openai models
