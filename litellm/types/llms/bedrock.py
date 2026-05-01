@@ -48,9 +48,9 @@ class CitationsConfig(TypedDict, total=False):
 
 
 class DocumentBlock(TypedDict, total=False):
-    format: Union[BedrockDocumentTypes, str]
-    source: SourceBlock
-    name: str
+    format: Required[Union[BedrockDocumentTypes, str]]
+    source: Required[SourceBlock]
+    name: Required[str]
     citations: CitationsConfig
     context: str
 

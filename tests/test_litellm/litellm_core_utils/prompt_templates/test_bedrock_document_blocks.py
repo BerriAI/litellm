@@ -5,11 +5,14 @@ Covers: basic document conversion, citations, context, tool results, and format 
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
     _convert_to_bedrock_tool_call_result,
-    _process_bedrock_document_block,
 )
+
+_process_document_message = BedrockConverseMessagesProcessor._process_document_message
 
 
 def _make_doc_message(extra_fields: dict = {}) -> list:
@@ -95,19 +98,13 @@ def test_document_block_context_forwarded():
 
 def test_document_block_deterministic_name():
     """Same document data always produces the same deterministic name."""
-    block = _process_bedrock_document_block(
-        {
-            "type": "document",
-            "source": {"type": "base64", "media_type": "application/pdf", "data": "dGVzdA=="},
-        }
-    )
-    block2 = _process_bedrock_document_block(
-        {
-            "type": "document",
-            "source": {"type": "base64", "media_type": "application/pdf", "data": "dGVzdA=="},
-        }
-    )
-    assert block["document"]["name"] == block2["document"]["name"]
+    element = {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": "dGVzdA=="},
+    }
+    block1 = _process_document_message(element)
+    block2 = _process_document_message(element)
+    assert block1["document"]["name"] == block2["document"]["name"]
 
 
 @pytest.mark.parametrize(
@@ -124,7 +121,7 @@ def test_document_block_deterministic_name():
 )
 def test_document_format_mapping(media_type, expected_format):
     """Various MIME types map to the correct Bedrock document format."""
-    block = _process_bedrock_document_block(
+    block = _process_document_message(
         {
             "type": "document",
             "source": {"type": "base64", "media_type": media_type, "data": "dGVzdA=="},
@@ -157,9 +154,9 @@ def test_document_in_tool_result():
 
 
 def test_non_base64_source_raises():
-    """Non-base64 source type raises a clear ValueError."""
-    with pytest.raises(ValueError, match="base64"):
-        _process_bedrock_document_block(
+    """Non-base64 source type raises BadRequestError."""
+    with pytest.raises(litellm.BadRequestError, match="base64"):
+        _process_document_message(
             {
                 "type": "document",
                 "source": {"type": "url", "url": "https://example.com/doc.pdf"},
