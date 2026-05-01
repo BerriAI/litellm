@@ -78,6 +78,35 @@ async def test_should_clear_stale_budget_reservation_when_budget_checks_skip():
 
 
 @pytest.mark.asyncio
+async def test_should_skip_budget_reservation_when_disabled():
+    user_api_key_auth_obj = UserAPIKeyAuth(
+        token="test_token",
+        spend=0.0,
+        max_budget=1.0,
+        budget_reservation={
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": "spend:key:test_token"}],
+        },
+    )
+
+    with patch.dict(os.environ, {"LITELLM_DISABLE_BUDGET_RESERVATION": "true"}):
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request_data={"model": "gpt-4"},
+            route="/v1/chat/completions",
+            llm_router=None,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=MagicMock(),
+            skip_budget_checks=False,
+        )
+
+    assert user_api_key_auth_obj.budget_reservation is None
+
+
+@pytest.mark.asyncio
 async def test_should_not_reuse_cached_key_object_for_request_state():
     key_cache = DualCache()
     cached_key = UserAPIKeyAuth(
