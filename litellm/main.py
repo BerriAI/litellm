@@ -4924,8 +4924,7 @@ def embedding(  # noqa: PLR0915
                 optional_params["encoding_format"] = encoding_format
             else:
                 optional_params["encoding_format"] = (
-                    optional_params.get("encoding_format")
-                    or get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
+                    get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
                     or "float"
                 )
 
