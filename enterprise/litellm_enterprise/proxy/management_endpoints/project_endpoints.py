@@ -857,10 +857,16 @@ async def project_info(
                 where={"team_id": project.team_id}
             )
             if team:
-                is_team_member = (
-                    user_api_key_dict.user_id in team.admins
-                    or user_api_key_dict.user_id in team.members
-                )
+                caller_user_id = user_api_key_dict.user_id
+                for m in team.members_with_roles or []:
+                    m_user_id = (
+                        m.get("user_id")
+                        if isinstance(m, dict)
+                        else getattr(m, "user_id", None)
+                    )
+                    if m_user_id == caller_user_id:
+                        is_team_member = True
+                        break
 
         if not (is_admin or is_team_member):
             raise HTTPException(
@@ -911,20 +917,20 @@ async def list_projects(
                 include={"litellm_budget_table": True, "object_permission": True}
             )
         else:
-            # Get projects for teams the user belongs to
-            user_teams = await prisma_client.db.litellm_teamtable.find_many(
-                where={
-                    "OR": [
-                        {"members": {"has": user_api_key_dict.user_id}},
-                        {"admins": {"has": user_api_key_dict.user_id}},
-                    ]
-                }
+            # Look up the user's team memberships via the reverse-index on
+            # LiteLLM_UserTable.teams (maintained by team_member_add alongside
+            # members_with_roles). This avoids a full scan of all team rows.
+            user_record = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_api_key_dict.user_id},
+            )
+            user_team_ids = (
+                user_record.teams
+                if user_record is not None and user_record.teams
+                else []
             )
 
-            team_ids = [team.team_id for team in user_teams]
-
             projects = await prisma_client.db.litellm_projecttable.find_many(
-                where={"team_id": {"in": team_ids}},
+                where={"team_id": {"in": user_team_ids}},
                 include={"litellm_budget_table": True, "object_permission": True},
             )
 
