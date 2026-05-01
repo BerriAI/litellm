@@ -131,10 +131,15 @@ class ProxyInitializationHelpers:
         port: int,
         log_config: Optional[str] = None,
         keepalive_timeout: Optional[int] = None,
+        timeout_worker_healthcheck: Optional[int] = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
         """
+        import inspect
+
+        import uvicorn
+
         import litellm
         from litellm._logging import _get_uvicorn_json_log_config
 
@@ -151,6 +156,18 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
+        if timeout_worker_healthcheck is not None:
+            if (
+                "timeout_worker_healthcheck"
+                in inspect.signature(uvicorn.Config.__init__).parameters
+            ):
+                uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
+            else:
+                print(  # noqa
+                    f"\033[1;33mLiteLLM Proxy: --timeout_worker_healthcheck "
+                    f"requires uvicorn>=0.37.0, but installed uvicorn=={uvicorn.__version__}. "
+                    f"Ignoring the flag.\033[0m"
+                )
         return uvicorn_args
 
     @staticmethod
@@ -644,6 +661,17 @@ class ProxyInitializationHelpers:
     envvar="KEEPALIVE_TIMEOUT",
 )
 @click.option(
+    "--timeout_worker_healthcheck",
+    default=None,
+    type=int,
+    help=(
+        "Set the uvicorn worker health-check timeout in seconds (uvicorn timeout_worker_healthcheck parameter). "
+        "Requires uvicorn>=0.37.0. Only applies when running uvicorn directly with --num_workers>1; "
+        "ignored under --run_gunicorn / --run_hypercorn."
+    ),
+    envvar="TIMEOUT_WORKER_HEALTHCHECK",
+)
+@click.option(
     "--max_requests_before_restart",
     default=None,
     type=int,
@@ -656,6 +684,16 @@ class ProxyInitializationHelpers:
     default=False,
     help="Exit with error if database migration fails on startup.",
     envvar="ENFORCE_PRISMA_MIGRATION_CHECK",
+)
+@click.option(
+    "--use_v2_migration_resolver",
+    is_flag=True,
+    default=False,
+    help=(
+        "Opt into the v2 migration resolver. Avoids the diff-and-force recovery "
+        "path that can cause schema thrashing during rolling deploys where two "
+        "LiteLLM versions contend for the same DB. Default is the v1 resolver."
+    ),
 )
 @click.option(
     "--reload",
@@ -704,8 +742,10 @@ def run_server(  # noqa: PLR0915
     use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
+    timeout_worker_healthcheck,
     max_requests_before_restart,
     enforce_prisma_migration_check: bool,
+    use_v2_migration_resolver: bool,
     reload: bool,
 ):
     if setup:
@@ -985,9 +1025,31 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    if not PrismaManager.setup_database(
-                        use_migrate=not use_prisma_db_push
-                    ):
+                    if not use_v2_migration_resolver:
+                        print(  # noqa
+                            "\033[1;33mLiteLLM Proxy: Using default (v1) migration resolver. "
+                            "If your deployment has seen schema thrashing during rolling "
+                            "deploys, try --use_v2_migration_resolver (safer: avoids the "
+                            "diff-and-force recovery that caused the thrash).\033[0m"
+                        )
+                    try:
+                        setup_ok = PrismaManager.setup_database(
+                            use_migrate=not use_prisma_db_push,
+                            use_v2_resolver=use_v2_migration_resolver,
+                        )
+                    except RuntimeError as e:
+                        # v2 resolver raises on unrecoverable migration errors
+                        # (e.g. non-idempotent failures, permission issues).
+                        # v1 never raises here, so this only fires when the
+                        # operator opted into v2.
+                        print(  # noqa
+                            "\033[1;31mLiteLLM Proxy: Database migration cannot proceed. "
+                            f"{e}\033[0m",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        sys.exit(2)
+                    if not setup_ok:
                         if enforce_prisma_migration_check:
                             print(  # noqa
                                 "\033[1;31mLiteLLM Proxy: Database setup failed after multiple retries. "
@@ -1032,11 +1094,15 @@ def run_server(  # noqa: PLR0915
             )
             return
 
+        running_uvicorn = run_gunicorn is False and run_hypercorn is False
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,
             port=port,
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
+            timeout_worker_healthcheck=(
+                timeout_worker_healthcheck if running_uvicorn else None
+            ),
         )
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:

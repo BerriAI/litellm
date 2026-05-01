@@ -467,6 +467,86 @@ def test_bedrock_invoke_messages_transform_converts_custom_tool_schema_type_to_o
     assert result["tools"][0]["type"] == "custom"
 
 
+def test_remove_ttl_from_cache_control_processes_tools():
+    """
+    Ensure _remove_ttl_from_cache_control also sanitizes cache_control on tools.
+
+    Without this, tools keep unsupported ttl values while system/messages have
+    them stripped, causing TTL ordering violations on Bedrock.
+    """
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    # Tools with ttl should have it stripped for non-Claude-4.5 models
+    request = {
+        "tools": [
+            {
+                "name": "get_weather",
+                "input_schema": {"type": "object"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+            {
+                "name": "get_time",
+                "input_schema": {"type": "object"},
+            },
+        ],
+        "system": [
+            {
+                "type": "text",
+                "text": "You are helpful.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ],
+        "messages": [],
+    }
+
+    cfg._remove_ttl_from_cache_control(
+        request, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+
+    # Tool ttl should be stripped
+    assert "ttl" not in request["tools"][0]["cache_control"]
+    assert request["tools"][0]["cache_control"]["type"] == "ephemeral"
+    # Tool without cache_control should be unchanged
+    assert "cache_control" not in request["tools"][1]
+    # System ttl should also be stripped
+    assert "ttl" not in request["system"][0]["cache_control"]
+
+
+def test_remove_ttl_from_cache_control_preserves_tools_ttl_for_claude_4_5():
+    """
+    For Claude 4.5+ models, ttl in ["5m", "1h"] should be preserved on tools,
+    just like it is for system and messages.
+    """
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    request = {
+        "tools": [
+            {
+                "name": "get_weather",
+                "input_schema": {"type": "object"},
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            },
+        ],
+        "system": [
+            {
+                "type": "text",
+                "text": "You are helpful.",
+                "cache_control": {"type": "ephemeral", "ttl": "1h"},
+            }
+        ],
+    }
+
+    cfg._remove_ttl_from_cache_control(
+        request, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+
+    # Both tools and system should preserve ttl for Claude 4.5
+    assert request["tools"][0]["cache_control"]["ttl"] == "1h"
+    assert request["system"][0]["cache_control"]["ttl"] == "1h"
+
+
 def test_remove_scope_from_cache_control():
     """Ensure scope field is removed from cache_control for Bedrock (not supported)."""
 
@@ -577,6 +657,155 @@ def test_bedrock_messages_strips_output_config_with_output_format():
 
     assert "output_config" not in result
     assert "output_format" not in result
+
+
+def test_bedrock_messages_strips_context_management():
+    """
+    Ensure context_management is stripped from the request before sending to
+    Bedrock Invoke, which doesn't support this Anthropic-specific parameter.
+
+    Claude Code sends context_management on every request; leaving it in the body
+    causes a 400 "context_management: Extra inputs are not permitted" from Bedrock.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "context_management": {
+            "edits": [{"type": "clear_thinking_20251015", "keep": "all"}]
+        },
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert (
+        "context_management" not in result
+    ), "context_management should be stripped — Bedrock Invoke rejects it"
+    assert result.get("max_tokens") == 4096
+
+
+def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
+    """
+    Bedrock Invoke rejects any top-level body field it doesn't recognize with
+    "Extra inputs are not permitted". Defend against that by filtering the
+    outgoing body to a Bedrock-supported allowlist — catches Anthropic-only
+    extensions (speed, mcp_servers, container, ...) and any future additions
+    Claude Code starts sending before we learn about them.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "temperature": 0.5,
+        "speed": "fast",
+        "mcp_servers": [{"type": "url", "url": "https://example.com"}],
+        "container": {"skills": []},
+        "inference_geo": "us",
+        "output_config": {"effort": "low"},
+        "context_management": {"edits": []},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    for bad in (
+        "speed",
+        "mcp_servers",
+        "container",
+        "inference_geo",
+        "output_config",
+        "context_management",
+        "model",
+        "stream",
+    ):
+        assert bad not in result, f"{bad} should be stripped by the allowlist"
+
+    # Supported fields pass through.
+    assert result["max_tokens"] == 4096
+    assert result["temperature"] == 0.5
+    assert result["anthropic_version"] == cfg.DEFAULT_BEDROCK_ANTHROPIC_API_VERSION
+    # Every surviving key is in the allowlist.
+    assert set(result).issubset(cfg.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
+
+
+def test_bedrock_messages_filters_user_provided_unsupported_beta_header():
+    """
+    In proxy deployments the client (e.g. Claude Code) doesn't know the backend
+    is Bedrock and may send Anthropic-direct beta headers Bedrock can't handle.
+    All betas must go through the provider mapping, not just auto-injected ones
+    — otherwise Bedrock 400s on the unsupported value.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {"max_tokens": 128}
+    # `advisor-tool-2026-03-01` has no bedrock mapping entry → must be dropped.
+    # `context-1m-2025-08-07` does → must pass through.
+    headers = {
+        "anthropic-beta": "advisor-tool-2026-03-01,context-1m-2025-08-07",
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers,
+    )
+
+    betas = result.get("anthropic_beta") or []
+    assert (
+        "advisor-tool-2026-03-01" not in betas
+    ), "user-provided beta not in the Bedrock mapping must be dropped"
+    assert (
+        "context-1m-2025-08-07" in betas
+    ), "user-provided beta that IS in the Bedrock mapping should survive"
+
+
+def test_bedrock_messages_renames_user_provided_aliased_beta_header():
+    """
+    Bedrock's config maps `advanced-tool-use-2025-11-20` to
+    `tool-search-tool-2025-10-19`. User-provided betas must go through the
+    rename too, not be forwarded under their Anthropic-direct spelling.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {"max_tokens": 128}
+    headers = {"anthropic-beta": "advanced-tool-use-2025-11-20"}
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers=headers,
+    )
+
+    betas = result.get("anthropic_beta") or []
+    assert (
+        "advanced-tool-use-2025-11-20" not in betas
+    ), "Anthropic-direct spelling should be rewritten, not forwarded verbatim"
+    assert (
+        "tool-search-tool-2025-10-19" in betas
+    ), "user-provided beta should be renamed to the Bedrock-side spelling"
 
 
 @pytest.mark.asyncio

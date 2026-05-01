@@ -684,7 +684,7 @@ def generic_cost_per_token(  # noqa: PLR0915
             - cache_creation
             - image_tokens
         )
-        # Clamp to zero: inconsistent streaming usage 
+        # Clamp to zero: inconsistent streaming usage
         if text_tokens < 0:
             text_tokens = 0
         prompt_tokens_details["text_tokens"] = text_tokens
@@ -982,9 +982,9 @@ class CostCalculatorUtils:
                 image_response=completion_response,
             )
         elif custom_llm_provider == litellm.LlmProviders.OPENAI.value:
-            # Check if this is a gpt-image model (token-based pricing)
+            # gpt-image models use token-based pricing.
             model_lower = model.lower()
-            if "gpt-image-1" in model_lower:
+            if "gpt-image" in model_lower:
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )
@@ -1004,9 +1004,9 @@ class CostCalculatorUtils:
                 optional_params=optional_params,
             )
         elif custom_llm_provider == litellm.LlmProviders.AZURE.value:
-            # Check if this is a gpt-image model (token-based pricing)
+            # gpt-image models use token-based pricing.
             model_lower = model.lower()
-            if "gpt-image-1" in model_lower:
+            if "gpt-image" in model_lower:
                 from litellm.llms.openai.image_generation.cost_calculator import (
                     cost_calculator as openai_gpt_image_cost_calculator,
                 )

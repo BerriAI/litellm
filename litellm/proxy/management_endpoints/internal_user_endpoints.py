@@ -2069,6 +2069,9 @@ async def delete_user(
         litellm_proxy_admin_name,
         prisma_client,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -2120,9 +2123,7 @@ async def delete_user(
         for m in all_target_memberships:
             if not m.organization_id:
                 continue
-            target_org_ids_by_user.setdefault(m.user_id, set()).add(
-                m.organization_id
-            )
+            target_org_ids_by_user.setdefault(m.user_id, set()).add(m.organization_id)
 
     # check that all teams passed exist
     for user_id in data.user_ids:
@@ -2141,9 +2142,7 @@ async def delete_user(
             # Org-admin may only delete users whose entire org membership is
             # within their admin scope. A target with ANY org outside the
             # caller's scope (or no org at all) requires PROXY_ADMIN.
-            if not target_org_ids or not target_org_ids.issubset(
-                caller_admin_org_ids
-            ):
+            if not target_org_ids or not target_org_ids.issubset(caller_admin_org_ids):
                 raise HTTPException(
                     status_code=403,
                     detail={
@@ -2166,9 +2165,11 @@ async def delete_user(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.USER_TABLE_NAME,
                         object_id=user_id,

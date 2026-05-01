@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 else:
     AsyncIOScheduler = Any
 
+
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
 
@@ -264,6 +265,7 @@ class PrometheusLogger(CustomLogger):
             ########################################
             # LiteLLM Virtual API KEY metrics
             ########################################
+
             # Remaining MODEL RPM limit for API Key
             self.litellm_remaining_api_key_requests_for_model = self._gauge_factory(
                 "litellm_remaining_api_key_requests_for_model",
@@ -991,9 +993,7 @@ class PrometheusLogger(CustomLogger):
         amount: float = 1.0,
     ) -> None:
         _labels = prometheus_label_factory(
-            supported_enum_labels=self.get_labels_for_metric(
-                metric_name=metric_name
-            ),
+            supported_enum_labels=self.get_labels_for_metric(metric_name=metric_name),
             enum_values=enum_values,
             label_context=label_context,
         )
@@ -1118,7 +1118,9 @@ class PrometheusLogger(CustomLogger):
 
             user_api_key = hash_token(user_api_key)
 
-        label_context = PrometheusLabelFactoryContext(enum_values) #amortized per request.
+        label_context = PrometheusLabelFactoryContext(
+            enum_values
+        )  # amortized per request.
 
         # increment total LLM requests and spend metric
         self._increment_top_level_request_and_spend_metrics(
@@ -3490,7 +3492,9 @@ def _prometheus_labels_from_context(
     }
 
     if UserAPIKeyLabelNames.END_USER.value in filtered_labels:
-        filtered_labels[UserAPIKeyLabelNames.END_USER.value] = ctx.get_resolved_end_user()
+        filtered_labels[UserAPIKeyLabelNames.END_USER.value] = (
+            ctx.get_resolved_end_user()
+        )
 
     for sk, val in ctx._custom_by_sanitized_key.items():
         if sk in supported_enum_labels:

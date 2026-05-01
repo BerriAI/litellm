@@ -239,3 +239,55 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["num_retries"] == 10
     # Key/team timeout should be applied since not in request
     assert call_kwargs["timeout"] == 30
+
+
+@pytest.mark.parametrize(
+    "route_type", ["agenerate_content", "agenerate_content_stream"]
+)
+@pytest.mark.asyncio
+async def test_route_request_maps_generation_config_for_google_routes(route_type):
+    """For Google generate_content routes, route_request must rename
+    `generationConfig` (Google's wire format) to `config` (the kwarg the
+    router method expects). Without this mapping the request reaches the
+    LLM with the field under the wrong name and the config is dropped."""
+    data = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "generationConfig": {
+            "responseModalities": ["TEXT", "IMAGE"],
+            "imageConfig": {"aspectRatio": "9:16", "imageSize": "4K"},
+        },
+    }
+    llm_router = MagicMock()
+    getattr(llm_router, route_type).return_value = "ok"
+
+    await route_request(data, llm_router, None, route_type)
+
+    call_kwargs = getattr(llm_router, route_type).call_args[1]
+    assert "generationConfig" not in call_kwargs
+    assert "config" in call_kwargs
+    assert call_kwargs["config"]["responseModalities"] == ["TEXT", "IMAGE"]
+    assert call_kwargs["config"]["imageConfig"]["aspectRatio"] == "9:16"
+    assert call_kwargs["config"]["imageConfig"]["imageSize"] == "4K"
+
+
+@pytest.mark.parametrize(
+    "route_type", ["agenerate_content", "agenerate_content_stream"]
+)
+@pytest.mark.asyncio
+async def test_route_request_preserves_existing_config_for_google_routes(route_type):
+    """If the caller already supplies `config`, route_request must not
+    overwrite it with `generationConfig`."""
+    data = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "Hello"}]}],
+        "config": {"existing": True},
+        "generationConfig": {"shouldNotWin": True},
+    }
+    llm_router = MagicMock()
+    getattr(llm_router, route_type).return_value = "ok"
+
+    await route_request(data, llm_router, None, route_type)
+
+    call_kwargs = getattr(llm_router, route_type).call_args[1]
+    assert call_kwargs["config"] == {"existing": True}

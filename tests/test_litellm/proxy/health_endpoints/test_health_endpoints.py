@@ -9,6 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+import httpx
 import pytest
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
@@ -110,220 +111,127 @@ async def test_db_health_prisma_client_none():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prisma_error",
+    "transport_error",
     [
-        PrismaError(),
+        httpx.ConnectError("All connection attempts failed"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
+        PrismaError("Can't reach database server"),
     ],
 )
-async def test_db_health_error_flag_off_raises_no_reconnect(prisma_error):
+async def test_db_health_transport_error_never_raises(transport_error):
     """
-    When health_check raises and allow_requests_on_db_unavailable is False,
-    handle_db_exception re-raises immediately. The reconnect path is never
-    reached, so disconnect/connect are never called.
+    Regression test for the /health/readiness 503 loop bug.
+
+    handle_db_exception() used to re-raise inside _db_health_readiness_check,
+    turning any DB outage into a 503 "Service Unhealthy" response that never
+    recovered. Transport errors (ClientNotConnectedError, httpx.ConnectError,
+    etc.) must return {"status": "disconnected"} — never raise.
     """
     mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=prisma_error)
-    mock_prisma.disconnect = AsyncMock()
+    mock_prisma.health_check = AsyncMock(side_effect=transport_error)
+    mock_prisma.attempt_db_reconnect = AsyncMock(return_value=False)
 
     _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": False},
-        ),
-    ):
-        with pytest.raises(Exception) as exc_info:
-            await _db_health_readiness_check()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await _db_health_readiness_check()
 
-        assert exc_info.value is prisma_error
-        mock_prisma.disconnect.assert_not_called()
-        assert _health_endpoints_module.db_health_cache["status"] == "disconnected"
+    assert result["status"] == "disconnected"
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check"
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prisma_error",
+    "transport_error",
     [
-        PrismaError("Can't reach database server"),
+        httpx.ConnectError("All connection attempts failed"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
     ],
 )
-async def test_db_health_error_flag_on_reconnect_succeeds(prisma_error):
+async def test_db_health_transport_error_reconnect_succeeds(transport_error):
     """
-    When health_check raises, allow_requests_on_db_unavailable is True,
-    and the reconnect cycle (disconnect -> connect -> health_check) succeeds,
-    return 'connected' and update the cache.
+    When health_check raises a transport error and attempt_db_reconnect
+    succeeds, the second health_check passes and we return 'connected'.
     """
     mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=[prisma_error, None])
-    mock_prisma.disconnect = AsyncMock()
-    mock_prisma.connect = AsyncMock()
+    mock_prisma.health_check = AsyncMock(side_effect=[transport_error, None])
+    mock_prisma.attempt_db_reconnect = AsyncMock(return_value=True)
 
     _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": True},
-        ),
-    ):
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "connected"
-    mock_prisma.disconnect.assert_called_once()
-    mock_prisma.connect.assert_called_once()
+    mock_prisma.attempt_db_reconnect.assert_called_once_with(
+        reason="health_readiness_check"
+    )
     assert mock_prisma.health_check.call_count == 2
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prisma_error",
+    "transport_error",
     [
-        PrismaError("Can't reach database server"),
+        httpx.ConnectError("All connection attempts failed"),
         ClientNotConnectedError(),
         HTTPClientClosedError(),
     ],
 )
-async def test_db_health_error_flag_on_reconnect_fails(prisma_error):
+async def test_db_health_transport_error_reconnect_fails(transport_error):
     """
-    When health_check raises, allow_requests_on_db_unavailable is True,
-    but the reconnect also fails, return 'disconnected' instead of raising.
-    This respects the flag's intent: keep serving even without a DB.
+    When health_check raises a transport error and attempt_db_reconnect also
+    fails, return 'disconnected' without raising.
     """
-    mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=prisma_error)
-    mock_prisma.disconnect = AsyncMock()
-    mock_prisma.connect = AsyncMock()
-
-    _health_endpoints_module.db_health_cache = {
-        "status": "connected",
-        "last_updated": datetime.now() - timedelta(seconds=20),
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": True},
-        ),
-    ):
-        result = await _db_health_readiness_check()
-
-    assert result["status"] == "disconnected"
-    mock_prisma.disconnect.assert_called_once()
-    mock_prisma.connect.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_db_health_non_transport_error_flag_off_raises():
-    """
-    When health_check raises a non-transport error and
-    allow_requests_on_db_unavailable is False, handle_db_exception
-    re-raises before reaching the is_database_transport_error guard.
-    Cache is still invalidated before the re-raise.
-    """
-    non_transport_error = PrismaError("UniqueViolationError")
-    mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=non_transport_error)
-    mock_prisma.disconnect = AsyncMock()
-    mock_prisma.connect = AsyncMock()
-
-    _health_endpoints_module.db_health_cache = {
-        "status": "connected",
-        "last_updated": datetime.now() - timedelta(seconds=20),
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": False},
-        ),
-    ):
-        with pytest.raises(PrismaError):
-            await _db_health_readiness_check()
-
-    assert _health_endpoints_module.db_health_cache["status"] == "disconnected"
-    mock_prisma.disconnect.assert_not_called()
-    mock_prisma.connect.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_db_health_non_transport_error_flag_on_skips_reconnect():
-    """
-    When health_check raises a non-transport error (e.g. data-layer) and
-    allow_requests_on_db_unavailable is True, handle_db_exception swallows
-    the exception, then is_database_transport_error returns False so the
-    reconnect cycle is skipped. Returns 'disconnected' without calling
-    disconnect/connect.
-    """
-    non_transport_error = PrismaError("UniqueViolationError")
-    mock_prisma = MagicMock()
-    mock_prisma.health_check = AsyncMock(side_effect=non_transport_error)
-    mock_prisma.disconnect = AsyncMock()
-    mock_prisma.connect = AsyncMock()
-
-    _health_endpoints_module.db_health_cache = {
-        "status": "connected",
-        "last_updated": datetime.now() - timedelta(seconds=20),
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": True},
-        ),
-    ):
-        result = await _db_health_readiness_check()
-
-    assert result["status"] == "disconnected"
-    mock_prisma.disconnect.assert_not_called()
-    mock_prisma.connect.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_db_health_reconnect_disconnect_fails():
-    """
-    When disconnect() itself raises during the reconnect cycle,
-    the inner except catches it and returns 'disconnected'.
-    connect() and the second health_check() are never called.
-    """
-    transport_error = ClientNotConnectedError()
     mock_prisma = MagicMock()
     mock_prisma.health_check = AsyncMock(side_effect=transport_error)
-    mock_prisma.disconnect = AsyncMock(side_effect=RuntimeError("already closed"))
-    mock_prisma.connect = AsyncMock()
+    mock_prisma.attempt_db_reconnect = AsyncMock(
+        side_effect=RuntimeError("reconnect failed")
+    )
 
     _health_endpoints_module.db_health_cache = {
         "status": "connected",
         "last_updated": datetime.now() - timedelta(seconds=20),
     }
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.proxy_server.general_settings",
-            {"allow_requests_on_db_unavailable": True},
-        ),
-    ):
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         result = await _db_health_readiness_check()
 
     assert result["status"] == "disconnected"
-    mock_prisma.disconnect.assert_called_once()
-    mock_prisma.connect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_db_health_non_transport_error_returns_disconnected():
+    """
+    When health_check raises a non-transport error (e.g. data-layer error),
+    is_database_transport_error returns False so reconnect is skipped.
+    Returns 'disconnected' without raising and without calling attempt_db_reconnect.
+    """
+    non_transport_error = PrismaError("UniqueViolationError")
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=non_transport_error)
+    mock_prisma.attempt_db_reconnect = AsyncMock()
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "connected",
+        "last_updated": datetime.now() - timedelta(seconds=20),
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await _db_health_readiness_check()
+
+    assert result["status"] == "disconnected"
+    mock_prisma.attempt_db_reconnect.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -870,3 +778,373 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     result = get_callback_identifier(my_callback_function)
     # Should fall back to callback_name() which returns __name__
     assert result == "my_callback_function"
+
+
+# ---------------------------------------------------------------------------
+# /health response shape: model-access scoping and display-field allowlist
+# ---------------------------------------------------------------------------
+# These tests pin the contract that the /health response (a) only includes
+# deployments the calling key is allowed to see, and (b) does not return
+# provider routing fields like api_base / api_version. They guard against
+# regressions that would widen the response shape.
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_filters_model_list_by_user_access():
+    """
+    health_endpoint() should restrict _llm_model_list to deployments whose
+    model_name appears in user_api_key_dict.models before running the health
+    check. A key scoped to ["model-a"] should only see model-a in the result,
+    not other deployments configured on the proxy.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-b.test",
+                "api_version": "2024-10-21",
+            },
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=["model-a"],
+    )
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [],
+            "healthy_count": 0,
+            "unhealthy_count": 0,
+        }
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", False),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", {}),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        from fastapi import Response
+
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+
+    assert (
+        "model_list" in captured
+    ), "health_endpoint did not call _perform_health_check_and_save"
+    returned_names = {m["model_name"] for m in captured["model_list"]}
+    assert returned_names == {
+        "model-a"
+    }, f"health_endpoint did not scope model_list to caller access: {returned_names}"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_filters_background_cache_by_user_access():
+    """
+    When background_health_checks is enabled, health_endpoint() should also
+    scope the cached result to the caller's allowed models rather than
+    returning the cache verbatim.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-b.test",
+            },
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    cached_results = {
+        "healthy_endpoints": [
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-a",
+                "api_base": "https://example-a.test",
+            },
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-b",
+                "api_base": "https://example-b.test",
+            },
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 2,
+        "unhealthy_count": 0,
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=["model-a"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ):
+        from fastapi import Response
+
+        result = await health_endpoint(
+            response=Response(), user_api_key_dict=user_api_key_dict
+        )
+
+    # Sanity: the source cache had two entries before scoping; the scoping
+    # step is what reduces it to one. (This guards against the test passing
+    # vacuously when the cache filter drops everything because cached
+    # entries lack the model_id key — both entries carry model_id above.)
+    assert len(cached_results["healthy_endpoints"]) == 2
+    assert all(
+        ep.get("model_id") for ep in cached_results["healthy_endpoints"]
+    ), "test fixture invariant: every cached entry must carry a model_id"
+
+    # The non-admin caller must not see api_base on the returned cache entries.
+    returned = result.get("healthy_endpoints", [])
+    assert (
+        len(returned) == 1
+    ), f"expected exactly one cached entry after scoping, got {len(returned)}"
+    assert returned[0]["model_id"] == "id-a"
+    assert "api_base" not in returned[0]
+    assert result["healthy_count"] == 1
+    assert result["unhealthy_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
+    """
+    A proxy admin should still see ``api_base`` and ``api_version`` in the
+    /health response so they can tell which Vertex region / Azure resource
+    + API version is healthy. A non-admin caller must not — both fields
+    should be stripped, and the response should carry a notice header so
+    non-admin clients can detect the change programmatically.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+    ]
+    cached_results = {
+        "healthy_endpoints": [
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-a",
+                "api_base": "https://us-central1-aiplatform.googleapis.com/v1/projects/p",
+                "api_version": "2024-10-21",
+            },
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+
+    admin_key = UserAPIKeyAuth(
+        api_key="hashed-admin-key",
+        models=["model-a"],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    non_admin_key = UserAPIKeyAuth(
+        api_key="hashed-user-key",
+        models=["model-a"],
+    )
+
+    common_patches = [
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ]
+
+    for p in common_patches:
+        p.start()
+    try:
+        admin_response = Response()
+        non_admin_response = Response()
+        admin_result = await health_endpoint(
+            response=admin_response, user_api_key_dict=admin_key
+        )
+        non_admin_result = await health_endpoint(
+            response=non_admin_response, user_api_key_dict=non_admin_key
+        )
+    finally:
+        for p in common_patches:
+            p.stop()
+
+    admin_eps = admin_result.get("healthy_endpoints", [])
+    non_admin_eps = non_admin_result.get("healthy_endpoints", [])
+
+    assert len(admin_eps) == 1
+    assert (
+        admin_eps[0]["api_base"]
+        == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
+    ), "admin must see the full api_base so they can identify the region"
+    assert (
+        admin_eps[0]["api_version"] == "2024-10-21"
+    ), "admin must see api_version so they can distinguish provider deployments"
+
+    assert len(non_admin_eps) == 1
+    assert "api_base" not in non_admin_eps[0]
+    assert "api_version" not in non_admin_eps[0]
+
+    # Non-admin response must advertise that api_base/api_version were
+    # withheld so clients that previously parsed them can detect the change.
+    assert (
+        non_admin_response.headers.get("Litellm-Health-Field-Notice")
+        == "api_base and api_version are admin-only on this endpoint"
+    )
+    assert "Litellm-Health-Field-Notice" not in admin_response.headers
+
+    # Stripping must produce a copy — the shared cache must still carry the
+    # routing fields so the next admin caller can read them.
+    cached_first = cached_results["healthy_endpoints"][0]
+    assert (
+        cached_first["api_base"]
+        == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
+    )
+    assert cached_first["api_version"] == "2024-10-21"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_warns_when_scoped_models_lack_model_id():
+    """
+    When a scoped key's accessible models exist on the proxy but none of the
+    matching deployments expose a ``model_info.id``, the cache filter drops
+    everything. The response should include a structured ``warnings`` field
+    so the caller can distinguish "no deployments configured" from
+    "deployments excluded due to missing model_info.id".
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            # Intentionally no model_info.id — this is the misconfiguration
+            # the warnings field is meant to flag.
+            "model_info": {},
+        },
+    ]
+    cached_results = {
+        "healthy_endpoints": [
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-a",
+                "api_base": "https://example-a.test",
+            },
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-user-key",
+        models=["model-a"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ):
+        result = await health_endpoint(
+            response=Response(), user_api_key_dict=user_api_key_dict
+        )
+
+    assert result["healthy_count"] == 0
+    assert result["unhealthy_count"] == 0
+    assert "warnings" in result, (
+        "empty cache result must surface a warnings field so the caller "
+        "can distinguish 'no deployments' from 'deployments excluded'"
+    )
+    assert any("model_info.id" in w for w in result["warnings"])
+
+
+def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
+    """
+    _clean_endpoint_data() drops credentials but leaves api_base /
+    api_version intact — the per-caller hide/show happens in the endpoint
+    layer based on user role, not in the cleaning helper. This guarantees
+    proxy admins continue to see those fields in the /health response.
+    """
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    raw = {
+        "model": "openai/gpt-4o",
+        "api_key": "sk-test",
+        "api_base": "https://example.test/v1",
+        "api_version": "2024-10-21",
+        "aws_access_key_id": "AKIAEXAMPLE",
+    }
+
+    cleaned = _clean_endpoint_data(raw, details=True)
+
+    assert "api_key" not in cleaned
+    assert "aws_access_key_id" not in cleaned
+    assert cleaned.get("api_base") == "https://example.test/v1"
+    assert cleaned.get("api_version") == "2024-10-21"
