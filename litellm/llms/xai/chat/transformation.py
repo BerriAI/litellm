@@ -1,4 +1,4 @@
-from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Tuple, Union
 
 import httpx
 
@@ -26,6 +26,7 @@ from ...openai.chat.gpt_transformation import (
 
 
 class XAIChatConfig(OpenAIGPTConfig):
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "xai"
@@ -222,6 +223,10 @@ class XAIChatConfig(OpenAIGPTConfig):
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
             verbose_logger.debug(f"Error extracting X.AI web search usage: {e}")
+
+        self._normalize_openai_compatible_usage_totals(
+            getattr(response, "usage", None)
+        )
         return response
 
     def _enhance_usage_with_xai_web_search_fields(
@@ -248,6 +253,25 @@ class XAIChatConfig(OpenAIGPTConfig):
             setattr(usage, "num_sources_used", int(num_sources_used))
             verbose_logger.debug(f"X.AI web search sources used: {num_sources_used}")
 
+    @staticmethod
+    def _normalize_openai_compatible_usage_totals(
+        usage: Union[Usage, Dict[str, Any], None],
+    ) -> None:
+        if usage is None:
+            return
+        if isinstance(usage, dict):
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            expected_total = prompt_tokens + completion_tokens
+            if int(usage.get("total_tokens") or 0) != expected_total:
+                usage["total_tokens"] = expected_total
+            return
+        prompt_tokens = int(usage.prompt_tokens or 0)
+        completion_tokens = int(usage.completion_tokens or 0)
+        expected_total = prompt_tokens + completion_tokens
+        if int(usage.total_tokens or 0) != expected_total:
+            usage.total_tokens = expected_total
+
 
 class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
@@ -267,5 +291,8 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
             # xAI sends usage in a chunk with empty choices array
             # Add a dummy choice with empty delta to ensure proper processing
             chunk["choices"] = [{"index": 0, "delta": {}, "finish_reason": None}]
+
+        if "usage" in chunk and chunk["usage"] is not None:
+            XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
 
         return super().chunk_parser(chunk)
