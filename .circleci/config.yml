@@ -146,7 +146,19 @@ commands:
       - run:
           name: Resolve Redis target for the cassette store
           command: |
-            if [ -n "${REDIS_SSL_URL:-}" ]; then
+            # Cassette must use a dedicated Redis. Sharing with the
+            # litellm proxy's Redis (REDIS_SSL_URL/REDIS_URL/REDIS_HOST)
+            # means whoever calls /cache/flushall on litellm wipes our
+            # cassette mid-run — we observed 4150 FLUSHALLs on the
+            # shared instance over 33 days, each one nuking 740+
+            # cassette entries and forcing every "hit" back to a
+            # billable upstream call. CASSETTE_REDIS_URL is configured
+            # as a CircleCI project secret pointing at a separate
+            # instance (currently Upstash) that no other workload
+            # touches.
+            if [ -n "${CASSETTE_REDIS_URL:-}" ]; then
+              REDIS_TARGET="$CASSETTE_REDIS_URL"
+            elif [ -n "${REDIS_SSL_URL:-}" ]; then
               REDIS_TARGET="$REDIS_SSL_URL"
             elif [ -n "${REDIS_URL:-}" ]; then
               REDIS_TARGET="$REDIS_URL"
@@ -157,6 +169,13 @@ commands:
               REDIS_TARGET="rediss://default:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
             fi
             echo "export LITELLM_E2E_CASS_REDIS_URL=$REDIS_TARGET" >> "$BASH_ENV"
+
+            # Extract host portion of the cassette Redis URL so we can
+            # add it to NO_PROXY in enable_cassette_proxy_for_pytest.
+            # Tolerates rediss://user:pass@host:port and bare host:port.
+            CASSETTE_REDIS_HOST=$(printf '%s' "$REDIS_TARGET" \
+              | sed -E 's|^[a-z]+://||; s|^[^@]*@||; s|:[0-9]+/?$||; s|/.*$||')
+            echo "export LITELLM_E2E_CASS_REDIS_HOST=$CASSETTE_REDIS_HOST" >> "$BASH_ENV"
       - run:
           name: Launch cassette-proxy (mitmdump) in the background
           background: true
@@ -289,7 +308,14 @@ commands:
             # since mitmproxy only speaks HTTP/HTTPS.
             EXTRA_NO_PROXY=""
             if [ -n "${REDIS_HOST:-}" ]; then
-              EXTRA_NO_PROXY=",${REDIS_HOST}"
+              EXTRA_NO_PROXY="${EXTRA_NO_PROXY},${REDIS_HOST}"
+            fi
+            # The cassette-store Redis (Upstash, separate from the
+            # litellm proxy's Redis) speaks RESP-over-TLS — must bypass
+            # mitmproxy or the redis client would try to negotiate
+            # HTTP and fail.
+            if [ -n "${LITELLM_E2E_CASS_REDIS_HOST:-}" ]; then
+              EXTRA_NO_PROXY="${EXTRA_NO_PROXY},${LITELLM_E2E_CASS_REDIS_HOST}"
             fi
             BASE_NO_PROXY="localhost,127.0.0.1,0.0.0.0,host.docker.internal,postgres-db,redis-cache,cassette-proxy${EXTRA_NO_PROXY}"
 
