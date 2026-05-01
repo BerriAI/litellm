@@ -10,8 +10,6 @@ from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms import openai
-from litellm.types import completion
 from litellm.types.llms.vertex_ai import RequestBody
 
 
@@ -93,6 +91,65 @@ async def test__transform_request_body_metadata():
         "rparam1": "rvalue1",
         "rparam2": "rvalue2",
     }
+
+
+def test_gemini_tool_result_resolves_after_text_only_assistant_message():
+    messages = [
+        {"role": "user", "content": "Read the file before answering."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_read_file",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "/tmp/example.txt"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": "I will inspect the file and then summarize it.",
+            "tool_calls": [],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_read_file",
+            "content": '{"contents": "hello from the file"}',
+        },
+    ]
+
+    contents = transformation._gemini_convert_messages_with_history(messages)
+
+    assert contents == [
+        {"parts": [{"text": "Read the file before answering."}], "role": "user"},
+        {
+            "parts": [
+                {
+                    "function_call": {
+                        "name": "read_file",
+                        "args": {"path": "/tmp/example.txt"},
+                    }
+                },
+                {"text": "I will inspect the file and then summarize it."},
+            ],
+            "role": "model",
+        },
+        {
+            "parts": [
+                {
+                    "function_response": {
+                        "name": "read_file",
+                        "response": {"contents": "hello from the file"},
+                    }
+                }
+            ],
+            "role": "user",
+        },
+    ]
 
 
 @pytest.mark.asyncio
