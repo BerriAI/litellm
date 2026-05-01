@@ -2276,6 +2276,7 @@ def _is_orphaned_tool_result(
     for j in range(len(sanitized_messages) - 1, -1, -1):
         prev_msg = sanitized_messages[j]
         if prev_msg.get("role") == "assistant":
+            # Check OpenAI format: tool_calls array
             tool_calls = prev_msg.get("tool_calls")
             if tool_calls:
                 for tool_call in cast(list, tool_calls):
@@ -2288,6 +2289,16 @@ def _is_orphaned_tool_result(
                     if tc_id == tool_call_id:
                         found_matching_tool_call = True
                         break
+
+            # Check Anthropic format: content blocks with type=tool_use
+            if not found_matching_tool_call:
+                content = prev_msg.get("content")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            if block.get("id") == tool_call_id:
+                                found_matching_tool_call = True
+                                break
 
             break
 
