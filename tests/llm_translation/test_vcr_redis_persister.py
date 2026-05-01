@@ -5,6 +5,7 @@ import sys
 
 import fakeredis
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 from vcr.persisters.filesystem import CassetteNotFoundError
 from vcr.request import Request
 from vcr.serializers import yamlserializer
@@ -80,6 +81,48 @@ def test_redis_key_normalizes_path_passed_by_pytest_recording():
         redis_key_for(raw)
         == "litellm:vcr:cassette:tests/llm_translation/test_anthropic/test_streaming"
     )
+
+
+class _FlakyRedis:
+    """Wraps a fake redis but raises ConnectionError on the chosen op."""
+
+    def __init__(self, inner, fail_on: str):
+        self._inner = inner
+        self._fail_on = fail_on
+
+    def get(self, *args, **kwargs):
+        if self._fail_on == "get":
+            raise RedisConnectionError("simulated outage")
+        return self._inner.get(*args, **kwargs)
+
+    def set(self, *args, **kwargs):
+        if self._fail_on == "set":
+            raise RedisConnectionError("simulated outage")
+        return self._inner.set(*args, **kwargs)
+
+
+def test_save_swallows_connection_errors_so_teardown_does_not_fail():
+    # Persistence is a cache; an outage shouldn't fail an otherwise-passing test.
+    flaky = _FlakyRedis(fakeredis.FakeStrictRedis(), fail_on="set")
+    persister = make_redis_persister(client=flaky)
+
+    persister.save_cassette(
+        "tests/llm_translation/test_x/test_save_outage",
+        _sample_cassette_dict(),
+        yamlserializer,
+    )
+
+
+def test_load_treats_connection_errors_as_cassette_miss():
+    # An outage on read should fall through to a live call (CassetteNotFound),
+    # not surface a redis exception in the test setup.
+    flaky = _FlakyRedis(fakeredis.FakeStrictRedis(), fail_on="get")
+    persister = make_redis_persister(client=flaky)
+
+    with pytest.raises(CassetteNotFoundError):
+        persister.load_cassette(
+            "tests/llm_translation/test_x/test_load_outage", yamlserializer
+        )
 
 
 @pytest.mark.parametrize(
