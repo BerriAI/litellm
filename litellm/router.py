@@ -5789,7 +5789,7 @@ class Router:
             _metadata["max_retries"] = num_retries
 
             ## LOGGING
-            if num_retries > 0:
+            if num_retries is not None and num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
             else:
                 raise
