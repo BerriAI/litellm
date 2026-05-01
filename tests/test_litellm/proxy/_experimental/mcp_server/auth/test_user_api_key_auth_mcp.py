@@ -2203,6 +2203,13 @@ class TestOrgMCPPermissions:
                 ["s1"],
                 "team_then_org",
             ),
+            (
+                ["s1"],
+                ["s2"],
+                ["s1", "s2", "org_s1"],
+                [],
+                "key_team_conflict_not_expanded_by_org",
+            ),
         ],
     )
     async def test_get_allowed_mcp_servers_with_org(

@@ -438,6 +438,10 @@ class MCPRequestHandler:
             # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
             allowed_mcp_servers: List[str] = []
+            has_lower_level_mcp_restrictions = (
+                len(allowed_mcp_servers_for_key) > 0
+                or len(allowed_mcp_servers_for_team) > 0
+            )
             if len(allowed_mcp_servers_for_team) > 0:
                 if len(allowed_mcp_servers_for_key) > 0:
                     # Key has its own MCP permissions - use intersection with team permissions
@@ -462,6 +466,7 @@ class MCPRequestHandler:
 
                 # If end_user has explicit MCP server permissions, apply intersection
                 if len(allowed_mcp_servers_for_end_user) > 0:
+                    has_lower_level_mcp_restrictions = True
                     verbose_logger.debug(
                         f"End user {user_api_key_auth.end_user_id} has explicit MCP permissions: {allowed_mcp_servers_for_end_user}"
                     )
@@ -493,6 +498,7 @@ class MCPRequestHandler:
                     )
                 )
                 if len(allowed_mcp_servers_for_agent) > 0:
+                    has_lower_level_mcp_restrictions = True
                     # Intersect: agent can only use servers allowed by BOTH key/team AND agent config
                     allowed_mcp_servers = [
                         s
@@ -513,8 +519,8 @@ class MCPRequestHandler:
                     )
                 )
                 if len(allowed_mcp_servers_for_org) > 0:
-                    if len(allowed_mcp_servers) > 0:
-                        # Both have explicit lists → intersection
+                    if has_lower_level_mcp_restrictions:
+                        # Lower-level restrictions exist, so org can only cap them.
                         allowed_mcp_servers = [
                             s
                             for s in allowed_mcp_servers
