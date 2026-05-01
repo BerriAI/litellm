@@ -189,7 +189,9 @@ async def _get_container_owner(
                 "file_purpose": CONTAINER_OBJECT_PURPOSE,
             }
         )
-        return getattr(row, "created_by", None) if row is not None else None
+        if row is not None:
+            return getattr(row, "created_by", None)
+        return _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to load container ownership for container_id=%s; "
@@ -287,7 +289,7 @@ async def _get_allowed_container_ids(
                 "created_by": {"in": owner_scopes},
             }
         )
-        return {
+        return in_memory_allowed_ids | {
             row.model_object_id
             for row in rows
             if getattr(row, "model_object_id", None) is not None
