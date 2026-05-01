@@ -2503,12 +2503,31 @@ class MCPServerManager:
         hook_extra_headers: Optional[Dict[str, str]],
     ) -> Optional[Dict[str, str]]:
         """Build per-request headers for OpenAPI-generated MCP tool handlers."""
-        extra_headers = oauth2_headers.copy() if oauth2_headers else None
+        return self._build_runtime_extra_headers(
+            mcp_server=mcp_server,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            hook_extra_headers=hook_extra_headers,
+            include_static_headers=False,
+            server_auth_header=None,
+        )
+
+    def _build_runtime_extra_headers(
+        self,
+        mcp_server: MCPServer,
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+        hook_extra_headers: Optional[Dict[str, str]],
+        include_static_headers: bool,
+        server_auth_header: Optional[Union[Dict[str, str], str]],
+    ) -> Optional[Dict[str, str]]:
+        """Build outbound headers shared by MCP transports and OpenAPI handlers."""
+        extra_headers: Dict[str, str] = {}
+
+        if oauth2_headers:
+            extra_headers.update(oauth2_headers)
 
         if mcp_server.extra_headers and raw_headers:
-            if extra_headers is None:
-                extra_headers = {}
-
             normalized_raw_headers = {
                 str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
             }
@@ -2525,19 +2544,33 @@ class MCPServerManager:
                     continue
                 extra_headers[header] = header_value
 
-        if mcp_server.static_headers:
-            if extra_headers is None:
-                extra_headers = {}
+        if include_static_headers and mcp_server.static_headers:
             extra_headers.update(mcp_server.static_headers)
 
         if hook_extra_headers:
-            if extra_headers is None:
-                extra_headers = {}
+            if "Authorization" in hook_extra_headers:
+                if "Authorization" in extra_headers:
+                    verbose_logger.warning(
+                        "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
+                        "the existing Authorization header from static_headers or oauth2_headers. "
+                        "The hook JWT will take precedence."
+                    )
+                elif server_auth_header is not None:
+                    # server_auth_header is passed separately to _create_mcp_client as
+                    # auth_value.  Both will reach the upstream server — warn so admins
+                    # know two Authorization credentials are being sent.
+                    verbose_logger.warning(
+                        "MCPServerManager: hook_extra_headers injects 'Authorization' while "
+                        "server '%s' already has a configured authentication_token. "
+                        "Both credentials will be sent; the hook header is in extra_headers "
+                        "and the server token is in auth_value — the upstream server decides "
+                        "which one wins.  Consider unsetting authentication_token if you want "
+                        "the hook JWT to be the sole credential.",
+                        mcp_server.server_name or mcp_server.name,
+                    )
             extra_headers.update(hook_extra_headers)
 
-        if extra_headers is not None and len(extra_headers) == 0:
-            return None
-        return extra_headers
+        return extra_headers or None
 
     async def _call_regular_mcp_tool(  # noqa: PLR0915
         self,
@@ -2599,68 +2632,19 @@ class MCPServerManager:
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
 
-        # oauth2 headers
-        extra_headers: Optional[Dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2:
-            if mcp_server.has_client_credentials:
-                # For M2M OAuth servers, Authorization must come from token fetch.
-                extra_headers = None
-            else:
-                extra_headers = oauth2_headers
-
-        if mcp_server.extra_headers and raw_headers:
-            if extra_headers is None:
-                extra_headers = {}
-
-            normalized_raw_headers = {
-                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
-            }
-            for header in mcp_server.extra_headers:
-                if not isinstance(header, str):
-                    continue
-                if (
-                    mcp_server.has_client_credentials
-                    and header.lower() == "authorization"
-                ):
-                    continue
-                header_value = normalized_raw_headers.get(header.lower())
-                if header_value is None:
-                    continue
-                extra_headers[header] = header_value
-
-        if mcp_server.static_headers:
-            if extra_headers is None:
-                extra_headers = {}
-            extra_headers.update(mcp_server.static_headers)
-
-        if hook_extra_headers:
-            if extra_headers is None:
-                extra_headers = {}
-            if "Authorization" in hook_extra_headers:
-                if "Authorization" in extra_headers:
-                    verbose_logger.warning(
-                        "MCPServerManager: hook_extra_headers 'Authorization' will overwrite "
-                        "the existing Authorization header from static_headers. "
-                        "The hook JWT will take precedence."
-                    )
-                elif server_auth_header is not None:
-                    # server_auth_header is passed separately to _create_mcp_client as
-                    # auth_value.  Both will reach the upstream server — warn so admins
-                    # know two Authorization credentials are being sent.
-                    verbose_logger.warning(
-                        "MCPServerManager: hook_extra_headers injects 'Authorization' while "
-                        "server '%s' already has a configured authentication_token. "
-                        "Both credentials will be sent; the hook header is in extra_headers "
-                        "and the server token is in auth_value — the upstream server decides "
-                        "which one wins.  Consider unsetting authentication_token if you want "
-                        "the hook JWT to be the sole credential.",
-                        mcp_server.server_name or mcp_server.name,
-                    )
-            extra_headers.update(hook_extra_headers)
-
-        # Reset to None if no headers were actually added
-        if extra_headers is not None and len(extra_headers) == 0:
-            extra_headers = None
+        extra_headers = self._build_runtime_extra_headers(
+            mcp_server=mcp_server,
+            oauth2_headers=(
+                oauth2_headers
+                if mcp_server.auth_type == MCPAuth.oauth2
+                and not mcp_server.has_client_credentials
+                else None
+            ),
+            raw_headers=raw_headers,
+            hook_extra_headers=hook_extra_headers,
+            include_static_headers=True,
+            server_auth_header=server_auth_header,
+        )
 
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
 
