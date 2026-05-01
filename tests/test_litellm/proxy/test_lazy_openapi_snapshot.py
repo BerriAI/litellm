@@ -1,6 +1,8 @@
 import sys
 from types import ModuleType, SimpleNamespace
 
+from litellm.proxy._lazy_openapi_snapshot import _normalize_operation_ids
+
 
 def test_generate_snapshot_uses_shared_operation_id_reservations(monkeypatch):
     from litellm.proxy import _lazy_openapi_snapshot
@@ -80,7 +82,6 @@ def test_generate_snapshot_uses_shared_operation_id_reservations(monkeypatch):
     assert fragments["feature-b"]["paths"]["/feature-b/items"]["get"]["tags"] == [
         "feature-b"
     ]
-from litellm.proxy._lazy_openapi_snapshot import _normalize_operation_ids
 
 
 def test_normalize_operation_ids_uses_each_http_method():
