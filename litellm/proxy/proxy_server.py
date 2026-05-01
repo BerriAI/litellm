@@ -4964,7 +4964,7 @@ class ProxyConfig:
         - Check if model id's in router already
         - If not, add to router
         """
-        global llm_router, llm_model_list, master_key, general_settings
+        global llm_router, llm_model_list, master_key, general_settings, store_model_in_db
 
         try:
             # warm the config cache so the per-param reads below all hit
@@ -4980,8 +4980,21 @@ class ProxyConfig:
                 ],
             )
 
-            # Only load models from DB if "models" is in supported_db_objects (or if supported_db_objects is not set)
-            if self._should_load_db_object(object_type="models"):
+            # Only load models from DB if:
+            #   1. store_model_in_db is enabled (the flag's documented purpose is
+            #      "allow saving / managing models in DB"); when disabled, the
+            #      DB must not be the source of truth for models, otherwise a
+            #      stale row in LiteLLM_ProxyModelTable can silently replace
+            #      models defined in config.yaml on every periodic sync.
+            #   2. "models" is in supported_db_objects (or supported_db_objects
+            #      is not set, preserving the existing fine-grained gate).
+            store_model_in_db_enabled = (
+                general_settings.get("store_model_in_db", False) is True
+                or store_model_in_db
+            )
+            if store_model_in_db_enabled and self._should_load_db_object(
+                object_type="models"
+            ):
                 new_models = await self._get_models_from_db(prisma_client=prisma_client)
 
                 # update llm router
