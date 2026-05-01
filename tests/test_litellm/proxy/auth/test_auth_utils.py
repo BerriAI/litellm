@@ -964,3 +964,103 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
             )
             is True
         )
+
+
+# ── is_request_body_safe nested-config recursion (VERIA-6) ────────────────────
+
+
+class TestIsRequestBodySafeNestedConfig:
+    """The Milvus vector store transformer unpacks
+    ``litellm_embedding_config`` as ``**kwargs`` into ``litellm.embedding(...)``
+    — same SSRF / credential-exfil surface as a top-level ``api_base`` in
+    the request body. ``is_request_body_safe`` must recurse into this
+    nested dict so a banned param can't be smuggled in via nesting."""
+
+    def test_root_level_api_base_blocked_when_no_opt_in(self):
+        """Sanity check: pre-existing root-level enforcement still works."""
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={"api_base": "https://attacker.example.com"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_nested_api_base_in_embedding_config_blocked(self):
+        """Smuggling ``api_base`` inside ``litellm_embedding_config`` is
+        the VERIA-6 bypass — must be blocked by the recursive check."""
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={
+                    "litellm_embedding_config": {
+                        "api_base": "https://attacker.example.com",
+                        "api_key": "leaked-key",
+                    }
+                },
+                general_settings={},
+                llm_router=None,
+                model="milvus-store",
+            )
+
+    def test_nested_langfuse_host_in_embedding_config_blocked(self):
+        """The recursion uses the *full* banned-param list, not a special
+        subset — so any flag that's banned at the root is also banned
+        when nested."""
+        with pytest.raises(ValueError, match="langfuse_host"):
+            is_request_body_safe(
+                request_body={
+                    "litellm_embedding_config": {
+                        "langfuse_host": "https://attacker.example.com"
+                    }
+                },
+                general_settings={},
+                llm_router=None,
+                model="milvus-store",
+            )
+
+    def test_nested_api_base_allowed_when_admin_opts_in(self):
+        """Admins who explicitly enable client-side credential passthrough
+        keep the existing escape hatch — same UX as for root-level."""
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "litellm_embedding_config": {
+                        "api_base": "https://my-azure.example.com"
+                    }
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="milvus-store",
+            )
+            is True
+        )
+
+    def test_safe_nested_config_accepted(self):
+        """A nested config without any banned params passes — there's no
+        false-positive on legitimate ``api_version`` / model params."""
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "litellm_embedding_config": {
+                        "api_version": "2024-02-15-preview",
+                    }
+                },
+                general_settings={},
+                llm_router=None,
+                model="milvus-store",
+            )
+            is True
+        )
+
+    def test_non_dict_nested_config_does_not_break_check(self):
+        """A bogus type for ``litellm_embedding_config`` (string, list,
+        None) must not crash the validator — it should just fall through."""
+        assert (
+            is_request_body_safe(
+                request_body={"litellm_embedding_config": "not-a-dict"},
+                general_settings={},
+                llm_router=None,
+                model="x",
+            )
+            is True
+        )
