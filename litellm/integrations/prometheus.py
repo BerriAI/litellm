@@ -1929,7 +1929,7 @@ class PrometheusLogger(CustomLogger):
             or _litellm_params_metadata.get("user_agent"),
         }
 
-    def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
+    def set_llm_deployment_failure_metrics(self, request_kwargs: dict):  # noqa: PLR0915
         """
         Sets Failure metrics when an LLM API call fails
 
@@ -2021,7 +2021,7 @@ class PrometheusLogger(CustomLogger):
                 label_model_id = ""
                 label_api_base = ""
                 label_api_provider = ""
-                label_requested_model = litellm_model_name or model_group
+                label_requested_model = litellm_model_name or model_group or ""
 
             enum_values = UserAPIKeyLabelValues(
                 litellm_model_name=label_litellm_model_name,
