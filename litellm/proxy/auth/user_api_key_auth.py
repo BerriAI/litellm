@@ -1920,10 +1920,22 @@ async def user_api_key_auth(
     RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj)
 
     # Single authorization point. Builder paths MUST NOT call common_checks.
-    # Route through the same exception handler the builder uses so
-    # authorization failures (ProxyException, or plain Exception from
-    # admin-only-route / model-access / budget checks) surface as
-    # ProxyException consistently with pre-refactor behavior.
+    #
+    # IMPORTANT: common_checks exceptions are handled separately from
+    # builder exceptions.  The builder's _handle_authentication_error may
+    # issue a DB-unavailable fallback token — that is correct when the
+    # builder itself cannot look up the key.  But if the builder already
+    # returned a *valid, restricted* token and common_checks subsequently
+    # fails due to a transient DB error, replacing that token with an
+    # unrestricted fallback would silently strip budget limits, model
+    # restrictions, and team access controls.
+    #
+    # Defence-in-depth: authorization-denial exceptions (ProxyException,
+    # HTTPException, BudgetExceededError) are re-raised so the caller
+    # gets a proper 4xx.  DB-connectivity exceptions are logged and the
+    # *original* authenticated token is preserved — the request proceeds
+    # with whatever limits are already encoded on the token, rather than
+    # being upgraded to an unrestricted fallback.
     try:
         await _run_centralized_common_checks(
             user_api_key_auth_obj=user_api_key_auth_obj,
@@ -1931,15 +1943,37 @@ async def user_api_key_auth(
             request_data=request_data,
             route=route,
         )
+    except (HTTPException, ProxyException, litellm.BudgetExceededError):
+        # Authorization denial — propagate as-is so the caller gets 4xx.
+        raise
     except Exception as e:
-        return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
-            e=e,
-            request=request,
-            request_data=request_data,
-            route=route,
-            parent_otel_span=user_api_key_auth_obj.parent_otel_span,
-            api_key=api_key,
-        )
+        # Transient / DB error during authorization checks.  Instead of
+        # replacing the authenticated token with an unrestricted fallback
+        # (which would be a privilege-escalation vector), keep the
+        # *original* token so model-access, team, and budget restrictions
+        # encoded on it remain in effect.
+        from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+
+        if PrismaDBExceptionHandler.is_database_connection_error(e):
+            verbose_proxy_logger.warning(
+                "common_checks: DB unavailable during authorization "
+                "checks — proceeding with original token restrictions "
+                "intact (NOT issuing fallback). error=%s",
+                str(e),
+            )
+            # Fall through: return user_api_key_auth_obj below with
+            # its original restrictions preserved.
+        else:
+            # Non-DB error (e.g. coding bug) — route through the
+            # existing handler so it surfaces as ProxyException.
+            return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+                e=e,
+                request=request,
+                request_data=request_data,
+                route=route,
+                parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+                api_key=api_key,
+            )
 
     end_user_id = get_end_user_id_from_request_body(
         request_data, _safe_get_request_headers(request)
