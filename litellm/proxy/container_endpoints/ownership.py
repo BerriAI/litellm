@@ -45,6 +45,22 @@ def decode_container_id_for_ownership(
     return original_container_id, custom_llm_provider
 
 
+def get_container_forwarding_params(
+    container_id: str,
+    original_container_id: str,
+    custom_llm_provider: str,
+) -> Dict[str, str]:
+    params = {
+        "container_id": original_container_id,
+        "custom_llm_provider": custom_llm_provider,
+    }
+    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    model_id = decoded.get("model_id")
+    if isinstance(model_id, str) and model_id:
+        params["model_id"] = model_id
+    return params
+
+
 def _get_response_id(response: Any) -> Optional[str]:
     if response is None:
         return None
@@ -139,11 +155,12 @@ async def record_container_owner(
         raise
     except Exception as e:
         verbose_proxy_logger.warning(
-            "Failed to record container ownership for container_id=%s: %s",
+            "Failed to persist container ownership for container_id=%s; "
+            "falling back to in-process tracking: %s",
             model_object_id,
             e,
         )
-        raise HTTPException(status_code=500, detail="Unable to track container")
+        _IN_MEMORY_CONTAINER_OWNERS[model_object_id] = owner
 
     return response
 
@@ -210,7 +227,9 @@ def _get_container_list_data(response: Any) -> Optional[List[Any]]:
     return data if isinstance(data, list) else None
 
 
-def _set_container_list_data(response: Any, data: List[Any]) -> Any:
+def _set_container_list_data(
+    response: Any, data: List[Any], removed_filtered_items: bool = False
+) -> Any:
     if isinstance(response, dict):
         response["data"] = data
         if data:
@@ -220,12 +239,16 @@ def _set_container_list_data(response: Any, data: List[Any]) -> Any:
             response["first_id"] = None
             response["last_id"] = None
             response["has_more"] = False
+        if removed_filtered_items:
+            response["has_more"] = False
         return response
 
     response.data = data
     response.first_id = _get_response_id(data[0]) if data else None
     response.last_id = _get_response_id(data[-1]) if data else None
     if not data and hasattr(response, "has_more"):
+        response.has_more = False
+    if removed_filtered_items and hasattr(response, "has_more"):
         response.has_more = False
     return response
 
@@ -291,4 +314,8 @@ async def filter_container_list_response(
         ):
             filtered.append(item)
 
-    return _set_container_list_data(response, filtered)
+    return _set_container_list_data(
+        response,
+        filtered,
+        removed_filtered_items=len(filtered) != len(data),
+    )

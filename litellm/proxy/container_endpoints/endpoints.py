@@ -17,6 +17,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.container_endpoints.ownership import (
     assert_user_can_access_container,
     filter_container_list_response,
+    get_container_forwarding_params,
     record_container_owner,
 )
 
@@ -295,15 +296,18 @@ async def retrieve_container(
     )
 
     # Add custom_llm_provider to data
-    container_access = await assert_user_can_access_container(
+    original_container_id, custom_llm_provider = await assert_user_can_access_container(
         container_id=container_id,
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
-    custom_llm_provider = container_access[1]
-    # Keep the managed id in request data so downstream container utilities can
-    # preserve encoded routing metadata while decoding before the provider call.
-    data["custom_llm_provider"] = custom_llm_provider
+    data.update(
+        get_container_forwarding_params(
+            container_id,
+            original_container_id,
+            custom_llm_provider,
+        )
+    )
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -397,15 +401,18 @@ async def delete_container(
     )
 
     # Add custom_llm_provider to data
-    container_access = await assert_user_can_access_container(
+    original_container_id, custom_llm_provider = await assert_user_can_access_container(
         container_id=container_id,
         user_api_key_dict=user_api_key_dict,
         custom_llm_provider=custom_llm_provider,
     )
-    custom_llm_provider = container_access[1]
-    # Keep the managed id in request data so downstream container utilities can
-    # preserve encoded routing metadata while decoding before the provider call.
-    data["custom_llm_provider"] = custom_llm_provider
+    data.update(
+        get_container_forwarding_params(
+            container_id,
+            original_container_id,
+            custom_llm_provider,
+        )
+    )
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
