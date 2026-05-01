@@ -2,6 +2,8 @@
 Unit tests for cache settings management endpoints
 """
 
+import asyncio
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,8 +13,6 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
-
-import json
 
 import litellm
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles
@@ -395,7 +395,3 @@ async def test_update_cache_settings_no_audit_when_disabled(monkeypatch):
         )
 
     assert audit_calls == []
-
-
-# Need an asyncio import for the eager-task drain pattern above.
-import asyncio  # noqa: E402
