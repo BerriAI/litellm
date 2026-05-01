@@ -573,33 +573,54 @@ async def _reserve_counter(
     from litellm.proxy.proxy_server import (
         _ensure_spend_counter_initialized,
         _ensure_window_spend_counter_initialized,
+        _invalidate_spend_counter,
         _increment_spend_counter_cache,
     )
 
-    if counter.source_cache_key is not None:
-        await _ensure_spend_counter_initialized(
-            counter_key=counter.counter_key,
-            source_cache_key=counter.source_cache_key,
-        )
-    elif counter.spend_log_entity_id is not None and counter.window_start is not None:
-        initialized = await _ensure_window_spend_counter_initialized(
-            counter_key=counter.counter_key,
-            entity_type=counter.entity_type,
-            entity_id=counter.spend_log_entity_id,
-            window_start=counter.window_start,
-        )
-        if initialized is False:
-            verbose_proxy_logger.warning(
-                "Skipping budget reservation for %s because window spend could not be loaded",
-                counter.counter_key,
+    try:
+        if counter.source_cache_key is not None:
+            await _ensure_spend_counter_initialized(
+                counter_key=counter.counter_key,
+                source_cache_key=counter.source_cache_key,
             )
-            raise _CounterReservationUnavailable
+        elif (
+            counter.spend_log_entity_id is not None and counter.window_start is not None
+        ):
+            initialized = await _ensure_window_spend_counter_initialized(
+                counter_key=counter.counter_key,
+                entity_type=counter.entity_type,
+                entity_id=counter.spend_log_entity_id,
+                window_start=counter.window_start,
+            )
+            if initialized is False:
+                verbose_proxy_logger.warning(
+                    "Skipping budget reservation for %s because window spend could not be loaded",
+                    counter.counter_key,
+                )
+                raise _CounterReservationUnavailable
 
-    reserved_value = await _increment_spend_counter_cache(
-        counter_key=counter.counter_key,
-        increment=reservation_cost,
-    )
-    return float(reserved_value) if reserved_value is not None else None
+        reserved_value = await _increment_spend_counter_cache(
+            counter_key=counter.counter_key,
+            increment=reservation_cost,
+        )
+        return float(reserved_value) if reserved_value is not None else None
+    except _CounterReservationUnavailable:
+        raise
+    except Exception:
+        verbose_proxy_logger.warning(
+            "Skipping budget reservation for %s because spend counter reservation failed",
+            counter.counter_key,
+            exc_info=True,
+        )
+        try:
+            await _invalidate_spend_counter(counter_key=counter.counter_key)
+        except Exception:
+            verbose_proxy_logger.warning(
+                "Failed to invalidate spend counter after budget reservation failure for %s",
+                counter.counter_key,
+                exc_info=True,
+            )
+        raise _CounterReservationUnavailable
 
 
 async def _get_current_counter_value(counter: _BudgetCounter) -> float:

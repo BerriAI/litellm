@@ -892,6 +892,102 @@ async def test_should_skip_window_reservation_when_db_baseline_unavailable(
 
 
 @pytest.mark.asyncio
+async def test_should_skip_reservation_when_counter_increment_fails(
+    spend_counter_state,
+    monkeypatch,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-reserve-unavailable",
+        spend=0.0,
+        max_budget=1.0,
+    )
+
+    async def fail_increment_cache(*args, **kwargs):
+        raise RuntimeError("counter unavailable")
+
+    monkeypatch.setattr(counter_cache, "async_increment_cache", fail_increment_cache)
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=0.5,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.verbose_proxy_logger.warning"
+        ) as mock_warning,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is None
+    assert mock_warning.call_count >= 1
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-reserve-unavailable"
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_should_skip_reservation_when_counter_initialization_fails(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-reserve-init-unavailable",
+        spend=0.0,
+        max_budget=1.0,
+    )
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=0.5,
+        ),
+        patch(
+            "litellm.proxy.proxy_server._ensure_spend_counter_initialized",
+            side_effect=RuntimeError("redis unavailable"),
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.verbose_proxy_logger.warning"
+        ) as mock_warning,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is None
+    assert mock_warning.call_count >= 1
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-reserve-init-unavailable"
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
 async def test_should_not_re_read_uncapped_budget_after_reservation_fallback(
     spend_counter_state,
     monkeypatch,
