@@ -1374,10 +1374,11 @@ class CustomStreamWrapper:
                     self.received_finish_reason = response_obj["finish_reason"]
             elif self.custom_llm_provider == "cached_response":
                 chunk = cast(ModelResponseStream, chunk)
+                chunk_finish_reason = chunk.choices[0].finish_reason
                 response_obj = {
                     "text": chunk.choices[0].delta.content,
-                    "is_finished": True,
-                    "finish_reason": chunk.choices[0].finish_reason,
+                    "is_finished": chunk_finish_reason is not None,
+                    "finish_reason": chunk_finish_reason,
                     "original_chunk": chunk,
                     "tool_calls": (
                         chunk.choices[0].delta.tool_calls
