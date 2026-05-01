@@ -28,7 +28,20 @@ _NO_TENANT_SCOPE = ""
 
 
 def _qdrant_tenant_filter(scope: str) -> dict:
-    """Qdrant query filter that constrains a search to a single scope."""
+    """Qdrant query filter that constrains a search to a single scope.
+
+    For the no-tenant sentinel ``""``, also match points that have no
+    ``tenant_scope`` field at all — those were stored before this fix
+    landed and would otherwise become silent cache misses on upgrade,
+    invalidating the entire pre-existing Qdrant cache.
+    """
+    if not scope:
+        return {
+            "should": [
+                {"key": "tenant_scope", "match": {"value": ""}},
+                {"is_empty": {"key": "tenant_scope"}},
+            ]
+        }
     return {"must": [{"key": "tenant_scope", "match": {"value": scope}}]}
 
 

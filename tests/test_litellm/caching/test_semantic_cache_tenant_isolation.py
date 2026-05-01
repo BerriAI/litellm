@@ -173,7 +173,11 @@ def test_qdrant_get_cache_filters_by_tenant_scope(monkeypatch):
     }
 
 
-def test_qdrant_get_cache_no_tenant_uses_sentinel_filter(monkeypatch):
+def test_qdrant_get_cache_no_tenant_filter_includes_legacy_points(monkeypatch):
+    """Greptile P1 follow-up: pre-existing Qdrant points have no
+    ``tenant_scope`` field. The no-tenant filter must match them via
+    ``is_empty`` so an upgrade doesn't silently invalidate the entire
+    pre-existing cache."""
     cache = _make_qdrant_cache()
     monkeypatch.setattr(
         "litellm.embedding", lambda **kw: {"data": [{"embedding": [0.1, 0.2]}]}
@@ -183,9 +187,11 @@ def test_qdrant_get_cache_no_tenant_uses_sentinel_filter(monkeypatch):
     cache.get_cache(key="k", messages=[{"role": "user", "content": "hi"}])
 
     body = _qdrant_search_args(cache)
-    # Sentinel ``""`` so callers without a tenant scope share their own
-    # legacy pool but never see tenant entries.
-    assert body["filter"]["must"][0]["match"]["value"] == ""
+    # ``should`` clauses are OR'd: match either the explicit sentinel
+    # OR points that have no ``tenant_scope`` field at all (legacy data).
+    should = body["filter"]["should"]
+    assert {"key": "tenant_scope", "match": {"value": ""}} in should
+    assert {"is_empty": {"key": "tenant_scope"}} in should
 
 
 # ── Redis semantic cache ──────────────────────────────────────────────────────
@@ -193,6 +199,9 @@ def test_qdrant_get_cache_no_tenant_uses_sentinel_filter(monkeypatch):
 
 def _make_redis_cache():
     """Build a RedisSemanticCache without touching the real Redis."""
+    import threading
+    from collections import OrderedDict
+
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
@@ -202,7 +211,9 @@ def _make_redis_cache():
     cache._index_name_base = "litellm_semantic_cache_index"
     cache._redis_url = "redis://localhost:6379"
     cache._cache_vectorizer = MagicMock()
-    cache._tenant_caches = {}
+    cache._tenant_caches = OrderedDict()
+    cache._tenant_caches_lock = threading.Lock()
+    cache._tenant_caches_lru_size = 256
     # Default (no-tenant) index — callers without proxy metadata route here.
     cache.llmcache = MagicMock()
     cache.llmcache.store = MagicMock()
@@ -328,6 +339,112 @@ async def test_redis_async_set_cache_routes_through_tenant_index():
 
     fake_scoped.astore.assert_awaited_once()
     cache.llmcache.astore.assert_not_called()
+
+
+def test_redis_tenant_caches_lru_evicts_oldest(fake_redisvl_module):
+    """Greptile P1 follow-up: ``_tenant_caches`` must be bounded so a
+    stream of distinct tenants doesn't exhaust Redis connections.
+    Eviction is FIFO (oldest by last access) so hot tenants stay warm."""
+    cache = _make_redis_cache()
+    cache._tenant_caches_lru_size = 3
+
+    instances = []
+
+    def fake_ctor(**kwargs):
+        m = MagicMock()
+        m.store = MagicMock()
+        instances.append(m)
+        return m
+
+    with patch("redisvl.extensions.llmcache.SemanticCache", side_effect=fake_ctor):
+        for scope in ["a", "b", "c", "d"]:
+            cache.set_cache(
+                key="k",
+                value="v",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"user_api_key_team_id": scope},
+            )
+
+    assert len(instances) == 4
+    assert "a" not in cache._tenant_caches  # evicted
+    assert set(cache._tenant_caches) == {"b", "c", "d"}
+
+
+def test_redis_tenant_caches_lru_keeps_recently_used(fake_redisvl_module):
+    """Touching tenant ``a`` must move it to the back of the LRU so the
+    next eviction picks an older entry."""
+    cache = _make_redis_cache()
+    cache._tenant_caches_lru_size = 3
+
+    def fake_ctor(**kwargs):
+        m = MagicMock()
+        m.store = MagicMock()
+        return m
+
+    with patch("redisvl.extensions.llmcache.SemanticCache", side_effect=fake_ctor):
+        for scope in ["a", "b", "c"]:
+            cache.set_cache(
+                key="k",
+                value="v",
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"user_api_key_team_id": scope},
+            )
+        # Touch ``a`` again so it's no longer the oldest.
+        cache.set_cache(
+            key="k",
+            value="v",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"user_api_key_team_id": "a"},
+        )
+        # Insert a fourth scope — should evict ``b`` (now the oldest).
+        cache.set_cache(
+            key="k",
+            value="v",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"user_api_key_team_id": "d"},
+        )
+
+    assert "b" not in cache._tenant_caches
+    assert set(cache._tenant_caches) == {"a", "c", "d"}
+
+
+def test_redis_tenant_caches_concurrent_first_touch_no_duplicate(
+    fake_redisvl_module,
+):
+    """Greptile P2 follow-up: two concurrent first-touches for the same
+    tenant must not both end up in ``_tenant_caches``. Double-checked
+    locking inside ``_get_cache_for_scope`` discards the loser."""
+    import threading
+
+    cache = _make_redis_cache()
+    barrier = threading.Barrier(2)
+    constructed = []
+
+    def fake_ctor(**kwargs):
+        # Wait until both threads are about to construct so the race is
+        # observable; then return distinct instances.
+        barrier.wait(timeout=2.0)
+        m = MagicMock()
+        constructed.append(m)
+        return m
+
+    results = []
+
+    def race():
+        with patch("redisvl.extensions.llmcache.SemanticCache", side_effect=fake_ctor):
+            results.append(cache._get_cache_for_scope("team-a"))
+
+    t1 = threading.Thread(target=race)
+    t2 = threading.Thread(target=race)
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    # Both threads got the *same* instance — the loser's construction
+    # was discarded by the double-check inside the lock.
+    assert results[0] is results[1]
+    assert len(cache._tenant_caches) == 1
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,8 @@ import ast
 import asyncio
 import json
 import os
+import threading
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import litellm
@@ -24,6 +26,12 @@ from litellm.types.utils import EmbeddingResponse
 
 from ._tenant_scope import get_tenant_scope
 from .base_cache import BaseCache
+
+# Cap on distinct ``(team, user, org)`` scopes whose ``SemanticCache``
+# instances we keep alive. Each instance holds its own RedisVL
+# connection pool, so an unbounded dict eventually exhausts Redis
+# connections in deployments with many transient tenants.
+_TENANT_CACHE_LRU_SIZE = 256
 
 
 class RedisSemanticCache(BaseCache):
@@ -115,10 +123,15 @@ class RedisSemanticCache(BaseCache):
         # no scope is present; per-tenant requests get their own index
         # via ``_get_cache_for_scope`` so cross-tenant lookups become
         # impossible by construction (no shared schema, no shared keys).
+        # Bounded LRU prevents connection-pool exhaustion when the set of
+        # distinct tenant scopes is large; lock makes lazy creation safe
+        # under concurrent first-touches.
         self._index_name_base = index_name
         self._redis_url = redis_url
         self._cache_vectorizer = cache_vectorizer
-        self._tenant_caches: Dict[str, "SemanticCache"] = {}
+        self._tenant_caches: "OrderedDict[str, SemanticCache]" = OrderedDict()
+        self._tenant_caches_lock = threading.Lock()
+        self._tenant_caches_lru_size = _TENANT_CACHE_LRU_SIZE
 
         self.llmcache = SemanticCache(
             name=index_name,
@@ -134,13 +147,26 @@ class RedisSemanticCache(BaseCache):
         ``None`` returns the default index (BC for callers without proxy
         metadata). Any non-None scope gets its own RedisVL index, lazily
         created on first use so two tenants share no keys, no schema,
-        and no vector neighborhood.
+        and no vector neighborhood. Bounded LRU evicts the least-recently-
+        used scoped instance when the cap is hit. Double-checked locking
+        prevents two concurrent first-touches from creating two indexes.
         """
         if tenant_scope is None:
             return self.llmcache
-        cached = self._tenant_caches.get(tenant_scope)
-        if cached is not None:
-            return cached
+
+        # Fast path: already present. Take the lock just to update LRU
+        # ordering (the dict op itself is atomic in CPython but
+        # ``move_to_end`` plus eviction need a consistent view).
+        with self._tenant_caches_lock:
+            cached = self._tenant_caches.get(tenant_scope)
+            if cached is not None:
+                self._tenant_caches.move_to_end(tenant_scope)
+                return cached
+
+        # Slow path: build the new instance OUTSIDE the lock so its
+        # Redis ping/index-existence check doesn't block other tenants'
+        # cache hits. We may race with another thread and waste one
+        # extra construction; the loser's instance is then discarded.
         from hashlib import sha256
 
         from redisvl.extensions.llmcache import SemanticCache
@@ -150,15 +176,23 @@ class RedisSemanticCache(BaseCache):
         # RedisVL rejects in index names).
         scope_hash = sha256(tenant_scope.encode("utf-8")).hexdigest()[:16]
         scoped_name = f"{self._index_name_base}:tenant:{scope_hash}"
-        scoped = SemanticCache(
+        new_instance = SemanticCache(
             name=scoped_name,
             redis_url=self._redis_url,
             vectorizer=self._cache_vectorizer,
             distance_threshold=self.distance_threshold,
             overwrite=False,
         )
-        self._tenant_caches[tenant_scope] = scoped
-        return scoped
+
+        with self._tenant_caches_lock:
+            existing = self._tenant_caches.get(tenant_scope)
+            if existing is not None:
+                self._tenant_caches.move_to_end(tenant_scope)
+                return existing
+            self._tenant_caches[tenant_scope] = new_instance
+            while len(self._tenant_caches) > self._tenant_caches_lru_size:
+                self._tenant_caches.popitem(last=False)
+            return new_instance
 
     def _get_ttl(self, **kwargs) -> Optional[int]:
         """
