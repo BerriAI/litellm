@@ -239,7 +239,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             # If only PII violations exist, mask the PII
             if self._is_only_pii_violation(lakera_guardrail_response):
                 data["messages"] = self._mask_pii_in_messages(
-                    messages=new_messages,
+                    messages=new_messages,  # type: ignore[arg-type]
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
                 )
@@ -305,7 +305,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             # If only PII violations exist, mask the PII
             if self._is_only_pii_violation(lakera_guardrail_response):
                 data["messages"] = self._mask_pii_in_messages(
-                    messages=new_messages,
+                    messages=new_messages,  # type: ignore[arg-type]
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
                 )
