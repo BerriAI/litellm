@@ -666,6 +666,40 @@ def test_bedrock_messages_preserves_output_config_for_claude_4_6():
     assert result.get("max_tokens") == 4096
 
 
+def test_bedrock_messages_checks_output_config_support_with_bedrock_provider():
+    from unittest.mock import patch
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {
+            "effort": "high",
+        },
+    }
+
+    with patch(
+        "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation._supports_factory",
+        return_value=True,
+    ) as mock_supports_factory:
+        result = cfg.transform_anthropic_messages_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+    mock_supports_factory.assert_called_with(
+        model="us.anthropic.claude-opus-4-7",
+        custom_llm_provider="bedrock",
+        key="supports_output_config",
+    )
+    assert result["output_config"] == {"effort": "high"}
+
+
 def test_bedrock_messages_forwards_output_config():
     """Bedrock Invoke /v1/messages forwards ``output_config`` for supported models."""
     from unittest.mock import patch

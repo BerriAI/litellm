@@ -27,6 +27,32 @@ def test_ocr_cost_prefers_credit_pricing_when_pages_processed_is_none(monkeypatc
     assert cost == 0.03
 
 
+def test_ocr_cost_prefers_zero_credit_pricing_over_page_pricing(monkeypatch):
+    monkeypatch.setattr(
+        litellm,
+        "get_model_info",
+        lambda model, custom_llm_provider=None: {
+            "ocr_cost_per_credit": 0.0,
+            "ocr_cost_per_page": 0.5,
+        },
+    )
+
+    response = OCRResponse(
+        pages=[OCRPage(index=0, markdown="free credit priced")],
+        model="parse-v3",
+        usage_info=OCRUsageInfo(pages_processed=2, credits=10),
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="reducto/parse-v3",
+        custom_llm_provider="reducto",
+        call_type="ocr",
+    )
+
+    assert cost == 0.0
+
+
 def test_ocr_cost_falls_back_to_page_pricing(monkeypatch):
     monkeypatch.setattr(
         litellm,
