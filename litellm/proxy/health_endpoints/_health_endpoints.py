@@ -926,6 +926,7 @@ async def health_endpoint(
             )
 
     is_admin = _is_proxy_admin(user_api_key_dict)
+    model_specific_request = bool(model or model_id)
 
     def _post_process(result: dict) -> dict:
         # api_base / api_version reveal which provider/region/internal host the
@@ -933,6 +934,12 @@ async def health_endpoint(
         # still see model/model_id and the healthy/unhealthy status. We also
         # set a header so non-admin clients that previously parsed those
         # fields can detect the change programmatically.
+        # When a caller asked about a specific model/model_id and zero
+        # endpoints came back healthy, surface that as a 503 so monitoring
+        # systems can rely on the HTTP status instead of having to parse the
+        # body. The body shape is unchanged.
+        if model_specific_request and result.get("healthy_count", 0) == 0:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         if is_admin:
             return result
         response.headers["Litellm-Health-Field-Notice"] = (
@@ -1384,7 +1391,7 @@ def callback_name(callback):
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def health_readiness():
+async def health_readiness(response: Response):
     """
     Unprotected endpoint for checking if worker can receive requests
     """
@@ -1417,8 +1424,8 @@ async def health_readiness():
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
-                    index_info = "index does not exist - error: " + str(e)
-                cache_type = {"type": cache_type, "index_info": index_info}
+                    index_info = "index does not exist - error: " + str(e)  # type: ignore[assignment]
+                cache_type = {"type": cache_type, "index_info": index_info}  # type: ignore[assignment]
 
         # check log level
         log_level_name = logging.getLevelName(verbose_logger.getEffectiveLevel())
@@ -1427,6 +1434,12 @@ async def health_readiness():
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = await _db_health_readiness_check()
+            # A configured DB that is not reachable means the worker cannot
+            # serve requests that depend on persisted state (keys, budgets,
+            # spend logs). Return 503 so orchestrators take this pod out of
+            # rotation; "Not connected" (no DB configured at all) stays 200.
+            if db_health_status["status"] != "connected":
+                response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
                 "db": db_health_status["status"],
