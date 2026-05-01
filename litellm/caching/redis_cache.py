@@ -824,6 +824,7 @@ class RedisCache(BaseCache):
         value: float,
         ttl: Optional[int] = None,
         parent_otel_span: Optional[Span] = None,
+        refresh_ttl: bool = False,
     ) -> float:
         from redis.asyncio import Redis
 
@@ -834,11 +835,12 @@ class RedisCache(BaseCache):
         try:
             result = await _redis_client.incrbyfloat(name=key, amount=value)
             if _used_ttl is not None:
-                # check if key already has ttl, if not -> set ttl
-                current_ttl = await _redis_client.ttl(key)
-                if current_ttl == -1:
-                    # Key has no expiration
+                if refresh_ttl:
                     await _redis_client.expire(key, _used_ttl)
+                else:
+                    current_ttl = await _redis_client.ttl(key)
+                    if current_ttl == -1:
+                        await _redis_client.expire(key, _used_ttl)
 
             ## LOGGING ##
             end_time = time.time()
