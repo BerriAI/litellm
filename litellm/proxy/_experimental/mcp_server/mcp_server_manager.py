@@ -205,11 +205,30 @@ class MCPServerManager:
                 raw
             ).strip()
 
+        # Async-safe equivalent of @functools.lru_cache for stdio tool fetching.
+        # Keyed by server_id → raw (unprefixed) List[MCPTool].
+        # Populated once at startup; use _cache_stdio_tools / _invalidate_stdio_cache
+        # to manage entries.  Prevents re-spawning the subprocess (and re-downloading
+        # packages via npx / uvx) on every list_tools call.
+        self._stdio_tools_cache: Dict[str, List[MCPTool]] = {}
+
     def get_registry(self) -> Dict[str, MCPServer]:
         """
         Get the registered MCP Servers from the registry and union with the config MCP Servers
         """
         return self.config_mcp_servers | self.registry
+
+    # ------------------------------------------------------------------
+    # stdio tools cache helpers  (async-safe @functools.lru_cache analog)
+    # ------------------------------------------------------------------
+
+    def _cache_stdio_tools(self, server_id: str, tools: List[MCPTool]) -> None:
+        """Store raw (unprefixed) tools for a stdio server.  Call after first fetch."""
+        self._stdio_tools_cache[server_id] = tools
+
+    def _invalidate_stdio_cache(self, server_id: str) -> None:
+        """Evict a stdio server's cached tools (e.g. after update or delete)."""
+        self._stdio_tools_cache.pop(server_id, None)
 
     async def load_servers_from_config(
         self,
@@ -555,6 +574,7 @@ class MCPServerManager:
         """
         Remove a server from the registry
         """
+        self._invalidate_stdio_cache(mcp_server.server_id)
         if mcp_server.server_name in self.get_registry():
             del self.registry[mcp_server.server_name]
             verbose_logger.debug(f"Removed MCP Server: {mcp_server.server_name}")
@@ -757,6 +777,9 @@ class MCPServerManager:
                     new_server.short_prefix = existing_prefix
                 self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
+                # Invalidate the stdio cache so the updated command/args are picked
+                # up on the next fetch (re-downloads package if version changed).
+                self._invalidate_stdio_cache(mcp_server.server_id)
                 await self._maybe_register_openapi_tools(new_server)
                 verbose_logger.debug(f"Updated MCP Server: {new_server.name}")
 
@@ -1088,6 +1111,104 @@ class MCPServerManager:
     #########################################################
     # Methods that call the upstream MCP servers
     #########################################################
+
+    # ------------------------------------------------------------------
+    # stdio package-security helpers
+    # ------------------------------------------------------------------
+    # Pinned semver: digits only, no range operators (^, ~, >, <, *).
+    # Allows pre-release suffixes like 1.2.3-rc.1.
+    _PINNED_SEMVER_RE = re.compile(r"^\d+\.\d+(\.\d+)?([-.][a-zA-Z0-9.]+)?$")
+
+    def _parse_package_and_version(
+        self, command: str, args: List[str]
+    ) -> Optional[Tuple[str, str]]:
+        """
+        Extract (package_name, version) from stdio args for npx or uvx commands.
+
+        Returns None if the command is not npx/uvx, or the args don't contain a
+        package spec with a pinned version.
+
+        npx examples:
+            ["-y", "@scope/pkg@1.2.3"] → ("@scope/pkg", "1.2.3")
+            ["pkg@1.0.0"]              → ("pkg", "1.0.0")
+            ["pkg"]                    → None  (no version)
+            ["-y", "pkg@latest"]       → None  (not pinned)
+
+        uvx / pip examples:
+            ["pkg@1.2.3"]   → ("pkg", "1.2.3")
+            ["pkg==1.2.3"]  → ("pkg", "1.2.3")
+            ["pkg>=1.0"]    → None  (range, not pinned)
+        """
+        base_command = os.path.basename(command)
+        if base_command not in ("npx", "uvx"):
+            return None
+
+        for arg in args:
+            if arg.startswith("-"):
+                continue
+
+            # uvx / pip style: pkg==1.2.3
+            if "==" in arg:
+                pkg, _, ver = arg.partition("==")
+                if pkg and self._PINNED_SEMVER_RE.match(ver):
+                    return pkg.strip(), ver.strip()
+                return None
+
+            # npx / uvx style: pkg@version (rfind handles @scope/pkg@1.0)
+            at_idx = arg.rfind("@")
+            if at_idx > 0:
+                pkg = arg[:at_idx]
+                ver = arg[at_idx + 1:]
+                if pkg and self._PINNED_SEMVER_RE.match(ver):
+                    return pkg, ver
+            # First non-flag arg found but no valid pinned version
+            return None
+
+        return None
+
+    def _validate_pinned_version(self, server: MCPServer) -> None:
+        """
+        Raise HTTPException(403) if a stdio server uses npx/uvx without a
+        pinned semver package version (e.g. @latest or bare package names).
+
+        Pinning prevents silent upgrades that could introduce malicious code.
+        """
+        if server.transport != MCPTransport.stdio or not server.command:
+            return
+        base_command = os.path.basename(server.command)
+        if base_command not in ("npx", "uvx"):
+            return
+        if not server.args:
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"MCP stdio server '{server.name}' uses {base_command} but "
+                    "has no args. Specify a package with a pinned version "
+                    "(e.g. @modelcontextprotocol/server-everything@1.2.3)."
+                ),
+            )
+        if self._parse_package_and_version(server.command, server.args) is None:
+            pkg_arg = next((a for a in server.args if not a.startswith("-")), "<unknown>")
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"MCP stdio server '{server.name}': package '{pkg_arg}' must "
+                    "specify an exact pinned version (e.g. pkg@1.2.3 or pkg==1.2.3). "
+                    "Tags like @latest or bare package names are not allowed."
+                ),
+            )
+
+    def _inject_ignore_scripts(self, args: List[str]) -> List[str]:
+        """
+        Return a copy of args with --ignore-scripts prepended (if absent).
+
+        Prevents npm postinstall/preinstall lifecycle scripts — a common
+        supply-chain attack vector — from executing when npx installs a package.
+        """
+        if "--ignore-scripts" in args:
+            return args
+        return ["--ignore-scripts"] + list(args)
+
     def _build_stdio_env(
         self,
         server: MCPServer,
@@ -1166,11 +1287,23 @@ class MCPServerManager:
                         f"Add it to LITELLM_MCP_STDIO_EXTRA_COMMANDS to allow this command.",
                     )
 
+            # Require an exact pinned version for npx/uvx packages so that
+            # silent upgrades (e.g. @latest) cannot introduce malicious code.
+            self._validate_pinned_version(server)
+
             stdio_config: Optional[MCPStdioConfig] = None
             if server.command and server.args is not None:
+                base_command = os.path.basename(server.command)
+                # Prevent npm lifecycle scripts (postinstall etc.) from running —
+                # a common supply-chain attack vector.
+                resolved_args = (
+                    self._inject_ignore_scripts(server.args)
+                    if base_command == "npx"
+                    else list(server.args)
+                )
                 stdio_config = MCPStdioConfig(
                     command=server.command,
-                    args=server.args,
+                    args=resolved_args,
                     env=resolved_env,
                 )
 
@@ -1235,6 +1368,17 @@ class MCPServerManager:
         verbose_logger.debug(f"Connecting to url: {server.url}")
         verbose_logger.info(f"_get_tools_from_server for {server.name}...")
 
+        # For stdio servers, serve tools from the in-memory cache that was populated at
+        # startup.  This avoids re-spawning the subprocess (and re-downloading packages
+        # via npx/uvx) on every list_tools / call_tool request.
+        if server.transport == MCPTransport.stdio and server.server_id in self._stdio_tools_cache:
+            verbose_logger.debug(
+                f"Returning cached tools for stdio server '{server.name}' (server_id={server.server_id})"
+            )
+            return self._create_prefixed_tools(
+                self._stdio_tools_cache[server.server_id], server, add_prefix=add_prefix
+            )
+
         client = None
 
         try:
@@ -1283,6 +1427,14 @@ class MCPServerManager:
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
+
+                # Populate the stdio cache on first successful fetch so that
+                # subsequent calls skip subprocess spawning entirely.
+                if server.transport == MCPTransport.stdio and tools:
+                    self._cache_stdio_tools(server.server_id, tools)
+                    verbose_logger.debug(
+                        f"Cached {len(tools)} tools for stdio server '{server.name}' (server_id={server.server_id})"
+                    )
 
             prefixed_or_original_tools = self._create_prefixed_tools(
                 tools, server, add_prefix=add_prefix
