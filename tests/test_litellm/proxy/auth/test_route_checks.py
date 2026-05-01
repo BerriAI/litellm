@@ -90,6 +90,73 @@ def test_proxy_admin_viewer_config_update_route_rejected():
     assert "role= proxy_admin_viewer" in str(exc_info.value.detail)
 
 
+@pytest.mark.parametrize(
+    "blocked_route",
+    [
+        # team write routes that previously fell through the blocklist
+        "/team/block",
+        "/team/unblock",
+        "/team/permissions_update",
+        "/team/permissions_bulk_update",
+        # JWT key mapping write routes
+        "/jwt/key/mapping/new",
+        "/jwt/key/mapping/update",
+        "/jwt/key/mapping/delete",
+        # key write routes
+        "/key/bulk_update",
+        # path-parameterized key write routes (suffix match)
+        "/key/abc123/regenerate",
+        "/key/abc123/reset_spend",
+        # baseline coverage of routes that were already blocked
+        "/team/new",
+        "/team/delete",
+        "/key/generate",
+        "/key/delete",
+        "/model/new",
+        "/model/delete",
+    ],
+)
+def test_proxy_admin_viewer_blocked_management_writes(blocked_route):
+    """View-only admins must be denied on every management write route — the
+    fall-through path previously allowed /team/block, /team/unblock,
+    /key/bulk_update, /key/{id}/reset_spend, and the JWT key-mapping routes."""
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks._check_proxy_admin_viewer_access(
+            route=blocked_route,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403
+    assert blocked_route in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
+    "allowed_read_route",
+    [
+        "/team/info",
+        "/team/list",
+        "/v2/team/list",
+        "/team/permissions_list",
+        "/team/daily/activity",
+        "/user/info",
+        "/user/list",
+        "/key/info",
+        "/key/list",
+        "/model/info",
+        "/jwt/key/mapping/list",
+        "/jwt/key/mapping/info",
+    ],
+)
+def test_proxy_admin_viewer_allowed_management_reads(allowed_read_route):
+    """View-only admins must still be allowed to read management routes."""
+    # Should not raise
+    RouteChecks._check_proxy_admin_viewer_access(
+        route=allowed_read_route,
+        _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+        request_data={},
+    )
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed():
     """Test that virtual key is allowed to call routes when allowed_routes contains LiteLLMRoutes member name"""
 
