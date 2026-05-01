@@ -23,6 +23,7 @@ from litellm.constants import (
     AZURE_DOCUMENT_INTELLIGENCE_DEFAULT_DPI,
     AZURE_OPERATION_POLLING_TIMEOUT,
 )
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.ocr.transformation import (
     BaseOCRConfig,
     DocumentType,
@@ -218,11 +219,12 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         if "/" in model:
             # Extract the last part after the last slash
             model_id = model.split("/")[-1]
+        encoded_model_id = encode_url_path_segment(model_id, field_name="model_id")
 
         # Azure Document Intelligence analyze endpoint
         # Note: API version 2024-11-30+ uses /documentintelligence/ (not /formrecognizer/)
         url = (
-            f"{api_base}/documentintelligence/documentModels/{model_id}:analyze"
+            f"{api_base}/documentintelligence/documentModels/{encoded_model_id}:analyze"
             f"?api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}"
         )
 

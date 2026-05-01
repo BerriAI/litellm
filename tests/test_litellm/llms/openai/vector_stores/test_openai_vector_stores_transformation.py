@@ -64,3 +64,21 @@ class TestOpenAIVectorStoreAPIConfig:
         for i in range(16):
             assert f"key_{i}" in request_body["metadata"]
             assert request_body["metadata"][f"key_{i}"] == f"value_{i}"
+
+    def test_transform_search_vector_store_request_encodes_vector_store_id(self):
+        config = OpenAIVectorStoreConfig()
+
+        url, request_body = config.transform_search_vector_store_request(
+            vector_store_id="../../files?x=1#frag",
+            query="hello",
+            vector_store_search_optional_params={},
+            api_base="https://api.openai.com/v1/vector_stores",
+            litellm_logging_obj=None,  # type: ignore[arg-type]
+            litellm_params={},
+        )
+
+        assert (
+            url
+            == "https://api.openai.com/v1/vector_stores/..%2F..%2Ffiles%3Fx%3D1%23frag/search"
+        )
+        assert request_body["query"] == "hello"
