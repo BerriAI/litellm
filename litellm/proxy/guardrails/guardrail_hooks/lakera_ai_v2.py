@@ -1,7 +1,7 @@
 import copy
 import os
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, cast
 
 from fastapi import HTTPException
 
@@ -89,8 +89,11 @@ class LakeraAIGuardrail(CustomGuardrail):
         flattened: List[AllMessageValues] = []
         for msg in messages:
             if isinstance(msg, dict) and isinstance(msg.get("content"), list):
-                new_msg = {**msg, "content": collect_message_text([msg])}
-                flattened.append(new_msg)  # type: ignore[arg-type]
+                new_msg = {
+                    **msg,
+                    "content": collect_message_text([cast(dict, msg)]),
+                }
+                flattened.append(cast(AllMessageValues, new_msg))
             else:
                 flattened.append(msg)
         return flattened
@@ -191,7 +194,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             is_list_content = isinstance(content, list)
             if is_list_content:
                 # Flatten to the same string Lakera saw, so offsets line up.
-                content_str = collect_message_text([msg])
+                content_str = collect_message_text([cast(dict, msg)])
                 if not content_str:
                     continue
             elif isinstance(content, str):
@@ -230,7 +233,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                     )
                     masked_entity_count[typ] = masked_entity_count.get(typ, 0) + 1
 
-            if is_list_content:
+            if isinstance(content, list):
                 # Write masked text into the first text part; clear the rest.
                 # Non-text parts (image_url, etc.) are preserved in place.
                 first_text_idx: Optional[int] = None
