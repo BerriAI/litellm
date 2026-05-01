@@ -381,6 +381,50 @@ def test_get_model_from_request_extracts_video_id_model():
     )
 
 
+def test_get_model_from_request_only_runs_media_decoders_for_matching_fields():
+    with (
+        patch(
+            "litellm.types.videos.utils.decode_video_id_with_provider",
+            return_value={"model_id": "video-model"},
+        ) as video_decoder,
+        patch(
+            "litellm.types.videos.utils.decode_character_id_with_provider",
+            return_value={"model_id": "character-model"},
+        ) as character_decoder,
+    ):
+        assert (
+            get_model_from_request(
+                request_data={"file_id": "file-provider-id"},
+                route="/v1/files/{file_id}",
+            )
+            is None
+        )
+        video_decoder.assert_not_called()
+        character_decoder.assert_not_called()
+
+        assert (
+            get_model_from_request(
+                request_data={"video_id": "video-provider-id"},
+                route="/v1/videos/{video_id}",
+            )
+            == "video-model"
+        )
+        video_decoder.assert_called_once_with("video-provider-id")
+        character_decoder.assert_not_called()
+
+        video_decoder.reset_mock()
+        character_decoder.reset_mock()
+        assert (
+            get_model_from_request(
+                request_data={"character_id": "character-provider-id"},
+                route="/v1/videos/{character_id}",
+            )
+            == "character-model"
+        )
+        video_decoder.assert_not_called()
+        character_decoder.assert_called_once_with("character-provider-id")
+
+
 def test_get_model_from_request_handles_managed_id_decoder_failures():
     with (
         patch(
@@ -400,6 +444,13 @@ def test_get_model_from_request_handles_managed_id_decoder_failures():
             get_model_from_request(
                 request_data={"file_id": "not-a-managed-resource-id"},
                 route="/v1/files/{file_id}",
+            )
+            is None
+        )
+        assert (
+            get_model_from_request(
+                request_data={"video_id": "not-a-managed-resource-id"},
+                route="/v1/videos/{video_id}",
             )
             is None
         )
