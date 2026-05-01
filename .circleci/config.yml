@@ -111,6 +111,64 @@ commands:
       - wait_for_service:
           url: tcp://localhost:6379
           timeout: "60"
+  start_cassette_proxy:
+    description: |
+      Start the e2e cassette proxy sidecar (mitmproxy + Redis-backed cache).
+      Egress HTTPS traffic from any container that points HTTPS_PROXY at
+      this sidecar is captured / replayed. After this command runs you'll
+      have:
+        - a container named ``cassette-proxy`` listening on host port 8080
+        - the proxy CA at /tmp/cassette-proxy-ca.crt on the host
+        - $CASSETTE_PROXY_URL exported in $BASH_ENV
+        - $CASSETTE_PROXY_CA  exported in $BASH_ENV
+      Consumers should ``-e HTTPS_PROXY=$CASSETTE_PROXY_URL`` and mount
+      $CASSETTE_PROXY_CA into the container's trust store. The
+      ``trust_ca.sh`` helper inside the image takes care of all known
+      Python / curl / boto3 trust stores in one shot.
+    steps:
+      - run:
+          name: Build cassette-proxy image
+          command: |
+            docker build -t litellm-cassette-proxy:ci \
+              -f tests/e2e_cassette_proxy/Dockerfile \
+              .
+      - run:
+          name: Run cassette-proxy
+          command: |
+            # Prefer the project-level REDIS_SSL_URL (already set in
+            # CircleCI's env), fall back to constructing one from
+            # REDIS_HOST/PORT/PASSWORD if it isn't.
+            if [ -n "${REDIS_SSL_URL:-}" ]; then
+              REDIS_TARGET="$REDIS_SSL_URL"
+            else
+              : "${REDIS_HOST:?REDIS_HOST or REDIS_SSL_URL must be set}"
+              : "${REDIS_PORT:?REDIS_PORT must be set}"
+              : "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"
+              REDIS_TARGET="rediss://default:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
+            fi
+            docker run -d \
+              --name cassette-proxy \
+              -p 8080:8080 \
+              -e LITELLM_E2E_CASS_REDIS_URL="$REDIS_TARGET" \
+              litellm-cassette-proxy:ci
+      - wait_for_service:
+          url: tcp://localhost:8080
+          timeout: "60"
+      - run:
+          name: Fetch CA from cassette-proxy
+          command: |
+            mkdir -p /tmp
+            for i in 1 2 3 4 5; do
+              if curl --silent --show-error --max-time 30 \
+                   --proxy http://localhost:8080 \
+                   -o /tmp/cassette-proxy-ca.crt http://mitm.it/cert/pem; then
+                break
+              fi
+              sleep 2
+            done
+            test -s /tmp/cassette-proxy-ca.crt
+            echo "export CASSETTE_PROXY_URL=http://host.docker.internal:8080" >> "$BASH_ENV"
+            echo "export CASSETTE_PROXY_CA=/tmp/cassette-proxy-ca.crt"        >> "$BASH_ENV"
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -1351,6 +1409,7 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_cassette_proxy
       - attach_workspace:
           at: ~/project
       - run:
@@ -1389,9 +1448,18 @@ jobs:
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              -e HTTP_PROXY="$CASSETTE_PROXY_URL" \
+              -e HTTPS_PROXY="$CASSETTE_PROXY_URL" \
+              -e NO_PROXY="localhost,127.0.0.1,host.docker.internal,postgres-db" \
+              -e SSL_CERT_FILE=/etc/litellm-cassette-proxy-ca.crt \
+              -e REQUESTS_CA_BUNDLE=/etc/litellm-cassette-proxy-ca.crt \
+              -e CURL_CA_BUNDLE=/etc/litellm-cassette-proxy-ca.crt \
+              -e AWS_CA_BUNDLE=/etc/litellm-cassette-proxy-ca.crt \
+              -e NODE_EXTRA_CA_CERTS=/etc/litellm-cassette-proxy-ca.crt \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/oai_misc_config.yaml:/app/config.yaml \
+              -v "$CASSETTE_PROXY_CA":/etc/litellm-cassette-proxy-ca.crt:ro \
               litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
@@ -1408,6 +1476,11 @@ jobs:
           command: |
             uv run --no-sync python -m pytest -s -vv tests/openai_endpoints_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
+
+      - run:
+          name: Cassette-proxy stats
+          command: docker logs cassette-proxy 2>&1 | grep -E '\[E2ECASS\]' | tail -200 || true
+          when: always
 
       # Store test results
       - store_test_results:
