@@ -310,6 +310,27 @@ class TestEuAiActCompliant:
         checks = ComplianceChecker(data).check_eu_ai_act()
         assert all(c.passed for c in checks)
 
+    def test_pre_call_detected_when_mode_is_array(self):
+        """Array guardrail_mode should count toward pre-call screening."""
+        data = ComplianceCheckRequest(
+            request_id="req-203",
+            user_id="user-2",
+            model="gpt-4o-mini",
+            timestamp="2026-02-17T12:00:00Z",
+            guardrail_information=[
+                {
+                    "guardrail_name": "presidio-output-parse",
+                    "guardrail_mode": ["pre_call", "post_call"],
+                    "guardrail_status": "success",
+                }
+            ],
+        )
+        checks = ComplianceChecker(data).check_eu_ai_act()
+        results = {c.check_name: c.passed for c in checks}
+        assert results["Guardrails applied"] is True
+        assert results["Content screened before LLM"] is True
+        assert results["Audit record complete"] is True
+
 
 # ---------------------------------------------------------------------------
 # GDPR — Compliant cases (Task #4)
@@ -385,3 +406,24 @@ class TestGdprCompliant:
         )
         checks = ComplianceChecker(data).check_gdpr()
         assert all(c.passed for c in checks)
+
+    def test_gdpr_pre_call_detected_when_mode_is_array(self):
+        """Array guardrail_mode should satisfy GDPR pre-call data protection checks."""
+        data = ComplianceCheckRequest(
+            request_id="req-304",
+            user_id="user-2",
+            model="gpt-4o-mini",
+            timestamp="2026-02-17T12:00:00Z",
+            guardrail_information=[
+                {
+                    "guardrail_name": "presidio-output-parse",
+                    "guardrail_mode": ["pre_call", "post_call"],
+                    "guardrail_status": "success",
+                }
+            ],
+        )
+        checks = ComplianceChecker(data).check_gdpr()
+        results = {c.check_name: c.passed for c in checks}
+        assert results["Data protection applied"] is True
+        assert results["Sensitive data protected"] is True
+        assert results["Audit record complete"] is True

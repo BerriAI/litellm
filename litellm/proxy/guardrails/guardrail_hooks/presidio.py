@@ -501,11 +501,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 "This may indicate a missing caller update."
             )
             request_data = {}
-        if not request_data.get("metadata"):
-            request_data["metadata"] = {}
-        if "pii_tokens" not in request_data["metadata"]:
-            request_data["metadata"]["pii_tokens"] = {}
-        pii_tokens = request_data["metadata"]["pii_tokens"]
+        pii_tokens = self._ensure_request_scoped_pii_tokens(request_data)
 
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
@@ -956,6 +952,60 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
         return response
 
+    def _ensure_request_scoped_pii_tokens(
+        self, request_data: Dict[str, Any]
+    ) -> Dict[str, str]:
+        """
+        Return the request-scoped token map, creating it if needed, and anchor
+        the same dict under both ``metadata`` and ``litellm_metadata`` for hooks
+        that only read one of those namespaces.
+        """
+        metadata = request_data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            request_data["metadata"] = metadata
+
+        pii_tokens = metadata.get("pii_tokens")
+        if not isinstance(pii_tokens, dict):
+            pii_tokens = {}
+
+        metadata["pii_tokens"] = pii_tokens
+
+        litellm_metadata = request_data.get("litellm_metadata")
+        if isinstance(litellm_metadata, dict):
+            litellm_metadata["pii_tokens"] = pii_tokens
+
+        return cast(Dict[str, str], pii_tokens)
+
+    def _resolve_request_scoped_pii_tokens(
+        self, request_data: Optional[Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """
+        Resolve the request-scoped token map from ``metadata`` or ``litellm_metadata``.
+
+        If the map exists only under ``metadata``, assigns the same dict onto
+        ``litellm_metadata`` so post-call paths that read the latter stay in sync.
+        """
+        if not request_data:
+            return {}
+
+        metadata = request_data.get("metadata")
+        if isinstance(metadata, dict):
+            pii_tokens = metadata.get("pii_tokens")
+            if isinstance(pii_tokens, dict):
+                litellm_metadata = request_data.get("litellm_metadata")
+                if isinstance(litellm_metadata, dict):
+                    litellm_metadata["pii_tokens"] = pii_tokens
+                return cast(Dict[str, str], pii_tokens)
+
+        litellm_metadata = request_data.get("litellm_metadata")
+        if isinstance(litellm_metadata, dict):
+            pii_tokens = litellm_metadata.get("pii_tokens")
+            if isinstance(pii_tokens, dict):
+                return cast(Dict[str, str], pii_tokens)
+
+        return {}
+
     @staticmethod
     def _unmask_pii_text(text: str, pii_tokens: Dict[str, str]) -> str:
         """
@@ -1001,11 +1051,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Process an Anthropic native message dict for PII masking/unmasking.
         Handles content blocks with type == "text".
         """
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = self._resolve_request_scoped_pii_tokens(request_data)
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
-                "No pii_tokens in metadata for Anthropic response unmask"
+                "No pii_tokens found for Anthropic response unmask"
             )
         presidio_config = self.get_presidio_settings_from_request_data(
             request_data or {}
@@ -1043,11 +1092,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Helper to recursively process a ModelResponse for PII.
         Handles all choices and tool calls.
         """
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = self._resolve_request_scoped_pii_tokens(request_data)
         if not pii_tokens and mode == "unmask":
             verbose_proxy_logger.debug(
-                "No pii_tokens found in request_data['metadata'] — nothing to unmask"
+                "No pii_tokens found in request_data — nothing to unmask"
             )
         presidio_config = self.get_presidio_settings_from_request_data(
             request_data or {}
@@ -1274,11 +1322,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 yield chunk
             return
 
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = self._resolve_request_scoped_pii_tokens(request_data)
         if not pii_tokens and request_data:
             verbose_proxy_logger.debug(
-                "No pii_tokens in request_data['metadata'] for streaming unmask path"
+                "No pii_tokens found in request_data for streaming unmask path"
             )
         if not (self.output_parse_pii and pii_tokens):
             async for chunk in response:
@@ -1338,13 +1385,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # When input_type is "response" and pii_tokens are available,
         # unmask the text instead of masking it.
-        metadata = (request_data.get("metadata") or {}) if request_data else {}
-        pii_tokens = metadata.get("pii_tokens", {})
+        pii_tokens = self._resolve_request_scoped_pii_tokens(request_data)
 
         new_texts = []
-        if input_type == "response" and pii_tokens:
-            for text in texts:
-                new_texts.append(self._unmask_pii_text(text, pii_tokens))
+        if input_type == "response":
+            if pii_tokens:
+                for text in texts:
+                    new_texts.append(self._unmask_pii_text(text, pii_tokens))
+            elif self.output_parse_pii:
+                verbose_proxy_logger.debug(
+                    "output_parse_pii enabled but no pii_tokens found on response path; "
+                    "leaving response text unchanged"
+                )
+                new_texts = list(texts)
+            else:
+                for text in texts:
+                    modified_text = await self.check_pii(
+                        text=text,
+                        output_parse_pii=self.output_parse_pii,
+                        presidio_config=None,
+                        request_data=request_data or {},
+                    )
+                    new_texts.append(modified_text)
         else:
             for text in texts:
                 modified_text = await self.check_pii(
