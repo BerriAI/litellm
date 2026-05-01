@@ -3,9 +3,23 @@ from typing import Any
 
 import pytest
 
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.proxy_server import UserAPIKeyCacheTTLEnum
+
+
+class CapturingInMemoryCache(InMemoryCache):
+    """Records ``ttl`` passed into ``set_cache`` (what DualCache injects)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.last_ttl: Any = None
+
+    def set_cache(self, key, value, **kwargs):  # type: ignore[override]
+        self.last_ttl = kwargs.get("ttl")
+        super().set_cache(key, value, **kwargs)
 
 
 class FakeRedisCache(RedisCache):
@@ -18,14 +32,18 @@ class FakeRedisCache(RedisCache):
     This fake:
     - raises TypeError if the value is not a dict
     - raises TypeError if the dict is not JSON-serializable
+
+    Records the ``ttl`` kwarg DualCache forwards on each Redis write for tests.
     """
 
     def __init__(self):  # noqa: super().__init__ skipped intentionally
         self._store: dict[str, str] = {}
+        self.last_ttl: Any = None
 
     def set_cache(self, key: str, value: Any, **kwargs):  # type: ignore[override]
         if not isinstance(value, dict):
             raise TypeError("FakeRedisCache only accepts dict payloads")
+        self.last_ttl = kwargs.get("ttl")
         self._store[key] = json.dumps(value)
         return True
 
@@ -38,6 +56,7 @@ class FakeRedisCache(RedisCache):
     async def async_set_cache(self, key: str, value: Any, **kwargs):  # type: ignore[override]
         if not isinstance(value, dict):
             raise TypeError("FakeRedisCache only accepts dict payloads")
+        self.last_ttl = kwargs.get("ttl")
         self._store[key] = json.dumps(value)
         return True
 
@@ -60,6 +79,93 @@ def _make_key_obj(token: str = "tok") -> UserAPIKeyAuth:
 
 
 class TestUserApiKeyCache:
+    @pytest.mark.asyncio
+    async def test_async_set_in_memory_gets_enum_default_when_user_api_key_cache_ttl_omitted(
+        self,
+    ):
+        """
+        If ``general_settings.user_api_key_cache_ttl`` is absent, the proxy never
+        calls ``update_cache_ttl``; ``user_api_key_cache`` keeps
+        ``default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl``.
+        DualCache must forward that as the in-memory ``ttl`` kwarg on each set.
+        """
+        mem = CapturingInMemoryCache()
+        cache = UserApiKeyCache(
+            in_memory_cache=mem,
+            redis_cache=FakeRedisCache(),
+            default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
+        )
+        await cache.async_set_cache(
+            "k",
+            _make_key_obj("t"),
+            model_type=UserAPIKeyAuth,
+        )
+        expected = UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
+        assert mem.last_ttl == expected
+
+    def test_sync_set_in_memory_gets_enum_default_when_user_api_key_cache_ttl_omitted(
+        self,
+    ):
+        mem = CapturingInMemoryCache()
+        cache = UserApiKeyCache(
+            in_memory_cache=mem,
+            redis_cache=FakeRedisCache(),
+            default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value,
+        )
+        cache.set_cache("sk", _make_key_obj("s"), model_type=UserAPIKeyAuth)
+        assert mem.last_ttl == UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
+
+    @pytest.mark.asyncio
+    async def test_async_set_forwards_default_in_memory_ttl_to_redis_layer(self):
+        """
+        DualCache injects missing ``ttl`` from ``default_in_memory_ttl`` into kwargs
+        before calling ``redis_cache.async_set_cache`` — Redis should receive the same
+        TTL as memory (matches proxy defaults: enum 60s).
+        """
+        fake = FakeRedisCache()
+        cache = UserApiKeyCache(
+            redis_cache=fake,
+            default_in_memory_ttl=60,
+        )
+
+        await cache.async_set_cache(
+            key="ttl-key",
+            value=_make_key_obj("ttl-tok"),
+            model_type=UserAPIKeyAuth,
+        )
+
+        assert fake.last_ttl == 60
+
+    @pytest.mark.asyncio
+    async def test_async_set_explicit_ttl_override_reaches_redis(self):
+        fake = FakeRedisCache()
+        cache = UserApiKeyCache(
+            redis_cache=fake,
+            default_in_memory_ttl=60,
+        )
+
+        await cache.async_set_cache(
+            key="k",
+            value=_make_key_obj("x"),
+            model_type=UserAPIKeyAuth,
+            ttl=900,
+        )
+
+        assert fake.last_ttl == 900
+
+    def test_sync_set_forwards_default_in_memory_ttl_to_redis_layer(self):
+        fake = FakeRedisCache()
+        cache = UserApiKeyCache(
+            redis_cache=fake,
+            default_in_memory_ttl=45,
+        )
+        cache.set_cache(
+            "sk",
+            _make_key_obj("sync"),
+            model_type=UserAPIKeyAuth,
+        )
+        assert fake.last_ttl == 45
+
     @pytest.mark.asyncio
     async def test_async_set_typed_stores_serialized_payload_in_memory_and_redis(self):
         cache = UserApiKeyCache(redis_cache=FakeRedisCache())
