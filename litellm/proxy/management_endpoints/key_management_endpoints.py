@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     LENGTH_OF_LITELLM_GENERATED_KEY,
     LITELLM_PROXY_ADMIN_NAME,
@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_server_credentials_master_key,
+    rotate_mcp_user_credentials_master_key,
 )
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
@@ -1058,7 +1059,7 @@ async def _check_project_key_limits(
     project_id: str,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """
     Validate that key's models and budget respect its project's limits.
@@ -1833,7 +1834,7 @@ async def _process_single_key_update(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Any,
     llm_router: Optional[Router],
     user_custom_key_update: Optional[Callable] = None,
@@ -3297,7 +3298,7 @@ async def _team_key_deletion_check(
     user_api_key_dict: UserAPIKeyAuth,
     key_info: LiteLLM_VerificationToken,
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ):
     is_team_key = _is_team_key(data=key_info)
 
@@ -3340,7 +3341,7 @@ async def _team_key_deletion_check(
 
 async def can_modify_verification_token(
     key_info: LiteLLM_VerificationToken,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
 ) -> bool:
@@ -3414,7 +3415,7 @@ async def can_modify_verification_token(
 
 async def delete_verification_tokens(
     tokens: List,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str] = None,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
@@ -3604,7 +3605,7 @@ async def _persist_deleted_verification_tokens(
 
 async def delete_key_aliases(
     key_aliases: List[str],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str] = None,
@@ -3716,6 +3717,17 @@ async def _rotate_master_key(  # noqa: PLR0915
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to rotate MCP server credentials: %s", str(e)
+        )
+
+    # 4b. process MCP user-scoped credentials table (BYOK + OAuth2 tokens)
+    try:
+        await rotate_mcp_user_credentials_master_key(
+            prisma_client=prisma_client,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Failed to rotate MCP user credentials: %s", str(e)
         )
 
     # 5. process credentials table
@@ -3850,7 +3862,7 @@ async def _execute_virtual_key_regeneration(
     data: Optional[RegenerateKeyRequest],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> GenerateKeyResponse:
     """Generate new token, update DB, invalidate cache, and return response."""
@@ -4140,7 +4152,7 @@ async def _check_proxy_or_team_admin_for_key(
     key_in_db: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> None:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -5161,7 +5173,7 @@ async def _check_key_admin_access(
     user_api_key_dict: UserAPIKeyAuth,
     hashed_token: str,
     prisma_client: Any,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     route: str,
 ) -> None:
     """
@@ -5254,6 +5266,9 @@ async def block_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -5297,9 +5312,11 @@ async def block_key(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
-                    or litellm_proxy_admin_name,
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
                     object_id=hashed_token,
@@ -5363,6 +5380,9 @@ async def unblock_key(
         proxy_logging_obj,
         user_api_key_cache,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise Exception("{}".format(CommonProxyErrors.db_not_connected_error.value))
@@ -5406,9 +5426,11 @@ async def unblock_key(
                 request_data=LiteLLM_AuditLogs(
                     id=str(uuid.uuid4()),
                     updated_at=datetime.now(timezone.utc),
-                    changed_by=litellm_changed_by
-                    or user_api_key_dict.user_id
-                    or litellm_proxy_admin_name,
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
                     changed_by_api_key=user_api_key_dict.api_key,
                     table_name=LitellmTableNames.KEY_TABLE_NAME,
                     object_id=hashed_token,
@@ -5589,7 +5611,6 @@ async def test_key_logging(
                     "content": "Hello, this is a test from litellm /key/health. No LLM API call was made for this",
                 }
             ],
-            "mock_response": "test response",
         }
         data = await add_litellm_data_to_request(
             data=data,
@@ -5598,6 +5619,7 @@ async def test_key_logging(
             general_settings=general_settings,
             request=request,
         )
+        data["mock_response"] = "test response"
         await litellm.acompletion(
             **data
         )  # make mock completion call to trigger key based callbacks
