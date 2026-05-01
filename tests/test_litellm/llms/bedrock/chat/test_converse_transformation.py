@@ -279,7 +279,7 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
     }
 
     optional_params = config.map_openai_params(
-        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         non_default_params=non_default_params,
         optional_params={},
         drop_params=False,
@@ -2797,7 +2797,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_with_max_completion,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -2819,7 +2819,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_with_max_tokens,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -2842,7 +2842,7 @@ def test_thinking_with_max_completion_tokens():
     result = config.map_openai_params(
         non_default_params=non_default_params_without_max,
         optional_params=optional_params,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         drop_params=False,
     )
 
@@ -3617,7 +3617,7 @@ class TestBedrockMinThinkingBudgetTokens:
     """Test that thinking.budget_tokens is clamped to the Bedrock minimum (1024)."""
 
     def _map_params(
-        self, thinking_value, model="anthropic.claude-3-7-sonnet-20250219-v1:0"
+        self, thinking_value, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
     ):
         """Helper to call map_openai_params with the given thinking value."""
         config = AmazonConverseConfig()
@@ -3651,7 +3651,7 @@ class TestBedrockMinThinkingBudgetTokens:
         result = config.map_openai_params(
             non_default_params={},
             optional_params={},
-            model="anthropic.claude-3-7-sonnet-20250219-v1:0",
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             drop_params=False,
         )
         assert "thinking" not in result or result.get("thinking") is None
@@ -4146,3 +4146,257 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
 
     # finish_reason must be "stop", not "tool_calls"
     assert result.choices[0].finish_reason == "stop"
+
+
+def test_bedrock_tool_message_openai_file_pdf_becomes_document():
+    """
+    OpenAI Chat Completions `{type: "file", file: {file_data: "data:application/pdf;...", filename}}`
+    inside a tool message content list should translate to a Bedrock
+    toolResult.content[].document block.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"  # tiny "%PDF-1.4\n" header
+    messages = [
+        {"role": "user", "content": "Summarize the attached PDF."},
+        {
+            "tool_call_id": "tooluse_pdf_1",
+            "role": "tool",
+            "name": "fetch_document",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                        "filename": "summary.pdf",
+                    },
+                },
+            ],
+        },
+    ]
+
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+
+    tool_result = translated_msg[-1]["content"][-1]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_pdf_1"
+    assert len(tool_result["content"]) == 1
+    block = tool_result["content"][0]
+    assert "document" in block, f"expected document block, got {block}"
+    assert block["document"]["format"] == "pdf"
+    assert block["document"]["source"]["bytes"] == pdf_b64
+    assert block["document"]["name"].startswith("DocumentPDFmessages_")
+    assert block["document"]["name"].endswith("_pdf")
+
+
+def test_bedrock_tool_message_image_url_pdf_data_uri_becomes_document():
+    """
+    Regression for the processor-returns-document-but-wrapper-drops-it bug:
+    when a caller sends a PDF as an `image_url` data URI on the tool-result path,
+    BedrockImageProcessor correctly returns a {"document": ...} block, but the
+    tool-result wrapper only appended the "image" case, silently dropping documents.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
+    messages = [
+        {"role": "user", "content": "Summarize the attached PDF."},
+        {
+            "tool_call_id": "tooluse_pdf_img_1",
+            "role": "tool",
+            "name": "fetch_document",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:application/pdf;base64,{pdf_b64}",
+                    },
+                },
+            ],
+        },
+    ]
+
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+
+    tool_result = translated_msg[-1]["content"][-1]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_pdf_img_1"
+    assert len(tool_result["content"]) == 1
+    block = tool_result["content"][0]
+    assert "document" in block, f"expected document block, got {block}"
+    assert block["document"]["format"] == "pdf"
+    assert block["document"]["source"]["bytes"] == pdf_b64
+
+
+def test_bedrock_tool_message_file_id_http_url_becomes_document():
+    """
+    OpenAI `file.file_id` is a server-side file reference. The Bedrock
+    user-message path (_process_file_message at factory.py:4796) accepts either
+    `file_data` or `file_id` and forwards to BedrockImageProcessor. The
+    tool-result path must match: when `file_id` is an http(s) PDF URL, it
+    should resolve to a Bedrock document block, not be silently dropped.
+    """
+    from unittest.mock import patch
+
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockImageProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    pdf_url = "https://example.com/whitepaper.pdf"
+    fake_document_block = {
+        "document": {
+            "format": "pdf",
+            "name": "fake_doc",
+            "source": {"bytes": "ZmFrZQ=="},
+        }
+    }
+    messages = [
+        {"role": "user", "content": "Summarize the attached PDF."},
+        {
+            "tool_call_id": "tooluse_fid_1",
+            "role": "tool",
+            "name": "fetch_document",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": pdf_url,
+                        "filename": "whitepaper.pdf",
+                    },
+                },
+            ],
+        },
+    ]
+
+    with patch.object(
+        BedrockImageProcessor,
+        "process_image_sync",
+        return_value=fake_document_block,
+    ) as mock_proc:
+        translated_msg = _bedrock_converse_messages_pt(
+            messages=messages, model="", llm_provider=""
+        )
+
+    mock_proc.assert_called_once()
+    assert mock_proc.call_args.kwargs["image_url"] == pdf_url
+
+    tool_result = translated_msg[-1]["content"][-1]["toolResult"]
+    assert len(tool_result["content"]) == 1
+    block = tool_result["content"][0]
+    assert "document" in block, f"expected document block, got {block}"
+    assert block["document"]["source"]["bytes"] == "ZmFrZQ=="
+
+
+def test_bedrock_tool_message_file_without_data_or_id_raises():
+    """
+    The user-message path raises BadRequestError when a `type: "file"` block
+    has neither `file_data` nor `file_id` (factory.py:4802-4809). The
+    tool-result path must match — silently dropping the block makes the model
+    see an empty tool result and obscures the caller bug.
+    """
+    import litellm
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {"role": "user", "content": "Summarize."},
+        {
+            "tool_call_id": "tooluse_bad_1",
+            "role": "tool",
+            "name": "fetch_document",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {"filename": "nothing.pdf"},
+                },
+            ],
+        },
+    ]
+
+    with pytest.raises(litellm.BadRequestError):
+        _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
+
+
+def test_bedrock_tool_message_image_url_png_still_becomes_image():
+    """
+    Regression: image_url with an image mime type must continue to translate
+    to a Bedrock image block (not document). Locks in existing behavior after
+    the document-passthrough fix.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+
+    png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
+    messages = [
+        {"role": "user", "content": "Describe the attached image."},
+        {
+            "tool_call_id": "tooluse_png_1",
+            "role": "tool",
+            "name": "fetch_image",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{png_b64}",
+                    },
+                },
+            ],
+        },
+    ]
+
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+
+    tool_result = translated_msg[-1]["content"][-1]["toolResult"]
+    assert len(tool_result["content"]) == 1
+    block = tool_result["content"][0]
+    assert "image" in block, f"expected image block, got {block}"
+    assert "document" not in block
+    assert block["image"]["format"] == "png"
+    assert block["image"]["source"]["bytes"] == png_b64
+
+
+def test_transform_response_does_not_leak_body_on_parse_failure():
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    leaky_body = {"output": {"message": {"content": [{"text": "secret content"}]}}}
+
+    class MockResponse:
+        def json(self):
+            return leaky_body
+
+        @property
+        def text(self):
+            return json.dumps(leaky_body)
+
+    with patch(
+        "litellm.llms.bedrock.chat.converse_transformation.ConverseResponseBlock",
+        side_effect=KeyError("missing required field"),
+    ):
+        with pytest.raises(BedrockError) as exc_info:
+            AmazonConverseConfig()._transform_response(
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                response=MockResponse(),
+                model_response=ModelResponse(),
+                stream=False,
+                logging_obj=None,
+                optional_params={},
+                api_key=None,
+                data=None,
+                messages=[],
+                encoding=None,
+            )
+
+    msg = str(exc_info.value)
+    assert "secret content" not in msg
+    assert "Error converting to valid response block" in msg

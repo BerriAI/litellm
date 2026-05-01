@@ -72,6 +72,9 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
+)
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicToolsValues,
@@ -1380,7 +1383,7 @@ class LiteLLMAnthropicMessagesAdapter:
         "ContentBlockContentBlockDict",
     ]:
         from litellm._uuid import uuid
-        from litellm.types.llms.anthropic import TextBlock, ToolUseBlock
+        from litellm.types.llms.anthropic import TextBlock
 
         for choice in choices:
             if (
@@ -1388,12 +1391,25 @@ class LiteLLMAnthropicMessagesAdapter:
                 and len(choice.delta.tool_calls) > 0
                 and choice.delta.tool_calls[0].function is not None
             ):
-                return "tool_use", ToolUseBlock(
-                    type="tool_use",
-                    id=choice.delta.tool_calls[0].id or str(uuid.uuid4()),
-                    name=choice.delta.tool_calls[0].function.name or "",
-                    input={},  # type: ignore[typeddict-item]
-                )
+                raw_id = choice.delta.tool_calls[0].id or str(uuid.uuid4())
+                tool_name = choice.delta.tool_calls[0].function.name or ""
+                base_id = raw_id
+                thought_sig: Optional[str] = None
+                if THOUGHT_SIGNATURE_SEPARATOR in raw_id:
+                    parts = raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)
+                    base_id = parts[0]
+                    thought_sig = parts[1] if len(parts) > 1 else None
+                tool_block: Dict[str, Any] = {
+                    "type": "tool_use",
+                    "id": base_id,
+                    "name": tool_name,
+                    "input": {},
+                }
+                if thought_sig:
+                    tool_block["provider_specific_fields"] = {
+                        "signature": thought_sig,
+                    }
+                return "tool_use", cast("ContentBlockContentBlockDict", tool_block)
             elif choice.delta.content is not None and len(choice.delta.content) > 0:
                 return "text", TextBlock(type="text", text="")
             elif isinstance(choice, StreamingChoices) and hasattr(
