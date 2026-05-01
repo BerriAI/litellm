@@ -12514,6 +12514,21 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "deepseek/deepseek-v4-pro": {
+        "max_tokens": 384000,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "input_cost_per_token": 4.35e-07,
+        "output_cost_per_token": 8.7e-07,
+        "cache_read_input_token_cost": 3.625e-09,
+        "litellm_provider": "deepseek",
+        "mode": "chat",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "deepseek.v3-v1:0": {
         "input_cost_per_token": 5.8e-07,
         "litellm_provider": "bedrock_converse",
