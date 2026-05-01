@@ -935,12 +935,37 @@ async def cancel_response(
         )
 
 
+
+class _ReplayWebSocket:
+    """Thin wrapper that replays one pre-read message on the first ``receive_text`` call.
+
+    Used when ``model`` is extracted from the first client message instead of
+    the URL query parameter, so the message is not lost for downstream handlers.
+    """
+
+    def __init__(self, websocket: WebSocket, first_message: str):
+        self._ws = websocket
+        self._replay: Optional[str] = first_message
+
+    async def receive_text(self) -> str:
+        if self._replay is not None:
+            msg = self._replay
+            self._replay = None
+            return msg
+        return await self._ws.receive_text()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._ws, name)
+
+
 @router.websocket("/v1/responses")
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
     websocket: WebSocket,
-    model: str = fastapi.Query(
-        ..., description="The model to use for the responses WebSocket session."
+    model: Optional[str] = fastapi.Query(
+        None,
+        description="The model to use for the responses WebSocket session. "
+        "If omitted, extracted from the first response.create message.",
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
@@ -976,6 +1001,54 @@ async def responses_websocket_endpoint(
     if requested_protocols:
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
+
+    # If model was not provided as a query parameter, read the first
+    # client message to extract it.  The OpenAI WebSocket spec sends
+    # model inside the response.create payload, not as a URL param.
+    # Wrap the websocket so the consumed message is replayed for
+    # downstream handlers that read from receive_text().
+    if model is None:
+        try:
+            first_message = await asyncio.wait_for(
+                websocket.receive_text(), timeout=30.0
+            )
+            first_msg_obj = json.loads(first_message)
+            # Support both nested and flat response.create formats:
+            #   {"type": "response.create", "response": {"model": "..."}}
+            #   {"type": "response.create", "model": "..."}
+            model = (
+                (first_msg_obj.get("response") or {}).get("model")
+                or first_msg_obj.get("model")
+            )
+            if not model:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": (
+                                    "model is required as a ?model= query parameter "
+                                    "or inside the first response.create message"
+                                ),
+                            },
+                        }
+                    )
+                )
+                await websocket.close(code=1008, reason="Missing model")
+                return
+            websocket = _ReplayWebSocket(websocket, first_message)  # type: ignore[assignment]
+        except asyncio.TimeoutError:
+            await websocket.close(
+                code=1008, reason="Timeout waiting for first message with model"
+            )
+            return
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Failed to extract model from first WebSocket message"
+            )
+            await websocket.close(code=1008, reason="Invalid first message")
+            return
 
     data: Dict[str, Any] = {
         "model": model,
