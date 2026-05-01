@@ -1,17 +1,14 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm.llms.vertex_ai.vertex_ai_aws_wif import VertexAIAwsWifAuth
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
@@ -71,7 +68,7 @@ class TestVertexBase:
                     project_id="different-project",
                     custom_llm_provider="vertex_ai",
                 )
-            print(f"result: {result}")
+            assert result == ("fake-token-1", "different-project")
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
     @pytest.mark.asyncio
@@ -890,6 +887,45 @@ class TestVertexBase:
             assert (
                 result_url == expected_url
             ), f"Expected {expected_url}, got {result_url} for model {model}"
+
+    @pytest.mark.parametrize(
+        "api_base, endpoint, expected_url",
+        [
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+            (
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+        ],
+    )
+    def test_check_custom_proxy_gemini_prebuilt_route_handling(
+        self, api_base, endpoint, expected_url
+    ):
+        """Test that Gemini custom api_base values are not double-appended when they already include model routing."""
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base=api_base,
+            custom_llm_provider="gemini",
+            gemini_api_key="test-api-key",
+            endpoint=endpoint,
+            stream=False,
+            auth_header=None,
+            url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            model="gemini-2.5-flash-lite",
+        )
+
+        assert result_url == expected_url
 
     def test_check_custom_proxy_streaming_parameter(self):
         """Test that streaming parameter correctly adds ?alt=sse to URLs"""
