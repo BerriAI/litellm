@@ -79,8 +79,11 @@ from litellm.proxy._types import (
     InvitationNew,
     InvitationUpdate,
     Litellm_EntityType,
+    LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
+    LiteLLM_TagTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     PassThroughGenericEndpoint,
@@ -95,6 +98,7 @@ from litellm.proxy._types import (
     UI_TEAM_ID,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
@@ -207,6 +211,7 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     _REALTIME_BODY_CACHE_SIZE,
     APSCHEDULER_COALESCE,
@@ -1695,7 +1700,7 @@ prisma_client: Optional[PrismaClient] = None
 shared_aiohttp_session: Optional["ClientSession"] = (
     None  # Global shared session for connection reuse
 )
-user_api_key_cache = DualCache(
+user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache = DualCache(
@@ -2097,14 +2102,16 @@ async def update_cache(  # noqa: PLR0915
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj: LiteLLM_VerificationTokenView = await user_api_key_cache.async_get_cache(key=hashed_token)  # type: ignore
+        existing_spend_obj = await user_api_key_cache.async_get_cache(
+            key=hashed_token, model_type=UserAPIKeyAuth
+        )
         verbose_proxy_logger.debug(
             f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
         )
         if existing_spend_obj is None:
             return
-        else:
-            existing_spend = existing_spend_obj.spend
+
+        existing_spend = existing_spend_obj.spend or 0.0
         # Calculate the new cost by adding the existing cost and response_cost
         new_spend = existing_spend + response_cost
 
@@ -2162,41 +2169,48 @@ async def update_cache(  # noqa: PLR0915
                 existing_team_member_spend + response_cost
             )
 
-        # Update the cost column for the given token
+        # Existing spend_obj is mutated; UserApiKeyCache.async_set_cache_pipeline turns
+        # BaseModel values into dicts for Redis (same Codec path as async_set_cache).
         existing_spend_obj.spend = new_spend
         values_to_update_in_cache.append((hashed_token, existing_spend_obj))
 
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
+        if response_cost is None:
+            return
         user_ids = [user_id]
         try:
             for _id in user_ids:
                 # Fetch the existing cost for the given user
                 if _id is None:
                     continue
-                existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
-                if existing_spend_obj is None:
+                cached_user = await user_api_key_cache.async_get_cache(key=_id)
+                if cached_user is None:
                     # do nothing if there is no cache value
+                    return
+                existing_spend_obj = CacheCodec.deserialize(
+                    cached_user, LiteLLM_UserTable
+                )
+                if existing_spend_obj is None:
                     return
                 verbose_proxy_logger.debug(
                     f"_update_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
                 )
 
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
+                existing_spend = existing_spend_obj.spend or 0.0
                 # Calculate the new cost by adding the existing cost and response_cost
                 new_spend = existing_spend + response_cost
 
-                # Update the cost column for the given user
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend_obj["spend"] = new_spend
-                    values_to_update_in_cache.append((_id, existing_spend_obj))
-                else:
-                    existing_spend_obj.spend = new_spend
-                    values_to_update_in_cache.append((_id, existing_spend_obj.json()))
+                existing_spend_obj.spend = new_spend
+                values_to_update_in_cache.append(
+                    (
+                        _id,
+                        CacheCodec.serialize(
+                            existing_spend_obj, model_type=LiteLLM_UserTable
+                        ),
+                    )
+                )
             ## UPDATE GLOBAL PROXY ##
             global_proxy_spend = await user_api_key_cache.async_get_cache(
                 key="{}:spend".format(litellm_proxy_admin_name)
@@ -2228,31 +2242,33 @@ async def update_cache(  # noqa: PLR0915
         _id = "end_user_id:{}".format(end_user_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
-            if existing_spend_obj is None:
+            cached_end_user = await user_api_key_cache.async_get_cache(key=_id)
+            if cached_end_user is None:
                 # if user does not exist in LiteLLM_UserTable, create a new user
                 # do nothing if end-user not in api key cache
+                return
+            existing_spend_obj = CacheCodec.deserialize(
+                cached_end_user, LiteLLM_EndUserTable
+            )
+            if existing_spend_obj is None:
                 return
             verbose_proxy_logger.debug(
                 f"_update_end_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
             )
-            if existing_spend_obj is None:
-                existing_spend = 0
-            else:
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
+
+            existing_spend = existing_spend_obj.spend or 0.0
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            # Update the cost column for the given user
-            if isinstance(existing_spend_obj, dict):
-                existing_spend_obj["spend"] = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
-            else:
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj.json()))
+            existing_spend_obj.spend = new_spend
+            values_to_update_in_cache.append(
+                (
+                    _id,
+                    CacheCodec.serialize(
+                        existing_spend_obj, model_type=LiteLLM_EndUserTable
+                    ),
+                )
+            )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update end user spend in cache. "
@@ -2271,36 +2287,32 @@ async def update_cache(  # noqa: PLR0915
 
         _id = "team_id:{}".format(team_id)
         try:
-            # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
+            cached_team = await user_api_key_cache.async_get_cache(key=_id)
+            if cached_team is None:
+                # do nothing if team not in api key cache
+                return
+            existing_spend_obj: Optional[LiteLLM_TeamTableCachedObj] = (
+                CacheCodec.deserialize(cached_team, LiteLLM_TeamTableCachedObj)
             )
             if existing_spend_obj is None:
-                # do nothing if team not in api key cache
                 return
             verbose_proxy_logger.debug(
                 f"_update_team_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
             )
-            if existing_spend_obj is None:
-                existing_spend: Optional[float] = 0.0
-            else:
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
 
-            if existing_spend is None:
-                existing_spend = 0.0
+            existing_spend: float = existing_spend_obj.spend or 0.0
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            # Update the cost column for the given user
-            if isinstance(existing_spend_obj, dict):
-                existing_spend_obj["spend"] = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
-            else:
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
+            existing_spend_obj.spend = new_spend
+            values_to_update_in_cache.append(
+                (
+                    _id,
+                    CacheCodec.serialize(
+                        existing_spend_obj, model_type=LiteLLM_TeamTableCachedObj
+                    ),
+                )
+            )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update team spend in cache. "
@@ -2327,32 +2339,32 @@ async def update_cache(  # noqa: PLR0915
 
                 cache_key = f"tag:{tag_name}"
                 # Fetch the existing tag object from cache
-                existing_tag_obj = await user_api_key_cache.async_get_cache(
-                    key=cache_key
-                )
-                if existing_tag_obj is None:
+                cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
+                if cached_tag is None:
                     # do nothing if tag not in api key cache
+                    continue
+
+                existing_tag_obj = CacheCodec.deserialize(cached_tag, LiteLLM_TagTable)
+                if existing_tag_obj is None:
                     continue
 
                 verbose_proxy_logger.debug(
                     f"_update_tag_cache: existing spend for tag={tag_name}: {existing_tag_obj}; response_cost: {response_cost}"
                 )
 
-                if isinstance(existing_tag_obj, dict):
-                    existing_spend = existing_tag_obj.get("spend", 0) or 0
-                else:
-                    existing_spend = getattr(existing_tag_obj, "spend", 0) or 0
-
+                existing_spend = existing_tag_obj.spend or 0.0
                 # Calculate the new cost by adding the existing cost and response_cost
                 new_spend = existing_spend + response_cost
 
-                # Update the spend column for the given tag
-                if isinstance(existing_tag_obj, dict):
-                    existing_tag_obj["spend"] = new_spend
-                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
-                else:
-                    existing_tag_obj.spend = new_spend
-                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+                existing_tag_obj.spend = new_spend
+                values_to_update_in_cache.append(
+                    (
+                        cache_key,
+                        CacheCodec.serialize(
+                            existing_tag_obj, model_type=LiteLLM_TagTable
+                        ),
+                    )
+                )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update tag spend in cache. "
@@ -3020,8 +3032,9 @@ class ProxyConfig:
     def _init_cache(
         self,
         cache_params: dict,
+        enable_redis_auth_cache: bool = False,
     ):
-        global redis_usage_cache, llm_router
+        global redis_usage_cache, llm_router, general_settings
         from litellm import Cache
 
         if "default_in_memory_ttl" in cache_params:
@@ -3037,7 +3050,29 @@ class ProxyConfig:
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
-            spend_counter_cache.redis_cache = redis_usage_cache
+            spend_counter_cache.attach_redis_cache(
+                redis_usage_cache,
+                default_redis_ttl=litellm.default_redis_ttl,
+            )
+            # Note: PKCE verifier storage uses redis_usage_cache directly (not
+            # user_api_key_cache) to avoid routing all API-key lookups through Redis.
+            if enable_redis_auth_cache is True:
+                user_api_key_cache.attach_redis_cache(
+                    redis_usage_cache,
+                    default_redis_ttl=litellm.default_redis_ttl,
+                )
+                verbose_proxy_logger.info(
+                    "enable_redis_auth_cache=True: attached Redis to "
+                    "user_api_key_cache — virtual-key lookups are now "
+                    "shared across all proxy workers."
+                )
+            else:
+                verbose_proxy_logger.info(
+                    "enable_redis_auth_cache is not set: user_api_key_cache "
+                    "remains in-memory only (per-worker). Set "
+                    "litellm_settings.enable_redis_auth_cache: true to share "
+                    "the auth cache across workers and reduce DB load."
+                )
             litellm_config_cache.redis_cache = redis_usage_cache
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
@@ -3363,7 +3398,13 @@ class ProxyConfig:
                             cache_params[key] = get_secret(value)
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
-                    self._init_cache(cache_params=cache_params)
+                    self._init_cache(
+                        cache_params=cache_params,
+                        enable_redis_auth_cache=litellm_settings.get(
+                            "enable_redis_auth_cache", False
+                        )
+                        is True,
+                    )
                     if litellm.cache is not None:
                         verbose_proxy_logger.debug(
                             f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
@@ -3634,21 +3675,23 @@ class ProxyConfig:
                 verbose_proxy_logger.critical(
                     "LITELLM_MASTER_KEY is not set! All requests will be treated as INTERNAL_USER with no admin access. Set LITELLM_MASTER_KEY for production use."
                 )
-            ### USER API KEY CACHE IN-MEMORY TTL ###
+            ### USER API KEY CACHE TTL (in-memory + Redis when Redis auth sharing is enabled) ###
             user_api_key_cache_ttl = general_settings.get(
                 "user_api_key_cache_ttl", None
             )
             if user_api_key_cache_ttl is not None:
+                ttl = float(user_api_key_cache_ttl)
+                # Mirror TTL on Redis as well when ``litellm_settings.enable_redis_auth_cache``
+                # attaches Redis to ``user_api_key_cache``; otherwise DualCache misses in
+                # memory fall back to a key that outlasts ``user_api_key_cache_ttl``.
                 user_api_key_cache.update_cache_ttl(
-                    default_in_memory_ttl=float(user_api_key_cache_ttl),
-                    default_redis_ttl=None,  # user_api_key_cache uses in-memory TTL only; Redis not configured for key lookups
+                    default_in_memory_ttl=ttl,
+                    default_redis_ttl=ttl,
                 )
 
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).
-            # user_api_key_cache is intentionally left in-memory-only to avoid routing
-            # all API-key lookups through Redis.
             use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
             if use_pkce and redis_usage_cache is None:
                 global _pkce_no_redis_warning_emitted
@@ -6377,7 +6420,7 @@ class ProxyStartupEvent:
         cls,
         general_settings: dict,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
     ):
         """Initialize JWT auth on startup"""
         if general_settings.get("litellm_jwtauth", None) is not None:
@@ -6426,7 +6469,7 @@ class ProxyStartupEvent:
     async def _warm_global_spend_cache(
         cls,
         litellm_proxy_admin_name: str,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         prisma_client: PrismaClient,
     ) -> None:
         """Warm global spend cache once at startup to reduce impact of first wave of requests."""
@@ -7066,7 +7109,7 @@ class ProxyStartupEvent:
         cls,
         database_url: Optional[str],
         proxy_logging_obj: ProxyLogging,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
     ) -> Optional[PrismaClient]:
         """
         - Sets up prisma client
@@ -10368,6 +10411,101 @@ def _paginate_models_response(
     }
 
 
+def _team_models_resolve_to_names(
+    team_models: List[str], access_groups: Dict[str, Any]
+) -> List[str]:
+    """Expand team model entries (including access group names) to concrete model names."""
+    resolved: List[str] = []
+    for name in team_models:
+        if name in access_groups:
+            resolved.extend(access_groups[name])
+        else:
+            resolved.append(name)
+    return resolved
+
+
+async def _load_team_object_for_model_filter(
+    team_id: str, prisma_client: PrismaClient
+) -> Optional[LiteLLM_TeamTable]:
+    """Load team row from DB; returns None if missing or on error."""
+    try:
+        team_db_object = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": team_id}
+        )
+        if team_db_object is None:
+            verbose_proxy_logger.warning(f"Team {team_id} not found in database")
+            return None
+        return LiteLLM_TeamTable(**team_db_object.model_dump())
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
+        return None
+
+
+async def _gather_team_accessible_model_ids(
+    team_object: LiteLLM_TeamTable,
+    team_id: str,
+    prisma_client: PrismaClient,
+    llm_router: Router,
+) -> Set[str]:
+    """Collect model IDs the team can use from router config and DB."""
+    team_accessible_model_ids: Set[str] = set()
+    access_groups = llm_router.get_model_access_groups() if llm_router else {}
+
+    if (
+        not team_object.models
+        or SpecialModelNames.all_proxy_models.value in team_object.models
+    ):
+        model_list = llm_router.get_model_list() if llm_router else []
+        if model_list is not None:
+            for model in model_list:
+                model_id = model.get("model_info", {}).get("id", None)
+                if model_id is None:
+                    continue
+                team_model_id = model.get("model_info", {}).get("team_id", None)
+                if team_model_id is None or team_model_id == team_id:
+                    team_accessible_model_ids.add(model_id)
+    else:
+        resolved_model_names: Set[str] = set()
+        for model_name in team_object.models:
+            if model_name in access_groups:
+                resolved_model_names.update(access_groups[model_name])
+            else:
+                resolved_model_names.add(model_name)
+
+        for model_name in resolved_model_names:
+            _models = (
+                llm_router.get_model_list(model_name=model_name, team_id=team_id)
+                if llm_router
+                else []
+            )
+            if _models is not None:
+                for model in _models:
+                    model_id = model.get("model_info", {}).get("id", None)
+                    if model_id is not None:
+                        team_accessible_model_ids.add(model_id)
+
+    try:
+        if (
+            team_object.models
+            and SpecialModelNames.all_proxy_models.value not in team_object.models
+        ):
+            _resolved_names = _team_models_resolve_to_names(
+                team_object.models, access_groups
+            )
+            db_models = await prisma_client.db.litellm_proxymodeltable.find_many(
+                where={"model_name": {"in": _resolved_names}}
+            )
+            for db_model in db_models:
+                if db_model.model_id:
+                    team_accessible_model_ids.add(db_model.model_id)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"Error querying database models for team {team_id}: {str(e)}"
+        )
+
+    return team_accessible_model_ids
+
+
 async def _filter_models_by_team_id(
     all_models: List[Dict[str, Any]],
     team_id: str,
@@ -10390,78 +10528,13 @@ async def _filter_models_by_team_id(
     Returns:
         Filtered list of models
     """
-    # Get team from database
-    try:
-        team_db_object = await prisma_client.db.litellm_teamtable.find_unique(
-            where={"team_id": team_id}
-        )
-        if team_db_object is None:
-            verbose_proxy_logger.warning(f"Team {team_id} not found in database")
-            # If team doesn't exist, return empty list
-            return []
-
-        team_object = LiteLLM_TeamTable(**team_db_object.model_dump())
-    except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
+    team_object = await _load_team_object_for_model_filter(team_id, prisma_client)
+    if team_object is None:
         return []
 
-    # Get models accessible to this team (similar to _add_team_models_to_all_models)
-    team_accessible_model_ids: Set[str] = set()
-
-    if (
-        not team_object.models  # empty list = all model access
-        or SpecialModelNames.all_proxy_models.value in team_object.models
-    ):
-        # Team has access to all models
-        model_list = llm_router.get_model_list() if llm_router else []
-        if model_list is not None:
-            for model in model_list:
-                model_id = model.get("model_info", {}).get("id", None)
-                if model_id is None:
-                    continue
-                # if team model id set, check if team id matches
-                team_model_id = model.get("model_info", {}).get("team_id", None)
-                can_add_model = False
-                if team_model_id is None:
-                    can_add_model = True
-                elif team_model_id == team_id:
-                    can_add_model = True
-
-                if can_add_model:
-                    team_accessible_model_ids.add(model_id)
-    else:
-        # Team has access to specific models
-        for model_name in team_object.models:
-            _models = (
-                llm_router.get_model_list(model_name=model_name, team_id=team_id)
-                if llm_router
-                else []
-            )
-            if _models is not None:
-                for model in _models:
-                    model_id = model.get("model_info", {}).get("id", None)
-                    if model_id is not None:
-                        team_accessible_model_ids.add(model_id)
-
-    # Also search database for models accessible to this team
-    # This complements the config search done above
-    try:
-        if (
-            team_object.models
-            and SpecialModelNames.all_proxy_models.value not in team_object.models
-        ):
-            # Team has specific models - check database for those model names
-            db_models = await prisma_client.db.litellm_proxymodeltable.find_many(
-                where={"model_name": {"in": team_object.models}}
-            )
-            for db_model in db_models:
-                model_id = db_model.model_id
-                if model_id:
-                    team_accessible_model_ids.add(model_id)
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Error querying database models for team {team_id}: {str(e)}"
-        )
+    team_accessible_model_ids = await _gather_team_accessible_model_ids(
+        team_object, team_id, prisma_client, llm_router
+    )
 
     # Filter models based on direct_access or access_via_team_ids
     # Models are already enriched with these fields before this function is called
