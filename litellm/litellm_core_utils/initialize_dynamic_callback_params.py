@@ -57,6 +57,11 @@ _supported_callback_params = [
     "lunary_public_key",
 ]
 
+_request_blocked_callback_params = {
+    "gcs_bucket_name",
+    "gcs_path_service_account",
+}
+
 
 def initialize_standard_callback_dynamic_params(
     kwargs: Optional[Dict] = None,
@@ -71,6 +76,8 @@ def initialize_standard_callback_dynamic_params(
     if kwargs:
         # 1. Check top-level kwargs
         for param in _supported_callback_params:
+            if param in _request_blocked_callback_params:
+                continue
             if param in kwargs:
                 _param_value = kwargs.get(param)
                 validate_no_callback_env_reference(
@@ -86,6 +93,8 @@ def initialize_standard_callback_dynamic_params(
 
         if isinstance(metadata, dict):
             for param in _supported_callback_params:
+                if param in _request_blocked_callback_params:
+                    continue
                 if param not in standard_callback_dynamic_params and param in metadata:
                     _param_value = metadata.get(param)
                     validate_no_callback_env_reference(
