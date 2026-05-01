@@ -146,23 +146,50 @@ class SemanticToolFilterHook(CustomLogger):
         name = getattr(tool, "name", "")
         return name if isinstance(name, str) else ""
 
-    def _is_mcp_router_tool(self, tool: Any) -> bool:
+    @staticmethod
+    def _is_native_function_tool(tool: Any) -> bool:
+        if not isinstance(tool, dict):
+            return False
+
+        if isinstance(tool.get("function"), dict):
+            return True
+
+        return tool.get("type") == "function" and isinstance(tool.get("name"), str)
+
+    @staticmethod
+    def _candidate_canonical_names(tool_name: str) -> List[str]:
+        return [
+            tool_name[index + 1 :]
+            for index, char in enumerate(tool_name)
+            if char in {"_", "-"} and index + 1 < len(tool_name)
+        ]
+
+    def _get_matching_mcp_canonical_name(self, tool: Any) -> Optional[str]:
+        if self._is_native_function_tool(tool):
+            return None
+
         tool_name = self._get_tool_name(tool)
         if not tool_name:
-            return False
+            return None
 
         tool_map = getattr(self.filter, "_tool_map", {})
         if tool_name in tool_map:
-            return True
+            return tool_name
 
         name_matches_canonical = getattr(self.filter, "_name_matches_canonical", None)
         if name_matches_canonical is None:
-            return False
+            return None
 
-        return any(
-            name_matches_canonical(tool_name, canonical_name)
-            for canonical_name in tool_map
-        )
+        for canonical_name in self._candidate_canonical_names(tool_name):
+            if canonical_name in tool_map and name_matches_canonical(
+                tool_name, canonical_name
+            ):
+                return canonical_name
+
+        return None
+
+    def _is_mcp_router_tool(self, tool: Any) -> bool:
+        return self._get_matching_mcp_canonical_name(tool) is not None
 
     def _partition_mcp_router_tools(
         self, tools: List[Any]

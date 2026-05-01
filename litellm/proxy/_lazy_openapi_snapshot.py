@@ -86,6 +86,7 @@ def generate_snapshot() -> Dict[str, Dict]:
     import importlib
 
     from fastapi.openapi.utils import get_openapi
+
     from litellm.proxy._lazy_features import LAZY_FEATURES
     from litellm.proxy.proxy_server import app, ensure_unique_openapi_operation_ids
 
@@ -131,6 +132,7 @@ def generate_snapshot() -> Dict[str, Dict]:
             "components": {"schemas": full.get("components", {}).get("schemas", {})},
         }
     return fragments
+
 
 if __name__ == "__main__":
     fragments = generate_snapshot()
