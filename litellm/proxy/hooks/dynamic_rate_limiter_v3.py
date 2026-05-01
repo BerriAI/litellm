@@ -562,6 +562,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         # If priority is NOT enforced (saturation below threshold) but
         # priority_descriptors exist, increment them for tracking only — no
         # check, no rollback. This matches the prior tracking semantics.
+        #
+        # Using the non-atomic should_rate_limit (instead of
+        # atomic_check_and_increment_by_n) is intentional here: we don't want
+        # to enforce the limit, we only want to bump the counter so the
+        # priority allocation has accurate usage when it later becomes
+        # enforced. The increment-then-check semantics of should_rate_limit
+        # are fine because we ignore the OVER_LIMIT response.
         if priority_descriptors and not should_enforce_priority:
             priority_tracking_response = await self.v3_limiter.should_rate_limit(
                 descriptors=priority_descriptors,

@@ -17,7 +17,7 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -179,16 +179,13 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             model_has_failures=False,
         )
 
-        increments = cast(
-            List[Dict[Literal["requests", "tokens"], int]],
-            [
-                {
-                    "requests": batch_usage.request_count,
-                    "tokens": batch_usage.total_tokens,
-                }
-                for _ in descriptors
-            ],
-        )
+        increment: Dict[Literal["requests", "tokens"], int] = {
+            "requests": batch_usage.request_count,
+            "tokens": batch_usage.total_tokens,
+        }
+        increments: List[Dict[Literal["requests", "tokens"], int]] = [
+            increment for _ in descriptors
+        ]
 
         rate_limit_response = (
             await self.parallel_request_limiter.atomic_check_and_increment_by_n(

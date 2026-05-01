@@ -754,17 +754,25 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 counter_key = self.create_rate_limit_keys(
                     descriptor_key, descriptor_value, rlt
                 )
+                # Counter-key TTL and window_size are conceptually distinct
+                # ("how long the counter Redis key lives" vs "how long the
+                # sliding window is"). They happen to be equal today because
+                # we have no descriptor type that needs them apart, but they
+                # are kept as separate variables here so a future custom-TTL
+                # descriptor doesn't reintroduce a silent expiry bug. Both
+                # the Lua script and the in-memory fallback read these from
+                # their respective ARGV / meta slots.
+                ttl_seconds = int(window_size)
+                window_size_seconds = int(window_size)
                 keys.extend([window_key, counter_key])
-                # Per-descriptor 4-tuple: limit, increment, ttl, window_size.
-                # window_size is per-descriptor — descriptors may carry custom
-                # windows distinct from self.window_size, and the Lua script
-                # uses this slot to evaluate window expiry.
+                # Per-counter 4-tuple matches the Lua ARGV layout exactly:
+                #   [limit, increment, ttl_seconds, window_size_seconds].
                 script_args.extend(
                     [
                         int(limit_value),
                         inc_amount,
-                        int(window_size),
-                        int(window_size),
+                        ttl_seconds,
+                        window_size_seconds,
                     ]
                 )
                 per_counter_meta.append(
@@ -775,8 +783,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         "window_key": window_key,
                         "counter_key": counter_key,
                         "increment": inc_amount,
-                        "ttl": int(window_size),
-                        "window_size": int(window_size),
+                        "ttl": ttl_seconds,
+                        "window_size": window_size_seconds,
                     }
                 )
 
@@ -822,13 +830,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         raw: List[Any],
         per_counter_meta: List[Dict[str, Any]],
     ) -> RateLimitResponse:
-        """Convert Lua script return value to RateLimitResponse."""
+        """Convert Lua script return value to RateLimitResponse.
+
+        Indexing invariant: `per_counter_meta` and `KEYS` are parallel-indexed
+        at the COUNTER level, not the descriptor level. A descriptor with both
+        RPM and TPM limits emits two `(window_key, counter_key)` pairs and
+        two meta entries — one per counter. The Lua script's loop variable
+        `i` therefore enumerates counters, and the over-limit return tuple
+        `{1, i, ...}` carries a counter index that maps directly to
+        `per_counter_meta[i - 1]`. Keep these arrays parallel at the counter
+        level when modifying this code.
+        """
         if not raw:
             return RateLimitResponse(overall_code="OK", statuses=[])
 
         status_code = int(raw[0])
         if status_code == 1:
-            # Over limit: { 1, descriptor_index (1-based), current_counter, limit }
+            # Over limit: { 1, counter_index (1-based), current_counter, limit }
             descriptor_index = int(raw[1]) - 1
             current_counter = int(raw[2])
             limit = int(raw[3])
