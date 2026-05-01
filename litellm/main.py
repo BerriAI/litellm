@@ -1466,7 +1466,9 @@ def completion(  # type: ignore # noqa: PLR0915
             provider.value for provider in LlmProviders
         ]:
             provider_config = ProviderConfigManager.get_provider_chat_config(
-                model=model, provider=LlmProviders(custom_llm_provider)
+                model=model,
+                provider=LlmProviders(custom_llm_provider),
+                base_model=base_model,
             )
 
         if provider_config is not None:
@@ -1521,6 +1523,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
+            "base_model": base_model,
         }
         optional_params = get_optional_params(
             **optional_param_args, **non_default_params
@@ -1710,7 +1713,12 @@ def completion(  # type: ignore # noqa: PLR0915
             if max_retries is not None:
                 optional_params["max_retries"] = max_retries
 
-            if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+            # Use base_model (the true underlying model) for model-type
+            # detection when the deployment name differs from the model name.
+            _azure_detection_model = base_model or model
+            if litellm.AzureOpenAIO1Config().is_o_series_model(
+                model=_azure_detection_model
+            ):
                 ## LOAD CONFIG - if set
                 config = litellm.AzureOpenAIO1Config.get_config()
                 for k, v in config.items():

@@ -3976,16 +3976,23 @@ def get_optional_params(  # noqa: PLR0915
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     safety_identifier: Optional[str] = None,
+    base_model: Optional[str] = None,
     **kwargs,
 ):
     passed_params = locals().copy()
     special_params = passed_params.pop("kwargs")
+    # Remove base_model from passed_params so it doesn't interfere with
+    # non_default_params / _check_valid_arg — it's a routing hint, not an
+    # OpenAI param.
+    passed_params.pop("base_model", None)
     provider_config: Optional[BaseConfig] = None
     if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
     ]:
         provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+            base_model=base_model,
         )
     non_default_params = pre_process_non_default_params(
         passed_params=passed_params,
@@ -4048,7 +4055,7 @@ def get_optional_params(  # noqa: PLR0915
         sys.modules[__name__], "get_supported_openai_params"
     )
     supported_params = get_supported_openai_params(
-        model=model, custom_llm_provider=custom_llm_provider
+        model=model, custom_llm_provider=custom_llm_provider, base_model=base_model
     )
     if supported_params is None:
         supported_params = get_supported_openai_params(
@@ -4655,22 +4662,27 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "azure":
-        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+        _azure_detection_model = base_model or model
+        if litellm.AzureOpenAIO1Config().is_o_series_model(
+            model=_azure_detection_model
+        ):
             optional_params = litellm.AzureOpenAIO1Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=_azure_detection_model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
                     else False
                 ),
             )
-        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+        elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(
+            model=_azure_detection_model
+        ):
             optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=_azure_detection_model,
                 drop_params=(
                     drop_params
                     if drop_params is not None and isinstance(drop_params, bool)
@@ -4692,7 +4704,7 @@ def get_optional_params(  # noqa: PLR0915
             optional_params = litellm.AzureOpenAIConfig().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
-                model=model,
+                model=_azure_detection_model,
                 api_version=api_version,  # type: ignore
                 drop_params=(
                     drop_params
@@ -8035,10 +8047,8 @@ class ProviderConfigManager:
             # Format: (factory_function, needs_model_parameter: bool)
             LlmProviders.OPENAI: (lambda: litellm.OpenAIGPTConfig(), False),
             LlmProviders.ANTHROPIC: (lambda: litellm.AnthropicConfig(), False),
-            LlmProviders.AZURE: (
-                lambda model: ProviderConfigManager._get_azure_config(model),
-                True,
-            ),
+            # AZURE is handled as a special case in get_provider_chat_config()
+            # so that base_model can be threaded through for model-type detection.
             LlmProviders.AZURE_AI: (
                 lambda model: ProviderConfigManager._get_azure_ai_config(model),
                 True,
@@ -8178,11 +8188,19 @@ class ProviderConfigManager:
         }
 
     @staticmethod
-    def _get_azure_config(model: str) -> BaseConfig:
-        """Get Azure config based on model type."""
-        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+    def _get_azure_config(model: str, base_model: Optional[str] = None) -> BaseConfig:
+        """Get Azure config based on model type.
+
+        When *base_model* is provided (e.g. ``"azure/gpt-5.2"``), it is used
+        for model-type detection instead of *model* (the deployment name).
+        This allows non-standard deployment names like ``"azure/foo"`` to be
+        routed through the correct config when the user specifies the true
+        underlying model via ``base_model``.
+        """
+        detection_model = base_model or model
+        if litellm.AzureOpenAIO1Config().is_o_series_model(model=detection_model):
             return litellm.AzureOpenAIO1Config()
-        if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+        if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=detection_model):
             return litellm.AzureOpenAIGPT5Config()
         return litellm.AzureOpenAIConfig()
 
@@ -8240,13 +8258,18 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
-        model: str, provider: LlmProviders
+        model: str,
+        provider: LlmProviders,
+        base_model: Optional[str] = None,
     ) -> Optional[BaseConfig]:
         """
         Returns the provider config for a given provider.
 
         Uses O(1) dictionary lookup for fast provider resolution.
         Python classes take priority over JSON (they have custom overrides).
+
+        For Azure, *base_model* (when set) drives model-type detection so that
+        non-standard deployment names still route to the correct config.
         """
         # Handle OpenAI special cases (O-series and GPT-5 models)
         if provider == LlmProviders.OPENAI:
@@ -8254,6 +8277,12 @@ class ProviderConfigManager:
                 return litellm.openaiOSeriesConfig
             if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
                 return litellm.OpenAIGPT5Config()
+
+        # Handle Azure before the generic map so base_model can be threaded through
+        if provider == LlmProviders.AZURE:
+            return ProviderConfigManager._get_azure_config(
+                model=model, base_model=base_model
+            )
 
         # Initialize provider config map lazily (avoids circular imports)
         if ProviderConfigManager._PROVIDER_CONFIG_MAP is None:
