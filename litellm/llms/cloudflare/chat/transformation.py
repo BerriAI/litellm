@@ -131,6 +131,39 @@ class CloudflareChatConfig(BaseConfig):
         }
         return data
 
+    @staticmethod
+    def _extract_response_content(completion_response: dict, status_code: int) -> str:
+        # Cloudflare Workers AI has two response shapes:
+        #   legacy:            {"result": {"response": "..."}}
+        #   OpenAI-compatible: {"result": {"choices": [{"message": {"content": "..."}}]}}
+        # Newer models (e.g. kimi-k2, openai-compatible endpoints) use the second form.
+        result = completion_response.get("result")
+        if not isinstance(result, dict):
+            raise CloudflareError(
+                status_code=status_code,
+                message=f"Cloudflare response missing 'result' object: {completion_response}",
+            )
+
+        if isinstance(result.get("response"), str):
+            return result["response"]
+
+        choices = result.get("choices")
+        if isinstance(choices, list) and choices:
+            message = (
+                choices[0].get("message") if isinstance(choices[0], dict) else None
+            )
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                return message["content"]
+
+        raise CloudflareError(
+            status_code=status_code,
+            message=(
+                "Cloudflare response did not contain a recognized content field "
+                "(expected 'result.response' or 'result.choices[0].message.content'): "
+                f"{completion_response}"
+            ),
+        )
+
     def transform_response(
         self,
         model: str,
@@ -147,9 +180,9 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        model_response.choices[0].message.content = completion_response["result"][  # type: ignore
-            "response"
-        ]
+        model_response.choices[0].message.content = self._extract_response_content(  # type: ignore
+            completion_response, raw_response.status_code
+        )
 
         prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
         completion_tokens = len(
