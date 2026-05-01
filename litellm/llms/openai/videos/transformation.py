@@ -1,6 +1,7 @@
 import mimetypes
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from urllib.parse import quote
 
 import httpx
 from httpx._types import RequestFiles
@@ -228,7 +229,11 @@ class OpenAIVideoConfig(BaseVideoConfig):
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{encoded_video_id}/content"
         if variant is not None:
-            url = f"{url}?variant={variant}"
+            # Encode the user-controlled ``variant`` so a value like
+            # ``thumbnail&extra=1`` cannot inject additional query params
+            # into the upstream request — same hardening rationale as the
+            # path-segment encoding above.
+            url = f"{url}?variant={quote(variant, safe='')}"
 
         # No additional data needed for GET content request
         data: Dict[str, Any] = {}
