@@ -532,11 +532,17 @@ async def test_sse_post_messages_auth_failure():
             handle_sse_post_messages,
         )
 
-        with pytest.raises(HTTPException) as exc_info:
-            await handle_sse_post_messages(mock_scope, mock_receive, mock_send)
+        await handle_sse_post_messages(mock_scope, mock_receive, mock_send)
 
-        assert exc_info.value.status_code == 401
-        assert exc_info.value.detail == "Unauthorized"
+        # Verify JSONResponse 401 was sent via ASGI send
+        assert mock_send.called
+        # Extract status code from mock_send
+        response_start = next(
+            call.args[0]
+            for call in mock_send.mock_calls
+            if call.args[0].get("type") == "http.response.start"
+        )
+        assert response_start["status"] == 401
 
 
 def test_generate_stable_server_id():

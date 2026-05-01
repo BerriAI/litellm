@@ -2570,7 +2570,7 @@ if MCP_AVAILABLE:
 
         status_code = 500
         detail = str(e)
-        headers = {}
+        headers: Dict[str, str] = {}
 
         if isinstance(e, HTTPException):
             status_code = e.status_code
@@ -2744,15 +2744,17 @@ if MCP_AVAILABLE:
                         # (e.g. _receive_loop), so tool handlers can't read auth_context_var reliably.
                         # Storing it in session-isolated storage ensures it's isolated per SSE session.
                         # We store it before calling server.run so it's available for the session's lifespan.
-                        auth = MCPAuthenticatedUser(  # type: ignore
-                            user_api_key_auth=user_api_key_auth,
-                            mcp_auth_header=mcp_auth_header,
-                            mcp_servers=mcp_servers,
-                            mcp_server_auth_headers=mcp_server_auth_headers,
-                            oauth2_headers=oauth2_headers,
-                            raw_headers=raw_headers,
-                            client_ip=_sse_client_ip,
-                        )
+                        auth = auth_context_var.get()
+                        if not auth or not isinstance(auth, MCPAuthenticatedUser):
+                            auth = MCPAuthenticatedUser(  # type: ignore
+                                user_api_key_auth=user_api_key_auth,
+                                mcp_auth_header=mcp_auth_header,
+                                mcp_servers=mcp_servers,
+                                mcp_server_auth_headers=mcp_server_auth_headers,
+                                oauth2_headers=oauth2_headers,
+                                raw_headers=raw_headers,
+                                client_ip=_sse_client_ip,
+                            )
                         _session_auth_storage[streams[0]] = auth
                         if session_id:
                             _session_id_auth_storage[session_id] = auth
@@ -3056,15 +3058,19 @@ if MCP_AVAILABLE:
                         "_session_auth_storage; creating standalone entry "
                         "(cleanup may not remove it via identity check)"
                     )
-                    _session_obj_auth_storage[id(session)] = MCPAuthenticatedUser(
-                        user_api_key_auth=user_api_key_auth,
-                        mcp_auth_header=mcp_auth_header,
-                        mcp_servers=mcp_servers,
-                        mcp_server_auth_headers=mcp_server_auth_headers,
-                        oauth2_headers=oauth2_headers,
-                        raw_headers=raw_headers,
-                        client_ip=_client_ip,
-                    )
+                    auth = auth_context_var.get()
+                    if auth and isinstance(auth, MCPAuthenticatedUser):
+                        _session_obj_auth_storage[id(session)] = auth
+                    else:
+                        _session_obj_auth_storage[id(session)] = MCPAuthenticatedUser(
+                            user_api_key_auth=user_api_key_auth,
+                            mcp_auth_header=mcp_auth_header,
+                            mcp_servers=mcp_servers,
+                            mcp_server_auth_headers=mcp_server_auth_headers,
+                            oauth2_headers=oauth2_headers,
+                            raw_headers=raw_headers,
+                            client_ip=_client_ip,
+                        )
         else:
             # Fallback: try session-object-identity lookup first (robust)
             stored: Optional[MCPAuthenticatedUser] = None

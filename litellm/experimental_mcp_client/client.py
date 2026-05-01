@@ -318,6 +318,11 @@ class MCPClient:
             if key in os.environ:
                 safe_env[key] = os.environ[key]
 
+        if "NPM_CONFIG_CACHE" not in safe_env:
+            from litellm.constants import MCP_NPM_CACHE_DIR
+
+            safe_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
+
         return safe_env
 
     async def _execute_session_operation(
