@@ -468,3 +468,57 @@ async def test_milvus_passthrough_denies_other_team_vector_store_index():
             )
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_azure_passthrough_denies_other_team_vector_store_index():
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        azure_proxy_route,
+    )
+
+    request = _mock_request()
+    request.url.path = "/azure/indexes/managed_index/docs/search"
+
+    index_object = MagicMock()
+    index_object.litellm_params.vector_store_name = "tenant-b-store"
+
+    mock_index_registry = MagicMock()
+    mock_index_registry.is_vector_store_index.side_effect = (
+        lambda vector_store_index_name: vector_store_index_name == "managed_index"
+    )
+    mock_index_registry.get_vector_store_index_by_name.return_value = index_object
+
+    mock_vector_registry = MagicMock()
+    mock_vector_registry.get_litellm_managed_vector_store_from_registry_by_name.return_value = {
+        "vector_store_id": "vs_other_team",
+        "custom_llm_provider": "azure_ai",
+        "team_id": "team-b",
+        "litellm_params": {"api_base": "https://azure.example.com"},
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.ProviderConfigManager.get_provider_vector_stores_config",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_allowed_to_call_vector_store_endpoint",
+            return_value=True,
+        ),
+        patch.object(litellm, "vector_store_index_registry", mock_index_registry),
+        patch.object(litellm, "vector_store_registry", mock_vector_registry),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await azure_proxy_route(
+                endpoint="indexes/managed_index/docs/search",
+                request=request,
+                fastapi_response=Response(),
+                user_api_key_dict=UserAPIKeyAuth(team_id="team-a"),
+            )
+
+    assert exc_info.value.status_code == 403
