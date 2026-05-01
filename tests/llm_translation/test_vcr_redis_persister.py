@@ -81,6 +81,31 @@ def test_redis_key_normalizes_path_passed_by_pytest_recording():
     )
 
 
+def test_redis_key_is_stable_across_working_directories(tmp_path, monkeypatch):
+    repo_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    abs_cassette = os.path.join(
+        repo_root,
+        "tests/llm_translation/cassettes/test_anthropic/test_streaming.yaml",
+    )
+
+    monkeypatch.chdir(repo_root)
+    key_from_root = redis_key_for(abs_cassette)
+
+    monkeypatch.chdir(os.path.join(repo_root, "tests", "llm_translation"))
+    key_from_subdir = redis_key_for(abs_cassette)
+
+    monkeypatch.chdir(tmp_path)
+    key_from_tmp = redis_key_for(abs_cassette)
+
+    assert key_from_root == key_from_subdir == key_from_tmp
+    assert (
+        key_from_root
+        == "litellm:vcr:cassette:tests/llm_translation/test_anthropic/test_streaming"
+    )
+
+
 class _FlakyRedis:
     def __init__(self, inner, fail_on: str):
         self._inner = inner

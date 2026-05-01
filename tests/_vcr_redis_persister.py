@@ -13,6 +13,8 @@ CASSETTE_REDIS_URL_ENV = "CASSETTE_REDIS_URL"
 VCR_VERBOSE_ENV = "LITELLM_VCR_VERBOSE"
 MAX_EPISODES_PER_CASSETTE = 50
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 _log = logging.getLogger(__name__)
 _passed_by_cassette_key: dict[str, bool] = {}
 
@@ -22,7 +24,11 @@ def mark_test_outcome_for_cassette(cassette_path: str, passed: bool) -> None:
 
 
 def redis_key_for(cassette_path: str) -> str:
-    rel = os.path.relpath(str(cassette_path))
+    abs_path = os.path.abspath(str(cassette_path))
+    try:
+        rel = os.path.relpath(abs_path, start=_REPO_ROOT)
+    except ValueError:
+        rel = os.path.basename(abs_path)
     if rel.endswith(".yaml"):
         rel = rel[: -len(".yaml")]
     rel = rel.replace("/cassettes/", "/").lstrip("./")
