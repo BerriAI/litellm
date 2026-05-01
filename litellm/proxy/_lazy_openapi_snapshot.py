@@ -10,7 +10,7 @@ any drift as a neutral check.
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
 HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
@@ -65,7 +65,7 @@ def generate_snapshot() -> Dict[str, Dict]:
     from fastapi.openapi.utils import get_openapi
 
     from litellm.proxy._lazy_features import LAZY_FEATURES
-    from litellm.proxy.proxy_server import app
+    from litellm.proxy.proxy_server import app, ensure_unique_openapi_operation_ids
 
     for feat in LAZY_FEATURES:
         if feat.module_path in sys.modules:
@@ -77,6 +77,7 @@ def generate_snapshot() -> Dict[str, Dict]:
             sys.stderr.write(f"warning: skip {feat.name}: {exc}\n")
 
     fragments: Dict[str, Dict] = {}
+    used_operation_ids: Set[str] = set()
     for feat in LAZY_FEATURES:
         feat_routes = [
             r
@@ -93,6 +94,7 @@ def generate_snapshot() -> Dict[str, Dict]:
             for op in path_ops.values():
                 if isinstance(op, dict):
                     op["tags"] = [feat.name]
+        full = ensure_unique_openapi_operation_ids(full, used_operation_ids)
         fragments[feat.name] = {
             "paths": paths,
             "components": {"schemas": full.get("components", {}).get("schemas", {})},
