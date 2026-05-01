@@ -891,7 +891,7 @@ def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
     logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
 
 
-def test_sync_get_cache_still_eagerly_logs_streaming_completion_hits():
+def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
     litellm.set_verbose = True
     setup_cache()
     caching_handler = LLMCachingHandler(
@@ -930,42 +930,32 @@ def test_sync_get_cache_still_eagerly_logs_streaming_completion_hits():
     )
 
     assert cached_response.cached_result is not None
-    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
+    logging_obj.handle_sync_success_callbacks_for_async_calls.assert_not_called()
 
 
-def test_should_defer_streaming_cache_hit_callbacks_only_for_responses_streams():
+def test_should_defer_streaming_cache_hit_callbacks_for_any_streaming_request():
     assert (
         _should_defer_streaming_cache_hit_callbacks(
-            call_type=CallTypes.responses.value,
             kwargs={"stream": True},
         )
         is True
     )
     assert (
         _should_defer_streaming_cache_hit_callbacks(
-            call_type=CallTypes.aresponses.value,
-            kwargs={"stream": True},
-        )
-        is True
-    )
-    assert (
-        _should_defer_streaming_cache_hit_callbacks(
-            call_type=CallTypes.completion.value,
-            kwargs={"stream": True},
+            kwargs={"stream": False},
         )
         is False
     )
     assert (
         _should_defer_streaming_cache_hit_callbacks(
-            call_type=CallTypes.responses.value,
-            kwargs={"stream": False},
+            kwargs={},
         )
         is False
     )
 
 
 @pytest.mark.asyncio
-async def test_async_get_cache_still_eagerly_logs_streaming_completion_hits():
+async def test_async_get_cache_defers_streaming_completion_hit_callbacks():
     litellm.set_verbose = True
     setup_cache()
     caching_handler = LLMCachingHandler(
@@ -1009,7 +999,7 @@ async def test_async_get_cache_still_eagerly_logs_streaming_completion_hits():
 
     assert cached_response is not None
     assert cached_response.cached_result is not None
-    caching_handler._async_log_cache_hit_on_callbacks.assert_called_once()
+    caching_handler._async_log_cache_hit_on_callbacks.assert_not_called()
 
 
 def test_convert_cached_streaming_responses_result_to_iterator():
