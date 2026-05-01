@@ -58,6 +58,35 @@ async def test_should_record_container_owner_with_original_provider_id(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_should_not_mutate_dict_container_response_when_recording_owner(
+    monkeypatch,
+):
+    table = AsyncMock()
+    table.find_unique.return_value = None
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+    response = {"id": "cntr_provider", "object": "container"}
+
+    returned = await ownership.record_container_owner(
+        response=response,
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    assert returned == {"id": "cntr_provider", "object": "container"}
+    data = table.create.await_args.kwargs["data"]
+    assert data["file_object"]["custom_llm_provider"] == "openai"
+    assert data["file_object"]["provider_container_id"] == "cntr_provider"
+
+
+@pytest.mark.asyncio
 async def test_should_record_team_owner_for_keys_without_user_id(monkeypatch):
     table = AsyncMock()
     table.find_unique.return_value = None
