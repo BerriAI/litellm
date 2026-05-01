@@ -14,6 +14,11 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.proxy.container_endpoints.ownership import (
+    assert_user_can_access_container,
+    filter_container_list_response,
+    record_container_owner,
+)
 
 router = APIRouter()
 
@@ -98,7 +103,7 @@ async def create_container(
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -123,6 +128,11 @@ async def create_container(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    return await record_container_owner(
+        response=response,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
+    )
 
 
 @router.get(
@@ -191,7 +201,7 @@ async def list_containers(
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -216,6 +226,11 @@ async def list_containers(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    return await filter_container_list_response(
+        response=response,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
+    )
 
 
 @router.get(
@@ -280,6 +295,11 @@ async def retrieve_container(
     )
 
     # Add custom_llm_provider to data
+    _, custom_llm_provider = await assert_user_can_access_container(
+        container_id=container_id,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
+    )
     data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing
@@ -374,6 +394,11 @@ async def delete_container(
     )
 
     # Add custom_llm_provider to data
+    _, custom_llm_provider = await assert_user_can_access_container(
+        container_id=container_id,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
+    )
     data["custom_llm_provider"] = custom_llm_provider
 
     # Process request using ProxyBaseLLMRequestProcessing

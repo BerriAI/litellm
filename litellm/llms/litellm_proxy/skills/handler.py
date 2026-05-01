@@ -9,7 +9,13 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest
+from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest, UserAPIKeyAuth
+from litellm.proxy.common_utils.resource_ownership import (
+    get_primary_resource_owner_scope,
+    get_resource_owner_scopes,
+    is_proxy_admin,
+    user_can_access_resource_owner,
+)
 
 
 def _prisma_skill_to_litellm(prisma_skill) -> LiteLLM_SkillsTable:
@@ -58,6 +64,7 @@ class LiteLLMSkillsHandler:
     async def create_skill(
         data: NewSkillRequest,
         user_id: Optional[str] = None,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     ) -> LiteLLM_SkillsTable:
         """
         Create a new skill in the LiteLLM database.
@@ -72,6 +79,7 @@ class LiteLLMSkillsHandler:
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
 
         skill_id = f"litellm_skill_{uuid.uuid4()}"
+        owner = get_primary_resource_owner_scope(user_api_key_dict) or user_id
 
         skill_data: Dict[str, Any] = {
             "skill_id": skill_id,
@@ -79,8 +87,8 @@ class LiteLLMSkillsHandler:
             "description": data.description,
             "instructions": data.instructions,
             "source": "custom",
-            "created_by": user_id,
-            "updated_by": user_id,
+            "created_by": owner,
+            "updated_by": owner,
         }
 
         # Handle metadata
@@ -111,6 +119,7 @@ class LiteLLMSkillsHandler:
     async def list_skills(
         limit: int = 20,
         offset: int = 0,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     ) -> List[LiteLLM_SkillsTable]:
         """
         List skills from the LiteLLM database.
@@ -128,16 +137,28 @@ class LiteLLMSkillsHandler:
             f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}"
         )
 
+        find_many_kwargs: Dict[str, Any] = {
+            "take": limit,
+            "skip": offset,
+            "order": {"created_at": "desc"},
+        }
+        if user_api_key_dict is not None and not is_proxy_admin(user_api_key_dict):
+            owner_scopes = get_resource_owner_scopes(user_api_key_dict)
+            if not owner_scopes:
+                return []
+            find_many_kwargs["where"] = {"created_by": {"in": owner_scopes}}
+
         skills = await prisma_client.db.litellm_skillstable.find_many(
-            take=limit,
-            skip=offset,
-            order={"created_at": "desc"},
+            **find_many_kwargs
         )
 
         return [_prisma_skill_to_litellm(s) for s in skills]
 
     @staticmethod
-    async def get_skill(skill_id: str) -> LiteLLM_SkillsTable:
+    async def get_skill(
+        skill_id: str,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    ) -> LiteLLM_SkillsTable:
         """
         Get a skill by ID from the LiteLLM database.
 
@@ -161,10 +182,18 @@ class LiteLLMSkillsHandler:
         if skill is None:
             raise ValueError(f"Skill not found: {skill_id}")
 
+        if not user_can_access_resource_owner(
+            getattr(skill, "created_by", None), user_api_key_dict
+        ):
+            raise ValueError(f"Skill not found: {skill_id}")
+
         return _prisma_skill_to_litellm(skill)
 
     @staticmethod
-    async def delete_skill(skill_id: str) -> Dict[str, str]:
+    async def delete_skill(
+        skill_id: str,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    ) -> Dict[str, str]:
         """
         Delete a skill by ID from the LiteLLM database.
 
@@ -189,13 +218,21 @@ class LiteLLMSkillsHandler:
         if skill is None:
             raise ValueError(f"Skill not found: {skill_id}")
 
+        if not user_can_access_resource_owner(
+            getattr(skill, "created_by", None), user_api_key_dict
+        ):
+            raise ValueError(f"Skill not found: {skill_id}")
+
         # Delete the skill
         await prisma_client.db.litellm_skillstable.delete(where={"skill_id": skill_id})
 
         return {"id": skill_id, "type": "skill_deleted"}
 
     @staticmethod
-    async def fetch_skill_from_db(skill_id: str) -> Optional[LiteLLM_SkillsTable]:
+    async def fetch_skill_from_db(
+        skill_id: str,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    ) -> Optional[LiteLLM_SkillsTable]:
         """
         Fetch a skill from the database (used by skills injection hook).
 
@@ -209,7 +246,10 @@ class LiteLLMSkillsHandler:
             LiteLLM_SkillsTable or None if not found
         """
         try:
-            return await LiteLLMSkillsHandler.get_skill(skill_id)
+            return await LiteLLMSkillsHandler.get_skill(
+                skill_id,
+                user_api_key_dict=user_api_key_dict,
+            )
         except ValueError:
             return None
         except Exception as e:

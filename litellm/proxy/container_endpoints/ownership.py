@@ -1,0 +1,256 @@
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from fastapi import HTTPException
+
+from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.resource_ownership import (
+    get_primary_resource_owner_scope,
+    get_resource_owner_scopes,
+    is_proxy_admin,
+    user_can_access_resource_owner,
+)
+from litellm.responses.utils import ResponsesAPIRequestUtils
+
+CONTAINER_OBJECT_PURPOSE = "container"
+
+
+def _container_model_object_id(
+    original_container_id: str,
+    custom_llm_provider: str,
+) -> str:
+    return f"{CONTAINER_OBJECT_PURPOSE}:{custom_llm_provider}:{original_container_id}"
+
+
+def decode_container_id_for_ownership(
+    container_id: str,
+    custom_llm_provider: str,
+) -> Tuple[str, str]:
+    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    original_container_id = decoded.get("response_id", container_id)
+    decoded_provider = decoded.get("custom_llm_provider")
+    if decoded_provider and custom_llm_provider == "openai":
+        custom_llm_provider = decoded_provider
+    return original_container_id, custom_llm_provider
+
+
+def _get_response_id(response: Any) -> Optional[str]:
+    if response is None:
+        return None
+    if isinstance(response, dict):
+        value = response.get("id")
+    else:
+        value = getattr(response, "id", None)
+    return value if isinstance(value, str) else None
+
+
+def _dump_response(response: Any) -> Dict[str, Any]:
+    if isinstance(response, dict):
+        return response
+    if hasattr(response, "model_dump"):
+        return response.model_dump()
+    if hasattr(response, "dict"):
+        return response.dict()
+    return {"id": _get_response_id(response)}
+
+
+async def _get_prisma_client():
+    from litellm.proxy.proxy_server import prisma_client
+
+    return prisma_client
+
+
+async def record_container_owner(
+    response: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+    custom_llm_provider: str,
+) -> Any:
+    container_id = _get_response_id(response)
+    owner = get_primary_resource_owner_scope(user_api_key_dict)
+    prisma_client = await _get_prisma_client()
+    if is_proxy_admin(user_api_key_dict) and (
+        container_id is None or owner is None or prisma_client is None
+    ):
+        return response
+    if container_id is None or owner is None or prisma_client is None:
+        raise HTTPException(status_code=500, detail="Unable to track container")
+
+    original_container_id, resolved_provider = decode_container_id_for_ownership(
+        container_id,
+        custom_llm_provider,
+    )
+    model_object_id = _container_model_object_id(
+        original_container_id,
+        resolved_provider,
+    )
+    file_object = _dump_response(response)
+    file_object["custom_llm_provider"] = resolved_provider
+    file_object["provider_container_id"] = original_container_id
+
+    try:
+        existing = await prisma_client.db.litellm_managedobjecttable.find_unique(
+            where={"model_object_id": model_object_id}
+        )
+        if existing is not None:
+            if getattr(existing, "file_purpose", None) != CONTAINER_OBJECT_PURPOSE:
+                raise HTTPException(status_code=500, detail="Unable to track container")
+            if not user_can_access_resource_owner(
+                getattr(existing, "created_by", None), user_api_key_dict
+            ):
+                raise HTTPException(status_code=403, detail="Forbidden")
+            await prisma_client.db.litellm_managedobjecttable.update(
+                where={"model_object_id": model_object_id},
+                data={
+                    "unified_object_id": container_id,
+                    "file_object": file_object,
+                    "updated_by": owner,
+                },
+            )
+        else:
+            await prisma_client.db.litellm_managedobjecttable.create(
+                data={
+                    "unified_object_id": container_id,
+                    "model_object_id": model_object_id,
+                    "file_object": file_object,
+                    "file_purpose": CONTAINER_OBJECT_PURPOSE,
+                    "created_by": owner,
+                    "updated_by": owner,
+                }
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Failed to record container ownership for container_id=%s: %s",
+            model_object_id,
+            e,
+        )
+        raise HTTPException(status_code=500, detail="Unable to track container")
+
+    return response
+
+
+async def _get_container_owner(
+    original_container_id: str,
+    custom_llm_provider: str,
+) -> Optional[str]:
+    prisma_client = await _get_prisma_client()
+    if prisma_client is None:
+        return None
+
+    row = await prisma_client.db.litellm_managedobjecttable.find_first(
+        where={
+            "model_object_id": _container_model_object_id(
+                original_container_id,
+                custom_llm_provider,
+            ),
+            "file_purpose": CONTAINER_OBJECT_PURPOSE,
+        }
+    )
+    return getattr(row, "created_by", None) if row is not None else None
+
+
+async def assert_user_can_access_container(
+    container_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    custom_llm_provider: str,
+) -> Tuple[str, str]:
+    original_container_id, resolved_provider = decode_container_id_for_ownership(
+        container_id,
+        custom_llm_provider,
+    )
+
+    if is_proxy_admin(user_api_key_dict):
+        return original_container_id, resolved_provider
+
+    owner = await _get_container_owner(original_container_id, resolved_provider)
+    if not user_can_access_resource_owner(owner, user_api_key_dict):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    return original_container_id, resolved_provider
+
+
+def _get_container_list_data(response: Any) -> Optional[List[Any]]:
+    if response is None:
+        return None
+    if isinstance(response, dict):
+        data = response.get("data")
+    else:
+        data = getattr(response, "data", None)
+    return data if isinstance(data, list) else None
+
+
+def _set_container_list_data(response: Any, data: List[Any]) -> Any:
+    if isinstance(response, dict):
+        response["data"] = data
+        if data:
+            response["first_id"] = _get_response_id(data[0])
+            response["last_id"] = _get_response_id(data[-1])
+        else:
+            response["first_id"] = None
+            response["last_id"] = None
+        return response
+
+    response.data = data
+    response.first_id = _get_response_id(data[0]) if data else None
+    response.last_id = _get_response_id(data[-1]) if data else None
+    return response
+
+
+async def _get_allowed_container_ids(
+    user_api_key_dict: UserAPIKeyAuth,
+    custom_llm_provider: str,
+) -> Set[str]:
+    prisma_client = await _get_prisma_client()
+    if prisma_client is None:
+        return set()
+
+    owner_scopes = get_resource_owner_scopes(user_api_key_dict)
+    if not owner_scopes:
+        return set()
+
+    rows = await prisma_client.db.litellm_managedobjecttable.find_many(
+        where={
+            "file_purpose": CONTAINER_OBJECT_PURPOSE,
+            "created_by": {"in": owner_scopes},
+        }
+    )
+    return {
+        row.model_object_id
+        for row in rows
+        if getattr(row, "model_object_id", None) is not None
+    }
+
+
+async def filter_container_list_response(
+    response: Any,
+    user_api_key_dict: UserAPIKeyAuth,
+    custom_llm_provider: str,
+) -> Any:
+    if is_proxy_admin(user_api_key_dict):
+        return response
+
+    data = _get_container_list_data(response)
+    if data is None:
+        return response
+
+    allowed_container_ids = await _get_allowed_container_ids(
+        user_api_key_dict,
+        custom_llm_provider,
+    )
+    filtered: List[Any] = []
+    for item in data:
+        container_id = _get_response_id(item)
+        if container_id is None:
+            continue
+        original_container_id, resolved_provider = decode_container_id_for_ownership(
+            container_id,
+            custom_llm_provider,
+        )
+        if (
+            _container_model_object_id(original_container_id, resolved_provider)
+            in allowed_container_ids
+        ):
+            filtered.append(item)
+
+    return _set_container_list_data(response, filtered)
