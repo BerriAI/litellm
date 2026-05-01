@@ -216,30 +216,6 @@ def vcr_verbose_enabled() -> bool:
     return os.environ.get(VCR_VERBOSE_ENV) == "1"
 
 
-def emit_vcr_verbose_line(line: str) -> None:
-    """Write a one-line VCR verdict to the un-redirected stderr.
-
-    Pytest's stdout/stderr capture would otherwise hide this output (and
-    only surface it as 'Captured stdout teardown' on failing tests). Under
-    xdist each worker has its own stderr; CircleCI aggregates them. Writing
-    to ``sys.__stderr__`` bypasses pytest's capture entirely so the line
-    reaches the live CI log alongside the per-test PASSED/FAILED markers.
-    """
-    import sys
-
-    try:
-        stream = sys.__stderr__
-        if stream is not None:
-            stream.write(line + "\n")
-            stream.flush()
-            return
-    except Exception:  # pragma: no cover - last-ditch fallback
-        pass
-    # If __stderr__ isn't writable for some reason, fall back to the
-    # captured stderr — better than swallowing.
-    print(line, file=sys.stderr)
-
-
 def format_vcr_verdict(cassette: Any) -> str:
     """Build a one-line hit/miss verdict for a vcrpy Cassette.
 

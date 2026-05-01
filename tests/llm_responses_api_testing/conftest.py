@@ -14,7 +14,6 @@ sys.path.insert(
 import litellm  # noqa: E402
 
 from tests._vcr_redis_persister import (  # noqa: E402
-    emit_vcr_verbose_line,
     filter_non_2xx_response,
     format_vcr_verdict,
     make_redis_persister,
@@ -22,6 +21,12 @@ from tests._vcr_redis_persister import (  # noqa: E402
     patch_vcrpy_aiohttp_record_path,
     vcr_verbose_enabled,
 )
+
+
+# Controller-side handles for writing per-test VCR verdicts to the live
+# terminal. See the matching comment in tests/llm_translation/conftest.py.
+_controller_pluginmanager = None
+_controller_terminal_reporter = None
 
 
 _FILTERED_REQUEST_HEADERS = (
@@ -128,10 +133,12 @@ def _vcr_outcome_gate(request, vcr):
     above, so we can mark the cassette key passed/failed before vcrpy's
     Cassette.__exit__ triggers persister.save_cassette.
 
-    Also prints a per-test hit/miss verdict when LITELLM_VCR_VERBOSE=1.
+    Stashes a per-test hit/miss verdict on ``user_properties`` so the
+    controller-side ``pytest_runtest_logreport`` hook can surface it to the
+    live terminal under xdist.
     """
     yield
-    cassette = vcr  # name kept for the verbose-output line
+    cassette = vcr
     rep_call = getattr(request.node, "rep_call", None)
     test_passed = bool(rep_call and rep_call.passed)
     cassette_path = getattr(cassette, "_path", None) if cassette is not None else None
@@ -141,7 +148,47 @@ def _vcr_outcome_gate(request, vcr):
     if not vcr_verbose_enabled():
         return
     verdict = format_vcr_verdict(cassette)
-    emit_vcr_verbose_line(f"{verdict} :: {request.node.nodeid}")
+    request.node.user_properties.append(("vcr_verdict", verdict))
+
+
+def pytest_configure(config):
+    """Stash the pluginmanager so the logreport hook can find TerminalReporter."""
+    global _controller_pluginmanager
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    _controller_pluginmanager = config.pluginmanager
+
+
+def _resolve_terminal_reporter():
+    global _controller_terminal_reporter
+    if _controller_terminal_reporter is not None:
+        return _controller_terminal_reporter
+    if _controller_pluginmanager is None:
+        return None
+    _controller_terminal_reporter = _controller_pluginmanager.getplugin(
+        "terminalreporter"
+    )
+    return _controller_terminal_reporter
+
+
+def pytest_runtest_logreport(report):
+    """Emit per-test VCR verdicts on the controller's live terminal."""
+    if report.when != "teardown":
+        return
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    if not vcr_verbose_enabled():
+        return
+    reporter = _resolve_terminal_reporter()
+    if reporter is None:
+        return
+    verdict = next(
+        (v for k, v in (report.user_properties or []) if k == "vcr_verdict"),
+        None,
+    )
+    if not verdict:
+        return
+    reporter.write_line(f"{verdict} :: {report.nodeid}")
 
 
 @pytest.fixture(scope="session")
