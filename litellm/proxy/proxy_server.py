@@ -2112,12 +2112,14 @@ async def _init_and_increment_window_spend_counter(
         )
         return
 
-    await _ensure_window_spend_counter_initialized(
+    initialized = await _ensure_window_spend_counter_initialized(
         counter_key=counter_key,
         entity_type=entity_type,
         entity_id=entity_id,
         window_start=window_start,
     )
+    if initialized is False:
+        return
     await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
 
 
@@ -2166,22 +2168,26 @@ async def _ensure_window_spend_counter_initialized(
     entity_type: str,
     entity_id: str,
     window_start: datetime,
-):
+) -> bool:
     is_warm = await _is_spend_counter_cache_warm(counter_key=counter_key)
-    if is_warm is False:
-        window_spend = await SpendCounterReseed.coalesced_window(
-            prisma_client=prisma_client,
-            spend_counter_cache=spend_counter_cache,
-            counter_key=counter_key,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            window_start=window_start,
+    if is_warm is True:
+        return True
+
+    window_spend = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma_client,
+        spend_counter_cache=spend_counter_cache,
+        counter_key=counter_key,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        window_start=window_start,
+    )
+    if window_spend is None:
+        verbose_proxy_logger.warning(
+            "Skipping cold spend counter seed for %s because window spend could not be loaded",
+            counter_key,
         )
-        if window_spend is None:
-            verbose_proxy_logger.warning(
-                "Skipping cold spend counter seed for %s because window spend could not be loaded",
-                counter_key,
-            )
+        return False
+    return True
 
 
 async def _is_spend_counter_cache_warm(counter_key: str) -> bool:

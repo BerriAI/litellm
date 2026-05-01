@@ -757,6 +757,14 @@ async def test_should_shrink_uncapped_reservation_multiple_times(
 
     assert reservation is not None
     assert reservation["reserved_cost"] == pytest.approx(0.6)
+    assert [entry["reserved_cost"] for entry in reservation["entries"]] == [
+        pytest.approx(0.6),
+        pytest.approx(0.6),
+    ]
+    assert [entry["applied_adjustment"] for entry in reservation["entries"]] == [
+        pytest.approx(0.0),
+        pytest.approx(0.0),
+    ]
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-budget-double-resize"
     ) == pytest.approx(0.9)
@@ -840,6 +848,47 @@ async def test_should_skip_budget_window_with_unparseable_duration(
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-budget-malformed-window"
     ) == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_should_skip_window_reservation_when_db_baseline_unavailable(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-window-db-unavailable",
+        budget_limits=[
+            {
+                "budget_duration": "1h",
+                "max_budget": 1.0,
+            }
+        ],
+    )
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+        return_value=0.5,
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is None
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-window-db-unavailable:window:1h"
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

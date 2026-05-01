@@ -33,6 +33,10 @@ class _BudgetCounter:
     window_start: Optional[datetime] = None
 
 
+class _CounterReservationUnavailable(Exception):
+    pass
+
+
 def get_reserved_counter_keys(budget_reservation: Optional[dict]) -> set:
     if not budget_reservation:
         return set()
@@ -99,10 +103,13 @@ async def reserve_budget_for_request(
                 counter=counter,
                 reserved_cost=reservation_cost,
             )
-            reserved_value = await _reserve_counter(
-                counter=counter,
-                reservation_cost=reservation_cost,
-            )
+            try:
+                reserved_value = await _reserve_counter(
+                    counter=counter,
+                    reservation_cost=reservation_cost,
+                )
+            except _CounterReservationUnavailable:
+                continue
             applied_entries.append(entry)
 
             if reserved_value is not None:
@@ -140,6 +147,9 @@ async def reserve_budget_for_request(
             default_reserved_cost=reservation_cost,
         )
         raise
+
+    if not applied_entries:
+        return None
 
     return {
         "reserved_cost": reservation_cost,
@@ -572,12 +582,18 @@ async def _reserve_counter(
             source_cache_key=counter.source_cache_key,
         )
     elif counter.spend_log_entity_id is not None and counter.window_start is not None:
-        await _ensure_window_spend_counter_initialized(
+        initialized = await _ensure_window_spend_counter_initialized(
             counter_key=counter.counter_key,
             entity_type=counter.entity_type,
             entity_id=counter.spend_log_entity_id,
             window_start=counter.window_start,
         )
+        if initialized is False:
+            verbose_proxy_logger.warning(
+                "Skipping budget reservation for %s because window spend could not be loaded",
+                counter.counter_key,
+            )
+            raise _CounterReservationUnavailable
 
     reserved_value = await _increment_spend_counter_cache(
         counter_key=counter.counter_key,
@@ -707,6 +723,9 @@ async def _resize_applied_reservation(
         actual_cost=new_reserved_cost,
         default_reserved_cost=current_reserved_cost,
     )
+    for entry in entries:
+        entry["reserved_cost"] = new_reserved_cost
+        entry["applied_adjustment"] = 0.0
 
 
 def _counter_to_reservation_entry(

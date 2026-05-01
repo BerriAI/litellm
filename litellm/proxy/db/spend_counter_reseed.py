@@ -295,12 +295,28 @@ class SpendCounterReseed:
                 return None
             try:
                 if spend_counter_cache.redis_cache is not None:
-                    current_value = (
-                        await spend_counter_cache.redis_cache.async_increment(
-                            key=counter_key,
-                            value=window_spend,
-                        )
+                    seeded = await spend_counter_cache.redis_cache.async_set_cache(
+                        key=counter_key,
+                        value=window_spend,
+                        nx=True,
                     )
+                    if seeded:
+                        current_value = window_spend
+                    else:
+                        current_cached_value = (
+                            await spend_counter_cache.redis_cache.async_get_cache(
+                                key=counter_key
+                            )
+                        )
+                        if current_cached_value is None:
+                            current_value = (
+                                await spend_counter_cache.redis_cache.async_increment(
+                                    key=counter_key,
+                                    value=window_spend,
+                                )
+                            )
+                        else:
+                            current_value = float(current_cached_value)
                     spend_counter_cache.in_memory_cache.set_cache(
                         key=counter_key,
                         value=current_value,
