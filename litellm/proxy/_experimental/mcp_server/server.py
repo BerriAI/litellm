@@ -1333,6 +1333,7 @@ if MCP_AVAILABLE:
                         extra_headers=extra_headers,
                         add_prefix=True,  # Always add server prefix
                         raw_headers=raw_headers,
+                        user_api_key_auth=user_api_key_auth,
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
                     filtered_tools = await filter_tools_by_key_team_permissions(
@@ -2840,15 +2841,20 @@ if MCP_AVAILABLE:
                 except ValueError:
                     pass
 
-            set_auth_context(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                client_ip=_sse_client_ip,
-            )
+            # Reuse existing session auth if available to ensure identity stability for cleanup
+            if session_id_param and 'session_auth' in locals() and session_auth is not None:
+                auth_context_var.set(session_auth)
+            else:
+                set_auth_context(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_servers=mcp_servers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    client_ip=_sse_client_ip,
+                )
+
             await sse.handle_post_message(scope, receive, send)
         except Exception as e:
             await _render_mcp_error(
@@ -3051,26 +3057,9 @@ if MCP_AVAILABLE:
                 if existing_auth is not None:
                     _session_obj_auth_storage[id(session)] = existing_auth
                 else:
-                    # Shouldn't normally happen — _session_auth_storage is
-                    # populated before server.run(). Log for diagnostics.
-                    verbose_logger.debug(
-                        "get_or_extract_auth_context: no existing auth in "
-                        "_session_auth_storage; creating standalone entry "
-                        "(cleanup may not remove it via identity check)"
-                    )
                     auth = auth_context_var.get()
                     if auth and isinstance(auth, MCPAuthenticatedUser):
                         _session_obj_auth_storage[id(session)] = auth
-                    else:
-                        _session_obj_auth_storage[id(session)] = MCPAuthenticatedUser(
-                            user_api_key_auth=user_api_key_auth,
-                            mcp_auth_header=mcp_auth_header,
-                            mcp_servers=mcp_servers,
-                            mcp_server_auth_headers=mcp_server_auth_headers,
-                            oauth2_headers=oauth2_headers,
-                            raw_headers=raw_headers,
-                            client_ip=_client_ip,
-                        )
         else:
             # Fallback: try session-object-identity lookup first (robust)
             stored: Optional[MCPAuthenticatedUser] = None

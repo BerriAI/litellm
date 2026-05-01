@@ -1,6 +1,7 @@
 import asyncio
 import os
 import logging
+import pytest
 from mcp.client.sse import sse_client
 from mcp.client.session import ClientSession
 from mcp.types import ElicitResult
@@ -9,10 +10,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def main():
-    if os.environ.get("RUN_LIVE_MCP_TEST") != "1":
-        logger.info("Skipping live integration test. Set RUN_LIVE_MCP_TEST=1 to run.")
-        return
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("RUN_LIVE_MCP_TEST") != "1",
+    reason="Skipping live integration test. Set RUN_LIVE_MCP_TEST=1 to run.",
+)
+async def test_live_mcp_pipeline():
     logger.info("Connecting to LiteLLM Proxy via SSE...")
 
     async def my_elicitation_callback(context, params):
@@ -43,16 +46,10 @@ async def main():
 
             logger.info("\n--- Testing Complex Pipeline (Elicitation + Sampling) ---")
             logger.info("Calling 'test_server-test_complex_pipeline'...")
-            try:
-                result = await session.call_tool(
-                    "test_server-test_complex_pipeline", arguments={}
-                )
-                logger.info("\nFINAL TOOL RESULT:")
-                logger.info("==================")
-                logger.info(result.content[0].text)
-            except Exception as e:
-                logger.info(f"Error calling test_complex_pipeline: {e}")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+            result = await session.call_tool(
+                "test_server-test_complex_pipeline", arguments={}
+            )
+            logger.info("\nFINAL TOOL RESULT:")
+            logger.info("==================")
+            logger.info(result.content[0].text)
+            assert "Pipeline Complete!" in result.content[0].text
