@@ -9475,6 +9475,16 @@ class Router:
                     request_kwargs=request_kwargs,
                     request_team_id=request_team_id,
                 )
+                # If the litellm-model lookup produced candidates that access-group
+                # filtering then removed, treat this the same as the by-name path
+                # being emptied: prevent default-model fallback from bypassing the
+                # restriction (the fallback model may have no access_groups and
+                # would short-circuit the filter).
+                if (
+                    len(_litellm_model_deployments) > 0
+                    and len(healthy_deployments) == 0
+                ):
+                    _access_group_filter_emptied_candidates = True
 
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug(
