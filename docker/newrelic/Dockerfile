@@ -16,4 +16,3 @@ RUN chmod +x /app/docker/newrelic/entrypoint.sh
 ENTRYPOINT ["/app/docker/newrelic/entrypoint.sh"]
 
 LABEL org.opencontainers.image.description="LiteLLM with New Relic APM and AI monitoring"
-LABEL org.opencontainers.image.documentation="https://docs.litellm.ai/docs/proxy/observability/new_relic"
