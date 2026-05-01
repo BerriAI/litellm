@@ -979,6 +979,167 @@ async def test_should_retry_partial_release_without_double_decrement(
 
 
 @pytest.mark.asyncio
+async def test_should_preserve_budget_error_and_continue_partial_cleanup(
+    spend_counter_state,
+    monkeypatch,
+):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-budget-cleanup-failure",
+        spend=0.0,
+        max_budget=1.0,
+        team_id="team-budget-cleanup-failure",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-budget-cleanup-failure",
+        spend=0.0,
+        max_budget=0.3,
+    )
+
+    original_increment_cache = counter_cache.async_increment_cache
+    fail_key_cleanup = True
+
+    async def flaky_increment_cache(key, value, *args, **kwargs):
+        nonlocal fail_key_cleanup
+        if key == "spend:key:key-budget-cleanup-failure" and value < 0:
+            if fail_key_cleanup:
+                fail_key_cleanup = False
+                raise RuntimeError("simulated cleanup failure")
+        return await original_increment_cache(key=key, value=value, *args, **kwargs)
+
+    monkeypatch.setattr(counter_cache, "async_increment_cache", flaky_increment_cache)
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=0.4,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation.verbose_proxy_logger.exception"
+        ) as mock_log_exception,
+    ):
+        with pytest.raises(litellm.BudgetExceededError):
+            await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=team_object,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-cleanup-failure"
+        )
+        is None
+    )
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:team:team-budget-cleanup-failure"
+    ) == pytest.approx(0.0)
+    mock_log_exception.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_should_not_create_negative_counter_when_release_counter_is_missing(
+    spend_counter_state,
+):
+    counter_cache, _ = spend_counter_state
+    reservation = {
+        "reserved_cost": 0.4,
+        "entries": [
+            {
+                "counter_key": "spend:key:key-budget-missing-release",
+                "reserved_cost": 0.4,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    with pytest.raises(RuntimeError, match="missing counter"):
+        await release_budget_reservation(reservation)
+
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-missing-release"
+        )
+        is None
+    )
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_should_invalidate_counter_when_release_would_underflow(
+    spend_counter_state,
+):
+    counter_cache, _ = spend_counter_state
+    await counter_cache.async_increment_cache(
+        key="spend:key:key-budget-underflow-release",
+        value=0.1,
+    )
+    reservation = {
+        "reserved_cost": 0.4,
+        "entries": [
+            {
+                "counter_key": "spend:key:key-budget-underflow-release",
+                "reserved_cost": 0.4,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    with pytest.raises(RuntimeError, match="negative"):
+        await release_budget_reservation(reservation)
+
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-underflow-release"
+        )
+        is None
+    )
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
+async def test_should_invalidate_non_numeric_counter_during_release(
+    spend_counter_state,
+):
+    counter_cache, _ = spend_counter_state
+    counter_cache.in_memory_cache.set_cache(
+        key="spend:key:key-budget-nonnumeric-release",
+        value="stale",
+    )
+    reservation = {
+        "reserved_cost": 0.4,
+        "entries": [
+            {
+                "counter_key": "spend:key:key-budget-nonnumeric-release",
+                "reserved_cost": 0.4,
+                "applied_adjustment": 0.0,
+            }
+        ],
+        "finalized": False,
+    }
+
+    with pytest.raises(RuntimeError, match="non-numeric"):
+        await release_budget_reservation(reservation)
+
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:key:key-budget-nonnumeric-release"
+        )
+        is None
+    )
+    assert reservation["finalized"] is False
+
+
+@pytest.mark.asyncio
 async def test_should_invalidate_reserved_counters_after_persisted_spend_failure(
     spend_counter_state,
 ):

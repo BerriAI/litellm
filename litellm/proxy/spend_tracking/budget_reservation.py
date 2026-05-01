@@ -138,9 +138,8 @@ async def reserve_budget_for_request(
                     ),
                 )
     except Exception:
-        await _set_reserved_entries_actual_cost(
+        await _release_applied_entries_best_effort(
             entries=applied_entries,
-            actual_cost=0.0,
             default_reserved_cost=reservation_cost,
         )
         raise
@@ -633,26 +632,101 @@ async def _set_reserved_entries_actual_cost(
     actual_cost: float,
     default_reserved_cost: float,
 ) -> None:
-    from litellm.proxy.proxy_server import _increment_spend_counter_cache
-
     for entry in entries:
-        counter_key = entry.get("counter_key")
-        if counter_key is None:
-            continue
-        reserved_cost = _get_entry_reserved_cost(
+        await _set_reserved_entry_actual_cost(
             entry=entry,
+            actual_cost=actual_cost,
             default_reserved_cost=default_reserved_cost,
         )
-        target_adjustment = actual_cost - reserved_cost
-        applied_adjustment = float(entry.get("applied_adjustment") or 0.0)
-        adjustment = target_adjustment - applied_adjustment
-        if adjustment == 0:
-            continue
-        await _increment_spend_counter_cache(
-            counter_key=counter_key,
-            increment=adjustment,
+
+
+async def _set_reserved_entry_actual_cost(
+    entry: dict,
+    actual_cost: float,
+    default_reserved_cost: float,
+) -> None:
+    from litellm.proxy.proxy_server import _increment_spend_counter_cache
+
+    counter_key = entry.get("counter_key")
+    if counter_key is None:
+        return
+    reserved_cost = _get_entry_reserved_cost(
+        entry=entry,
+        default_reserved_cost=default_reserved_cost,
+    )
+    target_adjustment = actual_cost - reserved_cost
+    applied_adjustment = float(entry.get("applied_adjustment") or 0.0)
+    adjustment = target_adjustment - applied_adjustment
+    if adjustment == 0:
+        return
+    await _ensure_counter_can_apply_adjustment(
+        counter_key=counter_key,
+        adjustment=adjustment,
+    )
+    await _increment_spend_counter_cache(
+        counter_key=counter_key,
+        increment=adjustment,
+    )
+    entry["applied_adjustment"] = target_adjustment
+
+
+async def _ensure_counter_can_apply_adjustment(
+    counter_key: str,
+    adjustment: float,
+) -> None:
+    from litellm.proxy.proxy_server import (
+        _invalidate_spend_counter,
+        spend_counter_cache,
+    )
+
+    current_value = await spend_counter_cache.async_get_cache(key=counter_key)
+    if current_value is None:
+        await _invalidate_spend_counter(counter_key=counter_key)
+        raise RuntimeError(
+            f"Cannot apply budget reservation adjustment to missing counter {counter_key}"
         )
-        entry["applied_adjustment"] = target_adjustment
+
+    try:
+        current_float = float(current_value)
+    except (TypeError, ValueError):
+        await _invalidate_spend_counter(counter_key=counter_key)
+        raise RuntimeError(
+            f"Cannot apply budget reservation adjustment to non-numeric counter {counter_key}"
+        )
+
+    if adjustment < 0 and current_float + adjustment < -1e-12:
+        await _invalidate_spend_counter(counter_key=counter_key)
+        raise RuntimeError(
+            f"Budget reservation adjustment would make counter negative {counter_key}"
+        )
+
+
+async def _release_applied_entries_best_effort(
+    entries: List[dict],
+    default_reserved_cost: float,
+) -> None:
+    for entry in entries:
+        try:
+            await _set_reserved_entry_actual_cost(
+                entry=entry,
+                actual_cost=0.0,
+                default_reserved_cost=default_reserved_cost,
+            )
+        except Exception:
+            counter_key = entry.get("counter_key")
+            verbose_proxy_logger.exception(
+                "Failed to release partial budget reservation during exception cleanup"
+            )
+            if counter_key is None:
+                continue
+            try:
+                from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+                await _invalidate_spend_counter(counter_key=counter_key)
+            except Exception:
+                verbose_proxy_logger.exception(
+                    "Failed to invalidate partial budget reservation counter during exception cleanup"
+                )
 
 
 async def _resize_applied_reservation(
