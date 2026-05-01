@@ -204,15 +204,15 @@ class AssemblyAIPassthroughLoggingHandler:
         )
         if _api_key is None:
             raise ValueError("AssemblyAI API key not found")
+        if (
+            any(c in transcript_id for c in ("/", "\\", "#", "?"))
+            or ".." in transcript_id
+        ):
+            raise ValueError(
+                f"Invalid transcript_id {transcript_id!r}: contains disallowed characters"
+            )
+        safe_transcript_id = urllib.parse.quote(transcript_id, safe="")
         try:
-            if (
-                any(c in transcript_id for c in ("/", "\\", "#", "?"))
-                or ".." in transcript_id
-            ):
-                raise ValueError(
-                    f"Invalid transcript_id {transcript_id!r}: contains disallowed characters"
-                )
-            safe_transcript_id = urllib.parse.quote(transcript_id, safe="")
             url = f"{_base_url}/v2/transcript/{safe_transcript_id}"
             headers = {
                 "Authorization": f"Bearer {_api_key}",
