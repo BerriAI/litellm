@@ -545,6 +545,41 @@ def test_multiple_web_search_tool_results():
     assert web_search_results[1]["tool_use_id"] == "srvtoolu_search2"
 
 
+def test_extract_response_content_strips_leaked_think_tags_from_text_blocks():
+    config = AnthropicConfig()
+
+    completion_response = {
+        "content": [
+            {
+                "type": "text",
+                "text": "I need to call the tool first.\n</think>\n\ntool-loop-ok",
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01XYZ789",
+                "name": "echo_status",
+                "input": {"status": "ok"},
+            },
+        ]
+    }
+
+    (
+        text,
+        citations,
+        thinking_blocks,
+        reasoning_content,
+        tool_calls,
+        web_search_results,
+        tool_results,
+        compaction_blocks,
+    ) = config.extract_response_content(completion_response)
+
+    assert text == "tool-loop-ok"
+    assert tool_calls is not None
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "echo_status"
+
+
 def test_add_code_execution_tool():
     config = AnthropicConfig()
 

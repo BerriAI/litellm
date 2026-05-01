@@ -1591,6 +1591,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         filtered_tools = [t for i, t in enumerate(tool_calls) if i not in json_indices]
         return None, filtered_tools, extra_content
 
+    @staticmethod
+    def _strip_leaked_think_prefix(text_content: str) -> str:
+        if "</think>" not in text_content:
+            return text_content
+        return text_content.split("</think>", 1)[1].lstrip()
+
     def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
         Optional[List[Any]],
@@ -1684,6 +1690,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 thinking_content = cast(Optional[str], block.get("thinking"))
                 if thinking_content is not None:
                     reasoning_content += thinking_content
+
+        text_content = self._strip_leaked_think_prefix(text_content)
 
         return (
             text_content,

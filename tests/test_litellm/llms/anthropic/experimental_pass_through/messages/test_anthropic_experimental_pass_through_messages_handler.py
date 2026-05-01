@@ -499,3 +499,87 @@ class TestThinkingSummaryPreservation:
         assert result == {
             "reasoning_effort": {"effort": "medium", "summary": "concise"}
         }
+
+
+def test_anthropic_messages_handler_strips_leaked_think_tags_from_completion_path():
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages_handler,
+    )
+    from litellm.types.llms.anthropic_messages.anthropic_response import (
+        AnthropicMessagesResponse,
+    )
+
+    leaked_response = AnthropicMessagesResponse(
+        id="msg_test",
+        type="message",
+        role="assistant",
+        content=[
+            {
+                "type": "text",
+                "text": "I need to call the tool first.\n</think>\n\ntool-loop-ok",
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01XYZ789",
+                "name": "echo_status",
+                "input": {"status": "ok"},
+            },
+        ],
+        model="custom-provider/test-model",
+        stop_reason="tool_use",
+        usage={"input_tokens": 10, "output_tokens": 20},
+    )
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.handler.LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler",
+        return_value=leaked_response,
+    ) as mock_completion_handler:
+        result = anthropic_messages_handler(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            model="my-custom-model",
+            custom_llm_provider="my-custom-llm",
+            api_key="test-api-key",
+        )
+
+    mock_completion_handler.assert_called_once()
+    assert result["content"][0]["type"] == "text"
+    assert result["content"][0]["text"] == "tool-loop-ok"
+    assert result["content"][1]["type"] == "tool_use"
+    assert result["content"][1]["name"] == "echo_status"
+
+
+def test_sanitize_think_tag_text_blocks_preserves_empty_blocks_without_mutation():
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        _sanitize_think_tag_text_blocks,
+    )
+    from litellm.types.llms.anthropic_messages.anthropic_response import (
+        AnthropicMessagesResponse,
+    )
+
+    response = AnthropicMessagesResponse(
+        id="msg_test_empty",
+        type="message",
+        role="assistant",
+        content=[
+            {"type": "text", "text": "Thinking...\n</think>"},
+            {
+                "type": "tool_use",
+                "id": "toolu_01EMPTY",
+                "name": "echo_status",
+                "input": {"status": "ok"},
+            },
+        ],
+        model="custom-provider/test-model",
+        stop_reason="tool_use",
+        usage={"input_tokens": 10, "output_tokens": 20},
+    )
+
+    sanitized = _sanitize_think_tag_text_blocks(response)
+
+    assert sanitized is not response
+    assert response["content"][0]["text"] == "Thinking...\n</think>"
+    assert sanitized["content"][0]["type"] == "text"
+    assert sanitized["content"][0]["text"] == ""
+    assert len(sanitized["content"]) == 2
+    assert sanitized["content"][1]["type"] == "tool_use"

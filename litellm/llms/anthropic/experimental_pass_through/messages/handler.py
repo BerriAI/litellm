@@ -47,6 +47,43 @@ def _should_route_to_responses_api(custom_llm_provider: Optional[str]) -> bool:
     return custom_llm_provider in _RESPONSES_API_PROVIDERS
 
 
+def _sanitize_think_tag_text_blocks(
+    response: Union[
+        AnthropicMessagesResponse, AsyncIterator[Any], Coroutine[Any, Any, Any]
+    ],
+) -> Union[AnthropicMessagesResponse, AsyncIterator[Any], Coroutine[Any, Any, Any]]:
+    if not isinstance(response, dict):
+        return response
+
+    content = response.get("content")
+    if not isinstance(content, list):
+        return response
+
+    sanitized_content: List[Any] = []
+    for block in content:
+        if not isinstance(block, dict):
+            sanitized_content.append(block)
+            continue
+
+        if block.get("type") != "text":
+            sanitized_content.append(block)
+            continue
+
+        text = block.get("text")
+        if not isinstance(text, str) or "</think>" not in text:
+            sanitized_content.append(block)
+            continue
+
+        cleaned_text = text.split("</think>", 1)[1].lstrip()
+        sanitized_block = dict(block)
+        sanitized_block["text"] = cleaned_text
+        sanitized_content.append(sanitized_block)
+
+    sanitized_response = dict(response)
+    sanitized_response["content"] = sanitized_content
+    return cast(AnthropicMessagesResponse, sanitized_response)
+
+
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -186,7 +223,7 @@ async def anthropic_messages(
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+) -> Union[AnthropicMessagesResponse, AsyncIterator[Any], Coroutine[Any, Any, Any]]:
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
@@ -288,7 +325,7 @@ async def anthropic_messages(
         response = await init_response
     else:
         response = init_response
-    return response
+    return _sanitize_think_tag_text_blocks(response)
 
 
 def validate_anthropic_api_metadata(metadata: Optional[Dict] = None) -> Optional[Dict]:
@@ -423,10 +460,12 @@ def anthropic_messages_handler(
             **kwargs,
         )
         if _should_route_to_responses_api(custom_llm_provider):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
-                **_shared_kwargs
+            return _sanitize_think_tag_text_blocks(
+                LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+                    **_shared_kwargs
+                )
             )
-        return (
+        return _sanitize_think_tag_text_blocks(
             LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )
@@ -454,20 +493,22 @@ def anthropic_messages_handler(
                 "display": "summarized",
             }
 
-    return base_llm_http_handler.anthropic_messages_handler(
-        model=model,
-        messages=messages,
-        anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(
-            anthropic_messages_optional_request_params
-        ),
-        _is_async=is_async,
-        client=client,
-        custom_llm_provider=custom_llm_provider,
-        litellm_params=litellm_params,
-        logging_obj=litellm_logging_obj,
-        api_key=api_key,
-        api_base=api_base,
-        stream=stream,
-        kwargs=kwargs,
+    return _sanitize_think_tag_text_blocks(
+        base_llm_http_handler.anthropic_messages_handler(
+            model=model,
+            messages=messages,
+            anthropic_messages_provider_config=anthropic_messages_provider_config,
+            anthropic_messages_optional_request_params=dict(
+                anthropic_messages_optional_request_params
+            ),
+            _is_async=is_async,
+            client=client,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            api_key=api_key,
+            api_base=api_base,
+            stream=stream,
+            kwargs=kwargs,
+        )
     )
