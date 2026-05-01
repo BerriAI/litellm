@@ -272,3 +272,153 @@ async def test_hashicorp_vault_validation_errors_and_access_control(
         litellm.secret_manager_client = old_client
         litellm._key_management_system = old_kms
         _cleanup()
+
+
+# ── Audit-log emission for /config_overrides/hashicorp_vault ─────────────────
+
+
+class TestHashicorpVaultAuditLog:
+    """The KMS config endpoint controls every secret retrieval on the proxy.
+    A mutation (create/update/delete) must emit an audit-log row when
+    ``litellm.store_audit_logs`` is True, with credential values redacted
+    so the audit table can't itself be a credential-harvest sink."""
+
+    @pytest.mark.asyncio
+    async def test_post_emits_audit_log_with_redacted_values(self, client, monkeypatch):
+        monkeypatch.setattr(litellm, "store_audit_logs", True)
+        mock_prisma, mock_db = _make_mock_db()
+        mock_cfg = _make_mock_proxy_config()
+        monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+        monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+        _set_admin()
+
+        audit_calls = []
+
+        async def capture(request_data):
+            audit_calls.append(request_data)
+
+        from unittest.mock import patch
+
+        try:
+            with patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture,
+            ):
+                r = client.post(
+                    VAULT_URL,
+                    json={
+                        "vault_addr": "https://vault.example.com",
+                        "vault_token": "my-very-secret-token",
+                    },
+                )
+                assert r.status_code == 200
+                import asyncio
+
+                for _ in range(3):
+                    await asyncio.sleep(0)
+
+            assert len(audit_calls) == 1
+            log = audit_calls[0]
+            assert log.action == "created"
+            assert log.object_id == "hashicorp_vault"
+            # Plaintext credentials must NOT appear anywhere in the row.
+            assert "my-very-secret-token" not in log.updated_values
+            assert "vault.example.com" not in log.updated_values
+            # Field names are kept so the auditor can see what changed.
+            after = json.loads(log.updated_values)
+            assert "vault_token" in after["config"]
+            assert "vault_addr" in after["config"]
+        finally:
+            _cleanup()
+
+    @pytest.mark.asyncio
+    async def test_delete_emits_audit_log_only_when_row_existed(
+        self, client, monkeypatch
+    ):
+        monkeypatch.setattr(litellm, "store_audit_logs", True)
+        mock_prisma, mock_db = _make_mock_db()
+        mock_cfg = _make_mock_proxy_config()
+        monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+        monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+        _set_admin()
+
+        audit_calls = []
+
+        async def capture(request_data):
+            audit_calls.append(request_data)
+
+        from unittest.mock import patch
+
+        try:
+            with patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture,
+            ):
+                # Idempotent delete on an empty table → no row, no audit log.
+                mock_db.find_unique = AsyncMock(return_value=None)
+                mock_db.delete = AsyncMock(side_effect=RecordNotFoundError(MagicMock()))
+                r = client.delete(VAULT_URL)
+                assert r.status_code == 200
+                import asyncio
+
+                for _ in range(3):
+                    await asyncio.sleep(0)
+                assert audit_calls == []
+
+                # Delete a real row → audit log fires with action="deleted".
+                mock_db.find_unique = AsyncMock(
+                    return_value=_db_record(
+                        {
+                            "vault_addr": "enc_https://v.example.com",
+                            "vault_token": "enc_t",
+                        }
+                    )
+                )
+                mock_db.delete = AsyncMock(return_value=None)
+                r = client.delete(VAULT_URL)
+                assert r.status_code == 200
+                for _ in range(3):
+                    await asyncio.sleep(0)
+
+            assert len(audit_calls) == 1
+            log = audit_calls[0]
+            assert log.action == "deleted"
+            # The before-snapshot must redact the token before logging.
+            assert "enc_t" not in log.before_value
+            assert "v.example.com" not in log.before_value
+        finally:
+            _cleanup()
+
+    @pytest.mark.asyncio
+    async def test_no_audit_when_store_audit_logs_is_off(self, client, monkeypatch):
+        monkeypatch.setattr(litellm, "store_audit_logs", False)
+        mock_prisma, mock_db = _make_mock_db()
+        mock_cfg = _make_mock_proxy_config()
+        monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+        monkeypatch.setattr(ps, "proxy_config", mock_cfg)
+        _set_admin()
+
+        audit_calls = []
+
+        async def capture(request_data):
+            audit_calls.append(request_data)
+
+        from unittest.mock import patch
+
+        try:
+            with patch(
+                "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+                new=capture,
+            ):
+                r = client.post(
+                    VAULT_URL,
+                    json={
+                        "vault_addr": "https://vault.example.com",
+                        "vault_token": "tok",
+                    },
+                )
+                assert r.status_code == 200
+
+            assert audit_calls == []
+        finally:
+            _cleanup()

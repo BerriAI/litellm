@@ -1,10 +1,13 @@
 import asyncio
+import json
 import os
-from typing import Any, Dict, Set
+from datetime import datetime, timezone
+from typing import Any, Dict, Mapping, Optional, Set
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import TypeAdapter
 
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
@@ -20,6 +23,8 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     CommonProxyErrors,
     KeyManagementSystem,
+    LiteLLM_AuditLogs,
+    LitellmTableNames,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
@@ -31,6 +36,82 @@ from litellm.types.proxy.management_endpoints.config_overrides import (
 )
 
 router = APIRouter()
+
+
+_AUDIT_REDACTED = "***REDACTED***"
+
+
+def _redact_config(config: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Strip values from a config snapshot before audit-log emission.
+
+    Hashicorp Vault config carries ``vault_token``, ``approle_secret_id``,
+    ``client_key`` etc.  Persisting them verbatim into ``LiteLLM_AuditLogs``
+    would let anyone with read access to the audit table harvest the
+    proxy's KMS credentials.  Keep keys, redact values.
+    """
+    if not config:
+        return {}
+    return {k: _AUDIT_REDACTED for k in config.keys()}
+
+
+def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        verbose_proxy_logger.warning(
+            "Failed to write hashicorp-vault config audit log: %s", exc
+        )
+
+
+async def _emit_hashicorp_vault_audit_log(
+    *,
+    action: str,
+    before_config: Optional[Mapping[str, Any]],
+    after_config: Optional[Mapping[str, Any]],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str],
+) -> None:
+    """Emit an audit-log row for a /config_overrides/hashicorp_vault mutation.
+
+    Mirrors the ``store_audit_logs``-gated pattern from
+    ``team_callback_endpoints.py``.  Captured under
+    ``LiteLLM_ConfigOverrides`` so the row co-locates with the table it
+    mutates.
+    """
+    import litellm
+
+    if litellm.store_audit_logs is not True:
+        return
+
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_audit_log_for_update,
+    )
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    task = asyncio.create_task(
+        create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=litellm_changed_by
+                or user_api_key_dict.user_id
+                or litellm_proxy_admin_name,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
+                object_id="hashicorp_vault",
+                action=action,
+                updated_values=json.dumps(
+                    {"config": _redact_config(after_config)}, default=str
+                ),
+                before_value=json.dumps(
+                    {"config": _redact_config(before_config)}, default=str
+                ),
+            )
+        )
+    )
+    task.add_done_callback(_log_audit_task_exception)
+
 
 # --- Hashicorp Vault constants ---
 
@@ -144,6 +225,10 @@ def _clear_hashicorp_vault_state(proxy_config: Any) -> None:
 async def update_hashicorp_vault_config(
     config: HashicorpVaultConfig,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """
     Update Hashicorp Vault secret manager configuration.
@@ -248,6 +333,18 @@ async def update_hashicorp_vault_config(
     # Update change-detection cache so the background reload doesn't redundantly re-init
     proxy_config._last_hashicorp_vault_config = safe_json_loads(config_value)
 
+    # Mutating the proxy's KMS config affects every secret retrieval going
+    # forward — emit an audit-log row so the action is traceable even
+    # though the secret_manager_client itself was just swapped under us.
+    before_config = existing_decrypted if existing_record is not None else env_values
+    await _emit_hashicorp_vault_audit_log(
+        action="updated" if existing_record is not None else "created",
+        before_config=before_config,
+        after_config=config_data,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
+
     return {
         "message": "Hashicorp Vault configuration updated successfully",
         "status": "success",
@@ -319,6 +416,10 @@ async def get_hashicorp_vault_config(
 )
 async def delete_hashicorp_vault_config(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """Delete Hashicorp Vault configuration. Idempotent."""
     from litellm.proxy.proxy_server import prisma_client, proxy_config
@@ -335,17 +436,44 @@ async def delete_hashicorp_vault_config(
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
 
+    # Capture the prior config before delete so the audit-log row can
+    # show *what* was removed (keys only — values get redacted).
+    existing_record = await prisma_client.db.litellm_configoverrides.find_unique(
+        where={"config_type": "hashicorp_vault"}
+    )
+    before_config: Optional[Dict[str, Any]] = None
+    if existing_record is not None and existing_record.config_value is not None:
+        try:
+            before_config = proxy_config._decrypt_db_variables(
+                _parse_config_value(existing_record.config_value)
+            )
+        except Exception:
+            before_config = None
+
     # Delete DB record if it exists — ignore if not found
+    deleted = False
     try:
         await prisma_client.db.litellm_configoverrides.delete(
             where={"config_type": "hashicorp_vault"}
         )
+        deleted = True
     except RecordNotFoundError:
         verbose_proxy_logger.debug(
             "No existing Hashicorp Vault config record to delete"
         )
 
     _clear_hashicorp_vault_state(proxy_config)
+
+    # Only emit audit log if a row was actually removed; an idempotent
+    # delete on a non-existent row produces no security-relevant change.
+    if deleted:
+        await _emit_hashicorp_vault_audit_log(
+            action="deleted",
+            before_config=before_config,
+            after_config=None,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
 
     return {
         "message": "Hashicorp Vault configuration deleted successfully",
