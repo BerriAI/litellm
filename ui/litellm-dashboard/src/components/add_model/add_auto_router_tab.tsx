@@ -393,7 +393,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({ form, handleOk, acc
 
           <div className="flex justify-between items-center mb-4">
             <Tooltip title="Get help on our github">
-              <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
+              <Typography.Link href="https://github.com/BerriAI/litellm/issues" target="_blank" rel="noopener noreferrer">Need Help?</Typography.Link>
             </Tooltip>
             <div className="space-x-2">
               <Button onClick={handleTestConnection} loading={isTestingConnection}>
