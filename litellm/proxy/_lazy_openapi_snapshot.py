@@ -10,7 +10,7 @@ any drift as a neutral check.
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
 
@@ -43,7 +43,7 @@ def generate_snapshot() -> Dict[str, Dict]:
             sys.stderr.write(f"warning: skip {feat.name}: {exc}\n")
 
     fragments: Dict[str, Dict] = {}
-    used_operation_ids = set()
+    used_operation_ids: Set[str] = set()
     for feat in LAZY_FEATURES:
         feat_routes = [
             r
