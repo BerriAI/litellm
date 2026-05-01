@@ -2,7 +2,7 @@ import os
 import re
 import sys
 from functools import lru_cache
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 from fastapi import HTTPException, Request, status
 
@@ -942,20 +942,249 @@ def get_end_user_id_from_request_body(
     return None
 
 
-def get_model_from_request(
-    request_data: dict, route: str
+MODEL_ROUTING_HEADER_NAME = "x-litellm-model"
+_MODEL_ROUTING_ROUTE_MARKERS = (
+    "/files",
+    "/batches",
+    "/vector_stores",
+    "/skills",
+    "/evals",
+    "/fine_tuning",
+    "/videos",
+)
+_MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS = (
+    "/files",
+    "/batches",
+    "/skills",
+    "/evals",
+)
+_MODEL_ROUTING_QUERY_TARGET_MODEL_ROUTE_MARKERS = (
+    "/files",
+    "/batches",
+    "/fine_tuning",
+)
+_MODEL_ROUTING_BODY_TARGET_MODEL_ROUTE_MARKERS = (
+    "/files",
+    "/batches",
+    "/vector_stores",
+)
+_MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS = ("/evals",)
+_MODEL_ROUTING_ID_FIELDS = (
+    "file_id",
+    "input_file_id",
+    "output_file_id",
+    "error_file_id",
+    "batch_id",
+    "fine_tuning_job_id",
+    "training_file",
+    "validation_file",
+    "vector_store_id",
+    "video_id",
+    "character_id",
+)
+
+
+def _append_model_candidates(candidates: List[str], value: Any) -> None:
+    if value is None:
+        return
+
+    if isinstance(value, str):
+        model_names = [model.strip() for model in value.split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            _append_model_candidates(candidates=candidates, value=item)
+        return
+    else:
+        model_names = [str(value).strip()]
+
+    candidates.extend(model for model in model_names if model)
+
+
+def _dedupe_model_candidates(candidates: List[str]) -> List[str]:
+    deduped: List[str] = []
+    for model in candidates:
+        if model not in deduped:
+            deduped.append(model)
+    return deduped
+
+
+def _get_case_insensitive_mapping_value(
+    mapping: Optional[Mapping[str, Any]], key: str
+) -> Any:
+    if not mapping:
+        return None
+    if key in mapping:
+        return mapping[key]
+    key_lower = key.lower()
+    for mapping_key, value in mapping.items():
+        if str(mapping_key).lower() == key_lower:
+            return value
+    return None
+
+
+def _route_matches_any_marker(route: str, markers: Tuple[str, ...]) -> bool:
+    normalized_route = route.lower()
+    return any(marker in normalized_route for marker in markers)
+
+
+def _route_uses_model_routing_sources(route: str) -> bool:
+    return _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_ROUTE_MARKERS)
+
+
+def _extract_models_from_managed_resource_id(resource_id: Any) -> List[str]:
+    if not isinstance(resource_id, str) or not resource_id:
+        return []
+
+    candidates: List[str] = []
+
+    try:
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            _is_base64_encoded_unified_file_id,
+            decode_model_from_file_id,
+            get_model_id_from_unified_batch_id,
+            get_models_from_unified_file_id,
+        )
+
+        _append_model_candidates(
+            candidates=candidates, value=decode_model_from_file_id(resource_id)
+        )
+        unified_file_id = _is_base64_encoded_unified_file_id(resource_id)
+        if unified_file_id:
+            _append_model_candidates(
+                candidates=candidates,
+                value=get_models_from_unified_file_id(unified_file_id),
+            )
+            _append_model_candidates(
+                candidates=candidates,
+                value=get_model_id_from_unified_batch_id(unified_file_id),
+            )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Unable to extract model from managed file/batch ID: %s", str(e)
+        )
+
+    try:
+        from litellm.llms.base_llm.managed_resources.utils import parse_unified_id
+
+        parsed_id = parse_unified_id(resource_id)
+        if parsed_id:
+            _append_model_candidates(
+                candidates=candidates, value=parsed_id.get("model_id")
+            )
+            _append_model_candidates(
+                candidates=candidates, value=parsed_id.get("target_model_names")
+            )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Unable to extract model from unified managed resource ID: %s", str(e)
+        )
+
+    try:
+        from litellm.types.videos.utils import (
+            decode_character_id_with_provider,
+            decode_video_id_with_provider,
+        )
+
+        _append_model_candidates(
+            candidates=candidates,
+            value=decode_video_id_with_provider(resource_id).get("model_id"),
+        )
+        _append_model_candidates(
+            candidates=candidates,
+            value=decode_character_id_with_provider(resource_id).get("model_id"),
+        )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Unable to extract model from managed video/character ID: %s", str(e)
+        )
+
+    return _dedupe_model_candidates(candidates)
+
+
+def _extract_model_candidates_from_request(
+    request_data: dict,
+    route: str,
+    request_headers: Optional[Mapping[str, Any]] = None,
+    request_query_params: Optional[Mapping[str, Any]] = None,
+) -> List[str]:
+    candidates: List[str] = []
+    uses_model_routing_sources = _route_uses_model_routing_sources(route=route)
+    uses_header_or_query_model_sources = _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS
+    )
+    uses_query_target_model_sources = _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_QUERY_TARGET_MODEL_ROUTE_MARKERS
+    )
+    uses_body_target_model_sources = _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_BODY_TARGET_MODEL_ROUTE_MARKERS
+    )
+    uses_completion_model_sources = _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS
+    )
+
+    body_model = request_data.get("model")
+    _append_model_candidates(candidates, body_model)
+    if uses_body_target_model_sources or not body_model:
+        _append_model_candidates(candidates, request_data.get("target_model_names"))
+    if uses_completion_model_sources and isinstance(
+        request_data.get("completion"), dict
+    ):
+        _append_model_candidates(candidates, request_data["completion"].get("model"))
+
+    if uses_model_routing_sources:
+        if uses_header_or_query_model_sources:
+            _append_model_candidates(
+                candidates,
+                _get_case_insensitive_mapping_value(request_query_params, "model"),
+            )
+            _append_model_candidates(
+                candidates,
+                _get_case_insensitive_mapping_value(
+                    request_headers, MODEL_ROUTING_HEADER_NAME
+                ),
+            )
+        if uses_query_target_model_sources:
+            _append_model_candidates(
+                candidates,
+                _get_case_insensitive_mapping_value(
+                    request_query_params, "target_model_names"
+                ),
+            )
+
+        for field in _MODEL_ROUTING_ID_FIELDS:
+            _append_model_candidates(
+                candidates,
+                _extract_models_from_managed_resource_id(request_data.get(field)),
+            )
+
+    return _dedupe_model_candidates(candidates)
+
+
+def _format_model_candidates(
+    candidates: List[str],
 ) -> Optional[Union[str, List[str]]]:
-    # First try to get model from request_data
-    model = request_data.get("model") or request_data.get("target_model_names")
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    return candidates
 
-    if model is not None:
-        model_names = model.split(",")
-        if len(model_names) == 1:
-            model = model_names[0].strip()
-        else:
-            model = [m.strip() for m in model_names]
 
-    # If model not in request_data, try to extract from route
+def get_model_from_request(
+    request_data: dict,
+    route: str,
+    request_headers: Optional[Mapping[str, Any]] = None,
+    request_query_params: Optional[Mapping[str, Any]] = None,
+) -> Optional[Union[str, List[str]]]:
+    candidates = _extract_model_candidates_from_request(
+        request_data=request_data,
+        route=route,
+        request_headers=request_headers,
+        request_query_params=request_query_params,
+    )
+    model = _format_model_candidates(candidates)
+
+    # If no explicit model was found, try to extract from route
     if model is None:
         # Parse model from route that follows the pattern /openai/deployments/{model}/*
         match = re.match(r"/openai/deployments/([^/]+)", route)
