@@ -46,6 +46,7 @@ podLabels: {}
 strategy: {}
 
 terminationGracePeriodSeconds: 90
+
 topologySpreadConstraints:
   []
   # - maxSkew: 1
@@ -53,7 +54,8 @@ topologySpreadConstraints:
   #   whenUnsatisfiable: DoNotSchedule
   #   labelSelector:
   #     matchLabels:
-  #       app: litellm
+  # Adjust to match name passed to `helm install`:
+  #       app.kubernetes.io/instance: litellm
 
 # At the time of writing, the litellm docker image requires write access to the
 #  filesystem on startup so that prisma can install some dependencies.
