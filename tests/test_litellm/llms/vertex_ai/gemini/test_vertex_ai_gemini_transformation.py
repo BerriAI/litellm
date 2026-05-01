@@ -1361,6 +1361,53 @@ def test_file_data_field_order_gcs_urls():
     ), "mime_type must come before file_uri in the file_data dict"
 
 
+def test_gemini_files_api_uri_without_format():
+    """
+    Test that Gemini Files API URIs work WITHOUT an explicit format/mime_type.
+
+    When a user uploads a file via the Gemini Files API and then references it
+    by URI (https://generativelanguage.googleapis.com/v1beta/files/...),
+    the file is already on Google's servers. These URLs return 403 when
+    fetched directly, so _process_gemini_media must NOT try to resolve the
+    MIME type via HTTP.  Instead it should pass the URI through as file_data
+    and let the Gemini API resolve the type from its stored metadata.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/24907
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
+    file_url = "https://generativelanguage.googleapis.com/v1beta/files/37eh7rsw1vfe"
+
+    # Should NOT raise — previously this hit the generic https:// handler
+    # which called _get_image_mime_type_from_url() and got a 403.
+    result = _process_gemini_media(image_url=file_url)
+
+    assert "file_data" in result
+    file_data = result["file_data"]
+    assert file_data["file_uri"] == file_url
+    # When no format is provided, mime_type should be absent so the
+    # Gemini API infers it from the stored file metadata.
+    assert "mime_type" not in file_data
+
+
+def test_gemini_files_api_uri_with_format():
+    """
+    Test that Gemini Files API URIs correctly forward an explicit format.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/24907
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
+    file_url = "https://generativelanguage.googleapis.com/v1beta/files/n1vhxa28lyaw"
+
+    result = _process_gemini_media(image_url=file_url, format="text/plain")
+
+    assert "file_data" in result
+    file_data = result["file_data"]
+    assert file_data["file_uri"] == file_url
+    assert file_data["mime_type"] == "text/plain"
+
+
 def test_extract_file_data_with_path_object():
     """
     Test that filename is correctly extracted from Path objects for MIME type detection.
