@@ -84,7 +84,6 @@ async def reserve_budget_for_request(
         route=route,
         llm_router=llm_router,
     )
-    using_remaining_budget_fallback = reservation_cost is None
     if reservation_cost is None:
         reservation_cost = await _get_smallest_remaining_budget(
             counters=counters,
@@ -114,18 +113,17 @@ async def reserve_budget_for_request(
                     cached_spend = await _get_current_counter_value(counter=counter)
                 current_spend = cached_spend + reservation_cost
             if current_spend > counter.max_budget:
-                if using_remaining_budget_fallback:
-                    remaining_before_reservation = counter.max_budget - (
-                        current_spend - reservation_cost
+                remaining_before_reservation = counter.max_budget - (
+                    current_spend - reservation_cost
+                )
+                if remaining_before_reservation > 1e-12:
+                    await _resize_applied_reservation(
+                        entries=applied_entries,
+                        current_reserved_cost=reservation_cost,
+                        new_reserved_cost=remaining_before_reservation,
                     )
-                    if remaining_before_reservation > 0:
-                        await _resize_applied_reservation(
-                            entries=applied_entries,
-                            current_reserved_cost=reservation_cost,
-                            new_reserved_cost=remaining_before_reservation,
-                        )
-                        reservation_cost = remaining_before_reservation
-                        continue
+                    reservation_cost = remaining_before_reservation
+                    continue
                 raise litellm.BudgetExceededError(
                     current_cost=current_spend,
                     max_budget=counter.max_budget,
