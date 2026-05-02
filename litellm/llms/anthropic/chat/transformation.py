@@ -22,7 +22,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -855,14 +854,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
             )
         elif reasoning_effort == "minimal":
-            # Anthropic enforces ``thinking.enabled.budget_tokens >= 1024`` and
-            # 400s otherwise; the generic 128 fallback used to leak through
-            # here and make ``reasoning_effort=\"minimal\"`` 400 on the pre-4.6
-            # ``budget_tokens`` thinking path on Anthropic / Azure / Bedrock
-            # Invoke / Vertex. Use the Anthropic-specific minimum instead.
+            # Anthropic's Messages API enforces
+            # ``thinking.enabled.budget_tokens >= 1024`` and 400s otherwise
+            # (exact error: ``thinking.enabled.budget_tokens: Input should be
+            # greater than or equal to 1024``). The generic
+            # ``DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET=128`` fallback
+            # used to leak through here, so ``reasoning_effort="minimal"``
+            # 400'd on Anthropic direct / Azure AI Anthropic / Bedrock Invoke /
+            # Vertex AI Anthropic — only Bedrock Converse silently clamped to
+            # 1024 in ``converse_transformation.py``. Reuse the existing
+            # ``DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET=1024`` constant
+            # rather than introducing a separate Anthropic-specific knob: 1024
+            # is both the API minimum and the LiteLLM ``low`` budget, so
+            # ``minimal`` and ``low`` end up at the same wire shape on the
+            # pre-4.6 path. (See PR #27039 QA bug #6.)
             return AnthropicThinkingParam(
                 type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC,
+                budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
             )
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")

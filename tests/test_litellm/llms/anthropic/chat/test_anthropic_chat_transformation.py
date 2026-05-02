@@ -3688,24 +3688,22 @@ def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
     ],
 )
 def test_minimal_reasoning_effort_emits_at_least_anthropic_min_budget(model):
-    """PR #27039 QA bug #6: ``reasoning_effort=\"minimal\"`` used to emit
+    """PR #27039 QA bug #6: ``reasoning_effort="minimal"`` used to emit
     ``budget_tokens=128`` (the generic fallback), which is below Anthropic's
     published minimum of 1024 — every provider except Bedrock Converse
     (which silently clamps) returned 400 with
     ``thinking.enabled.budget_tokens: Input should be greater than or equal
-    to 1024``. The Anthropic-specific constant is now ≥1024."""
-    from litellm.constants import (
-        DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC,
-    )
+    to 1024``. The minimal mapping now reuses
+    ``DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET`` (1024) so the wire
+    shape clears the API minimum end-to-end on the pre-4.6 path."""
+    from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
 
     thinking = AnthropicConfig._map_reasoning_effort(
         reasoning_effort="minimal", model=model
     )
     assert thinking is not None
     assert thinking["type"] == "enabled"
-    assert thinking["budget_tokens"] == (
-        DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC
-    )
+    assert thinking["budget_tokens"] == DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
     assert thinking["budget_tokens"] >= 1024, (
         "Anthropic enforces thinking.enabled.budget_tokens >= 1024 and 400s "
         "otherwise; the minimal mapping must satisfy that minimum."

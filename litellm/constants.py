@@ -190,18 +190,6 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET", 128)
 )
 
-# Anthropic Messages API enforces ``thinking.enabled.budget_tokens >= 1024``
-# and 400s otherwise (exact error: ``thinking.enabled.budget_tokens: Input
-# should be greater than or equal to 1024``). Bedrock Converse silently clamps
-# to 1024 in ``converse_transformation.py``; every other Anthropic-backed
-# provider (Anthropic direct, Azure AI Anthropic, Bedrock Invoke, Vertex AI
-# Anthropic) bubbles the 400 up to the caller. Setting the budget for
-# ``reasoning_effort=\"minimal\"`` to the API minimum keeps the request valid
-# end-to-end on the pre-4.6 (budget_tokens) thinking path.
-DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC = int(
-    os.getenv("DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC", 1024)
-)
-
 # Provider-specific API base URLs
 XAI_API_BASE = "https://api.x.ai/v1"
 
