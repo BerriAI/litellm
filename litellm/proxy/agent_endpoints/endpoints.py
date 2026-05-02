@@ -1005,8 +1005,9 @@ async def get_agent_daily_activity(
                 permitted_agent_ids = [a.agent_id for a in owned_records]
 
         if agent_ids_list:
+            permitted_agent_id_set = set(permitted_agent_ids)
             agent_ids_list = [
-                aid for aid in agent_ids_list if aid in permitted_agent_ids
+                aid for aid in agent_ids_list if aid in permitted_agent_id_set
             ]
         else:
             agent_ids_list = list(permitted_agent_ids)
