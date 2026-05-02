@@ -668,6 +668,8 @@ class LiteLLMRoutes(enum.Enum):
             "/models/{model_id}",
             "/guardrails/list",
             "/v2/guardrails/list",
+            "/project/list",
+            "/project/info",
         ]
         + spend_tracking_routes
         + key_management_routes
@@ -692,6 +694,9 @@ class LiteLLMRoutes(enum.Enum):
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
+        # Project read routes - endpoint scopes results to caller's teams (non-admin)
+        "/project/list",
+        "/project/info",
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
         "/invitation/new",
         "/invitation/delete",
@@ -719,21 +724,73 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/member_delete",
     ]
 
-    # Routes accessible by Admin Viewer (read-only admin access)
-    admin_viewer_routes = [
-        "/user/list",
-        "/user/available_users",
-        "/user/available_roles",
-        "/user/daily/activity",
-        "/team/daily/activity",
-        "/tag/daily/activity",
-        "/tag/list",
-        "/audit",
-        "/audit/{id}",
-        "/global/activity",
-        "/global/activity/model",
-        "/global/activity/cache_hits",
-    ] + info_routes
+    # Routes accessible by Admin Viewer (read-only admin access).
+    #
+    # Admin Viewer follows a read-parity-with-Proxy-Admin rule: anything Proxy
+    # Admin can read/list/get, Admin Viewer can too (no writes, no cost-incurring
+    # actions).
+    #
+    # NOTE: This list is no longer the primary mechanism for granting access —
+    # `_check_proxy_admin_viewer_access()` in route_checks.py default-allows
+    # any safe HTTP method (GET/HEAD/OPTIONS) on non-inference routes. This
+    # list now matters only for non-GET routes that are semantically reads
+    # (e.g. POST /spend/calculate). Adding a new GET endpoint does not require
+    # updating this list — the default-allow behavior covers it automatically.
+    admin_viewer_routes = (
+        [
+            "/user/list",
+            "/user/available_users",
+            "/user/available_roles",
+            "/user/daily/activity",
+            "/team/daily/activity",
+            "/tag/daily/activity",
+            "/tag/list",
+            "/audit",
+            "/audit/{id}",
+            "/global/activity",
+            "/global/activity/model",
+            "/global/activity/cache_hits",
+            # Customer / end-user listing (handlers already gate on
+            # PROXY_ADMIN_VIEW_ONLY — the route gate must match).
+            "/customer/list",
+            "/customer/info",
+            # UI Logs page detail drawer (single + session). The list endpoint
+            # `/spend/logs/ui` is covered via spend_tracking_routes below.
+            "/spend/logs/ui/{logId}",
+            "/spend/logs/session/ui",
+            # Settings / observability read endpoints exposed in admin-only
+            # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
+            # Invitations).
+            "/callbacks/list",
+            "/callbacks/configs",
+            "/get/config/callbacks",
+            "/alerting/settings",
+            "/config/list",
+            "/config/field/info",
+            "/budget/list",
+            "/budget/settings",
+            # Invitation viewing (admin viewer cannot create/delete; can read).
+            "/invitation/info",
+            # Guardrails / Policies pages (read-only views).
+            "/guardrails/list",
+            "/v2/guardrails/list",
+            "/guardrails/submissions",
+            "/guardrails/submissions/{guardrail_id}",
+            "/guardrails/usage/overview",
+            "/policies/attachments/list",
+            # MCP semantic filter settings (read).
+            "/get/mcp_semantic_filter_settings",
+            # Model cost map maintenance views (read-only status / source).
+            "/schedule/model_cost_map_reload/status",
+            "/model/cost_map/source",
+        ]
+        # Spend tracking reads (/spend/logs, /spend/logs/ui, /spend/keys,
+        # /spend/users, /spend/tags, /spend/calculate, /cost/estimate). Admin
+        # Viewer can already read /global/spend/* via global_spend_tracking_routes;
+        # the per-tenant /spend/* views were the missing peer.
+        + spend_tracking_routes
+        + info_routes
+    )
 
     # All routes accesible by an Org Admin
     org_admin_allowed_routes = (
@@ -2381,6 +2438,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For headers are only trusted from these IPs.",
     )
+    trusted_proxy_ranges: Optional[List[str]] = Field(
+        None,
+        description="CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.",
+    )
     store_model_in_db: Optional[bool] = Field(
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
@@ -2574,6 +2635,7 @@ class UserAPIKeyAuth(
     user_spend: Optional[float] = None
     user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
+    budget_reservation: Optional[Dict[str, Any]] = Field(default=None, exclude=True)
     user: Optional[Any] = None  # Expanded user object when expand=user is used
     created_by_user: Optional[Any] = (
         None  # Expanded created_by user when expand=user is used

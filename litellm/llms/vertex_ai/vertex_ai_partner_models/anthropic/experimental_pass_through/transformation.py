@@ -13,6 +13,7 @@ from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
+from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
@@ -158,12 +159,10 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             "model", None
         )  # do not pass model in request body to vertex ai
 
-        anthropic_messages_request.pop(
-            "output_format", None
-        )  # do not pass output_format in request body to vertex ai - vertex ai does not support output_format as yet
-
-        anthropic_messages_request.pop(
-            "output_config", None
-        )  # do not pass output_config in request body to vertex ai - vertex ai does not support output_config
+        # Vertex AI Claude accepts ``output_config.format`` (structured outputs)
+        # and ``output_format``, but rejects ``output_config.effort`` with 400
+        # "Extra inputs are not permitted". Sanitize in place so the supported
+        # bits flow through.
+        sanitize_vertex_anthropic_output_params(anthropic_messages_request)
 
         return anthropic_messages_request

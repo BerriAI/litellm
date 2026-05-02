@@ -3267,3 +3267,433 @@ async def test_multiregion_team_failover_between_regions():
         "response from us-east-1",
         "response from us-west-2",
     ]
+
+
+def test_access_group_scoped_key_filters_deployments_with_same_public_model():
+    """
+    If a key can access a model only via access group membership,
+    router candidate deployments for that public model should be constrained
+    to deployments in the allowed access group.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1",
+                    "api_key": "key1",
+                    "mock_response": "response-via-AG1",
+                },
+                "model_info": {"access_groups": ["AG1"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "response-via-AG2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG2"],
+        team_models=["AG2"],
+    )
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="gpt-5",
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team2",
+                "user_api_key_auth": scoped_key,
+            }
+        },
+    )
+
+    assert len(deployments) == 1
+    assert deployments[0].get("model_info", {}).get("access_groups") == ["AG2"]
+
+    seen = set()
+    for _ in range(20):
+        response = router.completion(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "hello"}],
+            metadata={"user_api_key_team_id": "team2", "user_api_key_auth": scoped_key},
+        )
+        seen.add(response.choices[0].message.content)
+
+    assert seen == {"response-via-AG2"}
+
+
+def test_explicit_model_access_does_not_force_access_group_filtering():
+    """
+    If a key has explicit model access in addition to access group entries,
+    do not force access-group-only filtering for deployment selection.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1",
+                    "api_key": "key1",
+                    "mock_response": "response-via-AG1",
+                },
+                "model_info": {"access_groups": ["AG1"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key2",
+                    "mock_response": "response-via-AG2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    explicit_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG2", "gpt-5"],
+        team_models=["AG2", "gpt-5"],
+    )
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="gpt-5",
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team2",
+                "user_api_key_auth": explicit_key,
+            }
+        },
+    )
+
+    deployment_groups = [
+        d.get("model_info", {}).get("access_groups") for d in deployments
+    ]
+    assert ["AG1"] in deployment_groups
+    assert ["AG2"] in deployment_groups
+
+
+def test_access_group_filter_empty_does_not_bypass_via_litellm_model_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    When access-group filtering removes all candidates, _get_deployment_by_litellm_model
+    must not run: it does not re-apply access groups and could return blocked deployments
+    that share the same litellm_params.model as the request model string.
+
+    ``get_model_access_groups`` is patched to expose AG1 for the public model (so the
+    access-group filter runs with a non-empty allowed set) while every deployment
+    returned for that name is AG2-only — filtered to empty. Without the guard, the
+    litellm-model fallback would return both rows because ``litellm_params.model`` matches.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key1",
+                    "mock_response": "blocked-dep-1",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key2",
+                    "mock_response": "blocked-dep-2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    orig_groups = router.get_model_access_groups
+
+    def fake_get_model_access_groups(
+        model_name=None, model_access_group=None, team_id=None
+    ):
+        if model_name == "gpt-5" and model_access_group is None:
+            return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
+        return orig_groups(
+            model_name=model_name,
+            model_access_group=model_access_group,
+            team_id=team_id,
+        )
+
+    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG1"],
+        team_models=["AG1"],
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        router._common_checks_available_deployment(
+            model="gpt-5",
+            request_kwargs={
+                "metadata": {
+                    "user_api_key_team_id": "team2",
+                    "user_api_key_auth": scoped_key,
+                }
+            },
+        )
+
+
+def test_access_group_block_does_not_silently_use_default_fallback_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    When access-group filtering empties candidates for model X, the router must not use
+    ``fallbacks`` default ``*`` routing to model Y: Y may have no ``access_groups``, so
+    ``_filter_deployments_by_model_access_groups`` would not constrain Y and the caller
+    would be served despite being blocked from X.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key1",
+                    "mock_response": "blocked-dep-1",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key2",
+                    "mock_response": "blocked-dep-2",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-4-fallback",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fallback-key",
+                    "mock_response": "should-not-reach",
+                },
+            },
+        ],
+        fallbacks=[{"*": ["gpt-4-fallback"]}],
+    )
+
+    orig_groups = router.get_model_access_groups
+
+    def fake_get_model_access_groups(
+        model_name=None, model_access_group=None, team_id=None
+    ):
+        if model_name == "gpt-5" and model_access_group is None:
+            return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
+        return orig_groups(
+            model_name=model_name,
+            model_access_group=model_access_group,
+            team_id=team_id,
+        )
+
+    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG1"],
+        team_models=["AG1"],
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        router._common_checks_available_deployment(
+            model="gpt-5",
+            request_kwargs={
+                "metadata": {
+                    "user_api_key_team_id": "team2",
+                    "user_api_key_auth": scoped_key,
+                }
+            },
+        )
+
+
+def test_access_group_block_via_litellm_model_branch_does_not_use_default_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    When the by-name lookup returns no deployments and the litellm-model fallback
+    branch finds candidates that access-group filtering then empties, the router
+    must not fall through to default ``fallbacks`` routing — the default fallback
+    model may have no ``access_groups`` and would short-circuit the filter,
+    silently serving a caller blocked by access-group restrictions.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-alias",
+                "litellm_params": {
+                    "model": "gpt-5",
+                    "api_key": "key1",
+                    "mock_response": "blocked-dep-1",
+                },
+                "model_info": {"access_groups": ["AG2"]},
+            },
+            {
+                "model_name": "gpt-4-fallback",
+                "litellm_params": {
+                    "model": "gpt-4",
+                    "api_key": "fallback-key",
+                    "mock_response": "should-not-reach",
+                },
+            },
+        ],
+        fallbacks=[{"*": ["gpt-4-fallback"]}],
+    )
+
+    orig_groups = router.get_model_access_groups
+
+    def fake_get_model_access_groups(
+        model_name=None, model_access_group=None, team_id=None
+    ):
+        if model_name == "gpt-5" and model_access_group is None:
+            return {"AG1": ["gpt-5"], "AG2": ["gpt-5"]}
+        return orig_groups(
+            model_name=model_name,
+            model_access_group=model_access_group,
+            team_id=team_id,
+        )
+
+    monkeypatch.setattr(router, "get_model_access_groups", fake_get_model_access_groups)
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team2",
+        models=["AG1"],
+        team_models=["AG1"],
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        router._common_checks_available_deployment(
+            model="gpt-5",
+            request_kwargs={
+                "metadata": {
+                    "user_api_key_team_id": "team2",
+                    "user_api_key_auth": scoped_key,
+                }
+            },
+        )
+
+
+def test_try_early_resolve_deployments_for_model_not_in_names():
+    """
+    Direct coverage for ``_try_early_resolve_deployments_for_model_not_in_names``:
+
+    - Returns ``None`` when the requested model is already in ``self.model_names``
+      (the by-name lookup path will handle it).
+    - Returns ``None`` when there are no team deployments, no pattern matches, and
+      no default deployment to fall back to.
+    - Returns the pattern-router match when the model matches a wildcard route.
+    - Returns the default deployment with the request model substituted in when one
+      is configured, without mutating the stored default.
+    """
+    router_in_names = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                    "api_key": "key1",
+                },
+            },
+        ]
+    )
+
+    assert (
+        router_in_names._try_early_resolve_deployments_for_model_not_in_names(
+            model="gpt-5", request_team_id=None
+        )
+        is None
+    )
+    assert (
+        router_in_names._try_early_resolve_deployments_for_model_not_in_names(
+            model="some-unknown-model", request_team_id=None
+        )
+        is None
+    )
+
+    pattern_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "key-pattern",
+                },
+            },
+        ]
+    )
+
+    pattern_result = (
+        pattern_router._try_early_resolve_deployments_for_model_not_in_names(
+            model="openai/gpt-4o-mini", request_team_id=None
+        )
+    )
+    assert pattern_result is not None
+    resolved_model, pattern_deployments = pattern_result
+    assert resolved_model == "openai/gpt-4o-mini"
+    assert isinstance(pattern_deployments, list) and len(pattern_deployments) == 1
+
+    default_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "named-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key-named",
+                },
+            },
+        ]
+    )
+    default_router.default_deployment = {
+        "model_name": "default",
+        "litellm_params": {
+            "model": "openai/will-be-overridden",
+            "api_key": "key-default",
+        },
+    }
+
+    default_result = (
+        default_router._try_early_resolve_deployments_for_model_not_in_names(
+            model="brand-new-model", request_team_id=None
+        )
+    )
+    assert default_result is not None
+    resolved_model, default_deployment = default_result
+    assert resolved_model == "brand-new-model"
+    assert isinstance(default_deployment, dict)
+    assert default_deployment["litellm_params"]["model"] == "brand-new-model"
+    # The original default_deployment must not be mutated.
+    assert (
+        default_router.default_deployment["litellm_params"]["model"]
+        == "openai/will-be-overridden"
+    )

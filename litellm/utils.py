@@ -5896,6 +5896,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_minimal_reasoning_effort=_model_info.get(
                     "supports_minimal_reasoning_effort", None
                 ),
+                supports_low_reasoning_effort=_model_info.get(
+                    "supports_low_reasoning_effort", None
+                ),
                 supports_xhigh_reasoning_effort=_model_info.get(
                     "supports_xhigh_reasoning_effort", None
                 ),
