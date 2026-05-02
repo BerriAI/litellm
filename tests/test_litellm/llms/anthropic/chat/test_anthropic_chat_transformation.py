@@ -3676,15 +3676,45 @@ def test_invalid_reasoning_effort_raises_bad_request(invalid_effort):
     assert "Invalid reasoning_effort value" in str(exc_info.value)
 
 
-@pytest.mark.parametrize("invalid_effort", ["disabled", "invalid", "garbage"])
+@pytest.mark.parametrize("invalid_effort", ["disabled", "invalid", "garbage", ""])
 def test_invalid_output_config_effort_raises_bad_request(invalid_effort):
-    """Invalid output_config.effort values raise litellm.BadRequestError (HTTP 400)."""
+    """Invalid output_config.effort values raise litellm.BadRequestError (HTTP 400).
+
+    Empty string is included to verify it does not get silently forwarded
+    to the provider (which would 400 with a less actionable message)."""
     config = AnthropicConfig()
     with pytest.raises(litellm.BadRequestError) as exc_info:
         config.transform_request(
             model="claude-opus-4-7",
             messages=[{"role": "user", "content": "hi"}],
             optional_params={"output_config": {"effort": invalid_effort}},
+            litellm_params={},
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+    assert "Invalid effort value" in str(exc_info.value)
+
+
+def test_empty_reasoning_effort_46_raises_bad_request():
+    """`reasoning_effort=""` on 4.6/4.7 models flows through the OpenAI param
+    mapping into `output_config.effort=""` and must be caught client-side
+    rather than forwarded as `effort=""` (which the provider 400s with a
+    less actionable error)."""
+    config = AnthropicConfig()
+    optional_params: dict = {}
+    config.map_openai_params(
+        non_default_params={"reasoning_effort": ""},
+        optional_params=optional_params,
+        model="claude-opus-4-7",
+        drop_params=False,
+    )
+    # On 4.6/4.7 the mapper builds {"effort": ""}; transform_request must
+    # reject it before sending to the provider.
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        config.transform_request(
+            model="claude-opus-4-7",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=optional_params,
             litellm_params={},
             headers={},
         )

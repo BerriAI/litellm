@@ -1540,7 +1540,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         effort = output_config.get("effort")
         valid_efforts = ["high", "medium", "low", "xhigh", "max"]
         provider = self.custom_llm_provider or "anthropic"
-        if effort and effort not in valid_efforts:
+        if effort is not None and effort not in valid_efforts:
             raise litellm.BadRequestError(
                 message=(
                     f"Invalid effort value: {effort!r}. Must be one of: "
