@@ -1059,6 +1059,7 @@ OpenAIImageVariationOptionalParams = Literal["n", "size", "response_format", "us
 
 OpenAIImageGenerationOptionalParams = Literal[
     "background",
+    "height",
     "moderation",
     "n",
     "output_compression",
@@ -1076,6 +1077,7 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "width",
 ]
 
 OpenAIImageEditOptionalParams = Literal[

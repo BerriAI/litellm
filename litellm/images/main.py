@@ -451,11 +451,31 @@ def image_generation(  # noqa: PLR0915
             )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+            from litellm.llms.azure_ai.image_generation import is_mai_image_model
 
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
             api_key = AzureFoundryModelInfo.get_api_key(api_key)
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
+
+            litellm_params_dict["api_base"] = api_base
+
+            if image_generation_config is not None and is_mai_image_model(
+                base_model or model
+            ):
+                return llm_http_handler.image_generation_handler(
+                    api_key=api_key,
+                    model=model,
+                    prompt=prompt,
+                    image_generation_provider_config=image_generation_config,
+                    image_generation_optional_request_params=optional_params,
+                    custom_llm_provider=custom_llm_provider,
+                    litellm_params=litellm_params_dict,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=client,
+                    _is_async=aimg_generation,
+                )
 
             default_headers = {
                 "Content-Type": "application/json",
