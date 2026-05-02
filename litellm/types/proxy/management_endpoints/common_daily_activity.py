@@ -1,6 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -108,7 +108,9 @@ class SpendAnalyticsPaginatedResponse(BaseModel):
 class LiteLLM_DailyUserSpend(BaseModel):
     id: str
     user_id: str
-    date: str
+    # Mirrors the DB column type. Pydantic v2 will accept ISO date strings
+    # (e.g. "2025-01-01") via either `date` or `datetime` and parse them.
+    date: Union[date, datetime]
     api_key: str
     mcp_server_id: Optional[str] = None
     model: Optional[str] = None

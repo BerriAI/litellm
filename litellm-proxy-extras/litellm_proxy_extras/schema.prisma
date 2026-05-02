@@ -679,7 +679,7 @@ model LiteLLM_AuditLog {
 model LiteLLM_DailyUserSpend {
   id                  String   @id @default(uuid())
   user_id             String? 
-  date                String
+  date                DateTime @client.Date
   api_key             String   
   model               String?
   model_group         String?  
@@ -710,7 +710,7 @@ model LiteLLM_DailyUserSpend {
 model LiteLLM_DailyOrganizationSpend {
   id                  String   @id @default(uuid())
   organization_id     String?
-  date                String
+  date                DateTime @client.Date
   api_key             String   
   model               String?
   model_group         String?  
@@ -741,7 +741,7 @@ model LiteLLM_DailyOrganizationSpend {
 model LiteLLM_DailyEndUserSpend {
   id                  String   @id @default(uuid())
   end_user_id         String?
-  date                String
+  date                DateTime @client.Date
   api_key             String   
   model               String?
   model_group         String?  
@@ -771,7 +771,7 @@ model LiteLLM_DailyEndUserSpend {
 model LiteLLM_DailyAgentSpend {
   id                  String   @id @default(uuid())
   agent_id            String?
-  date                String
+  date                DateTime @client.Date
   api_key             String   
   model               String?
   model_group         String?  
@@ -801,7 +801,7 @@ model LiteLLM_DailyAgentSpend {
 model LiteLLM_DailyTeamSpend {
   id                  String   @id @default(uuid())
   team_id             String?
-  date                String
+  date                DateTime @client.Date
   api_key             String   
   model               String?
   model_group         String?  
@@ -833,7 +833,7 @@ model LiteLLM_DailyTagSpend {
   id                  String   @id @default(uuid())
   request_id          String?
   tag                 String?   
-  date                String
+  date                DateTime @client.Date
   api_key             String   
   model               String?
   model_group         String?  
@@ -962,7 +962,7 @@ model LiteLLM_GuardrailsTable {
 // Daily guardrail metrics for usage dashboard (one row per guardrail per day)
 model LiteLLM_DailyGuardrailMetrics {
   guardrail_id        String   // logical id; may not FK if guardrail from config
-  date                String   // YYYY-MM-DD
+  date                DateTime @client.Date
   requests_evaluated  BigInt   @default(0)
   passed_count        BigInt   @default(0)
   blocked_count       BigInt   @default(0)
@@ -980,7 +980,7 @@ model LiteLLM_DailyGuardrailMetrics {
 // Daily policy metrics for usage dashboard (one row per policy per day)
 model LiteLLM_DailyPolicyMetrics {
   policy_id           String
-  date                String   // YYYY-MM-DD
+  date                DateTime @client.Date
   requests_evaluated  BigInt   @default(0)
   passed_count        BigInt   @default(0)
   blocked_count       BigInt   @default(0)
