@@ -6,6 +6,18 @@ from fastapi import HTTPException, status
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
 
+# Router-internal mock_testing_* flag names — kept in sync with
+# ``litellm.types.router.MockRouterTestingParams`` by the test
+# ``test_mock_testing_kwarg_names_matches_dataclass``. Hardcoding (rather
+# than deriving via ``dataclasses.fields(MockRouterTestingParams)`` at
+# import time) avoids a cyclic import: ``litellm.types.router`` imports
+# back into proxy modules before this module finishes loading.
+_MOCK_TESTING_KWARG_NAMES: tuple = (
+    "mock_testing_fallbacks",
+    "mock_testing_context_fallbacks",
+    "mock_testing_content_policy_fallbacks",
+)
+
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
 
@@ -321,6 +333,13 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
     Common helper to route the request
     """
     await add_shared_session_to_data(data)
+
+    # Strip router-internal mock_testing_* flags. Combined with an
+    # unauthorized fallback in ``router_settings_override`` they let a
+    # caller deterministically execute requests against restricted
+    # models. VERIA-44.
+    for _key in _MOCK_TESTING_KWARG_NAMES:
+        data.pop(_key, None)
 
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
