@@ -12,6 +12,10 @@ LiteLLM supports all models from [Ollama](https://github.com/ollama/ollama)
 
 We recommend using [ollama_chat](#using-ollama-apichat) for better responses.
 
+In chat-based workflows (e.g. TUI or interactive agents), using `ollama/...` may lead to unexpected behavior such as empty responses (`{}`) or missing outputs.
+
+For consistent and stable behavior, use `ollama_chat/...` when working with chat-based models.
+
 :::
 
 ## Pre-requisites
