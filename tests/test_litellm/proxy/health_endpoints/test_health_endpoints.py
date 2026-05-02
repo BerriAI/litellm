@@ -1520,8 +1520,7 @@ async def test_health_readiness_returns_503_when_db_disconnected():
         result = await health_readiness(response=response)
 
     assert response.status_code == 503
-    assert result["db"] == "disconnected"
-    assert result["status"] == "healthy"  # body shape unchanged for back-compat
+    assert result == {"status": "healthy"}
 
 
 @pytest.mark.asyncio
@@ -1544,7 +1543,7 @@ async def test_health_readiness_returns_200_when_db_connected():
         result = await health_readiness(response=response)
 
     assert response.status_code == 200
-    assert result["db"] == "connected"
+    assert result == {"status": "healthy"}
 
 
 @pytest.mark.asyncio
@@ -1563,7 +1562,7 @@ async def test_health_readiness_returns_200_when_no_db_configured():
         result = await health_readiness(response=response)
 
     assert response.status_code == 200
-    assert result["db"] == "Not connected"
+    assert result == {"status": "healthy"}
 
 
 def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
