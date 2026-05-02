@@ -1,7 +1,17 @@
 import json
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 
@@ -790,6 +800,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_stop = new_v
         return new_stop
 
+    # Effort values accepted by ``reasoning_effort`` across the Anthropic
+    # backed providers. ``none`` means "do not enable thinking"; the rest
+    # map to either adaptive thinking (4.6/4.7) or ``thinking.budget_tokens``
+    # (pre-4.6). Anything outside this set was previously silently accepted
+    # on 4.6/4.7 (because the adaptive short-circuit ignored the value) and
+    # surfaced as a 500 ``APIConnectionError`` on pre-4.6 — see PR #27039 QA
+    # bug #3 (Bedrock Converse silently accepting ``disabled``/``invalid``/
+    # ``""``). Validating up front makes the failure mode consistent across
+    # model generations: a clean 400 from the caller's perspective.
+    _VALID_REASONING_EFFORT_VALUES: ClassVar[frozenset] = frozenset(
+        {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+    )
+
     @staticmethod
     def _map_reasoning_effort(
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
@@ -797,6 +820,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
+        if (
+            isinstance(reasoning_effort, str)
+            and reasoning_effort not in AnthropicConfig._VALID_REASONING_EFFORT_VALUES
+        ):
+            # Pre-empt the adaptive-thinking short-circuit below so that
+            # invalid values fail fast with the same error on every model
+            # generation rather than silently mapping to ``{type: "adaptive"}``
+            # on 4.6/4.7. PR #27050 (separately) converts the trailing
+            # ``ValueError`` raise into a ``litellm.BadRequestError``; this
+            # raise stays as ``ValueError`` so the two PRs don't conflict
+            # textually — once PR #27050 lands, the same error-class upgrade
+            # will apply uniformly.
+            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
         if AnthropicConfig._is_claude_4_6_model(
             model
         ) or AnthropicConfig._is_claude_4_7_model(model):

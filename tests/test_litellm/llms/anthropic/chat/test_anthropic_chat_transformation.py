@@ -3710,3 +3710,27 @@ def test_minimal_reasoning_effort_emits_at_least_anthropic_min_budget(model):
         "Anthropic enforces thinking.enabled.budget_tokens >= 1024 and 400s "
         "otherwise; the minimal mapping must satisfy that minimum."
     )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        # 4.6/4.7 path (used to silently short-circuit to ``adaptive``).
+        "claude-opus-4-6-20250514",
+        "claude-sonnet-4-6-20260219",
+        "claude-opus-4-7",
+        # Pre-4.6 path (already raised, but cover both branches for parity).
+        "claude-sonnet-4-5-20250929",
+    ],
+)
+@pytest.mark.parametrize("invalid_effort", ["disabled", "invalid", "", "garbage"])
+def test_invalid_reasoning_effort_is_rejected_uniformly(model, invalid_effort):
+    """PR #27039 QA bug #3: ``disabled``, ``invalid``, and ``""`` were silently
+    mapped to ``{type: "adaptive"}`` on Bedrock Converse + 4.6/4.7 because
+    ``_map_reasoning_effort`` short-circuited on adaptive-thinking models
+    before validating the value. Validation must happen up front so the
+    error mode is consistent across model generations."""
+    with pytest.raises(ValueError, match="Unmapped reasoning effort"):
+        AnthropicConfig._map_reasoning_effort(
+            reasoning_effort=invalid_effort, model=model
+        )
