@@ -12,9 +12,12 @@ The opt-in is a single env var, ``LITELLM_SUPPRESS_SPEND_LOG_TRACEBACKS=true``,
 gated by ``should_suppress_spend_log_tracebacks``. When it returns ``True``:
   * ``spend_log_error`` drops the traceback from the console / structured log
     record (this module), and
-  * the failure callback in ``proxy_track_cost_callback`` blanks the
-    ``error_information.traceback`` field on the SpendLogs row before it is
-    persisted, so the UI's per-row Metadata pane stays clean.
+  * the failure callback in ``proxy_track_cost_callback`` drops the
+    ``error_information.traceback`` field from the SpendLogs row before it is
+    persisted, so the UI's per-row Metadata pane (which renders the metadata
+    JSON verbatim) stays clean. The key is omitted entirely rather than set
+    to ``""`` — ``StandardLoggingPayloadErrorInformation`` marks the field
+    optional and every downstream consumer uses ``.get("traceback")``.
 
 At DEBUG the full traceback is always preserved so operators can still
 troubleshoot. The UI suppression follows the same gate.
