@@ -1,18 +1,23 @@
 """
 Logging helpers for spend-tracking error paths.
 
-Proxy operators have asked for a way to keep their downstream log sinks free of
-the stack traces that the spend-tracking machinery emits when it hits 4xx/5xx
-or transient DB errors. The errors still need to be logged (and still need to
-flow to Sentry via ``proxy_logging_obj.failure_handler``), but the multi-line
-stack traces dominate the log volume and make the surrounding INFO/ERROR lines
-hard to read.
+Proxy operators have asked for a way to keep both their downstream log sinks
+and the SpendLogs UI free of the stack traces that the spend-tracking
+machinery emits when it hits 4xx/5xx or transient DB errors. The errors still
+need to be logged (and still flow to Sentry via
+``proxy_logging_obj.failure_handler``), but the multi-line stack traces
+dominate log volume and clutter the per-row Metadata pane in the UI.
 
-This module exposes ``spend_log_error`` — a thin wrapper around
-``verbose_proxy_logger.error`` that drops the traceback portion when the
-operator has opted in via ``LITELLM_SUPPRESS_SPEND_LOG_TRACEBACKS=true`` and
-the proxy logger is at INFO or above. At DEBUG the full traceback is always
-preserved.
+The opt-in is a single env var, ``LITELLM_SUPPRESS_SPEND_LOG_TRACEBACKS=true``,
+gated by ``should_suppress_spend_log_tracebacks``. When it returns ``True``:
+  * ``spend_log_error`` drops the traceback from the console / structured log
+    record (this module), and
+  * the failure callback in ``proxy_track_cost_callback`` blanks the
+    ``error_information.traceback`` field on the SpendLogs row before it is
+    persisted, so the UI's per-row Metadata pane stays clean.
+
+At DEBUG the full traceback is always preserved so operators can still
+troubleshoot. The UI suppression follows the same gate.
 """
 
 import logging
