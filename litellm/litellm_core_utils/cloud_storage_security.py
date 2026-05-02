@@ -116,15 +116,13 @@ def should_allow_legacy_cloud_file_ids(
 ) -> bool:
     value = None
     if isinstance(litellm_params, Mapping):
-        value = litellm_params.get("allow_legacy_cloud_file_ids")
-        if value is None:
-            trusted_model_credentials = litellm_params.get(
-                "_litellm_internal_model_credentials"
+        trusted_model_credentials = litellm_params.get(
+            "_litellm_internal_model_credentials"
+        )
+        if isinstance(trusted_model_credentials, _MAPPING_PROXY_TYPE):
+            value = cast(Mapping[str, Any], trusted_model_credentials).get(
+                "allow_legacy_cloud_file_ids"
             )
-            if isinstance(trusted_model_credentials, _MAPPING_PROXY_TYPE):
-                value = cast(Mapping[str, Any], trusted_model_credentials).get(
-                    "allow_legacy_cloud_file_ids"
-                )
 
     if isinstance(value, bool):
         return value
