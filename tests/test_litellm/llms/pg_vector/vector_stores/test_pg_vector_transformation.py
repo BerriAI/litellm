@@ -141,6 +141,24 @@ class TestPGVectorStoreConfig:
         assert headers["Authorization"] == "Bearer test_key"
         assert url == "https://example.com/v1/vector_stores"
 
+    def test_search_request_encodes_vector_store_id(self):
+        config = PGVectorStoreConfig()
+
+        url, request_body = config.transform_search_vector_store_request(
+            vector_store_id="../../files?x=1#frag",
+            query="hello",
+            vector_store_search_optional_params={},
+            api_base="https://example.com/v1/vector_stores",
+            litellm_logging_obj=Mock(),
+            litellm_params={},
+        )
+
+        assert (
+            url
+            == "https://example.com/v1/vector_stores/..%2F..%2Ffiles%3Fx%3D1%23frag/search"
+        )
+        assert request_body["query"] == "hello"
+
     def test_environment_variable_support(self):
         """
         Test that environment variables are supported for configuration.

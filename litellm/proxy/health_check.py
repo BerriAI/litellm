@@ -29,6 +29,10 @@ ILLEGAL_DISPLAY_PARAMS = [
     "exception",  # internal; not JSON-serializable, never for display
     "litellm_metadata",  # internal tracking metadata with auth objects; not for display
 ]
+# Provider routing fields. Allowed for proxy admins so they can see which
+# region/version a deployment is checking; gated at the endpoint layer for
+# non-admin callers (see _strip_admin_only_fields_from_health_result).
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS = ("api_base", "api_version")
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
 

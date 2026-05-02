@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Union, cast
 import httpx
 from openai.types.file_deleted import FileDeleted
 
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -185,7 +186,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
             AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
             or ANTHROPIC_FILES_API_BASE
         )
-        return f"{api_base.rstrip('/')}/v1/files/{file_id}", {}
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}", {}
 
     def transform_retrieve_file_response(
         self,
@@ -206,7 +208,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
             AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
             or ANTHROPIC_FILES_API_BASE
         )
-        return f"{api_base.rstrip('/')}/v1/files/{file_id}", {}
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}", {}
 
     def transform_delete_file_response(
         self,
@@ -268,7 +271,8 @@ class AnthropicFilesConfig(BaseFilesConfig):
             AnthropicModelInfo.get_api_base(litellm_params.get("api_base"))
             or ANTHROPIC_FILES_API_BASE
         )
-        return f"{api_base.rstrip('/')}/v1/files/{file_id}/content", {}
+        encoded_file_id = encode_url_path_segment(file_id, field_name="file_id")
+        return f"{api_base.rstrip('/')}/v1/files/{encoded_file_id}/content", {}
 
     def transform_file_content_response(
         self,
