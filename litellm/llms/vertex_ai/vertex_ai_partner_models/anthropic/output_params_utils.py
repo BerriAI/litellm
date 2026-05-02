@@ -11,11 +11,24 @@ keeps the parent module's import surface narrow.
 """
 
 # Keys inside ``output_config`` that Vertex AI Claude does not accept.
-# Today only ``effort`` triggers "Extra inputs are not permitted"; add new
-# entries here as Vertex parity drifts. Keep this list narrow — anything
-# Vertex DOES accept (e.g. ``format`` for structured outputs) must be
-# preserved so callers can rely on Anthropic-native features.
-VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: frozenset = frozenset({"effort"})
+#
+# Historical note: ``effort`` was previously listed here based on the
+# assumption that Vertex returned 400 "Extra inputs are not permitted" on
+# adaptive-thinking effort knobs. Direct ``:rawPredict`` curls against
+# ``us-east5`` on opus-4-7 (5-value enum: ``low|medium|high|xhigh|max``) and
+# opus-4-6/sonnet-4-6 (4-value enum: ``low|medium|high|max``) confirmed
+# Vertex AI Claude 4.6+ accepts ``output_config.effort`` with the same
+# per-model gating as Anthropic direct. Stripping it here was hiding a knob
+# Vertex actually supports — keeping ``reasoning_effort`` from landing on
+# Vertex 4.6+ while it works on Anthropic direct. Removing ``effort`` from
+# this allowlist relies on ``AnthropicConfig._apply_output_config`` to gate
+# ``xhigh``/``max`` per model from the model map, which is the same
+# validation Vertex applies server-side.
+#
+# Keep this list narrow — anything Vertex DOES accept (e.g. ``format`` for
+# structured outputs, ``effort`` on 4.6+) must be preserved so callers can
+# rely on Anthropic-native features.
+VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: frozenset = frozenset()
 
 
 def sanitize_vertex_anthropic_output_params(data: dict) -> None:

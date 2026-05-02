@@ -107,10 +107,11 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
 
         # Vertex AI Claude accepts ``output_config.format`` (structured outputs /
-        # JSON Schema) but NOT ``output_config.effort`` — sending ``effort`` to
-        # Vertex returns 400 "Extra inputs are not permitted". Sanitize in place:
-        # forward the structured-output bits, drop the unsupported keys.
-        # Same treatment for the legacy top-level ``output_format`` field.
+        # JSON Schema), ``output_format``, and on Claude 4.6+ also
+        # ``output_config.effort`` (the adaptive-thinking effort knob;
+        # verified via direct ``:rawPredict`` curls — PR #27039 QA bug #2).
+        # Anything Vertex still rejects in the future can be added back to
+        # ``VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS`` and stripped here.
         sanitize_vertex_anthropic_output_params(data)
 
         tools = optional_params.get("tools")

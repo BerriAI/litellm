@@ -159,10 +159,11 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             "model", None
         )  # do not pass model in request body to vertex ai
 
-        # Vertex AI Claude accepts ``output_config.format`` (structured outputs)
-        # and ``output_format``, but rejects ``output_config.effort`` with 400
-        # "Extra inputs are not permitted". Sanitize in place so the supported
-        # bits flow through.
+        # Vertex AI Claude accepts ``output_config.format`` (structured outputs),
+        # ``output_format``, and — on Claude 4.6+ — ``output_config.effort``
+        # (verified via direct ``:rawPredict`` curls; PR #27039 QA bug #2).
+        # Anything Vertex still rejects can be added back to
+        # ``VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS`` and sanitized here.
         sanitize_vertex_anthropic_output_params(anthropic_messages_request)
 
         return anthropic_messages_request
