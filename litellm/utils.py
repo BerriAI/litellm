@@ -8575,7 +8575,13 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
-            return litellm.GithubCopilotResponsesAPIConfig()
+            from litellm.llms.github_copilot.responses.transformation import (
+                github_copilot_supports_responses_api,
+            )
+
+            if model is None or github_copilot_supports_responses_api(model=model):
+                return litellm.GithubCopilotResponsesAPIConfig()
+            return None
         elif litellm.LlmProviders.CHATGPT == provider:
             return litellm.ChatGPTResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
