@@ -325,9 +325,6 @@ function CreateKeyPageContent() {
       if (decoded.user_role) {
         const formattedUserRole = formatUserRole(decoded.user_role);
         setUserRole(formattedUserRole);
-        if (formattedUserRole == "Admin Viewer") {
-          setPage("usage");
-        }
       }
 
       if (decoded.user_email) {

@@ -20,6 +20,7 @@ from litellm.proxy._types import (
     CallInfo,
     EnterpriseLicenseData,
     Litellm_EntityType,
+    LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
@@ -28,6 +29,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.health_check import (
+    ADMIN_ONLY_HEALTH_DISPLAY_PARAMS,
     _clean_endpoint_data,
     _update_litellm_params_for_health_check,
     perform_health_check,
@@ -723,6 +725,129 @@ async def _save_background_health_checks_to_db(
         # Continue execution - don't let database save failure break health checks
 
 
+_PROXY_ADMIN_ROLES = frozenset(
+    {
+        LitellmUserRoles.PROXY_ADMIN.value,
+        # View-only admins are operators (oncall, support); they need the
+        # routing fields (api_base, api_version) to diagnose health and tell
+        # which provider region a check is hitting. They cannot mutate config
+        # so granting them the read-only view is safe.
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    }
+)
+
+
+def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """
+    Return True if the caller has a proxy-admin role (full or view-only).
+
+    user_role on UserAPIKeyAuth can be either a LitellmUserRoles enum or its
+    string value depending on how the auth path constructed the object, so we
+    compare against the raw value rather than the enum identity.
+    """
+    role = user_api_key_dict.user_role
+    if role is None:
+        return False
+    role_value = role.value if hasattr(role, "value") else role
+    return role_value in _PROXY_ADMIN_ROLES
+
+
+def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
+    """
+    Return a copy of the /health response with provider routing fields
+    (``api_base``, ``api_version``) removed from each healthy/unhealthy
+    endpoint entry. Used to hide those fields from non-admin callers while
+    still showing them which deployments they own and whether each one is
+    healthy. Proxy admins receive the unmodified result.
+    """
+    out = dict(result)
+    drop = set(ADMIN_ONLY_HEALTH_DISPLAY_PARAMS)
+    for key in ("healthy_endpoints", "unhealthy_endpoints"):
+        eps = out.get(key)
+        if isinstance(eps, list):
+            out[key] = [
+                (
+                    {k: v for k, v in ep.items() if k not in drop}
+                    if isinstance(ep, dict)
+                    else ep
+                )
+                for ep in eps
+            ]
+    return out
+
+
+def _resolve_targeted_model_ids(
+    model_list: list, model: Optional[str], model_id: Optional[str]
+) -> Optional[set]:
+    """
+    Resolve a ``/health`` ``model`` / ``model_id`` query param to the set of
+    deployment IDs the response should be scoped to.
+
+    Mirrors the live-path semantics in ``perform_health_check()``: ``model``
+    matches either the deployment's ``model_name`` alias or its
+    ``litellm_params.model`` provider string. ``model_id`` matches
+    ``model_info.id``.
+
+    Both query params are validated against the supplied ``model_list``.
+    Callers pass an already-scoped list (filtered to the caller's allowed
+    models for non-admins, full list for admins), so a ``model_id`` that
+    isn't present resolves to an empty set rather than a single-element
+    set — preventing a non-admin from reading another deployment's cached
+    health entry by guessing its ID.
+
+    Returns ``None`` when no targeting is requested — callers should treat
+    that as "no filter."
+    """
+    if not model and not model_id:
+        return None
+    target_ids: set = set()
+    for m in model_list:
+        deployment_id = (m.get("model_info") or {}).get("id")
+        if not deployment_id:
+            continue
+        if model_id and deployment_id == model_id:
+            target_ids.add(deployment_id)
+            continue
+        if model:
+            litellm_model = (m.get("litellm_params") or {}).get("model")
+            if m.get("model_name") == model or litellm_model == model:
+                target_ids.add(deployment_id)
+    return target_ids
+
+
+def _filter_health_check_results_by_model_ids(
+    results: dict, allowed_model_ids: set
+) -> dict:
+    """
+    Restrict a cached background health-check result dict to endpoints whose
+    model_id is in ``allowed_model_ids``.
+
+    Endpoints without a model_id (e.g. CLI-model entries that predate the
+    model_id wiring) are dropped conservatively — we cannot prove they belong
+    to the caller, so they are excluded rather than leaked.
+
+    Each retained endpoint is shallow-copied before being returned, so any
+    downstream transform (e.g. _strip_admin_only_fields_from_health_result)
+    cannot accidentally mutate the shared ``health_check_results`` cache.
+    """
+    healthy = [
+        dict(ep)
+        for ep in (results.get("healthy_endpoints") or [])
+        if ep.get("model_id") in allowed_model_ids
+    ]
+    unhealthy = [
+        dict(ep)
+        for ep in (results.get("unhealthy_endpoints") or [])
+        if ep.get("model_id") in allowed_model_ids
+    ]
+    return {
+        "healthy_endpoints": healthy,
+        "unhealthy_endpoints": unhealthy,
+        "healthy_count": len(healthy),
+        "unhealthy_count": len(unhealthy),
+    }
+
+
 async def _perform_health_check_and_save(
     model_list,
     target_model,
@@ -771,6 +896,7 @@ async def _perform_health_check_and_save(
 
 @router.get("/health", tags=["health"], dependencies=[Depends(user_api_key_auth)])
 async def health_endpoint(
+    response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     model: Optional[str] = fastapi.Query(
         None, description="Specify the model name (optional)"
@@ -838,11 +964,33 @@ async def health_endpoint(
                 detail={"error": f"Model with ID {model_id} not found"},
             )
 
+    is_admin = _is_proxy_admin(user_api_key_dict)
+    model_specific_request = bool(model or model_id)
+
+    def _post_process(result: dict) -> dict:
+        # api_base / api_version reveal which provider/region/internal host the
+        # deployment talks to; only proxy admins receive them. Non-admin keys
+        # still see model/model_id and the healthy/unhealthy status. We also
+        # set a header so non-admin clients that previously parsed those
+        # fields can detect the change programmatically.
+        # When a caller asked about a specific model/model_id and zero
+        # endpoints came back healthy, surface that as a 503 so monitoring
+        # systems can rely on the HTTP status instead of having to parse the
+        # body. The body shape is unchanged.
+        if model_specific_request and result.get("healthy_count", 0) == 0:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        if is_admin:
+            return result
+        response.headers["Litellm-Health-Field-Notice"] = (
+            "api_base and api_version are admin-only on this endpoint"
+        )
+        return _strip_admin_only_fields_from_health_result(result)
+
     try:
         if llm_model_list is None:
             # if no router set, check if user set a model using litellm --model ollama/llama2
             if user_model is not None:
-                return await _perform_health_check_and_save(
+                cli_result = await _perform_health_check_and_save(
                     model_list=[],
                     target_model=None,
                     cli_model=user_model,
@@ -853,20 +1001,81 @@ async def health_endpoint(
                     model_id=None,  # CLI model doesn't have model_id
                     max_concurrency=health_check_concurrency,
                 )
+                return _post_process(cli_result)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": "Model list not initialized"},
             )
         _llm_model_list = copy.deepcopy(llm_model_list)
         ### FILTER MODELS FOR ONLY THOSE USER HAS ACCESS TO ###
+        # Live path: scope by model_name (every deployment has one).
+        # Cache path: scope by model_id (the cache is keyed on model_id).
+        # Consequence: a deployment whose model_name the caller can access
+        # but which lacks model_info.id will appear in the live /health
+        # response but NOT in the background-cache /health response. This is
+        # surfaced via the "warnings" field below so operators can fix the
+        # missing model_info.id rather than guess at the discrepancy.
         if len(user_api_key_dict.models) > 0:
-            pass
-        else:
-            pass  #
+            allowed_models = set(user_api_key_dict.models)
+            _llm_model_list = [
+                m for m in _llm_model_list if m.get("model_name") in allowed_models
+            ]
         if use_background_health_checks:
-            return health_check_results
+            # The cached background result covers every model. When the
+            # caller targets a specific model/model_id we have to narrow the
+            # cache to that deployment before _post_process evaluates
+            # healthy_count, otherwise an unhealthy "foo" combined with any
+            # other healthy model would still report healthy_count > 0 and
+            # the targeted-503 path would never fire.
+            targeted_ids = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
+            if len(user_api_key_dict.models) > 0:
+                allowed_model_ids = {
+                    (m.get("model_info") or {}).get("id")
+                    for m in _llm_model_list
+                    if (m.get("model_info") or {}).get("id")
+                }
+                # _llm_model_list is already scoped to the caller's allowed
+                # model_names above, so targeted_ids is implicitly the
+                # intersection of "targeted" and "allowed."
+                filter_ids = (
+                    targeted_ids if targeted_ids is not None else allowed_model_ids
+                )
+                filtered = _filter_health_check_results_by_model_ids(
+                    health_check_results, filter_ids
+                )
+                if targeted_ids is None and not allowed_model_ids:
+                    # Caller has accessible model_names but none of the
+                    # matching deployments expose a model_info.id, so the
+                    # cache filter (which keys on model_id) drops every
+                    # entry. Surface this both as a warning log and a
+                    # structured "warnings" field on the response so the
+                    # caller can distinguish "no deployments found" from
+                    # "deployments excluded due to missing model_info.id".
+                    verbose_proxy_logger.warning(
+                        "health_endpoint: scoped key %s has accessible models %s "
+                        "but none of the matching deployments carry a model_info.id; "
+                        "background health-check cache will return an empty result.",
+                        user_api_key_dict.user_id,
+                        list(user_api_key_dict.models),
+                    )
+                    filtered["warnings"] = [
+                        "Some accessible deployments are missing model_info.id "
+                        "and were excluded from this response. Ask a proxy admin "
+                        "to populate model_info.id for these models."
+                    ]
+                return _post_process(filtered)
+            if targeted_ids is not None:
+                # Admin caller targeting a specific model: filter the cache
+                # so the response (and the targeted-503 check) reflects only
+                # that deployment, not the global aggregate.
+                return _post_process(
+                    _filter_health_check_results_by_model_ids(
+                        health_check_results, targeted_ids
+                    )
+                )
+            return _post_process(health_check_results)
         else:
-            return await _perform_health_check_and_save(
+            router_result = await _perform_health_check_and_save(
                 model_list=_llm_model_list,
                 target_model=target_model,
                 cli_model=None,
@@ -877,6 +1086,7 @@ async def health_endpoint(
                 model_id=model_id,
                 max_concurrency=health_check_concurrency,
             )
+            return _post_process(router_result)
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.py::health_endpoint(): Exception occured - {}".format(
@@ -1242,7 +1452,7 @@ def callback_name(callback):
     tags=["health"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def health_readiness():
+async def health_readiness(response: Response):
     """
     Unprotected endpoint for checking if worker can receive requests
     """
@@ -1275,8 +1485,8 @@ async def health_readiness():
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
-                    index_info = "index does not exist - error: " + str(e)
-                cache_type = {"type": cache_type, "index_info": index_info}
+                    index_info = "index does not exist - error: " + str(e)  # type: ignore[assignment]
+                cache_type = {"type": cache_type, "index_info": index_info}  # type: ignore[assignment]
 
         # check log level
         log_level_name = logging.getLevelName(verbose_logger.getEffectiveLevel())
@@ -1285,6 +1495,12 @@ async def health_readiness():
         # check DB
         if prisma_client is not None:  # if db passed in, check if it's connected
             db_health_status = await _db_health_readiness_check()
+            # A configured DB that is not reachable means the worker cannot
+            # serve requests that depend on persisted state (keys, budgets,
+            # spend logs). Return 503 so orchestrators take this pod out of
+            # rotation; "Not connected" (no DB configured at all) stays 200.
+            if db_health_status["status"] != "connected":
+                response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
                 "db": db_health_status["status"],

@@ -17,7 +17,10 @@ import litellm
 from litellm.proxy._types import (
     CallInfo,
     Litellm_EntityType,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
     LiteLLM_ObjectPermissionTable,
+    LiteLLM_TagTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -29,10 +32,12 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _can_object_call_vector_stores,
+    _check_end_user_budget,
     _check_team_member_budget,
     _get_fuzzy_user_object,
     _get_team_db_check,
     _log_budget_lookup_failure,
+    _tag_max_budget_check,
     _team_max_budget_check,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
@@ -922,19 +927,21 @@ async def test_get_tag_objects_batch():
     # Simulate 5 tags: 2 cached, 3 uncached
     tag_names = ["cached-1", "uncached-1", "cached-2", "uncached-2", "uncached-3"]
 
-    # Mock cached tags
-    cached_tag_1 = {
-        "tag_name": "cached-1",
-        "spend": 10.0,
-        "models": [],
-        "litellm_budget_table": None,
-    }
-    cached_tag_2 = {
-        "tag_name": "cached-2",
-        "spend": 20.0,
-        "models": [],
-        "litellm_budget_table": None,
-    }
+    # Mock cached tags — must be LiteLLM_TagTable instances: the mocked async_get_cache
+    # bypasses UserApiKeyCache deserialization, so returning plain dicts would flow through
+    # as dict (production returns models after Codec.deserialize inside the cache).
+    cached_tag_1 = LiteLLM_TagTable(
+        tag_name="cached-1",
+        spend=10.0,
+        models=[],
+        litellm_budget_table=None,
+    )
+    cached_tag_2 = LiteLLM_TagTable(
+        tag_name="cached-2",
+        spend=20.0,
+        models=[],
+        litellm_budget_table=None,
+    )
 
     # Mock DB response for uncached tags
     uncached_tag_1 = MagicMock()
@@ -980,13 +987,13 @@ async def test_get_tag_objects_batch():
     )
 
     # Mock cache behavior - return cached tags, None for uncached
-    async def mock_get_cache(key):
+    async def mock_get_cache(*args, **kwargs):
+        key = kwargs.get("key")
         if key == "tag:cached-1":
             return cached_tag_1
-        elif key == "tag:cached-2":
+        if key == "tag:cached-2":
             return cached_tag_2
-        else:
-            return None
+        return None
 
     mock_cache.async_get_cache = AsyncMock(side_effect=mock_get_cache)
     mock_cache.async_set_cache = AsyncMock()
@@ -1960,6 +1967,67 @@ async def test_team_budget_check_reads_from_spend_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 1.5
+
+
+@pytest.mark.asyncio
+async def test_end_user_budget_check_reads_from_spend_counter():
+    """End-user budget check should use get_current_spend when counter exists."""
+    end_user_object = LiteLLM_EndUserTable(
+        user_id="customer-1",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:end_user:customer-1":
+            return 1.5
+        return fallback_spend
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_end_user_budget(
+                end_user_obj=end_user_object,
+                route="/chat/completions",
+            )
+        assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.max_budget == 1.0
+
+
+@pytest.mark.asyncio
+async def test_tag_budget_check_reads_from_spend_counter():
+    """Tag budget check should use get_current_spend when counter exists."""
+    from litellm.proxy.utils import ProxyLogging
+
+    tag_object = LiteLLM_TagTable(
+        tag_name="paid-tag",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:tag:paid-tag":
+            return 1.5
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+            new_callable=AsyncMock,
+            return_value={"paid-tag": tag_object},
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _tag_max_budget_check(
+                request_body={"metadata": {"tags": ["paid-tag"]}},
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+        assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.max_budget == 1.0
 
 
 @pytest.mark.asyncio
