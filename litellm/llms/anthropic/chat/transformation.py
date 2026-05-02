@@ -12,7 +12,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -819,9 +819,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
             )
         elif reasoning_effort == "minimal":
+            # Anthropic enforces ``thinking.enabled.budget_tokens >= 1024`` and
+            # 400s otherwise; the generic 128 fallback used to leak through
+            # here and make ``reasoning_effort=\"minimal\"`` 400 on the pre-4.6
+            # ``budget_tokens`` thinking path on Anthropic / Azure / Bedrock
+            # Invoke / Vertex. Use the Anthropic-specific minimum instead.
             return AnthropicThinkingParam(
                 type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC,
             )
         else:
             raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")

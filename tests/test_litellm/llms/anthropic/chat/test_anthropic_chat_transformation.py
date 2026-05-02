@@ -2158,7 +2158,7 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
         ("low", 1024),  # DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
         ("medium", 2048),  # DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
         ("high", 4096),  # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
-        ("minimal", 128),  # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+        ("minimal", 1024),  # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC
     ]
 
     for effort, expected_budget in test_cases:
@@ -3677,3 +3677,36 @@ def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
     original_content = [dict(b) for b in messages[1]["content"]]
     result = strip_advisor_blocks_from_messages(messages)
     assert result[1]["content"] == original_content
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-haiku-4-5",
+        "claude-sonnet-4-5-20250929",
+        "claude-opus-4-5-20251101",
+    ],
+)
+def test_minimal_reasoning_effort_emits_at_least_anthropic_min_budget(model):
+    """PR #27039 QA bug #6: ``reasoning_effort=\"minimal\"`` used to emit
+    ``budget_tokens=128`` (the generic fallback), which is below Anthropic's
+    published minimum of 1024 — every provider except Bedrock Converse
+    (which silently clamps) returned 400 with
+    ``thinking.enabled.budget_tokens: Input should be greater than or equal
+    to 1024``. The Anthropic-specific constant is now ≥1024."""
+    from litellm.constants import (
+        DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC,
+    )
+
+    thinking = AnthropicConfig._map_reasoning_effort(
+        reasoning_effort="minimal", model=model
+    )
+    assert thinking is not None
+    assert thinking["type"] == "enabled"
+    assert thinking["budget_tokens"] == (
+        DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_ANTHROPIC
+    )
+    assert thinking["budget_tokens"] >= 1024, (
+        "Anthropic enforces thinking.enabled.budget_tokens >= 1024 and 400s "
+        "otherwise; the minimal mapping must satisfy that minimum."
+    )
