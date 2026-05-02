@@ -6856,6 +6856,51 @@
         "supports_tool_choice": true,
         "supports_web_search": true
     },
+    "azure_ai/grok-4-20-non-reasoning": {
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 6e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/grok-4-20-is-now-available-in-microsoft-foundry/4509377",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
+    "azure_ai/grok-4-20-reasoning": {
+        "input_cost_per_token": 2e-06,
+        "output_cost_per_token": 6e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 256000,
+        "max_tokens": 256000,
+        "mode": "chat",
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/grok-4-20-is-now-available-in-microsoft-foundry/4509377",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": true
+    },
     "azure_ai/grok-code-fast-1": {
         "input_cost_per_token": 2e-07,
         "litellm_provider": "azure_ai",
