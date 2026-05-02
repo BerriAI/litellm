@@ -201,6 +201,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     budget_duration: Optional[str] = None
     use_in_pass_through: Optional[bool] = False
     use_litellm_proxy: Optional[bool] = False
+    use_chat_completions_api: Optional[bool] = None
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None
@@ -236,6 +237,8 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # Vector Store Params
     vector_store_id: Optional[str] = None
     milvus_text_field: Optional[str] = None
+    milvus_db_name: Optional[str] = None
+    milvus_partition_names: Optional[List[str]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -327,6 +330,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS  # for allowing api base switching on finetuned models
     ## DROP PARAMS ##
     drop_params: Optional[bool]
+    ## RESPONSES API → CHAT COMPLETIONS BRIDGE ##
+    use_chat_completions_api: Optional[bool]
     ## UNIFIED PROJECT/REGION ##
     region_name: Optional[str]
     ## VERTEX AI ##
