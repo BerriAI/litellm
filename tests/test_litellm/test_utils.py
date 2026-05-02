@@ -3983,3 +3983,55 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_deepseek_v4_models_in_cost_map():
+    """
+    Test that deepseek-v4-flash and deepseek-v4-pro entries are correctly
+    configured in model_prices_and_context_window.json.
+
+    Prices sourced from https://api-docs.deepseek.com/quick_start/pricing:
+    - deepseek-v4-flash: $0.14/M input, $0.28/M output
+    - deepseek-v4-pro:   $1.74/M input, $3.48/M output
+
+    Closes https://github.com/BerriAI/litellm/issues/26709
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    # --- bare model names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek-v4-flash", 1.4e-07, 2.8e-07, 1.4e-08),
+        ("deepseek-v4-pro", 1.74e-06, 3.48e-06, 1.74e-07),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["max_input_tokens"] == 1_000_000
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+
+    # --- provider-prefixed names ---
+    for key, expected_input, expected_output, expected_cache in [
+        ("deepseek/deepseek-v4-flash", 1.4e-07, 2.8e-07, 1.4e-08),
+        ("deepseek/deepseek-v4-pro", 1.74e-06, 3.48e-06, 1.74e-07),
+    ]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "deepseek"
+        assert info["mode"] == "chat"
+        assert info["input_cost_per_token"] == expected_input
+        assert info["output_cost_per_token"] == expected_output
+        assert info["cache_read_input_token_cost"] == expected_cache
+        assert info["supports_function_calling"] is True
+        assert info["supports_tool_choice"] is True
+
+    print("✅ deepseek-v4-flash and deepseek-v4-pro cost map entries verified")
