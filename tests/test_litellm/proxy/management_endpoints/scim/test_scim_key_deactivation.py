@@ -47,6 +47,9 @@ def _build_prisma_with_keys(user_keys, mock_user=None, updated_user=None):
     mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=user_keys)
     mock_db.litellm_verificationtoken.update_many = AsyncMock(return_value=None)
     mock_db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+    mock_db.litellm_invitationlink.delete_many = AsyncMock(return_value=None)
+    mock_db.litellm_organizationmembership.delete_many = AsyncMock(return_value=None)
+    mock_db.litellm_teammembership.delete_many = AsyncMock(return_value=None)
     return mock_client, mock_db
 
 
@@ -183,6 +186,68 @@ async def test_scim_delete_user_blocks_keys_before_deleting_user():
     mock_db.litellm_usertable.delete.assert_awaited_once_with(
         where={"user_id": user_id}
     )
+
+
+@pytest.mark.asyncio
+async def test_scim_delete_user_clears_fk_referenced_rows_before_user_delete():
+    user_id = "user-with-invite"
+    mock_user = LiteLLM_UserTable(
+        user_id=user_id,
+        user_email="x@example.com",
+        user_alias=None,
+        teams=[],
+        metadata={},
+    )
+    mock_client, mock_db = _build_prisma_with_keys(user_keys=[], mock_user=mock_user)
+
+    call_order: list = []
+    mock_db.litellm_invitationlink.delete_many = AsyncMock(
+        side_effect=lambda **kw: call_order.append(("invitation", kw)) or None
+    )
+    mock_db.litellm_organizationmembership.delete_many = AsyncMock(
+        side_effect=lambda **kw: call_order.append(("orgmembership", kw)) or None
+    )
+    mock_db.litellm_teammembership.delete_many = AsyncMock(
+        side_effect=lambda **kw: call_order.append(("teammembership", kw)) or None
+    )
+    mock_db.litellm_usertable.delete = AsyncMock(
+        side_effect=lambda **kw: call_order.append(("user", kw)) or None
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            AsyncMock(),
+        ),
+    ):
+        response = await delete_user(user_id=user_id)
+
+    assert response.status_code == 204
+
+    mock_db.litellm_invitationlink.delete_many.assert_awaited_once()
+    inv_kwargs = mock_db.litellm_invitationlink.delete_many.await_args.kwargs
+    assert inv_kwargs == {
+        "where": {
+            "OR": [
+                {"user_id": user_id},
+                {"created_by": user_id},
+                {"updated_by": user_id},
+            ]
+        }
+    }
+    mock_db.litellm_organizationmembership.delete_many.assert_awaited_once_with(
+        where={"user_id": user_id}
+    )
+    mock_db.litellm_teammembership.delete_many.assert_awaited_once_with(
+        where={"user_id": user_id}
+    )
+
+    stages = [stage for stage, _ in call_order]
+    assert stages.index("user") > stages.index("invitation")
+    assert stages.index("user") > stages.index("orgmembership")
 
 
 @pytest.mark.asyncio
