@@ -707,11 +707,48 @@ class JWTHandler:
             verbose_proxy_logger.error(f"Error fetching OIDC UserInfo: {str(e)}")
             raise Exception(f"Failed to fetch OIDC UserInfo: {str(e)}")
 
-    async def auth_jwt(self, token: str) -> dict:
+    _unscoped_jwt_warning_emitted = False
+
+    @classmethod
+    def _build_decode_kwargs(cls) -> dict:
+        """Build the audience/issuer/options kwargs for ``jwt.decode``.
+
+        Setting ``JWT_AUDIENCE`` (and optionally ``JWT_ISSUER``) turns on the
+        corresponding PyJWT verifications, blocking cross-tenant tokens
+        minted by other applications that share the same IdP signing keys.
+        When both are unset PyJWT only checks the signature and expiry, which
+        is preserved for backward compatibility but logged once as a warning.
+        """
         audience = os.getenv("JWT_AUDIENCE")
-        decode_options = None
+        issuer = os.getenv("JWT_ISSUER")
+
+        if (
+            audience is None
+            and issuer is None
+            and not cls._unscoped_jwt_warning_emitted
+        ):
+            verbose_proxy_logger.warning(
+                "JWT auth is enabled but neither JWT_AUDIENCE nor JWT_ISSUER "
+                "is configured. Tokens minted by any application that shares "
+                "the same IdP signing keys will be accepted. Set JWT_AUDIENCE "
+                "(and ideally JWT_ISSUER) to scope this proxy."
+            )
+            cls._unscoped_jwt_warning_emitted = True
+
+        options: dict = {}
         if audience is None:
-            decode_options = {"verify_aud": False}
+            options["verify_aud"] = False
+        if issuer is None:
+            options["verify_iss"] = False
+
+        return {
+            "audience": audience,
+            "issuer": issuer,
+            "options": options or None,
+        }
+
+    async def auth_jwt(self, token: str) -> dict:
+        decode_kwargs = self._build_decode_kwargs()
 
         header = jwt.get_unverified_header(token)
 
@@ -747,9 +784,8 @@ class JWTHandler:
                     token,
                     public_key_obj,  # type: ignore
                     algorithms=self.SUPPORTED_JWT_ALGORITHMS,
-                    options=decode_options,  # type: ignore[arg-type]
-                    audience=audience,
                     leeway=self.leeway,  # allow testing of expired tokens
+                    **decode_kwargs,
                 )
                 return payload
 
@@ -775,8 +811,7 @@ class JWTHandler:
                     token,
                     key,
                     algorithms=self.SUPPORTED_JWT_ALGORITHMS,
-                    audience=audience,
-                    options=decode_options,
+                    **decode_kwargs,
                 )
                 return payload
 
