@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import os
+from types import MappingProxyType
 from typing import Any, Coroutine, Optional, Tuple, Union
 
 import httpx
@@ -8,6 +9,7 @@ import httpx
 from litellm import LlmProviders
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_PREFIXES,
+    should_allow_legacy_cloud_file_ids,
     validate_managed_cloud_file_id,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -71,7 +73,10 @@ class BedrockFilesHandler(BaseAWSLLM):
         raise ValueError("file_id must be a managed LiteLLM S3 file id")
 
     def _parse_s3_uri(
-        self, s3_uri: str, configured_bucket_name: str
+        self,
+        s3_uri: str,
+        configured_bucket_name: str,
+        allow_legacy_cloud_file_ids: bool = False,
     ) -> Tuple[str, str]:
         """
         Parse S3 URI to extract bucket name and object key.
@@ -87,13 +92,20 @@ class BedrockFilesHandler(BaseAWSLLM):
             scheme="s3://",
             configured_bucket_name=configured_bucket_name,
             allowed_object_prefixes=BEDROCK_MANAGED_S3_PREFIXES,
+            allow_legacy_cloud_file_ids=allow_legacy_cloud_file_ids,
         )
 
-    def _get_configured_s3_bucket_name(self, optional_params: dict) -> str:
-        bucket_name = os.getenv("AWS_S3_BUCKET_NAME")
+    def _get_configured_s3_bucket_name(self, litellm_params: dict) -> str:
+        trusted_model_credentials = litellm_params.get(
+            "_litellm_internal_model_credentials"
+        )
+        bucket_name = None
+        if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
+            bucket_name = trusted_model_credentials.get("s3_bucket_name")
+        bucket_name = bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
         if not bucket_name:
             raise ValueError(
-                "S3 bucket_name is required. Set AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
+                "S3 bucket_name is required. Set 's3_bucket_name' in proxy config or AWS_S3_BUCKET_NAME for Bedrock file content retrieval."
             )
         return bucket_name
 
@@ -129,6 +141,9 @@ class BedrockFilesHandler(BaseAWSLLM):
         bucket_name, object_key = self._parse_s3_uri(
             s3_uri=s3_uri,
             configured_bucket_name=configured_bucket_name,
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(
+                optional_params
+            ),
         )
 
         # Get AWS credentials

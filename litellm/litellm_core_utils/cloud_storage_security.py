@@ -1,3 +1,4 @@
+import os
 import posixpath
 import re
 from typing import Optional, Sequence, Tuple
@@ -109,11 +110,26 @@ def encode_s3_object_key_for_url(object_key: str) -> str:
     return quote(unquote(object_key), safe="/")
 
 
+def should_allow_legacy_cloud_file_ids(litellm_params: Optional[dict] = None) -> bool:
+    value = None
+    if isinstance(litellm_params, dict):
+        value = litellm_params.get("allow_legacy_cloud_file_ids")
+    if value is None:
+        value = os.getenv("LITELLM_ALLOW_LEGACY_CLOUD_FILE_IDS")
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 def validate_managed_cloud_file_id(
     file_id: str,
     scheme: str,
     configured_bucket_name: str,
     allowed_object_prefixes: Sequence[str],
+    allow_legacy_cloud_file_ids: bool = False,
 ) -> Tuple[str, str]:
     decoded_file_id = unquote(file_id)
     if not decoded_file_id.startswith(scheme):
@@ -137,7 +153,16 @@ def validate_managed_cloud_file_id(
             f"{configured_prefix.rstrip('/')}/{prefix}" for prefix in allowed_prefixes
         )
 
-    if not object_name.startswith(allowed_prefixes):
-        raise ValueError("file_id must reference a LiteLLM-managed storage object")
+    if object_name.startswith(allowed_prefixes):
+        return bucket_name, object_name
 
-    return bucket_name, object_name
+    if allow_legacy_cloud_file_ids:
+        if configured_prefix and not object_name.startswith(
+            f"{configured_prefix.rstrip('/')}/"
+        ):
+            raise ValueError(
+                "file_id object does not match the configured storage prefix"
+            )
+        return bucket_name, object_name
+
+    raise ValueError("file_id must reference a LiteLLM-managed storage object")

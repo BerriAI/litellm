@@ -10,6 +10,7 @@ import contextvars
 import time
 import uuid as uuid_module
 from functools import partial
+from types import MappingProxyType
 from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
 import httpx
@@ -846,6 +847,11 @@ def file_content(
     try:
         optional_params = GenericLiteLLMParams(**kwargs)
         litellm_params_dict = get_litellm_params(**kwargs)
+        trusted_model_credentials = kwargs.get("_litellm_internal_model_credentials")
+        if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
+            litellm_params_dict["_litellm_internal_model_credentials"] = (
+                trusted_model_credentials
+            )
         ### TIMEOUT LOGIC ###
         timeout = optional_params.timeout or kwargs.get("request_timeout", 600) or 600
         client = kwargs.get("client")

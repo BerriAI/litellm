@@ -1,9 +1,11 @@
 import base64
 import os
-from unittest.mock import patch
+from types import MappingProxyType
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+import litellm.files.main as files_main
 from litellm.llms.bedrock.files.handler import BedrockFilesHandler
 from litellm.types.utils import SpecialEnums
 
@@ -55,6 +57,34 @@ class TestBedrockFilesHandler:
                 configured_bucket_name="safe-bucket",
             )
 
+    def test_should_allow_legacy_same_bucket_key_when_server_flag_enabled(self):
+        bucket, key = self.handler._parse_s3_uri(
+            s3_uri="s3://safe-bucket/private/output.jsonl",
+            configured_bucket_name="safe-bucket",
+            allow_legacy_cloud_file_ids=True,
+        )
+
+        assert bucket == "safe-bucket"
+        assert key == "private/output.jsonl"
+
+    def test_should_keep_configured_prefix_for_legacy_keys(self):
+        bucket, key = self.handler._parse_s3_uri(
+            s3_uri="s3://safe-bucket/team-a/private/output.jsonl",
+            configured_bucket_name="safe-bucket/team-a",
+            allow_legacy_cloud_file_ids=True,
+        )
+
+        assert bucket == "safe-bucket"
+        assert key == "team-a/private/output.jsonl"
+
+    def test_should_reject_legacy_key_outside_configured_prefix(self):
+        with pytest.raises(ValueError, match="configured storage prefix"):
+            self.handler._parse_s3_uri(
+                s3_uri="s3://safe-bucket/team-b/private/output.jsonl",
+                configured_bucket_name="safe-bucket/team-a",
+                allow_legacy_cloud_file_ids=True,
+            )
+
     def test_should_reject_dot_segment_key(self):
         with pytest.raises(ValueError, match="invalid path segment"):
             self.handler._parse_s3_uri(
@@ -102,9 +132,55 @@ class TestBedrockFilesHandler:
                 == "safe-bucket"
             )
 
+    def test_should_trust_proxy_config_s3_bucket_name_for_expected_bucket(self):
+        trusted_credentials = MappingProxyType({"s3_bucket_name": "safe-bucket"})
+
+        with patch.dict(os.environ, {}, clear=True):
+            assert (
+                self.handler._get_configured_s3_bucket_name(
+                    {
+                        "s3_bucket_name": "attacker-bucket",
+                        "_litellm_internal_model_credentials": trusted_credentials,
+                    }
+                )
+                == "safe-bucket"
+            )
+
+    def test_should_not_trust_user_supplied_internal_credentials_dict(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(ValueError, match="S3 bucket_name is required"):
+                self.handler._get_configured_s3_bucket_name(
+                    {
+                        "_litellm_internal_model_credentials": {
+                            "s3_bucket_name": "attacker-bucket"
+                        }
+                    }
+                )
+
     def test_should_require_server_s3_bucket_name(self):
         with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="AWS_S3_BUCKET_NAME"):
+            with pytest.raises(ValueError, match="S3 bucket_name is required"):
                 self.handler._get_configured_s3_bucket_name(
                     {"s3_bucket_name": "attacker-bucket"}
                 )
+
+
+def test_should_forward_trusted_model_credentials_to_bedrock_provider_config():
+    trusted_credentials = MappingProxyType({"s3_bucket_name": "safe-bucket"})
+    mock_response = MagicMock()
+
+    with patch.object(
+        files_main.base_llm_http_handler,
+        "retrieve_file_content",
+        return_value=mock_response,
+    ) as mock_retrieve_file_content:
+        response = files_main.file_content(
+            file_id="s3://safe-bucket/litellm-bedrock-files/file.jsonl",
+            custom_llm_provider="bedrock",
+            _litellm_internal_model_credentials=trusted_credentials,
+        )
+
+    assert response is mock_response
+    litellm_params = mock_retrieve_file_content.call_args.kwargs["litellm_params"]
+    assert litellm_params["_litellm_internal_model_credentials"] is trusted_credentials
+    assert "s3_bucket_name" not in litellm_params
