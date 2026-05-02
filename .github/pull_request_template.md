@@ -14,6 +14,7 @@
 - [ ] My PR passes all unit tests on [`make test-unit`](https://docs.litellm.ai/docs/extras/contributing_code)
 - [ ] My PR's scope is as isolated as possible, it only solves 1 specific problem
 - [ ] I have requested a Greptile review by commenting `@greptileai` and received a **Confidence Score of at least 4/5** before requesting a maintainer review
+- [ ] (LiteLLM Team Only) I have confirmed that the **Critical Entry Point Scan** (from `.github/workflows/security-gate.yml`) is passing and is configured as a required status check in the branch protection rules.
 
 ## Delays in PR merge?
 

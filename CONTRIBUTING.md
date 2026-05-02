@@ -15,6 +15,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
 - [ ] **Ensure your PR passes all checks**:
   - [ ] [Unit Tests](#running-unit-tests) - `make test-unit`
   - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
+  - [ ] **Security Gate** - Ensure the `Critical Entry Point Scan` (`security-gate.yml`) passes on your PR.
 
 #### UI PRs
 
