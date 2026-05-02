@@ -235,18 +235,10 @@ async def test_add_key_or_team_level_spend_logs_metadata_to_request(
             "langfuse_host": "https://us.cloud.langfuse.com",
             "langfuse_public_key": "pk-lf-9636b7a6-c066",
             "langfuse_secret_key": "sk-lf-7cc8b620",
-        },
-        {
-            "langfuse_host": "os.environ/LANGFUSE_HOST_TEMP",
-            "langfuse_public_key": "os.environ/LANGFUSE_PUBLIC_KEY_TEMP",
-            "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
-        },
+        }
     ],
 )
 def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
-    os.environ["LANGFUSE_PUBLIC_KEY_TEMP"] = "pk-lf-9636b7a6-c066"
-    os.environ["LANGFUSE_SECRET_KEY_TEMP"] = "sk-lf-7cc8b620"
-    os.environ["LANGFUSE_HOST_TEMP"] = "https://us.cloud.langfuse.com"
     from litellm.proxy.proxy_server import ProxyConfig
 
     proxy_config = ProxyConfig()
@@ -315,6 +307,41 @@ def test_dynamic_logging_metadata_key_and_team_metadata(callback_vars):
 
     for var in callbacks.callback_vars.values():
         assert "os.environ" not in var
+
+
+def test_dynamic_logging_metadata_ignores_env_references_from_key_metadata(
+    monkeypatch,
+):
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY_TEMP", "server-side-secret")
+    monkeypatch.setattr(
+        litellm.utils,
+        "get_secret",
+        lambda *args, **kwargs: pytest.fail("get_secret should not be called"),
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_secret_key": "os.environ/LANGFUSE_SECRET_KEY_TEMP",
+                    },
+                }
+            ]
+        },
+        team_metadata={},
+    )
+
+    callbacks = _get_dynamic_logging_metadata(
+        user_api_key_dict=user_api_key_dict, proxy_config=proxy_config
+    )
+
+    assert callbacks is None
 
 
 @pytest.mark.parametrize(
@@ -1263,10 +1290,15 @@ def test_proxy_config_state_post_init_callback_call(monkeypatch):
         }
     )
 
-    LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
+    callback_metadata = LiteLLMProxyRequestSetup.add_team_based_callbacks_from_config(
         team_id="test",
         proxy_config=pc,
     )
+
+    assert callback_metadata is not None
+    assert callback_metadata.callback_vars is not None
+    assert callback_metadata.callback_vars["langfuse_public_key"] == "test_public_key"
+    assert callback_metadata.callback_vars["langfuse_secret"] == "test_secret_key"
 
     config = pc.get_config_state()
     assert config["litellm_settings"]["default_team_settings"][0]["team_id"] == "test"
