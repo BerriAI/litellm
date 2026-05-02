@@ -199,8 +199,10 @@ class CloudflareChatResponseIterator(BaseModelResponseIterator):
 
             index = int(chunk.get("index", 0))
 
-            if "response" in chunk:
+            if "response" in chunk and chunk["response"] is not None:
                 text = chunk["response"]
+            elif "response_text" in chunk and chunk["response_text"] is not None:
+                text = chunk["response_text"]
 
             returned_chunk = GenericStreamingChunk(
                 text=text,
