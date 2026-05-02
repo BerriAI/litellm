@@ -3718,4 +3718,4 @@ def test_calculate_usage_no_iterations():
 
     assert usage.prompt_tokens == 100
     assert usage.completion_tokens == 200
-    assert not hasattr(usage, "iterations") or usage.get("iterations") is None
+    assert not hasattr(usage, "iterations")
