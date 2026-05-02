@@ -1,9 +1,12 @@
 import asyncio
+import json
 import os
 import sys
 import time
+import types
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -695,9 +698,9 @@ def test_reset_budget_resets_endusers_with_null_budget_id(
 
     # Both end users should have been reset
     updated = mock_prisma_client.updated_data["enduser"]
-    assert len(updated) == 2, (
-        f"Expected 2 endusers reset (1 explicit + 1 implicit), got {len(updated)}"
-    )
+    assert (
+        len(updated) == 2
+    ), f"Expected 2 endusers reset (1 explicit + 1 implicit), got {len(updated)}"
 
     user_ids = {u.user_id for u in updated}
     assert "enduser-explicit" in user_ids
@@ -784,3 +787,421 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_li
     assert len(find_many_calls) == 0
 
     litellm.max_end_user_budget_id = None
+
+
+def test_reset_budget_for_team_members_preserves_total_spend():
+    """Regression guard: reset_budget_for_litellm_team_members must zero `spend`
+    but leave `total_spend` untouched.
+
+    The reset writes `data={"spend": 0}` explicitly. If a future refactor adds
+    `"total_spend": 0` to that dict, this test fails immediately.
+    """
+    expired_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {"budget_id": "budget-1"},
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(
+        proxy_logging_obj=MagicMock(), prisma_client=mock_prisma_client
+    )
+
+    asyncio.run(job.reset_budget_for_litellm_team_members([expired_budget]))
+
+    mock_prisma_client.db.litellm_teammembership.update_many.assert_called_once()
+    call_kwargs = (
+        mock_prisma_client.db.litellm_teammembership.update_many.call_args.kwargs
+    )
+    assert call_kwargs["where"]["budget_id"]["in"] == ["budget-1"]
+    assert call_kwargs["data"] == {"spend": 0}
+    assert "total_spend" not in call_kwargs["data"]
+
+
+# ---------------------------------------------------------------------------
+# reset_budget_windows (per-key / per-team concurrent window resets)
+# ---------------------------------------------------------------------------
+
+
+def _make_reset_budget_windows_job(
+    monkeypatch,
+    key_rows: List[Dict[str, Any]],
+    team_rows: List[Dict[str, Any]],
+):
+    """Build a ResetBudgetJob with a fully-mocked prisma client and a fake
+    `litellm.proxy.proxy_server` module exposing a stub `spend_counter_cache`.
+
+    Returns (job, prisma_client_mock, spend_counter_cache_mock).
+    """
+    prisma_client = MagicMock()
+
+    async def fake_query_raw(query: str, *args, **kwargs):
+        # Dispatch by table name in the SQL so a single stub covers both calls.
+        if '"LiteLLM_VerificationToken"' in query:
+            return key_rows
+        if '"LiteLLM_TeamTable"' in query:
+            return team_rows
+        raise AssertionError(f"Unexpected query_raw call: {query}")
+
+    prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
+    prisma_client.db.litellm_verificationtoken.update = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+
+    # Stub out litellm.proxy.proxy_server so the in-function
+    # `from litellm.proxy.proxy_server import spend_counter_cache` resolves
+    # without importing the real (heavy) module.
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = None  # skip the async redis branch
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    return job, prisma_client, spend_counter_cache
+
+
+def test_reset_budget_windows_uses_is_not_null_filter(monkeypatch):
+    """Regression guard for the Prisma client limitation documented in
+    RobertCraigie/prisma-client-py#714: `{"not": None}` on a `Json?` column
+    raises `MissingRequiredValueError`. We work around it by using `query_raw`
+    with `IS NOT NULL`. If someone reverts to the ORM filter, this test fails.
+    """
+    job, prisma_client, _ = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=[], team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    queries = [call.args[0] for call in prisma_client.db.query_raw.await_args_list]
+    assert len(queries) == 2, queries
+    key_query, team_query = queries
+
+    assert '"LiteLLM_VerificationToken"' in key_query
+    assert "budget_limits IS NOT NULL" in key_query
+    assert '"LiteLLM_TeamTable"' in team_query
+    assert "budget_limits IS NOT NULL" in team_query
+
+
+def test_reset_budget_windows_resets_expired_key_window(monkeypatch):
+    """A key whose window's `reset_at` has passed gets an update with a new
+    `reset_at` in the future, and the in-memory spend counter is cleared."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=5)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-expired",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    # Update should have been called exactly once with the expired token.
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+    call_kwargs = prisma_client.db.litellm_verificationtoken.update.await_args.kwargs
+    assert call_kwargs["where"] == {"token": "sk-expired"}
+
+    # The `budget_limits` payload is re-serialized JSON with a bumped reset_at.
+    written_windows = json.loads(call_kwargs["data"]["budget_limits"])
+    assert len(written_windows) == 1
+    new_reset_at = datetime.fromisoformat(
+        written_windows[0]["reset_at"].replace("Z", "+00:00")
+    ).replace(tzinfo=None)
+    assert new_reset_at > now
+
+    # The spend counter for this key+window was cleared.
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:key:sk-expired:window:1d", value=0.0
+    )
+
+
+def test_reset_budget_windows_skips_unexpired_key_window(monkeypatch):
+    """If `reset_at` is in the future, no write should happen for that key."""
+    now = datetime.utcnow()
+    future = (now + timedelta(hours=1)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-future",
+            "budget_limits": [{"budget_duration": "1d", "reset_at": future}],
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
+def test_reset_budget_windows_resets_expired_team_window(monkeypatch):
+    """Same as the key test, but for teams."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+
+    team_rows = [
+        {
+            "team_id": "team-expired",
+            "budget_limits": [{"budget_duration": "30d", "reset_at": expired}],
+        }
+    ]
+    job, prisma_client, spend_counter_cache = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=[], team_rows=team_rows
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_teamtable.update.assert_awaited_once()
+    call_kwargs = prisma_client.db.litellm_teamtable.update.await_args.kwargs
+    assert call_kwargs["where"] == {"team_id": "team-expired"}
+    assert "budget_limits" in call_kwargs["data"]
+
+    spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team:team-expired:window:30d", value=0.0
+    )
+
+
+def test_reset_budget_windows_handles_string_budget_limits(monkeypatch):
+    """Defensive: if `query_raw` returns `budget_limits` as a JSON-encoded
+    string (driver-dependent), the code still parses and resets it.
+    """
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+
+    key_rows = [
+        {
+            "token": "sk-string-limits",
+            "budget_limits": json.dumps(
+                [{"budget_duration": "1d", "reset_at": expired}]
+            ),
+        }
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_awaited_once()
+
+
+def test_reset_budget_windows_skips_row_with_empty_budget_limits(monkeypatch):
+    """A row whose `budget_limits` comes back as an empty/falsy payload
+    (shouldn't happen given the WHERE filter, but we guard anyway) must not
+    trigger an update or crash the loop."""
+    key_rows = [
+        {"token": "sk-empty-list", "budget_limits": []},
+        {"token": "sk-empty-str", "budget_limits": ""},
+    ]
+    job, prisma_client, _ = _make_reset_budget_windows_job(
+        monkeypatch, key_rows=key_rows, team_rows=[]
+    )
+
+    asyncio.run(job.reset_budget_windows())
+
+    prisma_client.db.litellm_verificationtoken.update.assert_not_awaited()
+
+
+def test_reset_budget_windows_query_error_does_not_break_team_path(monkeypatch):
+    """If the key query raises, the teams path still runs (and vice-versa).
+    Each side has its own try/except; this locks that in."""
+    now = datetime.utcnow()
+    expired = (now - timedelta(minutes=1)).isoformat() + "Z"
+
+    prisma_client = MagicMock()
+
+    async def fake_query_raw(query: str, *args, **kwargs):
+        if '"LiteLLM_VerificationToken"' in query:
+            raise RuntimeError("boom")
+        if '"LiteLLM_TeamTable"' in query:
+            return [
+                {
+                    "team_id": "team-ok",
+                    "budget_limits": [{"budget_duration": "1d", "reset_at": expired}],
+                }
+            ]
+        raise AssertionError(query)
+
+    prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
+    prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=None)
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = None
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+
+    asyncio.run(job.reset_budget_windows())  # must not raise
+
+    prisma_client.db.litellm_teamtable.update.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Counter invalidation on budget reset
+# ---------------------------------------------------------------------------
+
+
+def _make_counter_invalidation_job(monkeypatch):
+    """Stub spend_counter_cache so we can observe invalidation calls."""
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    return spend_counter_cache
+
+
+def test_reset_budget_for_team_members_invalidates_redis_counter(monkeypatch):
+    """Team-member budget reset clears the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    membership = type(
+        "Membership",
+        (),
+        {"user_id": "alice", "team_id": "team-x", "budget_id": "budget-1"},
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[membership]
+    )
+    prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_litellm_team_members([expired_budget]))
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team_member:alice:team-x", value=0.0, ttl=60
+    )
+    counter_cache.redis_cache.async_set_cache.assert_any_await(
+        key="spend:team_member:alice:team-x", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_keys_invalidates_redis_counter(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Key budget reset must clear the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["key"] = [
+        type(
+            "Key",
+            (),
+            {
+                "spend": 100.0,
+                "budget_duration": "30d",
+                "budget_reset_at": now,
+                "id": "key-1",
+                "token": "sk-abc",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:key:sk-abc", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_users_invalidates_redis_counter(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """User budget reset must clear the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        type(
+            "User",
+            (),
+            {
+                "spend": 50.0,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+                "id": "user-1",
+                "user_id": "alice",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:user:alice", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_teams_invalidates_redis_counter(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Team budget reset must clear the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["team"] = [
+        type(
+            "Team",
+            (),
+            {
+                "spend": 200.0,
+                "budget_duration": "1mo",
+                "budget_reset_at": now,
+                "id": "team-1",
+                "team_id": "team-x",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_teams())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team:team-x", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_keys_linked_to_budgets_invalidates_redis_counter(monkeypatch):
+    """Resetting keys via budget tier must clear each linked key's counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_key = type("Key", (), {"token": "sk-linked"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[linked_key]
+    )
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_keys_linked_to_budgets([expired_budget]))
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:key:sk-linked", value=0.0, ttl=60
+    )

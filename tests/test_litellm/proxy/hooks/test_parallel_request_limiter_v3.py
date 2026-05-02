@@ -1030,6 +1030,83 @@ async def test_team_member_rate_limits_v3():
 
 
 @pytest.mark.asyncio
+async def test_team_member_rate_limits_v3_raises_429_when_over_limit():
+    """
+    When should_rate_limit reports OVER_LIMIT for the team_member descriptor, the
+    pre-call hook raises HTTP 429 with rate_limit headers — same contract as
+    test_rpm_api_key_rate_limits_v3 / test_tpm_api_key_rate_limits_v3.
+    """
+    _api_key = hash_token("sk-12345")
+    _team_id = "team_123"
+    _user_id = "user_456"
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=_api_key,
+        team_id=_team_id,
+        user_id=_user_id,
+        team_member_rpm_limit=10,
+        team_member_tpm_limit=1000,
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    captured_descriptors = None
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        nonlocal captured_descriptors
+        captured_descriptors = descriptors
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 10,
+                    "limit_remaining": -1,
+                    "rate_limit_type": "requests",
+                    "descriptor_key": "team_member",
+                },
+                {
+                    "code": "OK",
+                    "current_limit": 1000,
+                    "limit_remaining": 500,
+                    "rate_limit_type": "tokens",
+                    "descriptor_key": "team_member",
+                },
+            ],
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    error = None
+    try:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+    except HTTPException as e:
+        error = e
+        assert e.status_code == 429
+        assert "rate_limit_type" in e.headers
+        assert e.headers.get("rate_limit_type") == "requests"
+        assert "retry-after" in e.headers
+
+    assert error is not None, "An Exception must be thrown"
+    assert captured_descriptors is not None, "Rate limit descriptors should be captured"
+    team_member_descriptor = None
+    for descriptor in captured_descriptors:
+        if descriptor["key"] == "team_member":
+            team_member_descriptor = descriptor
+            break
+    assert team_member_descriptor is not None
+    assert team_member_descriptor["value"] == f"{_team_id}:{_user_id}"
+
+
+@pytest.mark.asyncio
 async def test_dynamic_rate_limiting_v3():
     """
     Test that dynamic rate limiting only enforces limits when model has failures.
