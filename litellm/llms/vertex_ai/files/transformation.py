@@ -143,12 +143,12 @@ def _get_litellm_batch_custom_id_from_labels(labels: Dict[str, Any]) -> str:
     return str(labels.get("litellm_custom_id", "unknown"))
 
 
-def _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+def _openai_batch_jsonl_entries_to_vertex_wrapped_requests(
     openai_jsonl_content: List[Dict[str, Any]],
     map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    Transforms OpenAI JSONL content to VertexAI JSONL content
+    Transforms OpenAI JSONL batch entries to Vertex AI JSONL lines.
 
     jsonl body for vertex is {"request": <request_body>}
     Example Vertex jsonl
@@ -371,7 +371,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
         self, openai_jsonl_content: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        return _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+        return _openai_batch_jsonl_entries_to_vertex_wrapped_requests(
             openai_jsonl_content=openai_jsonl_content,
             map_openai_to_vertex_params=self._map_openai_to_vertex_params,
         )
@@ -858,7 +858,7 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
     def _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
         self, openai_jsonl_content: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        return _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
+        return _openai_batch_jsonl_entries_to_vertex_wrapped_requests(
             openai_jsonl_content=openai_jsonl_content,
             map_openai_to_vertex_params=self._map_openai_to_vertex_params,
         )
