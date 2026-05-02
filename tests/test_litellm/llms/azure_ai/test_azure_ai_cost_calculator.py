@@ -4,26 +4,49 @@ Test Azure AI cost calculator, especially Model Router flat cost.
 
 import pytest
 
-import litellm
-from litellm.llms.azure_ai.cost_calculator import (
-    _is_azure_model_router,
-    cost_per_token,
-)
-from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-from litellm.types.utils import Usage
-from litellm.utils import _invalidate_model_cost_lowercase_map, get_model_info
+litellm = None
+_is_azure_model_router = None
+cost_per_token = None
+Usage = None
+get_model_info = None
+_invalidate_model_cost_lowercase_map = None
 
 
 @pytest.fixture(autouse=True)
 def use_local_model_cost_map(monkeypatch):
-    original_model_cost = litellm.model_cost
+    global litellm, _is_azure_model_router, cost_per_token
+    global Usage, get_model_info, _invalidate_model_cost_lowercase_map
+
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    import litellm as litellm_module
+    from litellm.llms.azure_ai.cost_calculator import (
+        _is_azure_model_router as is_azure_model_router,
+        cost_per_token as azure_ai_cost_per_token,
+    )
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+    from litellm.types.utils import Usage as UsageType
+    from litellm.utils import (
+        _invalidate_model_cost_lowercase_map as invalidate_model_cost_lowercase_map,
+        get_model_info as get_model_info_fn,
+    )
+
+    litellm = litellm_module
+    _is_azure_model_router = is_azure_model_router
+    cost_per_token = azure_ai_cost_per_token
+    Usage = UsageType
+    get_model_info = get_model_info_fn
+    _invalidate_model_cost_lowercase_map = invalidate_model_cost_lowercase_map
+
+    original_model_cost = litellm.model_cost
     litellm.model_cost = get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
     _invalidate_model_cost_lowercase_map()
     try:
         yield
     finally:
         litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
         _invalidate_model_cost_lowercase_map()
 
 
