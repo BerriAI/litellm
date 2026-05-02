@@ -565,6 +565,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/available",
             "/team/permissions_list",
             "/team/permissions_update",
+            "/team/permissions_bulk_update",
             "/team/daily/activity",
             # model
             "/model/new",
