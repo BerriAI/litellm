@@ -45,9 +45,6 @@ class ScimTransformations:
         if user.user_email and "@" in user.user_email:
             emails.append(SCIMUserEmail(value=user.user_email, primary=True))
 
-        # Reflect SCIM-provider-controlled active state. Default to True for
-        # users that have never had the flag set (e.g. created before this
-        # field existed, or created outside SCIM).
         metadata = user.metadata or {}
         scim_active = metadata.get("scim_active")
         active = True if scim_active is None else bool(scim_active)
