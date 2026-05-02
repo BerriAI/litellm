@@ -657,17 +657,16 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 return content
 
             vertex_gemini_config = VertexGeminiConfig()
-            if logging_obj is None:
-                logging_obj = Logging(
-                    model="",
-                    messages=[],
-                    stream=False,
-                    call_type="batch_transform",
-                    start_time=time.time(),
-                    litellm_call_id="",
-                    function_id="",
-                )
-            logging_obj.optional_params = {}
+            batch_transform_logging_obj = Logging(
+                model="",
+                messages=[],
+                stream=False,
+                call_type="batch_transform",
+                start_time=time.time(),
+                litellm_call_id="",
+                function_id="",
+            )
+            batch_transform_logging_obj.optional_params = {}
             mock_httpx_response = httpx.Response(
                 status_code=200,
                 headers={"content-type": "application/json"},
@@ -686,7 +685,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                         self._transform_single_vertex_batch_output_to_openai(
                             vertex_output=vertex_output,
                             vertex_gemini_config=vertex_gemini_config,
-                            logging_obj=logging_obj,
+                            logging_obj=batch_transform_logging_obj,
                             mock_httpx_response=mock_httpx_response,
                         )
                     )
@@ -752,9 +751,6 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         model = vertex_response.get("modelVersion", "gemini-1.5-flash-001")
         if "@" in model:
             model = model.split("@")[0]
-
-        logging_obj.model = model
-        logging_obj.start_time = time.time()
 
         try:
             # Use existing VertexGeminiConfig transformation

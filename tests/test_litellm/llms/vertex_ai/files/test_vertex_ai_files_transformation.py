@@ -149,27 +149,53 @@ class TestTransformFileContent:
         assert isinstance(result, HttpxBinaryResponseContent)
         assert result.response.content == b'{"line": 1}\n{"line": 2}\n'
 
-    def test_should_forward_logging_obj_to_batch_output_transformer(
+    def test_should_not_mutate_caller_logging_obj_for_batch_output_transform(
         self, config, monkeypatch
     ):
+        original_model = "vertex_ai/original-model"
+        original_start_time = 123.456
+        original_optional_params = {"temperature": 0.1}
         raw_response = httpx.Response(
             status_code=200,
-            content=b'{"line": 1}\n',
+            content=json.dumps(
+                {
+                    "status": "",
+                    "processed_time": "2024-11-01T18:13:16.826+00:00",
+                    "request": {"labels": {"litellm_custom_id": "request-1"}},
+                    "response": {
+                        "candidates": [
+                            {"content": {"parts": [{"text": "ok"}], "role": "model"}}
+                        ],
+                        "modelVersion": "gemini-2.0-flash-001@default",
+                    },
+                }
+            ).encode("utf-8"),
             headers={"content-type": "application/octet-stream"},
             request=httpx.Request("GET", "https://example.com"),
         )
         logging_obj = MagicMock()
+        logging_obj.model = original_model
+        logging_obj.start_time = original_start_time
+        logging_obj.optional_params = original_optional_params
         captured = {}
 
-        def mock_try_transform_vertex_batch_output_to_openai(content, logging_obj=None):
-            captured["content"] = content
+        def mock_transform_single(
+            vertex_output,
+            vertex_gemini_config,
+            logging_obj,
+            mock_httpx_response,
+        ):
             captured["logging_obj"] = logging_obj
-            return content
+            logging_obj.model = "gemini-2.0-flash-001"
+            logging_obj.start_time = 789.0
+            return {
+                "custom_id": vertex_output["request"]["labels"]["litellm_custom_id"]
+            }
 
         monkeypatch.setattr(
             config,
-            "_try_transform_vertex_batch_output_to_openai",
-            mock_try_transform_vertex_batch_output_to_openai,
+            "_transform_single_vertex_batch_output_to_openai",
+            mock_transform_single,
         )
 
         result = config.transform_file_content_response(
@@ -178,9 +204,11 @@ class TestTransformFileContent:
             litellm_params={},
         )
 
-        assert captured["content"] == raw_response.content
-        assert captured["logging_obj"] is logging_obj
-        assert result.response is raw_response
+        assert captured["logging_obj"] is not logging_obj
+        assert logging_obj.model == original_model
+        assert logging_obj.start_time == original_start_time
+        assert logging_obj.optional_params == original_optional_params
+        assert result.response is not raw_response
 
 
 class TestTransformDeleteFile:
