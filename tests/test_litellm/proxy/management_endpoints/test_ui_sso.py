@@ -5808,3 +5808,324 @@ class TestSyncUserRoleFromJwtRoleMap:
         )
 
         prisma.db.litellm_usertable.update.assert_not_called()
+
+
+# ── VERIA-34 regression: PKCE state-to-session-cookie binding ───────────────
+
+
+class TestPKCEStateCookieBinding:
+    """The Generic SSO PKCE flow used the URL ``state`` parameter as a
+    cache-key for the PKCE ``code_verifier`` without binding the state to
+    the caller's browser.  An attacker who pre-mints a state + cached
+    verifier could hand the link to a victim and capture the resulting
+    access token.  Fix: set ``litellm_oauth_state`` HttpOnly cookie on
+    the redirect; verify the URL state matches the cookie before doing
+    the PKCE token exchange."""
+
+    @pytest.mark.asyncio
+    async def test_redirect_response_sets_oauth_state_cookie_when_pkce_enabled(self):
+        """``get_generic_sso_redirect_response`` must set
+        ``litellm_oauth_state`` on the redirect response when PKCE is on so
+        the callback can verify it later.  The cookie must carry HttpOnly,
+        SameSite=Lax, and (because no http request was supplied to the
+        helper) the production-safe ``Secure`` default."""
+        from fastapi.responses import RedirectResponse
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_redirect = RedirectResponse(
+            url="https://idp.example.com/authorize?state=test-state-xyz"
+        )
+        mock_generic_sso = MagicMock()
+        mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
+        mock_generic_sso.__exit__ = MagicMock(return_value=None)
+        mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
+
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "test-state-xyz",
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=mock_generic_sso,
+                state=None,
+                generic_authorization_endpoint="https://idp.example.com/authorize",
+            )
+
+        assert response is not None
+        cookie_headers = response.headers.getlist("set-cookie")
+        cookie_str = next(
+            (c for c in cookie_headers if "litellm_oauth_state=" in c), None
+        )
+        assert (
+            cookie_str is not None
+        ), f"litellm_oauth_state cookie not set; got: {cookie_headers}"
+        assert "test-state-xyz" in cookie_str
+        assert "HttpOnly" in cookie_str
+        assert "SameSite=lax" in cookie_str
+        # No incoming Request supplied → ``Secure`` defaults to True so a
+        # network observer on plain HTTP cannot read the state value.
+        assert "Secure" in cookie_str
+
+    @pytest.mark.asyncio
+    async def test_redirect_response_omits_oauth_state_cookie_when_pkce_disabled(
+        self,
+    ):
+        """Non-PKCE flows delegate to fastapi-sso's own session-cookie
+        binding; we do not set our cookie there because it would never be
+        validated (and could collide with a concurrent PKCE session in
+        the same browser)."""
+        from fastapi.responses import RedirectResponse
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_redirect = RedirectResponse(
+            url="https://idp.example.com/authorize?state=test-state-xyz"
+        )
+        mock_generic_sso = MagicMock()
+        mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
+        mock_generic_sso.__exit__ = MagicMock(return_value=None)
+        mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
+
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "test-state-xyz",
+                "GENERIC_CLIENT_USE_PKCE": "false",
+            },
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=mock_generic_sso,
+                state=None,
+                generic_authorization_endpoint="https://idp.example.com/authorize",
+            )
+
+        assert response is not None
+        cookie_headers = response.headers.getlist("set-cookie")
+        assert not any(
+            "litellm_oauth_state=" in c for c in cookie_headers
+        ), f"litellm_oauth_state cookie set on non-PKCE flow; got: {cookie_headers}"
+
+    @pytest.mark.asyncio
+    async def test_redirect_response_drops_secure_flag_for_http_dev(self):
+        """When the incoming request is plain HTTP (local dev), ``Secure``
+        must be dropped so the browser will actually attach the cookie on
+        the callback hop."""
+        from fastapi.responses import RedirectResponse
+
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+        )
+
+        mock_redirect = RedirectResponse(
+            url="http://idp.local/authorize?state=local-dev-state"
+        )
+        mock_generic_sso = MagicMock()
+        mock_generic_sso.__enter__ = MagicMock(return_value=mock_generic_sso)
+        mock_generic_sso.__exit__ = MagicMock(return_value=None)
+        mock_generic_sso.get_login_redirect = AsyncMock(return_value=mock_redirect)
+
+        http_request = MagicMock(spec=Request)
+        http_request.url.scheme = "http"
+
+        with patch.dict(
+            os.environ,
+            {
+                "GENERIC_CLIENT_STATE": "local-dev-state",
+                "GENERIC_CLIENT_USE_PKCE": "true",
+            },
+        ):
+            response = await SSOAuthenticationHandler.get_generic_sso_redirect_response(
+                generic_sso=mock_generic_sso,
+                state=None,
+                generic_authorization_endpoint="http://idp.local/authorize",
+                request=http_request,
+            )
+
+        cookie_headers = response.headers.getlist("set-cookie")
+        cookie_str = next(
+            (c for c in cookie_headers if "litellm_oauth_state=" in c), None
+        )
+        assert cookie_str is not None
+        assert "Secure" not in cookie_str
+
+    @pytest.mark.asyncio
+    async def test_pkce_callback_rejects_missing_cookie(self):
+        """When PKCE is enabled and a code_verifier is in the cache, the
+        callback must reject a request that has no ``litellm_oauth_state``
+        cookie (browser-to-server binding missing)."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+            get_generic_sso_response,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {
+            "state": "attacker-minted-state",
+            "code": "auth-code",
+        }
+        # No oauth_state cookie set → request.cookies.get returns None.
+        mock_request.cookies = {}
+
+        with (
+            patch.object(
+                SSOAuthenticationHandler,
+                "prepare_token_exchange_parameters",
+                AsyncMock(
+                    return_value={
+                        "code_verifier": "attacker-cached-verifier",
+                        "_pkce_cache_key": "pkce_verifier:attacker-minted-state",
+                    }
+                ),
+            ),
+            patch("fastapi_sso.sso.base.DiscoveryDocument"),
+            patch("fastapi_sso.sso.generic.create_provider", return_value=MagicMock()),
+            patch.dict(
+                os.environ,
+                {
+                    "GENERIC_CLIENT_SECRET": "x",
+                    "GENERIC_AUTHORIZATION_ENDPOINT": "https://idp.example.com/auth",
+                    "GENERIC_TOKEN_ENDPOINT": "https://idp.example.com/token",
+                    "GENERIC_USERINFO_ENDPOINT": "https://idp.example.com/userinfo",
+                    "GENERIC_CLIENT_USE_PKCE": "true",
+                },
+            ),
+            pytest.raises(ProxyException) as exc_info,
+        ):
+            await get_generic_sso_response(
+                request=mock_request,
+                jwt_handler=MagicMock(spec=JWTHandler),
+                generic_client_id="cid",
+                redirect_url="https://proxy.example.com/sso/callback",
+                sso_jwt_handler=None,
+            )
+
+        assert "state" in str(exc_info.value.message).lower()
+
+    @pytest.mark.asyncio
+    async def test_pkce_callback_rejects_state_cookie_mismatch(self):
+        """The Login-CSRF shape: attacker mints state ``A``, victim's browser
+        carries cookie state ``B``.  The callback must reject."""
+        from litellm.proxy._types import ProxyException
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+            get_generic_sso_response,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {
+            "state": "attacker-minted-state",
+            "code": "auth-code",
+        }
+        mock_request.cookies = {"litellm_oauth_state": "victim-browser-state"}
+
+        with (
+            patch.object(
+                SSOAuthenticationHandler,
+                "prepare_token_exchange_parameters",
+                AsyncMock(
+                    return_value={
+                        "code_verifier": "verifier",
+                        "_pkce_cache_key": "pkce_verifier:attacker-minted-state",
+                    }
+                ),
+            ),
+            patch("fastapi_sso.sso.base.DiscoveryDocument"),
+            patch("fastapi_sso.sso.generic.create_provider", return_value=MagicMock()),
+            patch.dict(
+                os.environ,
+                {
+                    "GENERIC_CLIENT_SECRET": "x",
+                    "GENERIC_AUTHORIZATION_ENDPOINT": "https://idp.example.com/auth",
+                    "GENERIC_TOKEN_ENDPOINT": "https://idp.example.com/token",
+                    "GENERIC_USERINFO_ENDPOINT": "https://idp.example.com/userinfo",
+                    "GENERIC_CLIENT_USE_PKCE": "true",
+                },
+            ),
+            pytest.raises(ProxyException) as exc_info,
+        ):
+            await get_generic_sso_response(
+                request=mock_request,
+                jwt_handler=MagicMock(spec=JWTHandler),
+                generic_client_id="cid",
+                redirect_url="https://proxy.example.com/sso/callback",
+                sso_jwt_handler=None,
+            )
+
+        assert "state" in str(exc_info.value.message).lower()
+
+    @pytest.mark.asyncio
+    async def test_pkce_callback_accepts_matching_state_cookie(self):
+        """Happy path: URL state and cookie state match (the legitimate
+        flow where the same browser that started the redirect lands on
+        the callback) → the PKCE token exchange proceeds."""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            SSOAuthenticationHandler,
+            get_generic_sso_response,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.query_params = {"state": "matched-state", "code": "auth-code"}
+        mock_request.cookies = {"litellm_oauth_state": "matched-state"}
+
+        with (
+            patch.object(
+                SSOAuthenticationHandler,
+                "prepare_token_exchange_parameters",
+                AsyncMock(
+                    return_value={
+                        "code_verifier": "verifier",
+                        "_pkce_cache_key": "pkce_verifier:matched-state",
+                    }
+                ),
+            ),
+            patch.object(
+                SSOAuthenticationHandler,
+                "_pkce_token_exchange",
+                AsyncMock(
+                    return_value={
+                        "access_token": "tok",
+                        "id_token": "id",
+                        "sub": "user@example.com",
+                        "email": "user@example.com",
+                    }
+                ),
+            ),
+            patch.object(
+                SSOAuthenticationHandler,
+                "_delete_pkce_verifier",
+                AsyncMock(),
+            ),
+            patch("fastapi_sso.sso.base.DiscoveryDocument"),
+            patch("fastapi_sso.sso.generic.create_provider", return_value=MagicMock()),
+            patch.dict(
+                os.environ,
+                {
+                    "GENERIC_CLIENT_SECRET": "x",
+                    "GENERIC_AUTHORIZATION_ENDPOINT": "https://idp.example.com/auth",
+                    "GENERIC_TOKEN_ENDPOINT": "https://idp.example.com/token",
+                    "GENERIC_USERINFO_ENDPOINT": "https://idp.example.com/userinfo",
+                    "GENERIC_CLIENT_USE_PKCE": "true",
+                },
+            ),
+        ):
+            jwt_handler = MagicMock(spec=JWTHandler)
+            jwt_handler.get_team_ids_from_jwt.return_value = []
+            result, _, _ = await get_generic_sso_response(
+                request=mock_request,
+                jwt_handler=jwt_handler,
+                generic_client_id="cid",
+                redirect_url="https://proxy.example.com/sso/callback",
+                sso_jwt_handler=None,
+            )
+
+        # State-cookie check passed, so the function got past the early
+        # ProxyException raise and produced an SSO result object.
+        assert result is not None
