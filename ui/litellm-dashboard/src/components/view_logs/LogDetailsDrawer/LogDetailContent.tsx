@@ -4,6 +4,7 @@ import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import GuardrailViewer from "../GuardrailViewer/GuardrailViewer";
+import EvalViewer from "../EvalViewer/EvalViewer";
 import { CostBreakdownViewer } from "../CostBreakdownViewer";
 import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
@@ -37,7 +38,6 @@ const { Text } = Typography;
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
-  onOpenSettings?: () => void;
   /** When true, log details (messages/response) are still being lazy-loaded. */
   isLoadingDetails?: boolean;
   accessToken?: string | null;
@@ -51,7 +51,7 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
+export function LogDetailContent({ logEntry, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -67,6 +67,10 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
   const hasGuardrailData = guardrailEntries.length > 0;
   const totalMaskedEntities = calculateTotalMaskedEntities(guardrailEntries);
   const primaryGuardrailLabel = getGuardrailLabel(guardrailEntries);
+
+  // LLM Judge data
+  const evalInfo = metadata?.eval_information;
+  const hasEvalData = evalInfo != null;
 
   // Vector store data
   const hasVectorStoreData = checkHasVectorStoreData(metadata);
@@ -153,7 +157,7 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       {/* Configuration Info Message */}
       {missingData && (
         <div className="mb-6">
-          <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
+          <ConfigInfoMessage show={missingData} />
         </div>
       )}
 
@@ -189,6 +193,9 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
           />
         </div>
       )}
+
+      {/* LLM Judge Results */}
+      {hasEvalData && <EvalViewer data={evalInfo} />}
 
       {/* Vector Store Data */}
       {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}
