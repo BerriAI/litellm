@@ -5021,6 +5021,299 @@ async def test_list_keys_non_admin_user_id_auto_set():
                     )
 
 
+def _make_member_team_table(
+    team_id: str,
+    member_user_id: str,
+    member_role: str = "user",
+    team_member_permissions=None,
+):
+    """Build a LiteLLM_TeamTable with a single member, suitable for list_keys tests."""
+    from litellm.proxy._types import LiteLLM_TeamTable, Member
+
+    return LiteLLM_TeamTable(
+        team_id=team_id,
+        members_with_roles=[Member(user_id=member_user_id, role=member_role)],
+        team_member_permissions=team_member_permissions,
+    )
+
+
+async def _invoke_list_keys_and_capture_helper_kwargs(
+    user_api_key_dict,
+    team_objects,
+    *,
+    include_team_keys: bool = True,
+):
+    """
+    Invoke list_keys with mocked dependencies and return the kwargs that
+    list_keys passes to _list_key_helper (so tests can assert on
+    admin_team_ids / member_team_ids classification).
+    """
+    from unittest.mock import Mock, patch
+
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    mock_prisma_client = AsyncMock()
+    mock_user_info = LiteLLM_UserTable(
+        user_id=user_api_key_dict.user_id,
+        user_email="member@example.com",
+        teams=[t.team_id for t in team_objects],
+        organization_memberships=[],
+    )
+    mock_list_key_helper = AsyncMock(
+        return_value={
+            "keys": [],
+            "total_count": 0,
+            "current_page": 1,
+            "total_pages": 0,
+        }
+    )
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_list_check",
+            return_value=mock_user_info,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._fetch_user_team_objects",
+            AsyncMock(return_value=team_objects),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper",
+            mock_list_key_helper,
+        ),
+    ):
+        await list_keys(
+            request=Mock(),
+            user_api_key_dict=user_api_key_dict,
+            include_team_keys=include_team_keys,
+            status=None,
+        )
+    mock_list_key_helper.assert_called_once()
+    return mock_list_key_helper.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_list_keys_team_member_with_key_list_permission_sees_all_team_keys():
+    """
+    Bug fix: when a team has /key/list in team_member_permissions, regular
+    team members must get full key visibility for that team — same as a team
+    admin would. This means other members' keys AND service account keys
+    (user_id=NULL) must be returned, not only the caller's own keys.
+
+    This test pins down list_keys' classification: the team must be passed
+    to _list_key_helper as a full-visibility team (admin_team_ids), not as
+    a service-account-only team (member_team_ids).
+    """
+    member_user_id = "member-user-1"
+    team_id = "team-with-permission"
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id=member_user_id,
+    )
+    team_objects = [
+        _make_member_team_table(
+            team_id=team_id,
+            member_user_id=member_user_id,
+            member_role="user",
+            team_member_permissions=["/key/list"],
+        )
+    ]
+
+    helper_kwargs = await _invoke_list_keys_and_capture_helper_kwargs(
+        user_api_key_dict=user_api_key_dict,
+        team_objects=team_objects,
+    )
+
+    admin_team_ids = helper_kwargs.get("admin_team_ids") or []
+    member_team_ids = helper_kwargs.get("member_team_ids") or []
+    assert team_id in admin_team_ids, (
+        "team granting /key/list permission must be classified as full-visibility "
+        "(admin_team_ids), but got "
+        f"admin_team_ids={admin_team_ids}, member_team_ids={member_team_ids}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_keys_team_member_without_key_list_permission_only_service_accounts():
+    """
+    Without the /key/list permission, the existing scoping must hold: the
+    team is classified as member-only, so only service account keys
+    (user_id=NULL) for that team are visible to the caller.
+    """
+    member_user_id = "member-user-2"
+    team_id = "team-no-permission"
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id=member_user_id,
+    )
+    team_objects = [
+        _make_member_team_table(
+            team_id=team_id,
+            member_user_id=member_user_id,
+            member_role="user",
+            team_member_permissions=None,
+        )
+    ]
+
+    helper_kwargs = await _invoke_list_keys_and_capture_helper_kwargs(
+        user_api_key_dict=user_api_key_dict,
+        team_objects=team_objects,
+    )
+
+    admin_team_ids = helper_kwargs.get("admin_team_ids") or []
+    member_team_ids = helper_kwargs.get("member_team_ids") or []
+    assert team_id not in admin_team_ids
+    assert team_id in member_team_ids
+
+
+@pytest.mark.asyncio
+async def test_list_keys_team_member_with_permission_in_one_team_only():
+    """
+    Granular: a user is a member of two teams. Only one team grants
+    /key/list — the other does not. The classification must respect the
+    per-team permission, not leak full visibility across both teams.
+    """
+    member_user_id = "member-user-3"
+    team_with_permission = "team-A"
+    team_without_permission = "team-B"
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id=member_user_id,
+    )
+    team_objects = [
+        _make_member_team_table(
+            team_id=team_with_permission,
+            member_user_id=member_user_id,
+            member_role="user",
+            team_member_permissions=["/key/list"],
+        ),
+        _make_member_team_table(
+            team_id=team_without_permission,
+            member_user_id=member_user_id,
+            member_role="user",
+            team_member_permissions=[],
+        ),
+    ]
+
+    helper_kwargs = await _invoke_list_keys_and_capture_helper_kwargs(
+        user_api_key_dict=user_api_key_dict,
+        team_objects=team_objects,
+    )
+
+    admin_team_ids = helper_kwargs.get("admin_team_ids") or []
+    member_team_ids = helper_kwargs.get("member_team_ids") or []
+    assert team_with_permission in admin_team_ids
+    assert team_without_permission not in admin_team_ids
+    assert team_without_permission in member_team_ids
+
+
+@pytest.mark.asyncio
+async def test_list_keys_team_admin_unaffected_by_member_permission_logic():
+    """
+    Sanity: a team admin's classification is unchanged by the new
+    permission-aware path. They still appear in admin_team_ids (full
+    visibility) regardless of the team_member_permissions value.
+    """
+    admin_user_id = "team-admin-user"
+    team_id = "team-with-admin"
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id=admin_user_id,
+    )
+    team_objects = [
+        _make_member_team_table(
+            team_id=team_id,
+            member_user_id=admin_user_id,
+            member_role="admin",
+            team_member_permissions=None,
+        )
+    ]
+
+    helper_kwargs = await _invoke_list_keys_and_capture_helper_kwargs(
+        user_api_key_dict=user_api_key_dict,
+        team_objects=team_objects,
+    )
+
+    admin_team_ids = helper_kwargs.get("admin_team_ids") or []
+    assert team_id in admin_team_ids
+
+
+def test_build_key_filter_conditions_full_visibility_team_includes_service_accounts():
+    """
+    Direct check on the SQL filter: when a team is in the full-visibility
+    set (admin_team_ids), the filter clause for that team is
+    {"team_id": {"in": [...]}} with NO user_id constraint — so service
+    account keys (user_id=NULL) AND other members' keys are returned.
+
+    This is the SQL-level proof that a member with /key/list permission
+    will see service account keys for the team.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    full_visibility_team = "team-full-vis"
+    where = _build_key_filter_conditions(
+        user_id="member-user-x",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=[full_visibility_team],
+        member_team_ids=[full_visibility_team],
+        include_created_by_keys=False,
+    )
+
+    serialized = json.dumps(where)
+    # Full-visibility team filter: no user_id restriction
+    assert (
+        json.dumps({"team_id": {"in": [full_visibility_team]}}) in serialized
+    ), f"expected unrestricted team_id IN clause, got: {serialized}"
+    # No service-account-only AND clause for this team (it would be redundant
+    # and would erroneously narrow the visibility back to user_id=NULL).
+    sa_only_clause = json.dumps(
+        {"AND": [{"team_id": {"in": [full_visibility_team]}}, {"user_id": None}]}
+    )
+    assert (
+        sa_only_clause not in serialized
+    ), f"team in admin_team_ids must not also be filtered to user_id=NULL: {serialized}"
+
+
+def test_build_key_filter_conditions_member_only_team_restricts_to_service_accounts():
+    """
+    Existing-behavior pin: when a team is ONLY in member_team_ids (not
+    admin_team_ids), the filter for that team must be
+    {"AND": [{"team_id": {"in": [...]}}, {"user_id": None}]} — i.e. only
+    service accounts visible. This is the "no permission" baseline that
+    must keep working.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _build_key_filter_conditions,
+    )
+
+    member_only_team = "team-member-only"
+    where = _build_key_filter_conditions(
+        user_id="member-user-y",
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        exclude_team_id=None,
+        admin_team_ids=[],
+        member_team_ids=[member_only_team],
+        include_created_by_keys=False,
+    )
+
+    serialized = json.dumps(where)
+    expected = json.dumps(
+        {"AND": [{"team_id": {"in": [member_only_team]}}, {"user_id": None}]}
+    )
+    assert (
+        expected in serialized
+    ), f"member-only team must be restricted to user_id=NULL keys, got: {serialized}"
+
+
 @pytest.mark.asyncio
 async def test_generate_key_negative_max_budget():
     """

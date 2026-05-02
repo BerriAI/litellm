@@ -259,6 +259,189 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
         ), "Existing LoggerProvider should be respected and not overridden"
 
 
+class TestOpenTelemetryDualHandlerIsolation(unittest.TestCase):
+    """Two OpenTelemetry handlers coexisting via skip_set_global=True
+    must each get their own provider for every signal (tracer/meter/logger)."""
+
+    @staticmethod
+    def _wire_span_processor(exporter):
+        """Context manager: while active, the next OpenTelemetry instance
+        wires its TracerProvider to `exporter`."""
+        return patch.object(
+            OpenTelemetry,
+            "_get_span_processor",
+            lambda self, dynamic_headers=None: SimpleSpanProcessor(exporter),
+        )
+
+    def test_skip_set_global_creates_isolated_tracer_provider(self):
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        fake_existing = SDKTracerProvider()
+        own_exporter = InMemorySpanExporter()
+        cfg = OpenTelemetryConfig(
+            exporter="console", service_name="iso-test", skip_set_global=True
+        )
+        with (
+            patch.object(trace, "get_tracer_provider", return_value=fake_existing),
+            patch.object(trace, "set_tracer_provider") as mock_set,
+            self._wire_span_processor(own_exporter),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        self.assertIsNot(handler._tracer_provider, fake_existing)
+        mock_set.assert_not_called()
+
+        handler.tracer.start_span("isolation_check").end()
+        handler._tracer_provider.force_flush(2000)
+        self.assertEqual(
+            [s.name for s in own_exporter.get_finished_spans()],
+            ["isolation_check"],
+        )
+
+    def test_skip_set_global_via_callback_name_back_compat(self):
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        fake_existing = SDKTracerProvider()
+        cfg = OpenTelemetryConfig(exporter="console", service_name="lf-back-compat")
+        with (
+            patch.object(trace, "get_tracer_provider", return_value=fake_existing),
+            patch.object(trace, "set_tracer_provider"),
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg, callback_name="langfuse_otel")
+
+        self.assertIsNot(handler._tracer_provider, fake_existing)
+
+    def test_default_behavior_reuses_existing_sdk_tracer_provider(self):
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        fake_existing = SDKTracerProvider()
+        with patch.object(trace, "get_tracer_provider", return_value=fake_existing):
+            handler = OpenTelemetry(config=OpenTelemetryConfig(service_name="shared"))
+        self.assertIs(handler._tracer_provider, fake_existing)
+
+    def test_skip_set_global_creates_isolated_meter_provider(self):
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
+
+        fake_existing = SDKMeterProvider()
+        cfg = OpenTelemetryConfig(
+            exporter="console",
+            service_name="meter-iso-test",
+            enable_metrics=True,
+            skip_set_global=True,
+        )
+        with (
+            patch.object(metrics, "get_meter_provider", return_value=fake_existing),
+            patch.object(metrics, "set_meter_provider") as mock_set,
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        self.assertIsNot(handler._meter_provider, fake_existing)
+        mock_set.assert_not_called()
+
+    def test_skip_set_global_creates_isolated_logger_provider(self):
+        from opentelemetry import _logs
+        from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
+
+        fake_existing = SDKLoggerProvider()
+        cfg = OpenTelemetryConfig(
+            exporter="console",
+            service_name="logger-iso-test",
+            enable_events=True,
+            skip_set_global=True,
+        )
+        with (
+            patch.object(_logs, "get_logger_provider", return_value=fake_existing),
+            patch.object(_logs, "set_logger_provider") as mock_set,
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        self.assertIsNot(handler._logger_provider, fake_existing)
+        mock_set.assert_not_called()
+
+    def test_emitted_logs_route_to_isolated_logger_provider(self):
+        # End-to-end: emitted logs land in the handler's private LoggerProvider,
+        # not the global one. Guards against get_logger() bypassing self._logger_provider.
+        from opentelemetry import _logs
+        from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
+
+        global_exporter = InMemoryLogExporter()
+        fake_existing = SDKLoggerProvider()
+        fake_existing.add_log_record_processor(
+            SimpleLogRecordProcessor(global_exporter)
+        )
+
+        private_exporter = InMemoryLogExporter()
+        cfg = OpenTelemetryConfig(
+            exporter="console",
+            service_name="logger-emit-test",
+            enable_events=True,
+            skip_set_global=True,
+        )
+        with (
+            patch.object(_logs, "get_logger_provider", return_value=fake_existing),
+            patch.object(_logs, "set_logger_provider"),
+            patch.object(
+                OpenTelemetry, "_get_log_exporter", return_value=private_exporter
+            ),
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        span = handler.tracer.start_span("emit-test")
+        handler._emit_semantic_logs(
+            kwargs={"messages": [{"role": "user", "content": "hi"}]},
+            response_obj={"choices": []},
+            span=span,
+        )
+        span.end()
+        handler._logger_provider.force_flush(2000)
+
+        self.assertGreater(len(private_exporter.get_finished_logs()), 0)
+        self.assertEqual(len(global_exporter.get_finished_logs()), 0)
+
+    def test_two_handlers_each_receive_their_own_spans(self):
+        # Handler A gets explicit injection (production-ish: claims the global).
+        exporter_a = InMemorySpanExporter()
+        provider_a = TracerProvider()
+        provider_a.add_span_processor(SimpleSpanProcessor(exporter_a))
+        handler_a = OpenTelemetry(
+            config=OpenTelemetryConfig(service_name="handler-a"),
+            tracer_provider=provider_a,
+        )
+
+        # Handler B comes along with the global appearing to be A's provider.
+        exporter_b = InMemorySpanExporter()
+        cfg_b = OpenTelemetryConfig(
+            exporter="console", service_name="handler-b", skip_set_global=True
+        )
+        with (
+            patch.object(trace, "get_tracer_provider", return_value=provider_a),
+            patch.object(trace, "set_tracer_provider"),
+            self._wire_span_processor(exporter_b),
+        ):
+            handler_b = OpenTelemetry(config=cfg_b)
+
+        self.assertIsNot(handler_a._tracer_provider, handler_b._tracer_provider)
+
+        handler_a.tracer.start_span("from_handler_a").end()
+        handler_b.tracer.start_span("from_handler_b").end()
+        provider_a.force_flush(2000)
+        handler_b._tracer_provider.force_flush(2000)
+
+        self.assertEqual(
+            sorted(s.name for s in exporter_a.get_finished_spans()),
+            ["from_handler_a"],
+        )
+        self.assertEqual(
+            sorted(s.name for s in exporter_b.get_finished_spans()),
+            ["from_handler_b"],
+        )
+
+
 class TestOpenTelemetry(unittest.TestCase):
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0

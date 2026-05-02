@@ -330,6 +330,9 @@ enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
 )
+enable_gemini_default_thinking_level_low: bool = (
+    False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
+)
 ####################
 logging: bool = True
 enable_loadbalancing_on_batch_endpoints: Optional[bool] = None
