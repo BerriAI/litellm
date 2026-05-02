@@ -2138,6 +2138,47 @@ if MCP_AVAILABLE:
         #########################################################
         local_tool = global_mcp_tool_registry.get_tool(name)
         if local_tool:
+            # OpenAPI-backed tools used to bypass `pre_call_tool_check` —
+            # only the managed path ran allowed/banned-tool checks, key/team
+            # tool permissions, and parameter validation. Run the same checks
+            # before dispatching to the local registry. Refuse the call if
+            # we cannot resolve a server: tools registered via
+            # openapi_to_mcp_generator are always tied to a server, so a
+            # missing mcp_server here means the tool->server mapping has
+            # not finished initializing or the registry entry is orphaned.
+            # Skipping the check would re-open the same authorization gap.
+            if mcp_server is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        f"MCP server for tool '{name}' is not available; "
+                        "refusing to dispatch without authorization checks. "
+                        "Retry once the server is registered."
+                    ),
+                )
+
+            # `pre_call_tool_check` calls into `proxy_logging_obj` for the
+            # pre-call guardrail hooks, so source it from the canonical
+            # `proxy_server` module the same way `_handle_managed_mcp_tool`
+            # does. `kwargs.get("proxy_logging_obj")` is None on the MCP
+            # entry path and would crash with AttributeError after the
+            # security checks pass.
+            from litellm.proxy.proxy_server import proxy_logging_obj
+
+            hook_result = await global_mcp_server_manager.pre_call_tool_check(
+                name=original_tool_name,
+                arguments=arguments or {},
+                server_name=server_name or mcp_server.name,
+                user_api_key_auth=user_api_key_auth,
+                proxy_logging_obj=proxy_logging_obj,
+                server=mcp_server,
+                raw_headers=raw_headers,
+            )
+            # `pre_call_tool_check` may return guardrail-modified
+            # arguments; honor them on the local path too.
+            if isinstance(hook_result, dict) and "arguments" in hook_result:
+                arguments = hook_result["arguments"]
+
             verbose_logger.debug(f"Executing local registry tool: {name}")
             # For BYOK servers the credential must be injected via a ContextVar
             # because the tool function has headers baked into its closure.

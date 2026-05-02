@@ -2,7 +2,7 @@ import os
 import re
 import sys
 from functools import lru_cache
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 from fastapi import HTTPException, Request, status
 
@@ -167,6 +167,81 @@ def _allow_model_level_clientside_configurable_parameters(
     )
 
 
+# Config dicts whose entries are spread as ``**dict`` into outbound LLM
+# API calls. ``litellm_embedding_config`` is consumed by the Milvus
+# vector store transformer; future nested-config keys with the same
+# threat shape should be added here.
+_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config",)
+
+# Banned root-level params. Same list applies to every entry in
+# ``_NESTED_CONFIG_KEYS`` because those dicts get spread as ``**kwargs``
+# into the same outbound calls.
+_BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
+    "api_base",
+    "base_url",
+    "user_config",
+    "aws_sts_endpoint",
+    "aws_web_identity_token",
+    "aws_role_name",
+    "vertex_credentials",
+    # Endpoint-targeting fields that retarget the outbound request or
+    # an observability callback. An attacker-controlled value either
+    # exfiltrates the request payload (incl. messages + admin-set
+    # tokens) to the attacker's host, or coerces the proxy into
+    # authenticating against the attacker's host with admin secrets.
+    "aws_bedrock_runtime_endpoint",
+    "langsmith_base_url",
+    "langfuse_host",
+    "posthog_host",
+    "braintrust_host",
+    "slack_webhook_url",
+    # Provider-specific endpoint overrides that flow into the outbound
+    # request via ``optional_params``. Same threat as ``api_base``:
+    # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
+    # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
+    # ``deployment_url`` redirects SAP deployments.
+    "s3_endpoint_url",
+    "sagemaker_base_url",
+    "deployment_url",
+)
+
+
+def _check_banned_params(
+    body: dict,
+    general_settings: dict,
+    llm_router: Optional[Router],
+    model: str,
+) -> None:
+    """Raise ``ValueError`` if ``body`` carries a banned param without admin opt-in.
+
+    Shared between the root-level check and the nested-config check so a
+    new banned param only needs to be added in one place.
+    """
+    for param in _BANNED_REQUEST_BODY_PARAMS:
+        if param not in body:
+            continue
+        if general_settings.get("allow_client_side_credentials") is True:
+            return
+        if (
+            _allow_model_level_clientside_configurable_parameters(
+                model=model,
+                param=param,
+                request_body_value=body[param],
+                llm_router=llm_router,
+            )
+            is True
+        ):
+            return
+        raise ValueError(
+            f"Rejected Request: {param} is not allowed in request body. "
+            "Clientside passthrough requires explicit admin opt-in via "
+            "either `general_settings.allow_client_side_credentials = true` "
+            "(proxy-wide) or `configurable_clientside_auth_params` on the "
+            "deployment in your proxy config.yaml. "
+            "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
+        )
+
+
 def is_request_body_safe(
     request_body: dict, general_settings: dict, llm_router: Optional[Router], model: str
 ) -> bool:
@@ -175,72 +250,31 @@ def is_request_body_safe(
 
     A malicious user can set the ﻿api_base to their own domain and invoke POST /chat/completions to intercept and steal the OpenAI API key.
     Relevant issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997
+
+    The blocklist is enforced unconditionally. Legitimate clientside
+    credential / endpoint passthrough goes through one of the two
+    explicit admin opt-ins (``general_settings.allow_client_side_credentials``
+    proxy-wide or ``configurable_clientside_auth_params`` per deployment).
+    Historically there was a third, *implicit*, *caller-controlled* path:
+    ``check_complete_credentials`` returned True when the caller supplied
+    any non-empty ``api_key``, which made the entire blocklist a no-op.
+    That bypass turned every missing entry on the blocklist into an
+    exploitable SSRF / credential-exfil hole — see GHSA-jh89-88fc-qrfp,
+    GHSA-3frq-6r6h-7j64, and the chain of veria-admin findings (Dv_m860l,
+    b_yRJeQ5, stN90yjP, LBlyOAc8, U2TD78kg). Removed: the blocklist now
+    has a single, predictable failure mode for missing entries (a 400),
+    not a credential leak.
+
+    Iterative single-level descent into ``_NESTED_CONFIG_KEYS`` (rather
+    than recursion) covers nested-config attacks like Milvus's
+    ``litellm_embedding_config.api_base`` (VERIA-6) without exposing a
+    recursion-depth DoS surface.
     """
-    banned_params = [
-        "api_base",
-        "base_url",
-        "user_config",
-        "aws_sts_endpoint",
-        "aws_web_identity_token",
-        "aws_role_name",
-        "vertex_credentials",
-        # Endpoint-targeting fields that retarget the outbound request or
-        # an observability callback. An attacker-controlled value either
-        # exfiltrates the request payload (incl. messages + admin-set
-        # tokens) to the attacker's host, or coerces the proxy into
-        # authenticating against the attacker's host with admin secrets.
-        "aws_bedrock_runtime_endpoint",
-        "langsmith_base_url",
-        "langfuse_host",
-        "posthog_host",
-        "braintrust_host",
-        "slack_webhook_url",
-        # Provider-specific endpoint overrides that flow into the outbound
-        # request via ``optional_params``. Same threat as ``api_base``:
-        # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
-        # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
-        # ``deployment_url`` redirects SAP deployments.
-        "s3_endpoint_url",
-        "sagemaker_base_url",
-        "deployment_url",
-    ]
-
-    # The blocklist is enforced unconditionally. Legitimate clientside
-    # credential / endpoint passthrough goes through one of the two
-    # explicit admin opt-ins (``general_settings.allow_client_side_credentials``
-    # proxy-wide or ``configurable_clientside_auth_params`` per deployment).
-    # Historically there was a third, *implicit*, *caller-controlled* path:
-    # ``check_complete_credentials`` returned True when the caller supplied
-    # any non-empty ``api_key``, which made the entire blocklist a no-op.
-    # That bypass turned every missing entry on the blocklist into an
-    # exploitable SSRF / credential-exfil hole — see GHSA-jh89-88fc-qrfp,
-    # GHSA-3frq-6r6h-7j64, and the chain of veria-admin findings (Dv_m860l,
-    # b_yRJeQ5, stN90yjP, LBlyOAc8, U2TD78kg). Removed: the blocklist now
-    # has a single, predictable failure mode for missing entries (a 400),
-    # not a credential leak.
-    for param in banned_params:
-        if param in request_body:
-            if general_settings.get("allow_client_side_credentials") is True:
-                return True
-            elif (
-                _allow_model_level_clientside_configurable_parameters(
-                    model=model,
-                    param=param,
-                    request_body_value=request_body[param],
-                    llm_router=llm_router,
-                )
-                is True
-            ):
-                return True
-            raise ValueError(
-                f"Rejected Request: {param} is not allowed in request body. "
-                "Clientside passthrough requires explicit admin opt-in via "
-                "either `general_settings.allow_client_side_credentials = true` "
-                "(proxy-wide) or `configurable_clientside_auth_params` on the "
-                "deployment in your proxy config.yaml. "
-                "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
-            )
-
+    _check_banned_params(request_body, general_settings, llm_router, model)
+    for nested_key in _NESTED_CONFIG_KEYS:
+        nested = request_body.get(nested_key)
+        if isinstance(nested, dict):
+            _check_banned_params(nested, general_settings, llm_router, model)
     return True
 
 
@@ -942,20 +976,257 @@ def get_end_user_id_from_request_body(
     return None
 
 
-def get_model_from_request(
-    request_data: dict, route: str
-) -> Optional[Union[str, List[str]]]:
-    # First try to get model from request_data
-    model = request_data.get("model") or request_data.get("target_model_names")
+MODEL_ROUTING_HEADER_NAME = "x-litellm-model"
+_MODEL_ROUTING_ROUTE_MARKERS = (
+    "/files",
+    "/batches",
+    "/vector_stores",
+    "/skills",
+    "/evals",
+    "/fine_tuning",
+    "/videos",
+)
+_MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS = (
+    "/files",
+    "/batches",
+    "/skills",
+    "/evals",
+)
+_MODEL_ROUTING_QUERY_TARGET_MODEL_ROUTE_MARKERS = (
+    "/files",
+    "/batches",
+    "/fine_tuning",
+)
+_MODEL_ROUTING_BODY_TARGET_MODEL_ROUTE_MARKERS = (
+    "/files",
+    "/batches",
+    "/vector_stores",
+)
+_MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS = ("/evals",)
+_MODEL_ROUTING_ID_FIELDS = (
+    "file_id",
+    "input_file_id",
+    "output_file_id",
+    "error_file_id",
+    "batch_id",
+    "fine_tuning_job_id",
+    "training_file",
+    "validation_file",
+    "vector_store_id",
+    "video_id",
+    "character_id",
+)
 
-    if model is not None:
-        model_names = model.split(",")
-        if len(model_names) == 1:
-            model = model_names[0].strip()
+
+def _append_model_candidates(candidates: List[str], value: Any) -> None:
+    if value is None:
+        return
+
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    for item in values:
+        if item is None:
+            continue
+        if isinstance(item, str):
+            model_names = [model.strip() for model in item.split(",")]
         else:
-            model = [m.strip() for m in model_names]
+            model_names = [str(item).strip()]
+        candidates.extend(model for model in model_names if model)
 
-    # If model not in request_data, try to extract from route
+
+def _dedupe_model_candidates(candidates: List[str]) -> List[str]:
+    deduped: List[str] = []
+    for model in candidates:
+        if model not in deduped:
+            deduped.append(model)
+    return deduped
+
+
+def _get_case_insensitive_mapping_value(
+    mapping: Optional[Mapping[str, Any]], key: str
+) -> Any:
+    if not mapping:
+        return None
+    if key in mapping:
+        return mapping[key]
+    key_lower = key.lower()
+    for mapping_key, value in mapping.items():
+        if str(mapping_key).lower() == key_lower:
+            return value
+    return None
+
+
+def _route_matches_any_marker(route: str, markers: Tuple[str, ...]) -> bool:
+    normalized_route = route.lower()
+    return any(marker in normalized_route for marker in markers)
+
+
+def _route_uses_model_routing_sources(route: str) -> bool:
+    return _route_matches_any_marker(route=route, markers=_MODEL_ROUTING_ROUTE_MARKERS)
+
+
+def _extract_models_from_managed_resource_id(
+    resource_id: Any, resource_id_field: Optional[str] = None
+) -> List[str]:
+    if not isinstance(resource_id, str) or not resource_id:
+        return []
+
+    candidates: List[str] = []
+
+    try:
+        from litellm.proxy.openai_files_endpoints.common_utils import (
+            _is_base64_encoded_unified_file_id,
+            decode_model_from_file_id,
+            get_model_id_from_unified_batch_id,
+            get_models_from_unified_file_id,
+        )
+
+        _append_model_candidates(
+            candidates=candidates, value=decode_model_from_file_id(resource_id)
+        )
+        unified_file_id = _is_base64_encoded_unified_file_id(resource_id)
+        if unified_file_id:
+            _append_model_candidates(
+                candidates=candidates,
+                value=get_models_from_unified_file_id(unified_file_id),
+            )
+            _append_model_candidates(
+                candidates=candidates,
+                value=get_model_id_from_unified_batch_id(unified_file_id),
+            )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Unable to extract model from managed file/batch ID: %s", str(e)
+        )
+
+    try:
+        from litellm.llms.base_llm.managed_resources.utils import parse_unified_id
+
+        parsed_id = parse_unified_id(resource_id)
+        if parsed_id:
+            _append_model_candidates(
+                candidates=candidates, value=parsed_id.get("model_id")
+            )
+            _append_model_candidates(
+                candidates=candidates, value=parsed_id.get("target_model_names")
+            )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Unable to extract model from unified managed resource ID: %s", str(e)
+        )
+
+    if resource_id_field in ("video_id", "character_id"):
+        try:
+            from litellm.types.videos.utils import (
+                decode_character_id_with_provider,
+                decode_video_id_with_provider,
+            )
+
+            if resource_id_field == "video_id":
+                _append_model_candidates(
+                    candidates=candidates,
+                    value=decode_video_id_with_provider(resource_id).get("model_id"),
+                )
+            else:
+                _append_model_candidates(
+                    candidates=candidates,
+                    value=decode_character_id_with_provider(resource_id).get(
+                        "model_id"
+                    ),
+                )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Unable to extract model from managed video/character ID: %s", str(e)
+            )
+
+    return _dedupe_model_candidates(candidates)
+
+
+def _extract_model_candidates_from_request(
+    request_data: dict,
+    route: str,
+    request_headers: Optional[Mapping[str, Any]] = None,
+    request_query_params: Optional[Mapping[str, Any]] = None,
+) -> List[str]:
+    candidates: List[str] = []
+    uses_model_routing_sources = _route_uses_model_routing_sources(route=route)
+    uses_header_or_query_model_sources = _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_HEADER_OR_QUERY_ROUTE_MARKERS
+    )
+    uses_query_target_model_sources = _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_QUERY_TARGET_MODEL_ROUTE_MARKERS
+    )
+    uses_body_target_model_sources = _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_BODY_TARGET_MODEL_ROUTE_MARKERS
+    )
+    uses_completion_model_sources = _route_matches_any_marker(
+        route=route, markers=_MODEL_ROUTING_COMPLETION_MODEL_ROUTE_MARKERS
+    )
+
+    body_model = request_data.get("model")
+    _append_model_candidates(candidates, body_model)
+    if uses_body_target_model_sources or not body_model:
+        _append_model_candidates(candidates, request_data.get("target_model_names"))
+    if uses_completion_model_sources and isinstance(
+        request_data.get("completion"), dict
+    ):
+        _append_model_candidates(candidates, request_data["completion"].get("model"))
+
+    if uses_model_routing_sources:
+        if uses_header_or_query_model_sources:
+            _append_model_candidates(
+                candidates,
+                _get_case_insensitive_mapping_value(request_query_params, "model"),
+            )
+            _append_model_candidates(
+                candidates,
+                _get_case_insensitive_mapping_value(
+                    request_headers, MODEL_ROUTING_HEADER_NAME
+                ),
+            )
+        if uses_query_target_model_sources:
+            _append_model_candidates(
+                candidates,
+                _get_case_insensitive_mapping_value(
+                    request_query_params, "target_model_names"
+                ),
+            )
+
+        for field in _MODEL_ROUTING_ID_FIELDS:
+            _append_model_candidates(
+                candidates,
+                _extract_models_from_managed_resource_id(
+                    request_data.get(field), resource_id_field=field
+                ),
+            )
+
+    return _dedupe_model_candidates(candidates)
+
+
+def _format_model_candidates(
+    candidates: List[str],
+) -> Optional[Union[str, List[str]]]:
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    return candidates
+
+
+def get_model_from_request(
+    request_data: dict,
+    route: str,
+    request_headers: Optional[Mapping[str, Any]] = None,
+    request_query_params: Optional[Mapping[str, Any]] = None,
+) -> Optional[Union[str, List[str]]]:
+    candidates = _extract_model_candidates_from_request(
+        request_data=request_data,
+        route=route,
+        request_headers=request_headers,
+        request_query_params=request_query_params,
+    )
+    model = _format_model_candidates(candidates)
+
+    # If no explicit model was found, try to extract from route
     if model is None:
         # Parse model from route that follows the pattern /openai/deployments/{model}/*
         match = re.match(r"/openai/deployments/([^/]+)", route)
