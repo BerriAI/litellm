@@ -439,6 +439,53 @@ class TestVertexBatchOutputTransformation:
         assert result["error"]["code"] == "vertex_ai_error"
         assert result["custom_id"] == "request-error"
 
+    def test_transform_exception_path_sets_response_null(self, config):
+        """
+        The except-Exception branch in _transform_single_vertex_batch_output_to_openai
+        must also emit response=null per the OpenAI Batch output spec. The outer
+        _try_transform path swallows exceptions and falls back to original content,
+        so this test invokes the single-line transformer directly with a vertex_gemini_config
+        stub that raises during transformation.
+        """
+        from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+            VertexGeminiConfig,
+        )
+
+        vertex_output = {
+            "status": "",
+            "processed_time": "2024-11-01T18:13:16.826+00:00",
+            "request": {
+                "contents": [{"role": "user", "parts": [{"text": "Hello world!"}]}],
+                "labels": {"litellm_custom_id": "request-boom"},
+            },
+            "response": {"modelVersion": "gemini-2.0-flash-001@default"},
+        }
+
+        class _RaisingGeminiConfig(VertexGeminiConfig):
+            def _transform_google_generate_content_to_openai_model_response(
+                self, *args, **kwargs
+            ):
+                raise ValueError("simulated transform failure")
+
+        mock_response = httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            request=httpx.Request(method="POST", url="https://example.com"),
+        )
+
+        result = config._transform_single_vertex_batch_output_to_openai(
+            vertex_output=vertex_output,
+            vertex_gemini_config=_RaisingGeminiConfig(),
+            logging_obj=MagicMock(),
+            mock_httpx_response=mock_response,
+        )
+
+        assert result["response"] is None
+        assert result["error"] is not None
+        assert result["error"]["code"] == "transformation_error"
+        assert "simulated transform failure" in result["error"]["message"]
+        assert result["custom_id"] == "request-boom"
+
     def test_transform_vertex_batch_output_legacy_labels_only_sanitized(self, config):
         """Older LiteLLM batches only stored litellm_custom_id (sanitized); read path still works."""
         vertex_output = {
