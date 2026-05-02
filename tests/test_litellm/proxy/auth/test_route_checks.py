@@ -1265,6 +1265,349 @@ def test_proxy_admin_viewer_can_access_audit_logs(route):
         )
 
 
+# ── Admin Viewer parity: Logs page endpoints ──────────────────────────────────
+#
+# The Admin Viewer (PROXY_ADMIN_VIEW_ONLY) role is documented as
+# "view all keys, view all spend" and follows a read-parity-with-Proxy-Admin
+# rule. The UI Logs page is the most user-visible failure mode: filtering and
+# log details break entirely when these routes are blocked at the route_checks
+# layer, even though the underlying handlers already gate on PROXY_ADMIN_VIEW_ONLY.
+#
+# Each route below corresponds to a network call made by the Logs page
+# (ui/litellm-dashboard/src/components/view_logs/) — see the comment on each.
+ADMIN_VIEWER_LOGS_PAGE_ROUTES = [
+    # Main paginated log list — uiSpendLogsCall in log_filter_logic.tsx & index.tsx
+    "/spend/logs/ui",
+    # Single-log detail drawer — fetched on row click in LogDetailsDrawer
+    "/spend/logs/ui/abc-request-id",
+    # Multi-call session drawer — sessionSpendLogsCall in LogDetailsDrawer
+    "/spend/logs/session/ui",
+    # End User filter dropdown — allEndUsersCall in index.tsx
+    "/customer/list",
+    "/customer/info",
+    # Cost estimation — used by some log views
+    "/cost/estimate",
+    # Public spend logs / spend tracking routes that admin viewer should read
+    "/spend/logs",
+    "/spend/keys",
+    "/spend/users",
+    "/spend/tags",
+    "/spend/calculate",
+]
+
+
+@pytest.mark.parametrize("route", ADMIN_VIEWER_LOGS_PAGE_ROUTES)
+def test_proxy_admin_viewer_can_access_logs_page_endpoints(route):
+    """
+    PROXY_ADMIN_VIEW_ONLY must pass route_checks for every endpoint the UI
+    Logs page depends on. Without these, the page renders empty / errors.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(
+            f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}"
+        )
+
+
+@pytest.mark.parametrize("route", ADMIN_VIEWER_LOGS_PAGE_ROUTES)
+def test_internal_user_blocked_from_admin_viewer_logs_routes(route):
+    """
+    The Logs-page route opening above must NOT also widen access for
+    INTERNAL_USER. Plain internal users still see only their own logs and
+    must be blocked from proxy-wide spend tracking + customer routes.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    # Routes already in `spend_tracking_routes` (which is part of
+    # `internal_user_routes`) are intentionally accessible to internal users
+    # for their own scoped spend — those handlers enforce per-user filtering.
+    # /cost/estimate is similarly per-user. The /customer/* routes are
+    # admin-only.
+    INTERNAL_USER_BLOCKED_SUBSET = {
+        "/customer/list",
+        "/customer/info",
+    }
+    if route not in INTERNAL_USER_BLOCKED_SUBSET:
+        return
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin" in str(exc_info.value)
+
+
+# ── Admin Viewer parity: Settings/observability read endpoints ────────────────
+#
+# These are GET endpoints accessible to PROXY_ADMIN that the UI exposes to
+# admin viewers via sidebar items gated by `all_admin_roles` (which includes
+# proxy_admin_viewer). Without these, the Logging & Alerts, Caching, Budgets,
+# and Admin Settings pages break for admin viewers.
+ADMIN_VIEWER_SETTINGS_ROUTES = [
+    # Logging & Alerts page
+    "/callbacks/list",
+    "/callbacks/configs",
+    "/get/config/callbacks",
+    "/alerting/settings",
+    # Admin Settings / Router Settings pages
+    "/config/list",
+    "/config/field/info",
+    # Budgets page
+    "/budget/list",
+    "/budget/settings",
+    # Invitation viewing (admin viewer cannot create/delete; can read)
+    "/invitation/info",
+    # Guardrails / Policies pages (read-only views)
+    "/guardrails/list",
+    "/v2/guardrails/list",
+    "/guardrails/submissions",
+    "/guardrails/submissions/some-guardrail-id",
+    "/guardrails/usage/overview",
+    "/policies/attachments/list",
+    # MCP semantic filter settings (read)
+    "/get/mcp_semantic_filter_settings",
+    # Model cost map (read-only status / source)
+    "/schedule/model_cost_map_reload/status",
+    "/model/cost_map/source",
+]
+
+
+@pytest.mark.parametrize("route", ADMIN_VIEWER_SETTINGS_ROUTES)
+def test_proxy_admin_viewer_can_access_settings_read_endpoints(route):
+    """
+    PROXY_ADMIN_VIEW_ONLY must pass route_checks for the read-only
+    settings/observability endpoints exposed in admin-only sidebar groups.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(
+            f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}"
+        )
+
+
+# ── Admin Viewer parity: default-allow GET semantics ─────────────────────────
+#
+# The route-check layer is structured to default-allow safe HTTP methods
+# (GET / HEAD / OPTIONS) for PROXY_ADMIN_VIEW_ONLY. This eliminates the
+# whack-a-mole where every newly-added GET endpoint silently 403'd until
+# someone remembered to add it to admin_viewer_routes.
+#
+# These tests pin the new contract:
+#   - Any GET endpoint not on the LLM/inference path is readable.
+#   - Any unsafe method (POST/PUT/PATCH/DELETE) outside the explicit allow
+#     sets is still 403.
+
+# Routes the user reported as broken in production — they're in disparate
+# corners of the codebase and represent the long tail of GETs we'd otherwise
+# need to enumerate manually. Default-allow makes them all work.
+ADMIN_VIEWER_REPORTED_GET_ROUTES = [
+    "/in_product_nudges",
+    "/health/latest",
+    "/credentials",
+    "/v1/mcp/network/client-ip",
+    "/claude-code/plugins",
+    "/policy/templates",
+    # Routes we already had to enumerate manually (regression coverage).
+    "/spend/logs/ui",
+    "/customer/list",
+    "/guardrails/list",
+    "/policies/attachments/list",
+    # Hypothetical future GETs — must not require an allowlist entry.
+    "/some/future/read/endpoint",
+    "/another/admin-tool/status",
+]
+
+
+@pytest.mark.parametrize("route", ADMIN_VIEWER_REPORTED_GET_ROUTES)
+def test_proxy_admin_viewer_default_allows_any_get(route):
+    """
+    PROXY_ADMIN_VIEW_ONLY must be able to GET any non-inference endpoint.
+
+    This is a structural guarantee: the route-check defaults to allow for
+    safe HTTP methods so we don't have to maintain an explicit allowlist.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+    request.query_params = {}
+    request.url = MagicMock()
+    request.url.path = route
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(f"proxy_admin_viewer GET should default-allow {route!r}. Got: {e}")
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        # Random path that isn't in any allowlist — POST must still 403.
+        "/some/future/write/endpoint",
+        # Hard-blocked write routes.
+        "/user/new",
+        "/team/new",
+        "/key/generate",
+        "/model/new",
+    ],
+)
+def test_proxy_admin_viewer_post_blocked_outside_allowlists(route):
+    """
+    Default-allow only applies to safe HTTP methods. POST/PUT/PATCH/DELETE
+    on a route not in any allow set must still 403.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403
+
+
+# ── Admin Viewer: management_routes write endpoints stay blocked ─────────────
+#
+# `management_routes` is a mix of reads (info/list, handled via the safe-method
+# branch — GET) and writes. The route_checks layer must NOT blanket-allow the
+# whole set on POST — that would let Admin Viewer mutate teams, JWT mappings,
+# and bulk-update keys, violating the "no writes, ever" rule.
+#
+# These cases pin the gap closed (Greptile P1 review, 2026-04-30).
+ADMIN_VIEWER_MANAGEMENT_ROUTE_WRITES = [
+    # Team writes
+    "/team/block",
+    "/team/unblock",
+    "/team/permissions_update",
+    # JWT key mapping writes
+    "/jwt/key/mapping/new",
+    "/jwt/key/mapping/update",
+    "/jwt/key/mapping/delete",
+    # Key writes (existing _ADMIN_VIEWER_BLOCKED_WRITE_ROUTES doesn't list bulk
+    # update or per-key reset-spend, so the management_routes fallback was the
+    # only thing keeping them out — and it was permissive, not restrictive).
+    "/key/bulk_update",
+    "/key/some-key-id/reset_spend",
+]
+
+
+@pytest.mark.parametrize("route", ADMIN_VIEWER_MANAGEMENT_ROUTE_WRITES)
+def test_proxy_admin_viewer_post_blocked_for_management_route_writes(route):
+    """
+    Admin Viewer must be blocked on POST to write endpoints in
+    `management_routes`, even when the specific route is not in
+    `_ADMIN_VIEWER_BLOCKED_WRITE_ROUTES`.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.query_params = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert exc_info.value.status_code == 403
+
+
 class TestModelsRouteExemptFromDisableLLMEndpoints:
     """
     Test that /models and /v1/models are exempt from DISABLE_LLM_API_ENDPOINTS.

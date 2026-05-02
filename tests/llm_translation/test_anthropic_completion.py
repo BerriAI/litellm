@@ -1885,3 +1885,42 @@ def test_metadata_filter_applies_to_azure_anthropic():
         headers={},
     )
     assert data.get("metadata") == {"user_id": "u2"}
+
+
+def test_anthropic_basic_completion_replay():
+    response = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "Hello!"}],
+    )
+
+    assert response is not None
+    content = response.choices[0].message.content
+    assert isinstance(content, str) and content.strip(), content
+    assert response.usage.prompt_tokens > 0
+    assert response.usage.completion_tokens > 0
+    assert response.choices[0].finish_reason in {"stop", "length"}
+
+
+def test_anthropic_streaming_completion_replay():
+    stream = litellm.completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "Hello!"}],
+        stream=True,
+    )
+
+    collected_text = ""
+    finish_reason = None
+    chunk_count = 0
+    for chunk in stream:
+        chunk_count += 1
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta and delta.content:
+            collected_text += delta.content
+        if chunk.choices[0].finish_reason:
+            finish_reason = chunk.choices[0].finish_reason
+
+    assert chunk_count > 1, "expected multiple SSE chunks from streaming response"
+    assert collected_text.strip(), collected_text
+    assert finish_reason in {"stop", "length"}

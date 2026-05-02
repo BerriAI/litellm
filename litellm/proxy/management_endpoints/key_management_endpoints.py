@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     LENGTH_OF_LITELLM_GENERATED_KEY,
     LITELLM_PROXY_ADMIN_NAME,
@@ -57,6 +57,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,
     _is_user_team_admin,
     _set_object_metadata_field,
+    _team_member_has_permission,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
@@ -1059,7 +1060,7 @@ async def _check_project_key_limits(
     project_id: str,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """
     Validate that key's models and budget respect its project's limits.
@@ -1834,7 +1835,7 @@ async def _process_single_key_update(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Any,
     llm_router: Optional[Router],
     user_custom_key_update: Optional[Callable] = None,
@@ -3298,7 +3299,7 @@ async def _team_key_deletion_check(
     user_api_key_dict: UserAPIKeyAuth,
     key_info: LiteLLM_VerificationToken,
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ):
     is_team_key = _is_team_key(data=key_info)
 
@@ -3341,7 +3342,7 @@ async def _team_key_deletion_check(
 
 async def can_modify_verification_token(
     key_info: LiteLLM_VerificationToken,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
 ) -> bool:
@@ -3415,7 +3416,7 @@ async def can_modify_verification_token(
 
 async def delete_verification_tokens(
     tokens: List,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str] = None,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
@@ -3605,7 +3606,7 @@ async def _persist_deleted_verification_tokens(
 
 async def delete_key_aliases(
     key_aliases: List[str],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str] = None,
@@ -3862,7 +3863,7 @@ async def _execute_virtual_key_regeneration(
     data: Optional[RegenerateKeyRequest],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> GenerateKeyResponse:
     """Generate new token, update DB, invalidate cache, and return response."""
@@ -4152,7 +4153,7 @@ async def _check_proxy_or_team_admin_for_key(
     key_in_db: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> None:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -4436,6 +4437,26 @@ def _get_admin_team_ids_from_objects(
     ]
 
 
+def _get_team_ids_with_key_list_permission_from_objects(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_objects: List[LiteLLM_TeamTable],
+) -> List[str]:
+    """Filter team objects to non-admin teams where the caller has /key/list
+    permission via team_member_permissions. These teams should grant the
+    caller full key visibility (same as a team admin), so other members'
+    keys and service account keys (user_id=NULL) are returned."""
+    return [
+        team.team_id
+        for team in team_objects
+        if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+        and _team_member_has_permission(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team,
+            permission=KeyManagementRoutes.KEY_LIST.value,
+        )
+    ]
+
+
 def _get_member_team_ids_from_objects(
     user_api_key_dict: UserAPIKeyAuth,
     team_objects: List[LiteLLM_TeamTable],
@@ -4589,6 +4610,17 @@ async def list_keys(
                 user_api_key_dict=user_api_key_dict,
                 team_objects=team_objects,
             )
+            # Non-admin members with /key/list permission get full team-key
+            # visibility for that team — matching the UI contract that
+            # granting this permission lets them see all keys within the team.
+            list_permission_team_ids = (
+                _get_team_ids_with_key_list_permission_from_objects(
+                    user_api_key_dict=user_api_key_dict,
+                    team_objects=team_objects,
+                )
+            )
+            if list_permission_team_ids:
+                admin_team_ids = list({*admin_team_ids, *list_permission_team_ids})
         else:
             admin_team_ids = None
 
@@ -5173,7 +5205,7 @@ async def _check_key_admin_access(
     user_api_key_dict: UserAPIKeyAuth,
     hashed_token: str,
     prisma_client: Any,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     route: str,
 ) -> None:
     """
