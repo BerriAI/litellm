@@ -15,6 +15,7 @@ import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
+    LiteLLMRoutes,
     LiteLLM_JWTAuth,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -62,25 +63,16 @@ def test_route_requires_auth_despite_public_for_metrics(monkeypatch):
     assert _route_requires_auth_despite_public("/metrics", {}) is False
 
 
-def test_route_requires_auth_despite_public_for_public_ai_hub():
-    settings = {"require_auth_for_public_ai_hub": True}
-
-    assert _route_requires_auth_despite_public("/public/model_hub", {}) is True
-    assert _route_requires_auth_despite_public("/public/model_hub", settings) is True
-    assert _route_requires_auth_despite_public("/public/model_hub/", settings) is True
-    assert (
-        _route_requires_auth_despite_public("/public/model_hub/info", settings) is True
-    )
-    assert _route_requires_auth_despite_public("/public/agent_hub", settings) is True
-    assert _route_requires_auth_despite_public("/public/mcp_hub", settings) is True
-    assert _route_requires_auth_despite_public("/public/skill_hub", settings) is True
-
-    assert (
-        _route_requires_auth_despite_public(
-            "/public/model_hub", {"require_auth_for_public_ai_hub": False}
-        )
-        is False
-    )
+def test_public_ai_hub_routes_remain_public():
+    for route in (
+        "/public/model_hub",
+        "/public/model_hub/info",
+        "/public/agent_hub",
+        "/public/mcp_hub",
+        "/public/skill_hub",
+    ):
+        assert route in LiteLLMRoutes.public_routes.value
+        assert _route_requires_auth_despite_public(route, {}) is False
 
 
 @pytest.mark.asyncio

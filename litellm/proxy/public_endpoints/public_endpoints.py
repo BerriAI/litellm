@@ -5,7 +5,7 @@ from importlib.resources import files
 from typing import Any, Dict, List, Optional
 
 import litellm
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
@@ -16,11 +16,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
 )
 from litellm.proxy._types import (
     CommonProxyErrors,
-    LitellmUserRoles,
-    SpecialHeaders,
-    UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -35,36 +31,6 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
 from litellm.types.utils import LlmProviders
 
 router = APIRouter()
-
-
-async def public_ai_hub_auth_dependency(request: Request) -> UserAPIKeyAuth:
-    from litellm.proxy.proxy_server import general_settings
-
-    if (general_settings or {}).get("require_auth_for_public_ai_hub", True) is True:
-        return await user_api_key_auth(
-            request=request,
-            api_key=request.headers.get(SpecialHeaders.openai_authorization.value)
-            or "",
-            azure_api_key_header=request.headers.get(
-                SpecialHeaders.azure_authorization.value
-            )
-            or "",
-            anthropic_api_key_header=request.headers.get(
-                SpecialHeaders.anthropic_authorization.value
-            ),
-            google_ai_studio_api_key_header=request.headers.get(
-                SpecialHeaders.google_ai_studio_authorization.value
-            ),
-            azure_apim_header=request.headers.get(
-                SpecialHeaders.azure_apim_authorization.value
-            )
-            or "",
-            custom_litellm_key_header=request.headers.get(
-                SpecialHeaders.custom_litellm_api_key.value
-            ),
-        )
-
-    return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +155,6 @@ def _load_endpoints() -> List[Dict[str, Any]]:
 @router.get(
     "/public/model_hub",
     tags=["public", "model management"],
-    dependencies=[Depends(public_ai_hub_auth_dependency)],
     response_model=List[ModelGroupInfoProxy],
 )
 async def public_model_hub():
@@ -244,7 +209,6 @@ async def public_model_hub():
 @router.get(
     "/public/agent_hub",
     tags=["[beta] Agents", "public"],
-    dependencies=[Depends(public_ai_hub_auth_dependency)],
     response_model=List[AgentCard],
 )
 async def get_agents():
@@ -266,7 +230,6 @@ async def get_agents():
 @router.get(
     "/public/mcp_hub",
     tags=["[beta] MCP", "public"],
-    dependencies=[Depends(public_ai_hub_auth_dependency)],
     response_model=List[MCPPublicServer],
 )
 async def get_mcp_servers():
@@ -286,7 +249,6 @@ async def get_mcp_servers():
 @router.get(
     "/public/skill_hub",
     tags=["public", "Claude Code Marketplace"],
-    dependencies=[Depends(public_ai_hub_auth_dependency)],
 )
 async def public_skill_hub():
     """Return enabled (public) Claude Code skills — no auth required."""
@@ -333,7 +295,6 @@ async def public_skill_hub():
 @router.get(
     "/public/model_hub/info",
     tags=["public", "model management"],
-    dependencies=[Depends(public_ai_hub_auth_dependency)],
     response_model=PublicModelHubInfo,
 )
 async def public_model_hub_info():

@@ -86,16 +86,6 @@ except ImportError as e:
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
-_PUBLIC_AI_HUB_ROUTES = frozenset(
-    {
-        "/public/model_hub",
-        "/public/model_hub/info",
-        "/public/agent_hub",
-        "/public/mcp_hub",
-        "/public/skill_hub",
-    }
-)
-
 
 def _normalize_public_auth_route(route: str) -> str:
     if route != "/" and route.endswith("/"):
@@ -109,11 +99,6 @@ def _route_requires_auth_despite_public(
     normalized_route = _normalize_public_auth_route(route)
     if normalized_route == "/metrics":
         return litellm.require_auth_for_metrics_endpoint is not False
-
-    if normalized_route in _PUBLIC_AI_HUB_ROUTES:
-        return (general_settings or {}).get(
-            "require_auth_for_public_ai_hub", True
-        ) is True
 
     return False
 
