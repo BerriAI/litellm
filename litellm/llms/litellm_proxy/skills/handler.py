@@ -6,8 +6,9 @@ Used by the transformation layer and skills injection hook.
 """
 
 import os
+import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.llms.litellm_proxy.skills.store import LiteLLMSkillsStore
@@ -20,6 +21,39 @@ from litellm.proxy.common_utils.resource_ownership import (
 )
 
 ALLOW_UNOWNED_SKILL_ACCESS_ENV = "LITELLM_ALLOW_UNOWNED_SKILL_ACCESS"
+
+# Skills are looked up on every chat completion that has skills enabled
+# (`LiteLLMSkillsHandler.fetch_skill_from_db` in the injection hook). Cache
+# the Prisma skill row for a short window so the hot path doesn't issue a DB
+# round-trip per request. Same shape as `_byok_cred_cache` and the container
+# ownership cache: (value, monotonic_timestamp). `None` is cached as a true
+# negative ("skill does not exist") so repeated misses also avoid the DB.
+_SKILL_CACHE: Dict[str, Tuple[Optional[Any], float]] = {}
+_SKILL_CACHE_TTL = 60  # seconds
+_SKILL_CACHE_MAX_SIZE = 10000
+
+
+def _read_skill_cache(skill_id: str) -> Tuple[bool, Optional[Any]]:
+    """Return (hit, value). hit=False means caller must consult the DB."""
+    entry = _SKILL_CACHE.get(skill_id)
+    if entry is None:
+        return False, None
+    value, timestamp = entry
+    if time.monotonic() - timestamp > _SKILL_CACHE_TTL:
+        _SKILL_CACHE.pop(skill_id, None)
+        return False, None
+    return True, value
+
+
+def _write_skill_cache(skill_id: str, skill: Optional[Any]) -> None:
+    if len(_SKILL_CACHE) >= _SKILL_CACHE_MAX_SIZE:
+        _SKILL_CACHE.clear()
+    _SKILL_CACHE[skill_id] = (skill, time.monotonic())
+
+
+def _invalidate_skill_cache(skill_id: str) -> None:
+    """Drop the cache entry after a write so the next read sees the new row."""
+    _SKILL_CACHE.pop(skill_id, None)
 
 
 def _allow_unowned_skill_access() -> bool:
@@ -191,6 +225,24 @@ class LiteLLMSkillsHandler:
         return [_prisma_skill_to_litellm(s) for s in skills]
 
     @staticmethod
+    async def _load_skill(skill_id: str) -> Optional[Any]:
+        """Cache-first read of the Prisma skill row.
+
+        Caching here keeps `fetch_skill_from_db` (called per chat completion in
+        the skills injection hook) off the DB. Owner-scope filtering happens
+        on the cached row, so the cache is per-skill and not per-caller.
+        """
+        cached_hit, cached_skill = _read_skill_cache(skill_id)
+        if cached_hit:
+            return cached_skill
+
+        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        store = LiteLLMSkillsStore(prisma_client)
+        skill = await store.find_skill(skill_id)
+        _write_skill_cache(skill_id, skill)
+        return skill
+
+    @staticmethod
     async def get_skill(
         skill_id: str,
         user_api_key_dict: Optional[UserAPIKeyAuth] = None,
@@ -207,12 +259,9 @@ class LiteLLMSkillsHandler:
         Raises:
             ValueError: If skill not found
         """
-        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
-        store = LiteLLMSkillsStore(prisma_client)
-
         verbose_logger.debug(f"LiteLLMSkillsHandler: Getting skill {skill_id}")
 
-        skill = await store.find_skill(skill_id)
+        skill = await LiteLLMSkillsHandler._load_skill(skill_id)
 
         if skill is None:
             raise ValueError(f"Skill not found: {skill_id}")
@@ -247,7 +296,7 @@ class LiteLLMSkillsHandler:
         verbose_logger.debug(f"LiteLLMSkillsHandler: Deleting skill {skill_id}")
 
         # Check if skill exists
-        skill = await store.find_skill(skill_id)
+        skill = await LiteLLMSkillsHandler._load_skill(skill_id)
 
         if skill is None:
             raise ValueError(f"Skill not found: {skill_id}")
@@ -259,6 +308,7 @@ class LiteLLMSkillsHandler:
 
         # Delete the skill
         await store.delete_skill(skill_id)
+        _invalidate_skill_cache(skill_id)
 
         return {"id": skill_id, "type": "skill_deleted"}
 

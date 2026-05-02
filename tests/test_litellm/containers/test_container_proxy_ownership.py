@@ -14,9 +14,11 @@ from litellm.types.containers.main import ContainerListResponse, ContainerObject
 @pytest.fixture(autouse=True)
 def clear_in_memory_container_owners(monkeypatch):
     ownership._IN_MEMORY_CONTAINER_OWNERS.clear()
+    ownership._CONTAINER_OWNER_CACHE.clear()
     monkeypatch.delenv(ownership.ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV, raising=False)
     yield
     ownership._IN_MEMORY_CONTAINER_OWNERS.clear()
+    ownership._CONTAINER_OWNER_CACHE.clear()
 
 
 def _container(container_id: str) -> ContainerObject:
@@ -1102,3 +1104,134 @@ async def test_should_forward_decoded_container_id_for_proxy_delete(monkeypatch)
     assert result["container_id"] == "cntr_provider"
     assert result["custom_llm_provider"] == "azure"
     assert result["model_id"] == "router-gpt"
+
+
+# ── Cache layer ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_container_owner_uses_cache_after_first_db_hit(monkeypatch):
+    """Repeated access checks within the TTL window must not hit the DB.
+
+    Greptile's P1 was that ownership reads issued a Prisma query on every
+    request. The cache here mirrors `_byok_cred_cache`: TTL'd, capped, and
+    invalidated on writes.
+    """
+    table = AsyncMock()
+    fake_row = SimpleNamespace(
+        created_by="user-1", file_purpose=ownership.CONTAINER_OBJECT_PURPOSE
+    )
+    table.find_first.return_value = fake_row
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+
+    owner_first = await ownership._get_container_owner("cntr_x", "openai")
+    owner_second = await ownership._get_container_owner("cntr_x", "openai")
+    owner_third = await ownership._get_container_owner("cntr_x", "openai")
+
+    assert owner_first == "user-1"
+    assert owner_second == "user-1"
+    assert owner_third == "user-1"
+    # Single DB call across three reads — the cache absorbs the rest.
+    assert table.find_first.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_container_owner_caches_negative_lookups(monkeypatch):
+    """`None` (untracked) must also be cached so repeated misses don't query."""
+    table = AsyncMock()
+    table.find_first.return_value = None
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+
+    assert await ownership._get_container_owner("cntr_x", "openai") is None
+    assert await ownership._get_container_owner("cntr_x", "openai") is None
+    assert table.find_first.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_record_container_owner_invalidates_cache(monkeypatch):
+    """A recorded owner must drop the cached value so the next read re-fetches.
+
+    Otherwise a stale `None` from a prior negative lookup would survive the
+    create and the new owner would be invisible until the TTL elapses.
+    """
+    # Seed the cache with a stale negative result.
+    ownership._write_container_owner_cache("container:openai:cntr_new", None)
+    cached_hit, cached_value = ownership._read_container_owner_cache(
+        "container:openai:cntr_new"
+    )
+    assert cached_hit and cached_value is None
+
+    table = AsyncMock()
+    table.find_unique.return_value = None
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+
+    await ownership.record_container_owner(
+        response=_container("cntr_new"),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        custom_llm_provider="openai",
+    )
+
+    # Invalidation drops the entry — next read goes to the DB.
+    cached_hit, _ = ownership._read_container_owner_cache("container:openai:cntr_new")
+    assert not cached_hit
+
+
+@pytest.mark.asyncio
+async def test_get_container_owner_does_not_cache_on_db_error(monkeypatch):
+    """DB errors must skip caching so transient failures don't pin a `None`."""
+    table = AsyncMock()
+    table.find_first.side_effect = Exception("db unavailable")
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+
+    result = await ownership._get_container_owner("cntr_x", "openai")
+    assert result is None
+    cached_hit, _ = ownership._read_container_owner_cache("container:openai:cntr_x")
+    assert not cached_hit
+
+
+def test_container_owner_cache_expires_after_ttl(monkeypatch):
+    """Entries past the TTL count as misses so writes elsewhere are eventually
+    visible to this process."""
+    monkeypatch.setattr(ownership, "_CONTAINER_OWNER_CACHE_TTL", 0.0)
+    ownership._write_container_owner_cache("k", "user-1")
+    cached_hit, _ = ownership._read_container_owner_cache("k")
+    # TTL of 0 means anything in the cache is already stale.
+    assert not cached_hit
+
+
+def test_container_owner_cache_evicts_when_at_capacity(monkeypatch):
+    """The cache must not grow unbounded; reaching capacity clears all entries."""
+    monkeypatch.setattr(ownership, "_CONTAINER_OWNER_CACHE_MAX_SIZE", 2)
+    ownership._write_container_owner_cache("a", "user-a")
+    ownership._write_container_owner_cache("b", "user-b")
+    ownership._write_container_owner_cache("c", "user-c")
+    # Reaching the cap clears everything — the new write is the only survivor.
+    assert ownership._CONTAINER_OWNER_CACHE.keys() == {"c"}
