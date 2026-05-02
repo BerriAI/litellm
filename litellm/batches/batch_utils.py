@@ -387,6 +387,27 @@ def _get_batch_job_total_usage_from_file_content(
     )
 
 
+def _get_models_from_batch_input_file_content(
+    file_content_dictionary: List[dict],
+) -> List[str]:
+    """Extract the distinct ``body.model`` values from a batch *input* file.
+
+    Used by the proxy's batch pre-call hook to enforce that the caller is
+    authorized for every model named inside the JSONL — not just the one
+    on the outer request — so the proxy's per-key model allowlist isn't
+    bypassed by smuggling expensive models into the batch file.
+    """
+    models: List[str] = []
+    seen: set = set()
+    for _item in file_content_dictionary:
+        body = _item.get("body") or {}
+        model = body.get("model")
+        if model and model not in seen:
+            seen.add(model)
+            models.append(model)
+    return models
+
+
 def _get_batch_job_input_file_usage(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] = "openai",
@@ -403,17 +424,68 @@ def _get_batch_job_input_file_usage(
     for _item in file_content_dictionary:
         body = _item.get("body", {})
         model = body.get("model", model_name or "")
-        messages = body.get("messages", [])
 
+        # Chat completion payloads.
+        messages = body.get("messages")
         if messages:
-            item_tokens = token_counter(model=model, messages=messages)
-            prompt_tokens += item_tokens
+            prompt_tokens += token_counter(model=model, messages=messages)
+            continue
+
+        # Text completion payloads (`prompt`).
+        prompt = body.get("prompt")
+        if prompt:
+            prompt_tokens += _count_prompt_or_input_tokens(model=model, value=prompt)
+            continue
+
+        # Embedding payloads (`input`).
+        input_data = body.get("input")
+        if input_data:
+            prompt_tokens += _count_prompt_or_input_tokens(
+                model=model, value=input_data
+            )
 
     return Usage(
         total_tokens=prompt_tokens + completion_tokens,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )
+
+
+def _count_prompt_or_input_tokens(model: str, value: Any) -> int:
+    """Token-count a ``prompt`` / ``input`` field that the OpenAI batch
+    schema allows in four shapes:
+
+    - ``str``: a single text prompt.
+    - ``list[str]``: multiple text prompts.
+    - ``list[int]``: a pre-tokenized prompt (each int counts as 1 token).
+    - ``list[list[int]]``: multiple pre-tokenized prompts.
+
+    Pre-fix only the string shapes were counted, so a caller could send
+    a large ``list[list[int]]`` payload and slip past TPM rate limits
+    with a recorded cost of zero tokens.
+    """
+    if isinstance(value, str):
+        return token_counter(model=model, text=value)
+    if isinstance(value, list):
+        total = 0
+        for chunk in value:
+            if isinstance(chunk, str):
+                total += token_counter(model=model, text=chunk)
+            elif isinstance(chunk, int):
+                # Single pre-tokenized prompt at the top level: each
+                # int counts as one token.
+                total += 1
+            elif isinstance(chunk, list):
+                # Nested pre-tokenized prompt: every int contributes a
+                # token. Mixed string/int items still count.
+                total += sum(1 if isinstance(t, int) else 0 for t in chunk)
+                total += sum(
+                    token_counter(model=model, text=t)
+                    for t in chunk
+                    if isinstance(t, str)
+                )
+        return total
+    return 0
 
 
 def _get_batch_job_usage_from_response_body(response_body: dict) -> Usage:
