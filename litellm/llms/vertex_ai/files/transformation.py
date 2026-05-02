@@ -577,7 +577,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             content = raw_response.content
             if content:
                 transformed_content = self._try_transform_vertex_batch_output_to_openai(
-                    content
+                    content=content,
+                    logging_obj=logging_obj,
                 )
                 if transformed_content != content:
                     # Create a new response with transformed content and updated Content-Length
@@ -600,7 +601,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
         return HttpxBinaryResponseContent(response=raw_response)
 
-    def _try_transform_vertex_batch_output_to_openai(self, content: bytes) -> bytes:
+    def _try_transform_vertex_batch_output_to_openai(
+        self, content: bytes, logging_obj: Optional[LiteLLMLoggingObj] = None
+    ) -> bytes:
         """
         Try to transform Vertex AI batch output to OpenAI format.
         If conversion fails at any point, return the original content as-is.
@@ -656,15 +659,16 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 return content
 
             vertex_gemini_config = VertexGeminiConfig()
-            logging_obj = Logging(
-                model="",
-                messages=[],
-                stream=False,
-                call_type="batch_transform",
-                start_time=time.time(),
-                litellm_call_id="",
-                function_id="",
-            )
+            if logging_obj is None:
+                logging_obj = Logging(
+                    model="",
+                    messages=[],
+                    stream=False,
+                    call_type="batch_transform",
+                    start_time=time.time(),
+                    litellm_call_id="",
+                    function_id="",
+                )
             logging_obj.optional_params = {}
             mock_httpx_response = httpx.Response(
                 status_code=200,
