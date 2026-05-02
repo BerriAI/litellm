@@ -774,6 +774,7 @@ async def get_file_content(  # noqa: PLR0915
                     data=data,
                     credentials=credentials,  # type: ignore
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
+                    include_internal_credentials=True,
                 )
                 response = await litellm.afile_content(
                     custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
@@ -949,6 +950,7 @@ async def get_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_retrieve(**data)  # type: ignore
@@ -1149,6 +1151,7 @@ async def delete_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_delete(
