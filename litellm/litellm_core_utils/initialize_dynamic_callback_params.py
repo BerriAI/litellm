@@ -37,8 +37,6 @@ _supported_callback_params = [
     "langfuse_secret_key",
     "langfuse_host",
     "langfuse_prompt_version",
-    "gcs_bucket_name",
-    "gcs_path_service_account",
     "langsmith_api_key",
     "langsmith_project",
     "langsmith_base_url",
@@ -69,7 +67,7 @@ def initialize_standard_callback_dynamic_params(
     """
     Initialize the standard callback dynamic params from the kwargs
 
-    checks if langfuse_secret_key, gcs_bucket_name in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
+    checks supported request callback params in kwargs and sets the corresponding attributes in StandardCallbackDynamicParams
     """
 
     standard_callback_dynamic_params = StandardCallbackDynamicParams()

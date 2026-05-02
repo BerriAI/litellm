@@ -1016,6 +1016,7 @@ def file_content(
                 vertex_location=vertex_ai_location,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "bedrock":
             response = bedrock_files_instance.file_content(
