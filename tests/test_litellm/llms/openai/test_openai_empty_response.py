@@ -4,7 +4,7 @@ Test for issue #17209: Clearer error when LLM endpoint returns empty response
 
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -126,3 +126,102 @@ class TestEmptyResponseHandling:
 
         assert response == mock_stream
         assert headers == {"x-request-id": "123"}
+
+    def test_sync_sse_response_recovers(self):
+        """
+        Issue #25766: some OpenAI-compatible upstreams ignore stream=false and
+        always reply with SSE. The non-streaming code path should recover by
+        parsing the SSE chunks and returning an aggregated ModelResponse.
+        """
+        sse_body = (
+            'data: {"id":"chatcmpl-1","object":"chat.completion.chunk",'
+            '"created":1,"model":"qwen-3.6-plus","choices":[{"index":0,'
+            '"delta":{"role":"assistant","content":"Hello"},'
+            '"finish_reason":null}]}\n'
+            'data: {"id":"chatcmpl-1","object":"chat.completion.chunk",'
+            '"created":1,"model":"qwen-3.6-plus","choices":[{"index":0,'
+            '"delta":{"content":" world"},"finish_reason":"stop"}]}\n'
+            "data: [DONE]\n"
+        )
+        openai_chat = OpenAIChatCompletion()
+
+        mock_raw_response = MagicMock()
+        mock_raw_response.headers = {}
+        mock_raw_response.parse.return_value = sse_body
+        mock_raw_response.text = sse_body
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.with_raw_response.create.return_value = (
+            mock_raw_response
+        )
+
+        headers, response = openai_chat.make_sync_openai_chat_completion_request(
+            openai_client=mock_client,
+            data={"messages": [{"role": "user", "content": "test"}]},
+            timeout=30,
+            logging_obj=MagicMock(),
+        )
+
+        assert hasattr(response, "model_dump")
+        dumped = response.model_dump()
+        assert dumped["choices"][0]["message"]["content"] == "Hello world"
+        assert dumped["choices"][0]["finish_reason"] == "stop"
+
+    @pytest.mark.asyncio
+    async def test_async_sse_response_recovers(self):
+        """Async equivalent of test_sync_sse_response_recovers."""
+        sse_body = (
+            'data: {"id":"chatcmpl-2","object":"chat.completion.chunk",'
+            '"created":1,"model":"qwen-3.6-plus","choices":[{"index":0,'
+            '"delta":{"role":"assistant","content":"hi"},'
+            '"finish_reason":"stop"}]}\n'
+            "data: [DONE]\n"
+        )
+        openai_chat = OpenAIChatCompletion()
+
+        mock_raw_response = MagicMock()
+        mock_raw_response.headers = {}
+        mock_raw_response.parse.return_value = sse_body
+        mock_raw_response.text = sse_body
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.with_raw_response.create = AsyncMock(
+            return_value=mock_raw_response
+        )
+
+        headers, response = await openai_chat.make_openai_chat_completion_request(
+            openai_aclient=mock_client,
+            data={"messages": [{"role": "user", "content": "test"}]},
+            timeout=30,
+            logging_obj=MagicMock(),
+        )
+
+        assert hasattr(response, "model_dump")
+        assert response.model_dump()["choices"][0]["message"]["content"] == "hi"
+
+    def test_sync_garbage_text_still_raises(self):
+        """
+        Non-SSE garbage text must NOT be silently recovered — the original
+        "Empty or invalid response" error should still surface.
+        """
+        openai_chat = OpenAIChatCompletion()
+
+        mock_raw_response = MagicMock()
+        mock_raw_response.headers = {}
+        mock_raw_response.parse.return_value = "some garbage"
+        mock_raw_response.text = "some garbage"
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.with_raw_response.create.return_value = (
+            mock_raw_response
+        )
+
+        with pytest.raises(OpenAIError) as exc_info:
+            openai_chat.make_sync_openai_chat_completion_request(
+                openai_client=mock_client,
+                data={"messages": [{"role": "user", "content": "test"}]},
+                timeout=30,
+                logging_obj=MagicMock(),
+            )
+
+        assert "Empty or invalid response from LLM endpoint" in str(exc_info.value)

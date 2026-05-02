@@ -26,6 +26,8 @@ from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
+    from litellm.types.utils import ModelResponse
+
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -288,3 +290,46 @@ def get_openai_credentials(
         api_key=resolved_api_key,
         organization=resolved_organization,
     )
+
+
+def try_parse_sse_response_body(body: Optional[str]) -> Optional["ModelResponse"]:
+    """Recover a ModelResponse from an SSE body returned despite stream=false.
+
+    Some OpenAI-compatible upstreams (#25766) ignore stream=false and always
+    reply with SSE. Parse each `data: {...}` line and aggregate via
+    litellm.stream_chunk_builder. Returns None if the body isn't SSE or no
+    chunks could be parsed — caller falls back to the original error.
+    """
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    if not isinstance(body, str) or not body:
+        return None
+
+    chunks: List[Dict[str, Any]] = []
+    for line in body.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        stripped = CustomStreamWrapper._strip_sse_data_from_chunk(line)
+        if stripped is None or stripped == line:
+            continue
+        stripped = stripped.strip()
+        if not stripped or stripped == "[DONE]":
+            continue
+        try:
+            chunks.append(json.loads(stripped))
+        except json.JSONDecodeError:
+            continue
+
+    if not chunks:
+        return None
+
+    from litellm.types.utils import ModelResponse
+
+    try:
+        result = litellm.stream_chunk_builder(chunks=chunks)
+    except Exception:
+        return None
+    if not isinstance(result, ModelResponse):
+        return None
+    return result
