@@ -2518,7 +2518,7 @@ async def get_org_object(
         cache_key = "org_id:{}:with_budget".format(org_id)
 
     # check if in cache
-    cached_org_obj = user_api_key_cache.async_get_cache(key=cache_key)
+    cached_org_obj = await user_api_key_cache.async_get_cache(key=cache_key)
     if cached_org_obj is not None:
         if isinstance(cached_org_obj, dict):
             return LiteLLM_OrganizationTable(**cached_org_obj)
