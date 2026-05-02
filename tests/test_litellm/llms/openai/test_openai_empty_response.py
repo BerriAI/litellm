@@ -4,14 +4,14 @@ Test for issue #17209: Clearer error when LLM endpoint returns empty response
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.llms.openai.openai import OpenAIChatCompletion
-from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.common_utils import OpenAIError, try_parse_sse_response_body
 
 
 class TestEmptyResponseHandling:
@@ -225,3 +225,50 @@ class TestEmptyResponseHandling:
             )
 
         assert "Empty or invalid response from LLM endpoint" in str(exc_info.value)
+
+
+class TestTryParseSSEResponseBody:
+    """Unit tests for the try_parse_sse_response_body helper (covers edge-case branches)."""
+
+    def test_blank_lines_between_chunks_are_skipped(self):
+        """Blank lines interspersed between SSE chunks must be ignored gracefully."""
+        body = (
+            'data: {"id":"c1","object":"chat.completion.chunk","created":1,'
+            '"model":"m","choices":[{"index":0,"delta":{"role":"assistant",'
+            '"content":"hi"},"finish_reason":"stop"}]}\n'
+            "\n"  # blank line — exercises the `if not line: continue` branch
+            "data: [DONE]\n"
+        )
+        result = try_parse_sse_response_body(body)
+        assert result is not None
+        assert result.model_dump()["choices"][0]["message"]["content"] == "hi"
+
+    def test_malformed_json_after_data_prefix_is_skipped(self):
+        """A `data:` line with invalid JSON must be skipped; if no valid chunks remain, return None."""
+        body = "data: {not valid json}\ndata: [DONE]\n"
+        result = try_parse_sse_response_body(body)
+        assert result is None
+
+    def test_stream_chunk_builder_exception_returns_none(self):
+        """If stream_chunk_builder raises, the helper returns None (caller raises the original error)."""
+        body = (
+            'data: {"id":"c1","object":"chat.completion.chunk","created":1,'
+            '"model":"m","choices":[{"index":0,"delta":{"content":"hi"},'
+            '"finish_reason":"stop"}]}\n'
+            "data: [DONE]\n"
+        )
+        with patch("litellm.stream_chunk_builder", side_effect=Exception("boom")):
+            result = try_parse_sse_response_body(body)
+        assert result is None
+
+    def test_non_model_response_result_returns_none(self):
+        """If stream_chunk_builder returns something that isn't a ModelResponse, return None."""
+        body = (
+            'data: {"id":"c1","object":"chat.completion.chunk","created":1,'
+            '"model":"m","choices":[{"index":0,"delta":{"content":"hi"},'
+            '"finish_reason":"stop"}]}\n'
+            "data: [DONE]\n"
+        )
+        with patch("litellm.stream_chunk_builder", return_value="unexpected string"):
+            result = try_parse_sse_response_body(body)
+        assert result is None
