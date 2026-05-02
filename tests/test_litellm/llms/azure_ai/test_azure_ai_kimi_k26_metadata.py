@@ -2,19 +2,26 @@
 Test Azure AI Kimi K2.6 model metadata.
 """
 
+import json
+from importlib.resources import files
+
 import pytest
 
 
-@pytest.fixture(autouse=True)
-def use_local_model_cost_map(monkeypatch):
+@pytest.fixture(scope="module")
+def use_local_model_cost_map():
+    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
     import litellm
-    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
     from litellm.utils import _invalidate_model_cost_lowercase_map
 
     original_model_cost = litellm.model_cost
-    litellm.model_cost = get_model_cost_map(url="")
+    litellm.model_cost = json.loads(
+        files("litellm")
+        .joinpath("model_prices_and_context_window_backup.json")
+        .read_text(encoding="utf-8")
+    )
     litellm.get_model_info.cache_clear()
     _invalidate_model_cost_lowercase_map()
     try:
@@ -23,12 +30,11 @@ def use_local_model_cost_map(monkeypatch):
         litellm.model_cost = original_model_cost
         litellm.get_model_info.cache_clear()
         _invalidate_model_cost_lowercase_map()
+        monkeypatch.undo()
 
 
-def test_azure_ai_kimi_k26_model_info():
-    import litellm
-
-    model_info = litellm.get_model_info(model="azure_ai/kimi-k2.6")
+def test_azure_ai_kimi_k26_model_info(use_local_model_cost_map):
+    model_info = use_local_model_cost_map.get_model_info(model="azure_ai/kimi-k2.6")
 
     assert model_info["litellm_provider"] == "azure_ai"
     assert model_info["mode"] == "chat"
@@ -54,7 +60,7 @@ def test_azure_ai_kimi_k26_raw_model_cost_entry(use_local_model_cost_map):
     assert model_info["supports_vision"] is True
 
 
-def test_azure_ai_kimi_k26_cost_per_token():
+def test_azure_ai_kimi_k26_cost_per_token(use_local_model_cost_map):
     from litellm.llms.azure_ai.cost_calculator import cost_per_token
     from litellm.types.utils import Usage
 
