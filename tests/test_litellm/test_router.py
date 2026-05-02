@@ -3602,3 +3602,98 @@ def test_access_group_block_via_litellm_model_branch_does_not_use_default_fallba
                 }
             },
         )
+
+
+def test_try_early_resolve_deployments_for_model_not_in_names():
+    """
+    Direct coverage for ``_try_early_resolve_deployments_for_model_not_in_names``:
+
+    - Returns ``None`` when the requested model is already in ``self.model_names``
+      (the by-name lookup path will handle it).
+    - Returns ``None`` when there are no team deployments, no pattern matches, and
+      no default deployment to fall back to.
+    - Returns the pattern-router match when the model matches a wildcard route.
+    - Returns the default deployment with the request model substituted in when one
+      is configured, without mutating the stored default.
+    """
+    router_in_names = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {
+                    "model": "openai/gpt-5",
+                    "api_key": "key1",
+                },
+            },
+        ]
+    )
+
+    assert (
+        router_in_names._try_early_resolve_deployments_for_model_not_in_names(
+            model="gpt-5", request_team_id=None
+        )
+        is None
+    )
+    assert (
+        router_in_names._try_early_resolve_deployments_for_model_not_in_names(
+            model="some-unknown-model", request_team_id=None
+        )
+        is None
+    )
+
+    pattern_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "key-pattern",
+                },
+            },
+        ]
+    )
+
+    pattern_result = (
+        pattern_router._try_early_resolve_deployments_for_model_not_in_names(
+            model="openai/gpt-4o-mini", request_team_id=None
+        )
+    )
+    assert pattern_result is not None
+    resolved_model, pattern_deployments = pattern_result
+    assert resolved_model == "openai/gpt-4o-mini"
+    assert isinstance(pattern_deployments, list) and len(pattern_deployments) == 1
+
+    default_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "named-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "key-named",
+                },
+            },
+        ]
+    )
+    default_router.default_deployment = {
+        "model_name": "default",
+        "litellm_params": {
+            "model": "openai/will-be-overridden",
+            "api_key": "key-default",
+        },
+    }
+
+    default_result = (
+        default_router._try_early_resolve_deployments_for_model_not_in_names(
+            model="brand-new-model", request_team_id=None
+        )
+    )
+    assert default_result is not None
+    resolved_model, default_deployment = default_result
+    assert resolved_model == "brand-new-model"
+    assert isinstance(default_deployment, dict)
+    assert default_deployment["litellm_params"]["model"] == "brand-new-model"
+    # The original default_deployment must not be mutated.
+    assert (
+        default_router.default_deployment["litellm_params"]["model"]
+        == "openai/will-be-overridden"
+    )
