@@ -14,6 +14,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     _set_user_keys_blocked,
     delete_user,
     patch_user,
+    update_user,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMPatchOp,
@@ -418,3 +419,125 @@ async def test_scim_patch_user_no_active_change_does_not_touch_keys():
 
     mock_db.litellm_verificationtoken.find_many.assert_not_called()
     mock_db.litellm_verificationtoken.update_many.assert_not_called()
+
+
+def _build_put_user_payload(user_id: str, **overrides) -> dict:
+    payload = {
+        "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+        "id": user_id,
+        "userName": user_id,
+        "name": {"givenName": "Y", "familyName": "X"},
+        "emails": [{"value": "x@example.com", "primary": True}],
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_scim_put_user_omitting_active_preserves_deactivated_state():
+    """PUT without `active` must not silently reactivate a SCIM-deactivated user
+    nor unblock their SCIM-blocked keys."""
+    user_id = "scim-user"
+    deactivated = LiteLLM_UserTable(
+        user_id=user_id,
+        user_email="x@example.com",
+        user_alias=None,
+        teams=[],
+        metadata={"scim_active": False},
+    )
+    keys = [
+        _build_token_row(
+            "hash-keep-blocked", user_id, blocked=True, metadata={"scim_blocked": True}
+        )
+    ]
+    mock_client, mock_db = _build_prisma_with_keys(
+        keys, mock_user=deactivated, updated_user=deactivated
+    )
+
+    put_user = SCIMUser.model_validate(_build_put_user_payload(user_id))
+
+    mock_scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        id=user_id,
+        userName=user_id,
+        name=SCIMUserName(familyName="X", givenName="Y"),
+        emails=[SCIMUserEmail(value="x@example.com")],
+        active=False,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+            AsyncMock(return_value=mock_scim_user),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            AsyncMock(),
+        ),
+    ):
+        await update_user(user_id=user_id, user=put_user)
+
+    mock_db.litellm_verificationtoken.update.assert_not_called()
+    mock_db.litellm_verificationtoken.update_many.assert_not_called()
+    mock_db.litellm_usertable.update.assert_awaited_once()
+    update_kwargs = mock_db.litellm_usertable.update.await_args.kwargs
+    assert '"scim_active": false' in update_kwargs["data"]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_scim_put_user_explicit_active_false_blocks_keys():
+    """PUT explicitly setting active=False on an active user must cascade to keys."""
+    user_id = "scim-user"
+    active = LiteLLM_UserTable(
+        user_id=user_id,
+        user_email="x@example.com",
+        user_alias=None,
+        teams=[],
+        metadata={"scim_active": True},
+    )
+    deactivated = LiteLLM_UserTable(
+        user_id=user_id,
+        user_email="x@example.com",
+        user_alias=None,
+        teams=[],
+        metadata={"scim_active": False, "scim_metadata": {}},
+    )
+    keys = [_build_token_row("hash-block-me", user_id, blocked=False)]
+    mock_client, mock_db = _build_prisma_with_keys(
+        keys, mock_user=active, updated_user=deactivated
+    )
+
+    put_user = SCIMUser.model_validate(_build_put_user_payload(user_id, active=False))
+
+    mock_scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        id=user_id,
+        userName=user_id,
+        name=SCIMUserName(familyName="X", givenName="Y"),
+        emails=[SCIMUserEmail(value="x@example.com")],
+        active=False,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+            AsyncMock(return_value=mock_scim_user),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.scim.scim_v2._delete_cache_key_object",
+            AsyncMock(),
+        ),
+    ):
+        await update_user(user_id=user_id, user=put_user)
+
+    mock_db.litellm_verificationtoken.update.assert_awaited_once()
+    update_kwargs = mock_db.litellm_verificationtoken.update.await_args.kwargs
+    assert update_kwargs["where"] == {"token": "hash-block-me"}
+    assert update_kwargs["data"]["blocked"] is True
+    assert '"scim_blocked": true' in update_kwargs["data"]["metadata"]
