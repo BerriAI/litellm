@@ -502,23 +502,28 @@ async def common_checks(  # noqa: PLR0915
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin."
         )
 
-    # 2. If team can call model
+    # 2. If team can call model (or key's access_group_ids grant it)
     if _model and team_object:
         with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
-            if not await can_team_access_model(
-                model=_model,
-                team_object=team_object,
-                llm_router=llm_router,
-                team_model_aliases=(
-                    valid_token.team_model_aliases if valid_token else None
-                ),
-            ):
-                raise ProxyException(
-                    message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
-                    type=ProxyErrorTypes.team_model_access_denied,
-                    param="model",
-                    code=status.HTTP_401_UNAUTHORIZED,
+            try:
+                await can_team_access_model(
+                    model=_model,
+                    team_object=team_object,
+                    llm_router=llm_router,
+                    team_model_aliases=(
+                        valid_token.team_model_aliases if valid_token else None
+                    ),
                 )
+            except ProxyException as team_denial:
+                if team_denial.type != ProxyErrorTypes.team_model_access_denied:
+                    raise
+                if not await _key_access_group_grants_model(
+                    model=_model,
+                    valid_token=valid_token,
+                    team_object=team_object,
+                    llm_router=llm_router,
+                ):
+                    raise
 
     # 2.2. If team member has per-member model scope, enforce it
     if _model and team_object and valid_token and valid_token.user_id:
@@ -2973,6 +2978,77 @@ async def can_team_access_model(
                     object_type="team",
                 )
         raise
+
+
+async def _key_access_group_grants_model(
+    model: Union[str, List[str]],
+    valid_token: Optional[UserAPIKeyAuth],
+    team_object: Optional[LiteLLM_TeamTable],
+    llm_router: Optional[Router],
+) -> bool:
+    """
+    Returns True if the key's `access_group_ids` expand to models that grant
+    access to `model`. Used to let a key's access group override a team's
+    model restriction in `common_checks`.
+
+    A key's access group only counts if the access group itself authorizes the
+    caller as an owner — that is, the group's `assigned_team_ids` includes the
+    key's `team_id`, or the group's `assigned_key_ids` includes the key's
+    token. This preserves the team-as-owner boundary (a team member cannot
+    escalate by naming a group assigned to a different team) while still
+    letting a group reach the key without first being added to the team's
+    `access_group_ids` list.
+    """
+    if valid_token is None:
+        return False
+    key_access_group_ids = list(valid_token.access_group_ids or [])
+    if not key_access_group_ids:
+        return False
+
+    from litellm.proxy.proxy_server import prisma_client as _prisma_client
+    from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
+    from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
+
+    if _prisma_client is None or _user_api_key_cache is None:
+        return False
+
+    key_team_id = valid_token.team_id or (
+        team_object.team_id if team_object is not None else None
+    )
+    key_token = valid_token.token
+
+    authorized_models: List[str] = []
+    for ag_id in key_access_group_ids:
+        try:
+            ag = await get_access_object(
+                access_group_id=ag_id,
+                prisma_client=_prisma_client,
+                user_api_key_cache=_user_api_key_cache,
+                proxy_logging_obj=_proxy_logging_obj,
+            )
+        except Exception:
+            continue
+        team_authorized = bool(
+            key_team_id and key_team_id in (ag.assigned_team_ids or [])
+        )
+        key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
+        if team_authorized or key_authorized:
+            authorized_models.extend(ag.access_model_names or [])
+
+    if not authorized_models:
+        return False
+    try:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=list(set(authorized_models)),
+            team_model_aliases=valid_token.team_model_aliases,
+            team_id=valid_token.team_id,
+            object_type="key",
+        )
+        return True
+    except ProxyException:
+        return False
 
 
 def can_project_access_model(

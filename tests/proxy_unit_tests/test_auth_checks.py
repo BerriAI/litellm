@@ -1153,3 +1153,320 @@ async def test_can_key_call_model_via_access_group_ids():
             valid_token=user_api_key_object,
             llm_router=router,
         )
+
+
+# ---------------------------------------------------------------------------
+# _key_access_group_grants_model (key access group overriding team restriction)
+# ---------------------------------------------------------------------------
+
+
+def _patch_proxy_server_globals():
+    """Patch proxy_server's prisma_client and user_api_key_cache to non-None mocks
+    so the helper's None-guard doesn't short-circuit. The actual values don't
+    matter because get_access_object is patched separately to return fixtures."""
+    from unittest.mock import MagicMock, patch
+
+    return [
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+    ]
+
+
+def _fake_access_group(
+    access_group_id: str,
+    access_model_names=None,
+    assigned_team_ids=None,
+    assigned_key_ids=None,
+):
+    from litellm.proxy._types import LiteLLM_AccessGroupTable
+
+    return LiteLLM_AccessGroupTable(
+        access_group_id=access_group_id,
+        access_group_name=access_group_id,
+        access_model_names=access_model_names or [],
+        assigned_team_ids=assigned_team_ids or [],
+        assigned_key_ids=assigned_key_ids or [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_team_authorized():
+    """Group's assigned_team_ids includes the key's team and grants the model → True.
+
+    This is the happy path equivalent of Andres's report: admin creates an
+    access group with assigned_team_ids=[team-a], grants claude-haiku-4-5,
+    attaches it to a key on team-a. Override fires.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["premium-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],  # deliberately not synced — the access group itself authorizes
+    )
+
+    fake_ag = _fake_access_group(
+        access_group_id="premium-group",
+        access_model_names=["claude-haiku-4-5"],
+        assigned_team_ids=["team-a"],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is True
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_key_directly_authorized():
+    """Group's assigned_key_ids includes the key's token and grants the model → True.
+
+    Per-key authorization path: an admin scopes a group directly to a key
+    (assigned_key_ids) without listing the team.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token-hashed",
+        models=[],
+        access_group_ids=["per-key-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],
+    )
+
+    fake_ag = _fake_access_group(
+        access_group_id="per-key-group",
+        access_model_names=["claude-haiku-4-5"],
+        assigned_team_ids=[],
+        assigned_key_ids=["test-token-hashed"],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is True
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_key_has_no_groups():
+    """Key with no access_group_ids → False (early return, no DB read)."""
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=[],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=["any-group"],
+    )
+    assert (
+        await _key_access_group_grants_model(
+            model="claude-haiku-4-5",
+            valid_token=valid_token,
+            team_object=team_object,
+            llm_router=None,
+        )
+        is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_group_does_not_cover_model():
+    """Group authorizes the team but does not grant the requested model → False."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["basic-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],
+    )
+
+    fake_ag = _fake_access_group(
+        access_group_id="basic-group",
+        access_model_names=["gpt-4o-mini"],
+        assigned_team_ids=["team-a"],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is False
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_group_authorizes_neither():
+    """
+    Bypass regression test: a team member sets a foreign access group on their
+    key. The group grants the requested model but its assigned_team_ids /
+    assigned_key_ids do not include this caller's team or token. Override is
+    denied — the team's 401 propagates.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="team-a-token",
+        models=[],
+        access_group_ids=["team-b-premium"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],
+    )
+
+    fake_ag = _fake_access_group(
+        access_group_id="team-b-premium",
+        access_model_names=["claude-opus-4-5"],
+        assigned_team_ids=["team-b"],
+        assigned_key_ids=["team-b-token"],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            return_value=fake_ag,
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-opus-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is False
+        )
+    finally:
+        for p in patches:
+            p.stop()
+
+
+@pytest.mark.asyncio
+async def test_key_access_group_grants_model_when_get_access_object_raises():
+    """Group lookup failure (404, network, etc.) is treated as no authorization."""
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        models=[],
+        access_group_ids=["missing-group"],
+        team_id="team-a",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-a",
+        models=["mock-success"],
+        access_group_ids=[],
+    )
+
+    patches = _patch_proxy_server_globals() + [
+        patch(
+            "litellm.proxy.auth.auth_checks.get_access_object",
+            new_callable=AsyncMock,
+            side_effect=Exception("not found"),
+        ),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        assert (
+            await _key_access_group_grants_model(
+                model="claude-haiku-4-5",
+                valid_token=valid_token,
+                team_object=team_object,
+                llm_router=None,
+            )
+            is False
+        )
+    finally:
+        for p in patches:
+            p.stop()
