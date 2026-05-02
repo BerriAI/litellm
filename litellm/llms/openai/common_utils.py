@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from litellm.types.utils import ModelResponse
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
@@ -322,13 +323,19 @@ def try_parse_sse_response_body(body: Optional[str]) -> Optional["ModelResponse"
             continue
 
     if not chunks:
+        verbose_logger.debug(
+            "try_parse_sse_response_body: no SSE data lines found in response body"
+        )
         return None
 
     from litellm.types.utils import ModelResponse
 
     try:
         result = litellm.stream_chunk_builder(chunks=chunks)
-    except Exception:
+    except Exception as e:
+        verbose_logger.debug(
+            "try_parse_sse_response_body: stream_chunk_builder failed: %s", e
+        )
         return None
     if not isinstance(result, ModelResponse):
         return None
