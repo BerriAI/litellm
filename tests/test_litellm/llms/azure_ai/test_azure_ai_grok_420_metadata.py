@@ -53,6 +53,7 @@ def test_azure_ai_grok_420_model_info(
     assert model_info["input_cost_per_token"] == pytest.approx(2e-06)
     assert model_info["output_cost_per_token"] == pytest.approx(6e-06)
     assert model_info["supports_function_calling"] is True
+    assert model_info["supports_response_schema"] is True
     assert model_info["supports_tool_choice"] is True
     assert model_info["supports_vision"] is True
     assert model_info["supports_web_search"] is True
@@ -74,6 +75,7 @@ def test_azure_ai_grok_420_raw_model_cost_entry(
     assert model_info["supported_modalities"] == ["text", "image"]
     assert model_info["supported_output_modalities"] == ["text"]
     assert model_info["supports_function_calling"] is True
+    assert model_info["supports_response_schema"] is True
     assert model_info["supports_tool_choice"] is True
     assert model_info["supports_vision"] is True
     assert model_info["supports_web_search"] is True
