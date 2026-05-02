@@ -4400,3 +4400,19 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+
+
+@pytest.mark.parametrize("invalid_effort", ["disabled", "invalid", "garbage"])
+def test_bedrock_converse_invalid_reasoning_effort_raises_bad_request(invalid_effort):
+    """Bedrock Converse routes invalid `reasoning_effort` to a 400 BadRequestError
+    with `llm_provider="bedrock"`, not a 500 APIConnectionError."""
+    config = AmazonConverseConfig()
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        config._handle_reasoning_effort_parameter(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            reasoning_effort=invalid_effort,
+            optional_params={},
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.llm_provider == "bedrock"
+    assert "Invalid reasoning_effort value" in str(exc_info.value)

@@ -450,7 +450,9 @@ class AmazonConverseConfig(BaseConfig):
         else:
             # Anthropic and other models: convert to thinking parameter
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort=reasoning_effort, model=model
+                reasoning_effort=reasoning_effort,
+                model=model,
+                llm_provider="bedrock",
             )
 
     @staticmethod

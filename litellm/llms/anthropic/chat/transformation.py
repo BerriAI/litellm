@@ -794,6 +794,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_reasoning_effort(
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
         model: str,
+        llm_provider: str = "anthropic",
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
@@ -824,7 +825,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
             )
         else:
-            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+            raise litellm.BadRequestError(
+                message=(
+                    f"Invalid reasoning_effort value: {reasoning_effort!r}. "
+                    f"Must be one of: 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'."
+                ),
+                model=model,
+                llm_provider=llm_provider,
+            )
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
@@ -1089,7 +1097,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
                 optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    reasoning_effort=value, model=model
+                    reasoning_effort=value,
+                    model=model,
+                    llm_provider=self.custom_llm_provider or "anthropic",
                 )
                 # For Claude 4.6+ models, effort is controlled via output_config,
                 # not thinking budget_tokens. Map reasoning_effort to output_config.
@@ -1529,10 +1539,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return
         effort = output_config.get("effort")
         valid_efforts = ["high", "medium", "low", "xhigh", "max"]
+        provider = self.custom_llm_provider or "anthropic"
         if effort and effort not in valid_efforts:
-            raise ValueError(
-                f"Invalid effort value: {effort}. Must be one of: "
-                f"'high', 'medium', 'low', 'xhigh', 'max'"
+            raise litellm.BadRequestError(
+                message=(
+                    f"Invalid effort value: {effort!r}. Must be one of: "
+                    f"'high', 'medium', 'low', 'xhigh', 'max'."
+                ),
+                model=model,
+                llm_provider=provider,
             )
         # ``max`` is for Opus 4.6+ output effort (not Sonnet 4.6, not Opus 4.5).
         # Accept known Opus 4.6/4.7 id patterns and/or ``supports_max_reasoning_effort``
@@ -1542,14 +1557,22 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             or self._is_opus_4_7_model(model)
             or self._supports_effort_level(model, "max")
         ):
-            raise ValueError(
-                f"effort='max' is not supported by this model. Got model: {model}"
+            raise litellm.BadRequestError(
+                message=(
+                    f"effort='max' is not supported by this model. Got model: {model}"
+                ),
+                model=model,
+                llm_provider=provider,
             )
         # ``xhigh`` is data-driven via ``supports_xhigh_reasoning_effort`` so
         # enabling it for a new model is a pure model-map change.
         if effort == "xhigh" and not self._supports_effort_level(model, "xhigh"):
-            raise ValueError(
-                f"effort='xhigh' is not supported by this model. Got model: {model}"
+            raise litellm.BadRequestError(
+                message=(
+                    f"effort='xhigh' is not supported by this model. Got model: {model}"
+                ),
+                model=model,
+                llm_provider=provider,
             )
         data["output_config"] = output_config
 

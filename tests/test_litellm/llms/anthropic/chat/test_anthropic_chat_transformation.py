@@ -8,6 +8,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -1631,8 +1632,8 @@ def test_effort_validation():
         )
         assert result["output_config"]["effort"] == effort
 
-    # Invalid value should raise error
-    with pytest.raises(ValueError, match="Invalid effort value"):
+    # Invalid value should raise BadRequestError (HTTP 400)
+    with pytest.raises(litellm.BadRequestError, match="Invalid effort value"):
         optional_params = {"output_config": {"effort": "invalid"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1688,7 +1689,7 @@ def test_max_effort_rejected_for_opus_45():
     messages = [{"role": "user", "content": "Test"}]
 
     with pytest.raises(
-        ValueError, match="effort='max' is not supported by this model"
+        litellm.BadRequestError, match="effort='max' is not supported by this model"
     ):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
@@ -2252,7 +2253,7 @@ def test_max_effort_rejected_for_sonnet_46():
     messages = [{"role": "user", "content": "Test"}]
 
     with pytest.raises(
-        ValueError, match="effort='max' is not supported by this model"
+        litellm.BadRequestError, match="effort='max' is not supported by this model"
     ):
         config.transform_request(
             model="claude-sonnet-4-6-20260219",
@@ -3657,3 +3658,79 @@ def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
     original_content = [dict(b) for b in messages[1]["content"]]
     result = strip_advisor_blocks_from_messages(messages)
     assert result[1]["content"] == original_content
+
+
+@pytest.mark.parametrize("invalid_effort", ["disabled", "invalid", "", "garbage"])
+def test_invalid_reasoning_effort_raises_bad_request(invalid_effort):
+    """Invalid reasoning_effort values raise litellm.BadRequestError (HTTP 400),
+    not ValueError (which surfaces as APIConnectionError 500)."""
+    config = AnthropicConfig()
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": invalid_effort},
+            optional_params={},
+            model="claude-haiku-4-5",
+            drop_params=False,
+        )
+    assert exc_info.value.status_code == 400
+    assert "Invalid reasoning_effort value" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("invalid_effort", ["disabled", "invalid", "garbage"])
+def test_invalid_output_config_effort_raises_bad_request(invalid_effort):
+    """Invalid output_config.effort values raise litellm.BadRequestError (HTTP 400)."""
+    config = AnthropicConfig()
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        config.transform_request(
+            model="claude-opus-4-7",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"output_config": {"effort": invalid_effort}},
+            litellm_params={},
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+    assert "Invalid effort value" in str(exc_info.value)
+
+
+def test_unsupported_xhigh_raises_bad_request():
+    """`xhigh` on a model that does not advertise xhigh support raises 400."""
+    config = AnthropicConfig()
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        config.transform_request(
+            model="claude-sonnet-4-6-20260219",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"output_config": {"effort": "xhigh"}},
+            litellm_params={},
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+    assert "xhigh" in str(exc_info.value)
+    assert "not supported by this model" in str(exc_info.value)
+
+
+def test_unsupported_max_raises_bad_request():
+    """`max` on a non-Opus-4.6+ model raises 400."""
+    config = AnthropicConfig()
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        config.transform_request(
+            model="claude-opus-4-5-20251101",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"output_config": {"effort": "max"}},
+            litellm_params={},
+            headers={},
+        )
+    assert exc_info.value.status_code == 400
+    assert "max" in str(exc_info.value)
+
+
+def test_bad_request_carries_provider_anthropic():
+    """Default provider attribution is `anthropic`."""
+    config = AnthropicConfig()
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "garbage"},
+            optional_params={},
+            model="claude-haiku-4-5",
+            drop_params=False,
+        )
+    assert exc_info.value.llm_provider == "anthropic"
