@@ -1043,12 +1043,14 @@ async def test_failure_hook_keeps_error_information_traceback_by_default(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_failure_hook_blanks_error_information_traceback_when_env_set(
+async def test_failure_hook_drops_error_information_traceback_when_env_set(
     monkeypatch,
 ):
-    """With the opt-in env var, the traceback in the SpendLogs row is blanked
-    so the per-row Metadata pane in the UI stays clean. The other fields
-    (error_class / error_message / error_code) are preserved."""
+    """With the opt-in env var, the traceback key is omitted from the
+    SpendLogs row entirely so the per-row Metadata pane in the UI (which
+    renders ``error_information`` as a JSON blob) doesn't show a noisy empty
+    ``"traceback": ""`` line. The other fields (error_class / error_message /
+    error_code) are preserved."""
     import logging
 
     from litellm._logging import verbose_proxy_logger
@@ -1062,6 +1064,6 @@ async def test_failure_hook_blanks_error_information_traceback_when_env_set(
         verbose_proxy_logger.setLevel(original_level)
 
     error_information = metadata["error_information"]
-    assert error_information["traceback"] == ""
+    assert "traceback" not in error_information
     assert error_information["error_class"] == "RuntimeError"
     assert error_information["error_message"] == "boom-with-traceback"

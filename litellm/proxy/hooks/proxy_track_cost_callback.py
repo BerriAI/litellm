@@ -83,7 +83,14 @@ class _ProxyDBLogger(CustomLogger):
             traceback_str=traceback_str,
         )
         if should_suppress_spend_log_tracebacks():
-            _error_information = {**_error_information, "traceback": ""}
+            # Drop the traceback key entirely so the per-row Metadata pane in
+            # the UI (which renders the JSON blob verbatim) doesn't show a
+            # noisy ``"traceback": ""`` line. Downstream consumers all use
+            # ``.get("traceback")`` / truthy checks, and the TypedDict marks
+            # the field as optional, so omitting is type-safe.
+            _error_information = {
+                k: v for k, v in _error_information.items() if k != "traceback"
+            }
         _metadata["error_information"] = _error_information
 
         _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
