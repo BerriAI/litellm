@@ -57,7 +57,9 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 custom_tool.get("name") or tool.get("name") or f"custom_tool_{idx}"
             )
             tool_description = custom_tool.get("description") or tool.get("description")
-            tool_parameters = custom_tool.get("input_schema") or tool.get("input_schema")
+            tool_parameters = custom_tool.get("input_schema") or tool.get(
+                "input_schema"
+            )
 
             if not isinstance(tool_parameters, dict):
                 tool_parameters = {
