@@ -582,8 +582,6 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 )
                 if transformed_content != content:
                     # Create a new response with transformed content and updated Content-Length
-                    import httpx
-
                     # Update headers with correct Content-Length
                     new_headers = dict(raw_response.headers)
                     new_headers["content-length"] = str(len(transformed_content))

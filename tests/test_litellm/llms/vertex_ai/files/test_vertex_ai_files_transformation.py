@@ -149,6 +149,39 @@ class TestTransformFileContent:
         assert isinstance(result, HttpxBinaryResponseContent)
         assert result.response.content == b'{"line": 1}\n{"line": 2}\n'
 
+    def test_should_forward_logging_obj_to_batch_output_transformer(
+        self, config, monkeypatch
+    ):
+        raw_response = httpx.Response(
+            status_code=200,
+            content=b'{"line": 1}\n',
+            headers={"content-type": "application/octet-stream"},
+            request=httpx.Request("GET", "https://example.com"),
+        )
+        logging_obj = MagicMock()
+        captured = {}
+
+        def mock_try_transform_vertex_batch_output_to_openai(content, logging_obj=None):
+            captured["content"] = content
+            captured["logging_obj"] = logging_obj
+            return content
+
+        monkeypatch.setattr(
+            config,
+            "_try_transform_vertex_batch_output_to_openai",
+            mock_try_transform_vertex_batch_output_to_openai,
+        )
+
+        result = config.transform_file_content_response(
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+            litellm_params={},
+        )
+
+        assert captured["content"] == raw_response.content
+        assert captured["logging_obj"] is logging_obj
+        assert result.response is raw_response
+
 
 class TestTransformDeleteFile:
     def test_should_build_correct_gcs_delete_url(self, config):
