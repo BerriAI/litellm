@@ -632,7 +632,7 @@ async def test_should_include_memory_container_list_when_db_recovers_without_row
 
 
 @pytest.mark.asyncio
-async def test_should_validate_owner_and_preserve_managed_id_for_proxy_forwarding(
+async def test_should_validate_owner_and_forward_decoded_id_for_proxy_forwarding(
     monkeypatch,
 ):
     from litellm.proxy.container_endpoints import handler_factory
@@ -691,13 +691,13 @@ async def test_should_validate_owner_and_preserve_managed_id_for_proxy_forwardin
 
     access_check.assert_awaited_once()
     assert access_check.await_args.kwargs["container_id"] == encoded_id
-    assert result["container_id"] == encoded_id
-    assert result["custom_llm_provider"] == "openai"
-    assert "model_id" not in result
+    assert result["container_id"] == "cntr_provider"
+    assert result["custom_llm_provider"] == "azure"
+    assert result["model_id"] == "router-gpt"
 
 
 @pytest.mark.asyncio
-async def test_should_validate_owner_and_preserve_managed_id_for_multipart_upload(
+async def test_should_validate_owner_and_forward_decoded_id_for_multipart_upload(
     monkeypatch,
 ):
     from litellm.proxy.common_utils import http_parsing_utils
@@ -767,9 +767,9 @@ async def test_should_validate_owner_and_preserve_managed_id_for_multipart_uploa
 
     access_check.assert_awaited_once()
     assert access_check.await_args.kwargs["container_id"] == encoded_id
-    assert result["container_id"] == encoded_id
-    assert result["custom_llm_provider"] == "openai"
-    assert "model_id" not in result
+    assert result["container_id"] == "cntr_provider"
+    assert result["custom_llm_provider"] == "azure"
+    assert result["model_id"] == "router-gpt"
     assert result["file"] == "file-data"
 
 
