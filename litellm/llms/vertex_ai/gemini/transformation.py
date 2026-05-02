@@ -212,6 +212,22 @@ def _process_gemini_media(
             return _apply_gemini_metadata(
                 part, model, media_resolution_enum, video_metadata
             )
+        elif image_url.startswith(
+            "https://generativelanguage.googleapis.com/v1beta/files/"
+        ):
+            # Gemini Files API URIs — the file is already uploaded to Google's
+            # servers; pass the URI through as file_data without fetching it.
+            # These URLs return 403 when accessed directly, so we must not try
+            # to resolve their MIME type via HTTP.
+            if format:
+                file_data = FileDataType(mime_type=format, file_uri=image_url)
+            else:
+                # Gemini Files API references can be passed through as URI-only.
+                file_data = cast(FileDataType, {"file_uri": image_url})
+            part = {"file_data": file_data}
+            return _apply_gemini_metadata(
+                part, model, media_resolution_enum, video_metadata
+            )
         elif (
             "https://" in image_url
             and (image_type := format or _get_image_mime_type_from_url(image_url))
@@ -743,16 +759,22 @@ def _transform_request_body(  # noqa: PLR0915
                     ]
 
         data = RequestBody(contents=content)
-        if system_instructions is not None:
-            data["system_instruction"] = system_instructions
-        if tools is not None:
-            data["tools"] = tools
-        if tool_choice is not None:
-            data["toolConfig"] = tool_choice
-        if include_server_side_tool_invocations:
-            if "toolConfig" not in data:
-                data["toolConfig"] = {}
-            data["toolConfig"]["includeServerSideToolInvocations"] = True
+        # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.
+        # Treat dropping these fields as a request mutation guarded by modify_params.
+        can_send_cache_incompatible_fields = (
+            cached_content is None or litellm.modify_params is False
+        )
+        if can_send_cache_incompatible_fields:
+            if system_instructions is not None:
+                data["system_instruction"] = system_instructions
+            if tools is not None:
+                data["tools"] = tools
+            if tool_choice is not None:
+                data["toolConfig"] = tool_choice
+            if include_server_side_tool_invocations:
+                if "toolConfig" not in data:
+                    data["toolConfig"] = {}
+                data["toolConfig"]["includeServerSideToolInvocations"] = True
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:

@@ -60,6 +60,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _safe_get_request_headers,
+    _safe_get_request_query_params,
+)
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
@@ -486,7 +490,10 @@ async def common_checks(  # noqa: PLR0915
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     _model: Optional[Union[str, List[str]]] = get_model_from_request(
-        request_body, route
+        request_data=request_body,
+        route=route,
+        request_headers=_safe_get_request_headers(request=request),
+        request_query_params=_safe_get_request_query_params(request=request),
     )
 
     # 1. If team is blocked
@@ -495,23 +502,28 @@ async def common_checks(  # noqa: PLR0915
             f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin."
         )
 
-    # 2. If team can call model
+    # 2. If team can call model (or key's access_group_ids grant it)
     if _model and team_object:
         with tracer.trace("litellm.proxy.auth.common_checks.can_team_access_model"):
-            if not await can_team_access_model(
-                model=_model,
-                team_object=team_object,
-                llm_router=llm_router,
-                team_model_aliases=(
-                    valid_token.team_model_aliases if valid_token else None
-                ),
-            ):
-                raise ProxyException(
-                    message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
-                    type=ProxyErrorTypes.team_model_access_denied,
-                    param="model",
-                    code=status.HTTP_401_UNAUTHORIZED,
+            try:
+                await can_team_access_model(
+                    model=_model,
+                    team_object=team_object,
+                    llm_router=llm_router,
+                    team_model_aliases=(
+                        valid_token.team_model_aliases if valid_token else None
+                    ),
                 )
+            except ProxyException as team_denial:
+                if team_denial.type != ProxyErrorTypes.team_model_access_denied:
+                    raise
+                if not await _key_access_group_grants_model(
+                    model=_model,
+                    valid_token=valid_token,
+                    team_object=team_object,
+                    llm_router=llm_router,
+                ):
+                    raise
 
     # 2.2. If team member has per-member model scope, enforce it
     if _model and team_object and valid_token and valid_token.user_id:
@@ -656,13 +668,7 @@ async def common_checks(  # noqa: PLR0915
             end_user_object is not None
             and end_user_object.litellm_budget_table is not None
         ):
-            end_user_budget = end_user_object.litellm_budget_table.max_budget
-            if end_user_budget is not None and end_user_object.spend > end_user_budget:
-                raise litellm.BudgetExceededError(
-                    current_cost=end_user_object.spend,
-                    max_budget=end_user_budget,
-                    message=f"ExceededBudget: End User={end_user_object.user_id} over budget. Spend={end_user_object.spend}, Budget={end_user_budget}",
-                )
+            await _check_end_user_budget(end_user_obj=end_user_object, route=route)
 
     _enforce_user_param_check(general_settings, request, request_body, route)
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
@@ -1012,7 +1018,7 @@ async def _apply_default_budget_to_end_user(
     return end_user_obj
 
 
-def _check_end_user_budget(
+async def _check_end_user_budget(
     end_user_obj: LiteLLM_EndUserTable,
     route: str,
 ) -> None:
@@ -1033,11 +1039,20 @@ def _check_end_user_budget(
         return
 
     end_user_budget = end_user_obj.litellm_budget_table.max_budget
-    if end_user_budget is not None and end_user_obj.spend > end_user_budget:
+    if end_user_budget is None:
+        return
+
+    from litellm.proxy.proxy_server import get_current_spend
+
+    end_user_spend = await get_current_spend(
+        counter_key=f"spend:end_user:{end_user_obj.user_id}",
+        fallback_spend=end_user_obj.spend or 0.0,
+    )
+    if end_user_spend > end_user_budget:
         raise litellm.BudgetExceededError(
-            current_cost=end_user_obj.spend,
+            current_cost=end_user_spend,
             max_budget=end_user_budget,
-            message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_obj.spend}, Budget={end_user_budget}",
+            message=f"ExceededBudget: End User={end_user_obj.user_id} over budget. Spend={end_user_spend}, Budget={end_user_budget}",
         )
 
 
@@ -1091,7 +1106,7 @@ async def get_end_user_object(
         )
 
         # Check budget limits
-        _check_end_user_budget(end_user_obj=return_obj, route=route)
+        await _check_end_user_budget(end_user_obj=return_obj, route=route)
 
         return return_obj
 
@@ -1124,7 +1139,7 @@ async def get_end_user_object(
         )
 
         # Check budget limits
-        _check_end_user_budget(end_user_obj=_response, route=route)
+        await _check_end_user_budget(end_user_obj=_response, route=route)
 
         return _response
 
@@ -1616,9 +1631,12 @@ async def _cache_key_object(
     ## CACHE REFRESH TIME
     user_api_key_obj.last_refreshed_at = time.time()
 
+    cached_key_obj = _copy_user_api_key_auth_for_cache(
+        user_api_key_obj=user_api_key_obj
+    )
     await _cache_management_object(
         key=key,
-        value=user_api_key_obj,
+        value=cached_key_obj,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         model_type=UserAPIKeyAuth,
@@ -2348,7 +2366,7 @@ async def get_key_object(
         model_type=UserAPIKeyAuth,
     )
     if user_api_key_auth is not None:
-        return user_api_key_auth
+        return _copy_user_api_key_auth_for_cache(user_api_key_obj=user_api_key_auth)
 
     if check_cache_only:
         raise Exception(
@@ -2399,6 +2417,16 @@ async def get_key_object(
     )
 
     return _response
+
+
+def _copy_user_api_key_auth_for_cache(
+    user_api_key_obj: UserAPIKeyAuth,
+) -> UserAPIKeyAuth:
+    copied_key_obj = user_api_key_obj.model_copy()
+    copied_key_obj.budget_reservation = None
+    copied_key_obj.parent_otel_span = None
+    copied_key_obj.request_route = None
+    return copied_key_obj
 
 
 @log_db_metrics
@@ -2950,6 +2978,77 @@ async def can_team_access_model(
                     object_type="team",
                 )
         raise
+
+
+async def _key_access_group_grants_model(
+    model: Union[str, List[str]],
+    valid_token: Optional[UserAPIKeyAuth],
+    team_object: Optional[LiteLLM_TeamTable],
+    llm_router: Optional[Router],
+) -> bool:
+    """
+    Returns True if the key's `access_group_ids` expand to models that grant
+    access to `model`. Used to let a key's access group override a team's
+    model restriction in `common_checks`.
+
+    A key's access group only counts if the access group itself authorizes the
+    caller as an owner — that is, the group's `assigned_team_ids` includes the
+    key's `team_id`, or the group's `assigned_key_ids` includes the key's
+    token. This preserves the team-as-owner boundary (a team member cannot
+    escalate by naming a group assigned to a different team) while still
+    letting a group reach the key without first being added to the team's
+    `access_group_ids` list.
+    """
+    if valid_token is None:
+        return False
+    key_access_group_ids = list(valid_token.access_group_ids or [])
+    if not key_access_group_ids:
+        return False
+
+    from litellm.proxy.proxy_server import prisma_client as _prisma_client
+    from litellm.proxy.proxy_server import proxy_logging_obj as _proxy_logging_obj
+    from litellm.proxy.proxy_server import user_api_key_cache as _user_api_key_cache
+
+    if _prisma_client is None or _user_api_key_cache is None:
+        return False
+
+    key_team_id = valid_token.team_id or (
+        team_object.team_id if team_object is not None else None
+    )
+    key_token = valid_token.token
+
+    authorized_models: List[str] = []
+    for ag_id in key_access_group_ids:
+        try:
+            ag = await get_access_object(
+                access_group_id=ag_id,
+                prisma_client=_prisma_client,
+                user_api_key_cache=_user_api_key_cache,
+                proxy_logging_obj=_proxy_logging_obj,
+            )
+        except Exception:
+            continue
+        team_authorized = bool(
+            key_team_id and key_team_id in (ag.assigned_team_ids or [])
+        )
+        key_authorized = bool(key_token and key_token in (ag.assigned_key_ids or []))
+        if team_authorized or key_authorized:
+            authorized_models.extend(ag.access_model_names or [])
+
+    if not authorized_models:
+        return False
+    try:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=list(set(authorized_models)),
+            team_model_aliases=valid_token.team_model_aliases,
+            team_id=valid_token.team_id,
+            object_type="key",
+        )
+        return True
+    except ProxyException:
+        return False
 
 
 def can_project_access_model(
@@ -3967,13 +4066,19 @@ async def _tag_max_budget_check(
         if (
             tag_object.litellm_budget_table is not None
             and tag_object.litellm_budget_table.max_budget is not None
-            and tag_object.spend is not None
-            and tag_object.spend > tag_object.litellm_budget_table.max_budget
         ):
+            from litellm.proxy.proxy_server import get_current_spend
+
+            tag_spend = await get_current_spend(
+                counter_key=f"spend:tag:{tag_name}",
+                fallback_spend=tag_object.spend or 0.0,
+            )
+            if tag_spend <= tag_object.litellm_budget_table.max_budget:
+                continue
             raise litellm.BudgetExceededError(
-                current_cost=tag_object.spend,
+                current_cost=tag_spend,
                 max_budget=tag_object.litellm_budget_table.max_budget,
-                message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_object.spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
+                message=f"Budget has been exceeded! Tag={tag_name} Current cost: {tag_spend}, Max budget: {tag_object.litellm_budget_table.max_budget}",
             )
 
 

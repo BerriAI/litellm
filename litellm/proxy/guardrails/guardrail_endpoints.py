@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
     compile_sandboxed,
@@ -842,7 +843,10 @@ async def list_guardrail_submissions(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
-    is_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    # Admin Viewer follows the read-parity rule: see all submissions like a
+    # Proxy Admin would (no writes — registration / approval still gated
+    # elsewhere by their own per-action checks).
+    is_admin = _user_has_admin_view(user_api_key_dict)
     visible_team_ids: Optional[List[str]] = None
     if not is_admin:
         visible_team_ids = await _get_user_team_ids(user_api_key_dict)

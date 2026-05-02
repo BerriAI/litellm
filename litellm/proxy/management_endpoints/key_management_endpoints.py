@@ -57,6 +57,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,
     _is_user_team_admin,
     _set_object_metadata_field,
+    _team_member_has_permission,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
@@ -4436,6 +4437,26 @@ def _get_admin_team_ids_from_objects(
     ]
 
 
+def _get_team_ids_with_key_list_permission_from_objects(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_objects: List[LiteLLM_TeamTable],
+) -> List[str]:
+    """Filter team objects to non-admin teams where the caller has /key/list
+    permission via team_member_permissions. These teams should grant the
+    caller full key visibility (same as a team admin), so other members'
+    keys and service account keys (user_id=NULL) are returned."""
+    return [
+        team.team_id
+        for team in team_objects
+        if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+        and _team_member_has_permission(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team,
+            permission=KeyManagementRoutes.KEY_LIST.value,
+        )
+    ]
+
+
 def _get_member_team_ids_from_objects(
     user_api_key_dict: UserAPIKeyAuth,
     team_objects: List[LiteLLM_TeamTable],
@@ -4589,6 +4610,17 @@ async def list_keys(
                 user_api_key_dict=user_api_key_dict,
                 team_objects=team_objects,
             )
+            # Non-admin members with /key/list permission get full team-key
+            # visibility for that team — matching the UI contract that
+            # granting this permission lets them see all keys within the team.
+            list_permission_team_ids = (
+                _get_team_ids_with_key_list_permission_from_objects(
+                    user_api_key_dict=user_api_key_dict,
+                    team_objects=team_objects,
+                )
+            )
+            if list_permission_team_ids:
+                admin_team_ids = list({*admin_team_ids, *list_permission_team_ids})
         else:
             admin_team_ids = None
 
