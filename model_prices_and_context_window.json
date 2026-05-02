@@ -6904,6 +6904,27 @@
         "supports_video_input": true,
         "supports_vision": true
     },
+    "azure_ai/kimi-k2.6": {
+        "input_cost_per_token": 9.5e-07,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 262144,
+        "max_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-kimi-k2-6-in-microsoft-foundry/4513125",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure_ai/ministral-3b": {
         "input_cost_per_token": 4e-08,
         "litellm_provider": "azure_ai",
