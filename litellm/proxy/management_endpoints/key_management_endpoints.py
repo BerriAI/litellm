@@ -809,6 +809,20 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if prisma_client:
+            # Mirror the membership rule applied to /key/update: when the
+            # caller specifies an organization_id, require that they are a
+            # member of (or proxy admin over) the target organization.
+            _is_proxy_admin = (
+                user_api_key_dict.user_role is not None
+                and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+            )
+            if not _is_proxy_admin:
+                await _validate_caller_can_assign_key_org(
+                    user_api_key_dict=user_api_key_dict,
+                    organization_id=data.organization_id,
+                    prisma_client=prisma_client,
+                )
+
             org_table = await get_org_object(
                 org_id=data.organization_id,
                 user_api_key_cache=user_api_key_cache,
@@ -3919,6 +3933,22 @@ async def _execute_virtual_key_regeneration(
 ) -> GenerateKeyResponse:
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy.proxy_server import hash_token
+
+    # Apply the same membership rule used on /key/update: when the caller
+    # asks to point the regenerated key at a different organization_id,
+    # require they are a member of (or proxy admin over) the target org.
+    if data is not None and data.organization_id is not None:
+        _existing_org_id = getattr(key_in_db, "organization_id", None)
+        _is_proxy_admin = (
+            user_api_key_dict.user_role is not None
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        if data.organization_id != _existing_org_id and not _is_proxy_admin:
+            await _validate_caller_can_assign_key_org(
+                user_api_key_dict=user_api_key_dict,
+                organization_id=data.organization_id,
+                prisma_client=prisma_client,
+            )
 
     new_token = await get_new_token(data=data)
     new_token_hash = hash_token(new_token)
