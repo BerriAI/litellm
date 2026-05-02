@@ -4518,6 +4518,10 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
 
 
 class BaseDailySpendTransaction(TypedDict):
+    # `date` is the in-memory representation, kept as a YYYY-MM-DD string so it
+    # serializes through Redis cleanly and remains a stable transaction-key
+    # component. The corresponding DB column is `DateTime @db.Date`; conversion
+    # happens at the Prisma boundary (see `to_db_date`).
     date: str
     api_key: str
     model: Optional[str]

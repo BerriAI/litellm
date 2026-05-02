@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors
+from litellm.proxy.db.daily_aggregate_date_utils import to_date_str, to_db_date
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
@@ -438,8 +439,8 @@ def _build_where_conditions(
 
     where_conditions: Dict[str, Any] = {
         "date": {
-            "gte": adjusted_start,
-            "lte": adjusted_end,
+            "gte": to_db_date(adjusted_start),
+            "lte": to_db_date(adjusted_end),
         }
     }
 
@@ -501,12 +502,13 @@ def _build_aggregated_sql_query(
     sql_params: List[Any] = []
     p = 1  # parameter index (1-based for PostgreSQL $N placeholders)
 
-    # Date range (always present)
-    sql_conditions.append(f"date >= ${p}")
+    # Date range (always present). The column is DATE, so cast the string
+    # parameter at the SQL boundary to keep the types unambiguous.
+    sql_conditions.append(f"date >= ${p}::date")
     sql_params.append(adjusted_start)
     p += 1
 
-    sql_conditions.append(f"date <= ${p}")
+    sql_conditions.append(f"date <= ${p}::date")
     sql_params.append(adjusted_end)
     p += 1
 
@@ -594,7 +596,12 @@ async def _aggregate_spend_records(
     grouped_data: Dict[str, Dict[str, Any]] = {}
 
     for record in records:
-        date_str = record.date
+        # `record.date` may be a `datetime`/`date` (Prisma) or a string
+        # (raw query result). Normalize to a YYYY-MM-DD key so grouping
+        # collapses the two representations into the same bucket.
+        date_str = to_date_str(record.date)
+        if date_str is None:
+            continue
         if date_str not in grouped_data:
             grouped_data[date_str] = {
                 "metrics": SpendMetrics(),
@@ -620,7 +627,7 @@ async def _aggregate_spend_records(
     for date_str, data in grouped_data.items():
         results.append(
             DailySpendData(
-                date=datetime.strptime(date_str, "%Y-%m-%d").date(),
+                date=date.fromisoformat(date_str),
                 metrics=data["metrics"],
                 breakdown=data["breakdown"],
             )

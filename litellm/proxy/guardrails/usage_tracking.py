@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.db.daily_aggregate_date_utils import to_db_date
 from litellm.proxy.utils import PrismaClient
 
 
@@ -146,17 +147,18 @@ async def process_spend_logs_guardrail_usage(
             n = int(agg["requests_evaluated"])
             if n == 0:
                 continue
+            db_date = to_db_date(date_key)
             await prisma_client.db.litellm_dailyguardrailmetrics.upsert(
                 where={
                     "guardrail_id_date": {
                         "guardrail_id": guardrail_id,
-                        "date": date_key,
+                        "date": db_date,
                     }
                 },
                 data={
                     "create": {
                         "guardrail_id": guardrail_id,
-                        "date": date_key,
+                        "date": db_date,
                         "requests_evaluated": n,
                         "passed_count": int(agg["passed_count"]),
                         "blocked_count": int(agg["blocked_count"]),

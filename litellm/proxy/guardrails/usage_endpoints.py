@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.daily_aggregate_date_utils import to_date_str, to_db_date
 
 router = APIRouter()
 
@@ -124,7 +125,9 @@ def _prev_fail_rates(metrics_prev: Any, id_attr: str) -> Dict[str, float]:
 def _chart_from_metrics(metrics: Any) -> List[Dict[str, Any]]:
     chart_by_date: Dict[str, Dict[str, int]] = {}
     for m in metrics:
-        d = m.date
+        d = to_date_str(m.date)
+        if d is None:
+            continue
         if d not in chart_by_date:
             chart_by_date[d] = {"passed": 0, "blocked": 0}
         chart_by_date[d]["passed"] += int(m.passed_count or 0)
@@ -352,13 +355,13 @@ async def guardrails_usage_detail(
     metrics = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
         where={
             "guardrail_id": {"in": metric_ids},
-            "date": {"gte": start, "lte": end},
+            "date": {"gte": to_db_date(start), "lte": to_db_date(end)},
         }
     )
     metrics_prev = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
         where={
             "guardrail_id": {"in": metric_ids},
-            "date": {"lt": start},
+            "date": {"lt": to_db_date(start)},
         }
     )
 
@@ -374,7 +377,9 @@ async def guardrails_usage_detail(
     # Aggregate by date in case metrics exist under both UUID and logical name
     ts_by_date: Dict[str, Dict[str, Any]] = {}
     for m in metrics:
-        d = m.date
+        d = to_date_str(m.date)
+        if d is None:
+            continue
         if d not in ts_by_date:
             ts_by_date[d] = {"passed": 0, "blocked": 0}
         ts_by_date[d]["passed"] += int(m.passed_count or 0)
@@ -647,15 +652,17 @@ async def policies_usage_overview(
     try:
         policies = await prisma_client.db.litellm_policytable.find_many()
         metrics = await prisma_client.db.litellm_dailypolicymetrics.find_many(
-            where={"date": {"gte": start, "lte": end}}
+            where={"date": {"gte": to_db_date(start), "lte": to_db_date(end)}}
         )
         metrics_prev = await prisma_client.db.litellm_dailypolicymetrics.find_many(
             where={
                 "date": {
-                    "gte": (
-                        datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)
-                    ).strftime("%Y-%m-%d"),
-                    "lt": start,
+                    "gte": to_db_date(
+                        (
+                            datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)
+                        ).strftime("%Y-%m-%d")
+                    ),
+                    "lt": to_db_date(start),
                 }
             }
         )

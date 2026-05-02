@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.db.daily_aggregate_date_utils import to_date_str, to_db_date
 
 # Constants for analytics periods
 MAX_DAYS = 7  # Number of days to show in DAU analytics
@@ -202,9 +203,11 @@ async def get_daily_active_users(
         start_dt = end_dt - timedelta(days=MAX_DAYS)
         start_date = start_dt.strftime("%Y-%m-%d")
 
-        # Build SQL query with optional tag filter(s)
+        # Build SQL query with optional tag filter(s). The DB column is now
+        # `DATE`, so cast string params to date at the placeholder.
         where_clause = (
-            "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
+            "WHERE dts.date >= $1::date AND dts.date <= $2::date "
+            "AND vt.user_id IS NOT NULL"
         )
         params = [start_date, end_date]
 
@@ -236,7 +239,11 @@ async def get_daily_active_users(
 
         results = [
             TagActiveUsersResponse(
-                tag=row["tag"], active_users=row["active_users"], date=row["date"]
+                tag=row["tag"],
+                active_users=row["active_users"],
+                # `dts.date` is now a DATE column; serialize back to YYYY-MM-DD
+                # for the response so the wire format is unchanged.
+                date=to_date_str(row["date"]) or "",
             )
             for row in db_response
         ]
@@ -310,7 +317,8 @@ async def get_weekly_active_users(
 
         # Build SQL query with optional tag filter(s)
         where_clause = (
-            "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
+            "WHERE dts.date >= $1::date AND dts.date <= $2::date "
+            "AND vt.user_id IS NOT NULL"
         )
         params = [start_date, end_date]
 
@@ -439,7 +447,8 @@ async def get_monthly_active_users(
 
         # Build SQL query with optional tag filter(s)
         where_clause = (
-            "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
+            "WHERE dts.date >= $1::date AND dts.date <= $2::date "
+            "AND vt.user_id IS NOT NULL"
         )
         params = [start_date, end_date]
 
@@ -551,7 +560,7 @@ async def get_tag_summary(
         datetime.strptime(end_date, "%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s)
-        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2"
+        where_clause = "WHERE dts.date >= $1::date AND dts.date <= $2::date"
         params = [start_date, end_date]
 
         # Handle multiple tag filters (takes precedence over single tag filter)
@@ -667,7 +676,9 @@ async def get_per_user_analytics(
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build where clause with date range
-        where_clause: Dict[str, Any] = {"date": {"gte": start_date, "lte": end_date}}
+        where_clause: Dict[str, Any] = {
+            "date": {"gte": to_db_date(start_date), "lte": to_db_date(end_date)}
+        }
 
         # Add tag filtering if provided
         if tag_filters and len(tag_filters) > 0:

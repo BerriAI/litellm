@@ -50,6 +50,7 @@ from litellm.proxy._types import (
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
 )
+from litellm.proxy.db.daily_aggregate_date_utils import to_db_date
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
 )
@@ -1616,11 +1617,17 @@ class DBSpendUpdateWriter:
                             for _, transaction in transactions_to_process.items():
                                 entity_id = transaction.get(entity_id_field)
 
+                                # The in-memory transaction stores `date` as a YYYY-MM-DD
+                                # string (see BaseDailySpendTransaction). The DB column is
+                                # `DateTime @db.Date`, so normalize to a UTC-midnight
+                                # datetime at the Prisma boundary.
+                                db_date = to_db_date(transaction["date"])
+
                                 # Construct the where clause dynamically
                                 where_clause = {
                                     unique_constraint_name: {
                                         entity_id_field: entity_id,
-                                        "date": transaction["date"],
+                                        "date": db_date,
                                         "api_key": transaction["api_key"],
                                         "model": transaction["model"],
                                         "custom_llm_provider": transaction.get(
@@ -1641,7 +1648,7 @@ class DBSpendUpdateWriter:
                                 # Common data structure for both create and update
                                 common_data = {
                                     entity_id_field: entity_id,
-                                    "date": transaction["date"],
+                                    "date": db_date,
                                     "api_key": transaction["api_key"],
                                     "model": transaction.get("model"),
                                     "model_group": transaction.get("model_group"),
