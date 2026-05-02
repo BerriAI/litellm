@@ -2380,7 +2380,14 @@ class MCPServerManager:
             GuardrailRaisedException,
             HTTPException,
         ) as e:
-            # Re-raise guardrail exceptions to properly fail the MCP call
+            # Re-raise guardrail exceptions to properly fail the MCP call.
+            # Attach guardrail logging info so _execute_tool_calls can surface it
+            # in observability (UI logs, Langfuse, DataDog, etc.).
+            guardrail_info = synthetic_llm_data.get("metadata", {}).get(
+                "standard_logging_guardrail_information"
+            )
+            if guardrail_info:
+                e._guardrail_logging_info = guardrail_info  # type: ignore[attr-defined]
             verbose_logger.error(f"Guardrail blocked MCP tool call pre call: {str(e)}")
             raise e
 

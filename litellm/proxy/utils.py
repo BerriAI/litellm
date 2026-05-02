@@ -575,6 +575,17 @@ class ProxyLogging:
             role="user", content=tool_call_content
         )
 
+        # Build namespaced tool name ({server_name}-{tool_name}) so guardrail rules
+        # written against the prefixed form (e.g. "exa-.*") match correctly.
+        server_name = kwargs.get("server_name") or getattr(
+            request_obj, "server_name", None
+        )
+        namespaced_tool_name = (
+            f"{server_name}-{request_obj.tool_name}"
+            if server_name
+            else request_obj.tool_name
+        )
+
         # Create synthetic LLM data that guardrails can process
         synthetic_data = {
             "messages": [synthetic_message],
@@ -584,7 +595,7 @@ class ProxyLogging:
             "user_api_key_end_user_id": kwargs.get("user_api_key_end_user_id"),
             "user_api_key_hash": kwargs.get("user_api_key_hash"),
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
-            "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
+            "mcp_tool_name": namespaced_tool_name,  # namespaced {server}-{tool} for rule matching
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity

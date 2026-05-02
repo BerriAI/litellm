@@ -56,6 +56,8 @@ class ToolPermissionGuardrail(CustomGuardrail):
             kwargs["supported_event_hooks"] = [
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.post_call,
+                GuardrailEventHooks.pre_mcp_call,
+                GuardrailEventHooks.during_mcp_call,
             ]
 
         super().__init__(**kwargs)
@@ -515,8 +517,29 @@ class ToolPermissionGuardrail(CustomGuardrail):
             add_guardrail_to_applied_guardrails_header,
         )
 
-        event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        # pre_mcp_call path: synthetic data has mcp_tool_name but no tools list
+        mcp_tool_name: Optional[str] = data.get("mcp_tool_name")
+        event_type: GuardrailEventHooks = (
+            GuardrailEventHooks.pre_mcp_call
+            if mcp_tool_name is not None
+            else GuardrailEventHooks.pre_call
+        )
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
+            return data
+        if mcp_tool_name is not None:
+            is_allowed, _, message = self._check_tool_permission(mcp_tool_name)
+            if not is_allowed and message is not None:
+                verbose_proxy_logger.warning(f"Tool Permission Guardrail: {message}")
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Violated guardrail policy",
+                        "detection_message": message,
+                    },
+                )
+            add_guardrail_to_applied_guardrails_header(
+                request_data=data, guardrail_name=self.guardrail_name
+            )
             return data
 
         new_tools: Optional[List[ChatCompletionToolParam]] = data.get("tools")
@@ -559,6 +582,43 @@ class ToolPermissionGuardrail(CustomGuardrail):
             request_data=data, guardrail_name=self.guardrail_name
         )
         return data
+
+    @log_guardrail_information
+    async def async_moderation_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        """
+        Enforce tool permission rules during MCP tool execution (during_mcp_call).
+
+        The data dict is the synthetic MCP payload built by _convert_mcp_to_llm_format,
+        which carries mcp_tool_name as the namespaced '{server}-{tool}' string.
+        """
+        if self.should_run_guardrail(
+            data=data, event_type=GuardrailEventHooks.during_mcp_call
+        ) is not True:
+            return
+
+        mcp_tool_name: Optional[str] = data.get("mcp_tool_name")
+        if mcp_tool_name is None:
+            return
+
+        is_allowed, _, message = self._check_tool_permission(mcp_tool_name)
+        if not is_allowed and message is not None:
+            verbose_proxy_logger.warning(f"Tool Permission Guardrail: {message}")
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Violated guardrail policy",
+                    "detection_message": message,
+                },
+            )
+
+        add_guardrail_to_applied_guardrails_header(
+            request_data=data, guardrail_name=self.guardrail_name
+        )
 
     @log_guardrail_information
     async def async_post_call_success_hook(
