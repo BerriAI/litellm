@@ -94,6 +94,7 @@ async def test_router_override_fallbacks_validated_against_key_allowlist():
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
+            request=None,
             llm_model_list=None,
             llm_router=None,
         )
@@ -144,6 +145,7 @@ async def test_router_override_all_fallback_fields_validated(fallback_field):
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
+            request=None,
             llm_model_list=None,
             llm_router=None,
         )
@@ -190,6 +192,7 @@ async def test_top_level_fallback_fields_validated(fallback_field):
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
+            request=None,
             llm_model_list=None,
             llm_router=None,
         )
@@ -226,6 +229,7 @@ async def test_router_override_without_fallbacks_does_not_break_auth():
             valid_token=valid_token,
             request_data=request_data,
             route="/v1/chat/completions",
+            request=None,
             llm_model_list=None,
             llm_router=None,
         )

@@ -11,7 +11,7 @@ import asyncio
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple, Union, cast
+from typing import Any, Iterator, List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -2270,10 +2270,6 @@ async def _enforce_key_and_fallback_model_access(
             request_data=request_data,
             route=route,
             request=request,
-        )
-        fallback_models = cast(
-            Optional[List[ALL_FALLBACK_MODEL_VALUES]],
-            request_data.get("fallbacks", None),
         )
 
         if model is not None:
