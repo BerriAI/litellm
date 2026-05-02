@@ -69,6 +69,8 @@ class OpenTelemetryConfig:
     deployment_environment: Optional[str] = None
     model_id: Optional[str] = None
     ignore_context_propagation: Optional[bool] = None
+    # When True, create a private TracerProvider instead of reusing or setting the global one.
+    skip_set_global: bool = False
 
     def __post_init__(self) -> None:
         # If endpoint is specified but exporter is still the default "console",
@@ -259,16 +261,21 @@ class OpenTelemetry(CustomLogger):
         try:
             existing_provider = get_existing_provider_fn()
 
-            # If a real SDK provider exists (set by another SDK like Langfuse), use it
-            # This uses a positive check for SDK providers instead of a negative check for proxy providers
             if isinstance(existing_provider, sdk_provider_class):
-                verbose_logger.debug(
-                    "OpenTelemetry: Using existing %s: %s",
-                    provider_name,
-                    type(existing_provider).__name__,
-                )
-                provider = existing_provider
-                # Don't call set_provider to preserve existing context
+                if skip_set_global:
+                    verbose_logger.debug(
+                        "OpenTelemetry: existing %s found but skip_set_global=True; creating private %s for isolation",
+                        provider_name,
+                        provider_name,
+                    )
+                    provider = create_new_provider_fn()
+                else:
+                    verbose_logger.debug(
+                        "OpenTelemetry: Using existing %s: %s",
+                        provider_name,
+                        type(existing_provider).__name__,
+                    )
+                    provider = existing_provider
             else:
                 # Default proxy provider or unknown type, create our own
                 verbose_logger.debug("OpenTelemetry: Creating new %s", provider_name)
@@ -293,6 +300,12 @@ class OpenTelemetry(CustomLogger):
 
         return provider
 
+    def _skip_set_global(self) -> bool:
+        # langfuse_otel relies on the Langfuse SDK's providers; don't overwrite them.
+        return self.config.skip_set_global or (
+            hasattr(self, "callback_name") and self.callback_name == "langfuse_otel"
+        )
+
     def _init_tracing(self, tracer_provider):
         from opentelemetry import trace
         from opentelemetry.sdk.trace import TracerProvider
@@ -303,11 +316,6 @@ class OpenTelemetry(CustomLogger):
             provider.add_span_processor(self._get_span_processor())
             return provider
 
-        # CRITICAL FIX: For Langfuse OTEL, skip setting global provider to prevent interference
-        skip_global = (
-            hasattr(self, "callback_name") and self.callback_name == "langfuse_otel"
-        )
-
         tracer_provider = self._get_or_create_provider(
             provider=tracer_provider,
             provider_name="TracerProvider",
@@ -315,16 +323,18 @@ class OpenTelemetry(CustomLogger):
             sdk_provider_class=TracerProvider,
             create_new_provider_fn=create_tracer_provider,
             set_provider_fn=trace.set_tracer_provider,
-            skip_set_global=skip_global,
+            skip_set_global=self._skip_set_global(),
         )
 
         # Grab our tracer from the TracerProvider (not from global context)
         # This ensures we use the provided TracerProvider (e.g., for testing)
         self.tracer = tracer_provider.get_tracer(LITELLM_TRACER_NAME)
+        self._tracer_provider = tracer_provider
         self.span_kind = SpanKind
 
     def _init_metrics(self, meter_provider):
         if not self.config.enable_metrics:
+            self._meter_provider = None
             self._operation_duration_histogram = None
             self._token_usage_histogram = None
             self._cost_histogram = None
@@ -350,7 +360,9 @@ class OpenTelemetry(CustomLogger):
             sdk_provider_class=MeterProvider,
             create_new_provider_fn=create_meter_provider,
             set_provider_fn=metrics.set_meter_provider,
+            skip_set_global=self._skip_set_global(),
         )
+        self._meter_provider = meter_provider
 
         meter = meter_provider.get_meter(__name__)
 
@@ -388,6 +400,7 @@ class OpenTelemetry(CustomLogger):
     def _init_logs(self, logger_provider):
         # nothing to do if events disabled
         if not self.config.enable_events:
+            self._logger_provider = None
             return
 
         from opentelemetry._logs import get_logger_provider, set_logger_provider
@@ -404,13 +417,14 @@ class OpenTelemetry(CustomLogger):
             )
             return provider
 
-        self._get_or_create_provider(
+        self._logger_provider = self._get_or_create_provider(
             provider=logger_provider,
             provider_name="LoggerProvider",
             get_existing_provider_fn=get_logger_provider,
             sdk_provider_class=OTLoggerProvider,
             create_new_provider_fn=create_logger_provider,
             set_provider_fn=set_logger_provider,
+            skip_set_global=self._skip_set_global(),
         )
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -1073,7 +1087,7 @@ class OpenTelemetry(CustomLogger):
         # See: https://github.com/open-telemetry/opentelemetry-python/pull/4676
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
-        from opentelemetry._logs import SeverityNumber, get_logger
+        from opentelemetry._logs import SeverityNumber
 
         try:
             from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]  # OTEL < 1.39.0
@@ -1084,7 +1098,10 @@ class OpenTelemetry(CustomLogger):
                 LogRecord as SdkLogRecord,  # type: ignore[attr-defined]  # OTEL >= 1.39.0
             )
 
-        otel_logger = get_logger(LITELLM_LOGGER_NAME)
+        # Resolve through the handler's own LoggerProvider (which may be a
+        # private one when skip_set_global=True) rather than the module-level
+        # get_logger() which always goes through the global provider.
+        otel_logger = self._logger_provider.get_logger(LITELLM_LOGGER_NAME)
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
