@@ -156,8 +156,11 @@ async def test_update_request_data_with_litellm_managed_vector_store_registry():
             vector_store_id="test_store_id"
         )
 
-    # Test with no vector store registry
-    with patch.object(litellm, "vector_store_registry", None):
+    # Test with no vector store registry or DB fallback
+    with (
+        patch.object(litellm, "vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
         original_data = {"existing_key": "existing_value"}
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data=original_data, vector_store_id=vector_store_id
@@ -786,7 +789,22 @@ class TestVectorStoreManagementEndpointsExist:
         - POST /vector_store/info
         - POST /vector_store/update
         """
+        import importlib
+
+        from litellm.proxy._lazy_features import LAZY_FEATURES
         from litellm.proxy.proxy_server import app
+
+        # Force-register the lazy vector_store_management routes so the
+        # assertions can find them.
+        already_registered = any(
+            getattr(r, "path", None) == "/vector_store/new" for r in app.routes
+        )
+        if not already_registered:
+            for feat in LAZY_FEATURES:
+                if feat.name == "vector_store_management":
+                    module = importlib.import_module(feat.module_path)
+                    feat.register_fn(app, module)
+                    break
 
         # Define expected endpoints
         expected_endpoints = [
