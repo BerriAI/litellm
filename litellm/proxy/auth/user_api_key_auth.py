@@ -11,7 +11,7 @@ import asyncio
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Tuple, Union, cast
+from typing import Any, Iterator, List, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -2271,10 +2271,6 @@ async def _enforce_key_and_fallback_model_access(
             route=route,
             request=request,
         )
-        fallback_models = cast(
-            Optional[List[ALL_FALLBACK_MODEL_VALUES]],
-            request_data.get("fallbacks", None),
-        )
 
         if model is not None:
             await can_key_call_model(
@@ -2284,19 +2280,68 @@ async def _enforce_key_and_fallback_model_access(
                 llm_router=llm_router,
             )
 
-        if fallback_models is not None:
-            for m in fallback_models:
-                await can_key_call_model(
-                    model=m["model"] if isinstance(m, dict) else m,
-                    llm_model_list=llm_model_list,
-                    valid_token=valid_token,
-                    llm_router=llm_router,
+        # Validate every fallback model name reachable by this request.
+        # All three fields (``fallbacks``, ``context_window_fallbacks``,
+        # ``content_policy_fallbacks``) are forwarded to the router as
+        # per-request kwargs whether they appear at the top level of
+        # ``request_data`` or nested under ``router_settings_override``.
+        # Both surfaces must be validated against the API key's model
+        # allowlist or a caller can smuggle a restricted model. VERIA-44.
+        fallback_names: List[str] = []
+        override_settings = request_data.get("router_settings_override")
+        for _fb_key in ROUTER_FALLBACK_FIELDS:
+            fallback_names.extend(
+                iter_router_fallback_model_names(request_data.get(_fb_key))
+            )
+            if isinstance(override_settings, dict):
+                fallback_names.extend(
+                    iter_router_fallback_model_names(override_settings.get(_fb_key))
                 )
-                await is_valid_fallback_model(
-                    model=m["model"] if isinstance(m, dict) else m,
-                    llm_router=llm_router,
-                    user_model=None,
-                )
+
+        for _name in dict.fromkeys(fallback_names):  # dedupe, preserve order
+            await can_key_call_model(
+                model=_name,
+                llm_model_list=llm_model_list,
+                valid_token=valid_token,
+                llm_router=llm_router,
+            )
+            await is_valid_fallback_model(
+                model=_name,
+                llm_router=llm_router,
+                user_model=None,
+            )
+
+
+ROUTER_FALLBACK_FIELDS: Tuple[str, ...] = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+)
+
+
+def iter_router_fallback_model_names(fallbacks: Any) -> Iterator[str]:
+    """Yield leaf model names from any of the supported fallbacks shapes.
+
+    Handles the simple top-level shape (``str`` or ``{"model": str}``) and
+    the nested router-config shape (``[{primary: [fallback_list]}]``).
+    """
+    if not isinstance(fallbacks, list):
+        return
+    for entry in fallbacks:
+        if isinstance(entry, str):
+            yield entry
+        elif isinstance(entry, dict):
+            if isinstance(entry.get("model"), str):
+                yield entry["model"]
+                continue
+            for fallback_list in entry.values():
+                if not isinstance(fallback_list, list):
+                    continue
+                for m in fallback_list:
+                    if isinstance(m, str):
+                        yield m
+                    elif isinstance(m, dict) and isinstance(m.get("model"), str):
+                        yield m["model"]
 
 
 async def _run_post_custom_auth_checks(
