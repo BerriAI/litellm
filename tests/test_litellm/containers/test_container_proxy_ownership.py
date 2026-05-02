@@ -934,6 +934,65 @@ async def test_should_not_route_owner_record_errors_through_llm_error_handler(
 
 
 @pytest.mark.asyncio
+async def test_should_return_response_when_owner_recording_raises_unexpected(
+    monkeypatch,
+):
+    """If record_container_owner raises a non-HTTPException after upstream create,
+    the upstream container exists but is untracked. The caller still gets the
+    response (not a 500) so they aren't billed for an unusable resource — an
+    operator reconciles via logs.
+    """
+    from litellm.proxy.container_endpoints import endpoints
+
+    proxy_server_stub = SimpleNamespace(
+        general_settings={},
+        llm_router=None,
+        proxy_config=None,
+        proxy_logging_obj=None,
+        select_data_generator=None,
+        user_api_base=None,
+        user_max_tokens=None,
+        user_model=None,
+        user_request_timeout=None,
+        user_temperature=None,
+        version="test",
+    )
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_stub)
+
+    created = _container("cntr_provider")
+
+    class FakeProcessor:
+        def __init__(self, data):
+            pass
+
+        async def base_process_llm_request(self, **kwargs):
+            return created
+
+        async def _handle_llm_api_exception(self, **kwargs):
+            raise AssertionError("upstream-create errors only")
+
+    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
+    monkeypatch.setattr(
+        endpoints,
+        "record_container_owner",
+        AsyncMock(side_effect=RuntimeError("transient db blip")),
+    )
+
+    response = await endpoints.create_container(
+        request=SimpleNamespace(
+            query_params={},
+            headers={},
+            json=AsyncMock(return_value={}),
+            body=AsyncMock(return_value=b"{}"),
+        ),
+        fastapi_response=SimpleNamespace(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    assert response is created
+
+
+@pytest.mark.asyncio
 async def test_should_filter_container_list_inside_list_endpoint(monkeypatch):
     from litellm.proxy.container_endpoints import endpoints
 

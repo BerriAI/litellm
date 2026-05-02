@@ -2,9 +2,10 @@
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -129,11 +130,31 @@ async def create_container(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
-    return await record_container_owner(
-        response=response,
-        user_api_key_dict=user_api_key_dict,
-        custom_llm_provider=custom_llm_provider,
-    )
+
+    # Ownership recording sits between the upstream create and the response
+    # to the caller. The recorder swallows DB errors internally (falling
+    # back to in-memory tracking) and only surfaces HTTPException on auth
+    # conflicts; we let those propagate verbatim so the client sees the
+    # real status code rather than a generic LLM error wrapper.
+    try:
+        return await record_container_owner(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Unexpected (non-HTTPException) failure after upstream create.
+        # The container exists upstream but is now untracked — log loudly
+        # so an operator can reconcile, and return the response so the
+        # caller does not get charged for a resource they cannot use.
+        verbose_proxy_logger.exception(
+            "Container ownership recording failed after upstream create; "
+            "returning response with untracked ownership: %s",
+            e,
+        )
+        return response
 
 
 @router.get(
