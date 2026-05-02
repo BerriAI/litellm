@@ -1,7 +1,7 @@
 import os
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Union
+from typing import List, Optional, Set, Union
 
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
@@ -146,6 +146,7 @@ class AlertType(str, Enum):
     # Deployment alerts
     cooldown_deployment = "cooldown_deployment"
     new_model_added = "new_model_added"
+    model_deprecation_warnings = "model_deprecation_warnings"
 
     # Outage alerts
     outage_alerts = "outage_alerts"
@@ -186,6 +187,7 @@ DEFAULT_ALERT_TYPES: List[AlertType] = [
     # Deployment alerts
     AlertType.cooldown_deployment,
     AlertType.new_model_added,
+    AlertType.model_deprecation_warnings,
     # Outage alerts
     AlertType.outage_alerts,
     AlertType.region_outage_alerts,

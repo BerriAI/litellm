@@ -1150,6 +1150,81 @@ Model Info:
     async def model_removed_alert(self, model_name: str):
         pass
 
+    async def send_model_deprecation_alert(
+        self, llm_router: Optional[Any] = None
+    ) -> bool:
+        """Aggregate deprecation metadata for the configured models and alert.
+
+        Returns ``True`` when an alert payload was dispatched, ``False``
+        otherwise. The ``send_alert`` helper itself is responsible for honoring
+        the user's webhook configuration; this method only owns producing the
+        message and choosing whether to send it.
+        """
+        if (
+            self.alerting is None
+            or AlertType.model_deprecation_warnings not in self.alert_types
+        ):
+            return False
+
+        from litellm.proxy.common_utils.model_deprecation import (
+            collect_model_deprecations,
+            format_deprecation_alert_message,
+        )
+
+        try:
+            snapshot = collect_model_deprecations(llm_router=llm_router)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "Error collecting model deprecation snapshot: %s", e
+            )
+            return False
+
+        message = format_deprecation_alert_message(snapshot)
+        if message is None:
+            return False
+
+        level: Literal["Low", "Medium", "High"] = (
+            "High" if snapshot.deprecated else "Medium"
+        )
+
+        await self.send_alert(
+            message=message,
+            level=level,
+            alert_type=AlertType.model_deprecation_warnings,
+            alerting_metadata={
+                "deprecated_count": len(snapshot.deprecated),
+                "imminent_count": len(snapshot.imminent),
+                "upcoming_count": len(snapshot.upcoming),
+            },
+        )
+        return True
+
+    async def _run_scheduled_deprecation_check(self, llm_router: Optional[Any] = None):
+        """Periodic background task that emits a model deprecation alert.
+
+        Runs immediately on startup (so operators see the current state in
+        Slack) and then sleeps ``DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS``
+        between runs. Exits silently if the alert type is not enabled.
+        """
+        from litellm.types.proxy.model_deprecation import (
+            DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
+        )
+
+        if (
+            self.alerting is None
+            or AlertType.model_deprecation_warnings not in self.alert_types
+        ):
+            return
+
+        while True:
+            try:
+                await self.send_model_deprecation_alert(llm_router=llm_router)
+            except Exception as e:
+                verbose_proxy_logger.exception(
+                    "Error in model deprecation alert loop: %s", e
+                )
+            await asyncio.sleep(DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS)
+
     async def send_webhook_alert(self, webhook_event: WebhookEvent) -> bool:
         """
         Sends structured alert to webhook, if set.
