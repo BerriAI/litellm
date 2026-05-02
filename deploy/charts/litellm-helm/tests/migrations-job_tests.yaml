@@ -2,6 +2,15 @@ suite: test migrations job
 templates:
   - migrations-job.yaml
 tests:
+  - it: should use main-latest image tag by default
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/berriai/litellm-database:main-latest
   - it: should work with envVars
     template: migrations-job.yaml
     set:
