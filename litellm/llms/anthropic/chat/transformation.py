@@ -1,17 +1,7 @@
 import json
 import re
 import time
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    ClassVar,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -99,6 +89,27 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+# Effort values accepted by ``reasoning_effort`` across the Anthropic-backed
+# providers. ``none`` means "do not enable thinking"; the rest map to either
+# adaptive thinking (4.6/4.7) or ``thinking.budget_tokens`` (pre-4.6).
+# Anything outside this set was previously silently accepted on 4.6/4.7
+# (because the adaptive short-circuit ignored the value) and surfaced as a
+# 500 ``APIConnectionError`` on pre-4.6 — see PR #27039 QA bug #3 (Bedrock
+# Converse silently accepting ``disabled`` / ``invalid`` / ``""``).
+# ``_map_reasoning_effort`` validates against this set up front so the
+# failure mode is consistent across model generations.
+#
+# Defined at module scope rather than as a ``ClassVar`` on
+# ``AnthropicConfig`` because ``BaseConfig.get_config`` walks ``cls.__dict__``
+# and serializes whatever's left over into the outgoing request body — a
+# class-level frozenset would leak into the wire payload as a
+# non-JSON-serializable field, breaking custom prompt management and any
+# other path that round-trips the config through JSON.
+_VALID_REASONING_EFFORT_VALUES: frozenset = frozenset(
+    {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+)
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -799,19 +810,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 new_stop = new_v
         return new_stop
 
-    # Effort values accepted by ``reasoning_effort`` across the Anthropic
-    # backed providers. ``none`` means "do not enable thinking"; the rest
-    # map to either adaptive thinking (4.6/4.7) or ``thinking.budget_tokens``
-    # (pre-4.6). Anything outside this set was previously silently accepted
-    # on 4.6/4.7 (because the adaptive short-circuit ignored the value) and
-    # surfaced as a 500 ``APIConnectionError`` on pre-4.6 — see PR #27039 QA
-    # bug #3 (Bedrock Converse silently accepting ``disabled``/``invalid``/
-    # ``""``). Validating up front makes the failure mode consistent across
-    # model generations: a clean 400 from the caller's perspective.
-    _VALID_REASONING_EFFORT_VALUES: ClassVar[frozenset] = frozenset(
-        {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
-    )
-
     @staticmethod
     def _map_reasoning_effort(
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
@@ -821,7 +819,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return None
         if (
             isinstance(reasoning_effort, str)
-            and reasoning_effort not in AnthropicConfig._VALID_REASONING_EFFORT_VALUES
+            and reasoning_effort not in _VALID_REASONING_EFFORT_VALUES
         ):
             # Pre-empt the adaptive-thinking short-circuit below so that
             # invalid values fail fast with the same error on every model
