@@ -657,6 +657,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 return content
 
             vertex_gemini_config = VertexGeminiConfig()
+            # Always use a fresh local Logging object for the per-line transformation
+            # so we never mutate the caller's logging_obj (which already went through
+            # pre_call and has its own model/start_time/optional_params set).
             batch_transform_logging_obj = Logging(
                 model="",
                 messages=[],
