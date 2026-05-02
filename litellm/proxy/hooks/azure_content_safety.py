@@ -141,12 +141,16 @@ class _PROXY_AzureContentSafety(
         response,
     ):
         verbose_proxy_logger.debug("Inside Azure Content-Safety Post-Call Hook")
-        if isinstance(response, litellm.ModelResponse) and isinstance(
-            response.choices[0], litellm.utils.Choices
-        ):
-            await self.test_violation(
-                content=response.choices[0].message.content or "", source="output"
-            )
+        if not isinstance(response, litellm.ModelResponse):
+            return
+
+        for choice in response.choices:
+            if not isinstance(choice, litellm.utils.Choices):
+                continue
+            message = getattr(choice, "message", None)
+            content = getattr(message, "content", None)
+            if isinstance(content, str):
+                await self.test_violation(content=content, source="output")
 
     # async def async_post_call_streaming_hook(
     #    self,

@@ -399,6 +399,36 @@ async def test_lasso_inspects_responses_api_input(user_api_key, monkeypatch):
     assert seen_messages == [[{"role": "user", "content": "responses-api content"}]]
 
 
+@pytest.mark.asyncio
+async def test_lasso_masking_writes_back_responses_api_input(user_api_key, monkeypatch):
+    """Krrish blocker: Lasso classifix masking must update ``data["input"]``
+    for Responses-API requests, not only ``data["messages"]``."""
+    monkeypatch.setenv("LASSO_API_KEY", "ls-test")
+    from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import LassoGuardrail
+
+    guard = LassoGuardrail(lasso_api_key="ls-test", mask=True)
+    lasso_response = {
+        "violations_detected": True,
+        "deputies": {"pii": True},
+        "findings": {"pii": [{"action": "AUTO_MASKING"}]},
+        "messages": [{"role": "user", "content": "[REDACTED]"}],
+    }
+
+    async def fake_call_lasso_api(headers, payload, api_url=None):
+        return lasso_response
+
+    data = {"input": "user@example.com leaked"}
+
+    with patch.object(guard, "_call_lasso_api", side_effect=fake_call_lasso_api):
+        await guard._run_lasso_guardrail(
+            data=data,
+            cache=DualCache(),
+            message_type="PROMPT",
+        )
+
+    assert data["input"] == "[REDACTED]"
+
+
 # ── Banned Keywords ───────────────────────────────────────────────────────────
 
 
@@ -454,6 +484,69 @@ def test_banned_keywords_blocks_responses_api_input(monkeypatch):
 
     with pytest.raises(HTTPException):
         asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_banned_keywords_post_call_checks_all_choices(monkeypatch, user_api_key):
+    """Krrish blocker: ``n>1`` responses must not bypass post-call checks by
+    placing the banned text in ``choices[1+]``."""
+    monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
+    from enterprise.enterprise_hooks.banned_keywords import _ENTERPRISE_BannedKeywords
+    from fastapi import HTTPException
+
+    guard = _ENTERPRISE_BannedKeywords()
+    response = ModelResponse(
+        choices=[
+            Choices(index=0, message=Message(role="assistant", content="clean")),
+            Choices(index=1, message=Message(role="assistant", content="forbidden")),
+        ]
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await guard.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=user_api_key,
+            response=response,
+        )
+
+    assert "forbidden" in str(exc.value.detail).lower()
+
+
+# ── Azure Content Safety ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_azure_content_safety_post_call_checks_all_choices(user_api_key):
+    """Krrish blocker: ``n>1`` responses must not bypass Azure Content Safety
+    by placing the unsafe text in ``choices[1+]``."""
+    from fastapi import HTTPException
+    from litellm.proxy.hooks.azure_content_safety import _PROXY_AzureContentSafety
+
+    guard = _PROXY_AzureContentSafety.__new__(_PROXY_AzureContentSafety)
+    seen_outputs = []
+
+    async def fake_test_violation(content, source=None):
+        seen_outputs.append((content, source))
+        if "unsafe" in content:
+            raise HTTPException(status_code=400, detail={"error": "unsafe"})
+
+    guard.test_violation = fake_test_violation
+    response = ModelResponse(
+        choices=[
+            Choices(index=0, message=Message(role="assistant", content="clean")),
+            Choices(index=1, message=Message(role="assistant", content="unsafe")),
+            Choices(index=2, message=Message(role="assistant", content="later")),
+        ]
+    )
+
+    with pytest.raises(HTTPException):
+        await guard.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=user_api_key,
+            response=response,
+        )
+
+    assert seen_outputs == [("clean", "output"), ("unsafe", "output")]
 
 
 # ── Secret Detection ──────────────────────────────────────────────────────────

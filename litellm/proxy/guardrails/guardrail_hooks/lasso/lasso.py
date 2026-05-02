@@ -51,6 +51,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails._content_utils import (
+    apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
 )
@@ -420,8 +421,9 @@ class LassoGuardrail(CustomGuardrail):
             self._process_lasso_response(response)
 
             # Apply masking to messages if violations detected and masked messages are available
-            if response.get("violations_detected") and response.get("messages"):
-                data["messages"] = response["messages"]
+            redacted_messages = response.get("messages")
+            if response.get("violations_detected") and redacted_messages:
+                apply_redacted_messages_back(data, list(redacted_messages))
                 self._log_masking_applied(message_type, dict(response))
 
             return data
