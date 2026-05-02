@@ -94,11 +94,6 @@ class UISettings(BaseModel):
         description="List of page keys that internal users (non-admins) can see in the UI sidebar. If not set, all pages are visible based on role permissions.",
     )
 
-    require_auth_for_public_ai_hub: bool = Field(
-        default=True,
-        description="If true, requires authentication for accessing the public AI Hub.",
-    )
-
     allow_public_health_readiness_details: bool = Field(
         default=False,
         description="If true, returns the legacy detailed payload from the unauthenticated /health/readiness endpoint.",
@@ -173,7 +168,6 @@ ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",
     "enabled_ui_pages_internal_users",
-    "require_auth_for_public_ai_hub",
     "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
@@ -189,7 +183,6 @@ ALLOWED_UI_SETTINGS_FIELDS = {
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
 _RUNTIME_GENERAL_SETTINGS_FLAGS = [
-    "require_auth_for_public_ai_hub",
     "allow_public_health_readiness_details",
     "forward_client_headers_to_llm_api",
     "forward_llm_provider_auth_headers",
