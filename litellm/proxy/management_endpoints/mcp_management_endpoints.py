@@ -501,6 +501,8 @@ if MCP_AVAILABLE:
         sanitized.static_headers = None
         sanitized.extra_headers = []
         sanitized.env = {}
+        sanitized.command = None
+        sanitized.args = []
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None

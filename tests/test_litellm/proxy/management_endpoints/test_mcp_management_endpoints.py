@@ -2931,6 +2931,8 @@ async def test_list_mcp_servers_non_admin_url_redacted():
     server.static_headers = {"Authorization": "Bearer SUPER-SECRET-TOKEN"}
     server.env = {"API_KEY": "another-secret"}
     server.extra_headers = ["Authorization"]
+    server.command = "npx"
+    server.args = ["-y", "@sensitive/mcp"]
     server.authorization_url = "https://oauth.example.com/authorize?token=foo"
     server.token_url = "https://oauth.example.com/token"
     server.registration_url = "https://oauth.example.com/register"
@@ -2969,6 +2971,8 @@ async def test_list_mcp_servers_non_admin_url_redacted():
     assert s.static_headers is None
     assert s.env == {}
     assert s.extra_headers == []
+    assert s.command is None
+    assert s.args == []
     assert s.authorization_url is None
     assert s.token_url is None
     assert s.registration_url is None
@@ -3038,6 +3042,8 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     server.spec_path = "https://example.com/specs/openapi-with-token.yaml"
     server.env = {"API_KEY": "y"}
     server.extra_headers = ["Authorization"]
+    server.command = "python"
+    server.args = ["server.py", "--token", "secret"]
     server.authorization_url = "https://idp/authorize"
     server.token_url = "https://idp/token"
     server.registration_url = "https://idp/register"
@@ -3050,6 +3056,8 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     assert sanitized.static_headers is None
     assert sanitized.env == {}
     assert sanitized.extra_headers == []
+    assert sanitized.command is None
+    assert sanitized.args == []
     assert sanitized.authorization_url is None
     assert sanitized.token_url is None
     assert sanitized.registration_url is None
