@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Coroutine, Dict, Optional, Type, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -72,7 +73,8 @@ def _build_url(
 
     # Substitute path parameters
     for param, value in path_params.items():
-        path_template = path_template.replace(f"{{{param}}}", value)
+        encoded_value = encode_url_path_segment(value, field_name=param)
+        path_template = path_template.replace(f"{{{param}}}", encoded_value)
 
     # Parse the api_base to extract existing query params
     parsed_base = httpx.URL(api_base)

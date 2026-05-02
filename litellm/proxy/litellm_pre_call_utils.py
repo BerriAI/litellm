@@ -893,6 +893,10 @@ class LiteLLMProxyRequestSetup:
         data[_metadata_variable_name]["user_api_end_user_max_budget"] = getattr(
             user_api_key_dict, "end_user_max_budget", None
         )
+        if user_api_key_dict.budget_reservation is not None:
+            data[_metadata_variable_name][
+                "user_api_key_budget_reservation"
+            ] = user_api_key_dict.budget_reservation
         # Add the full UserAPIKeyAuth object for MCP server access control
         data[_metadata_variable_name]["user_api_key_auth"] = user_api_key_dict
         return data
