@@ -4,8 +4,10 @@ from unittest.mock import Mock
 import pytest
 
 from litellm import Router
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
+    add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
 )
@@ -362,3 +364,155 @@ def test_invalidate_model_group_info_cache():
     # Invalidate and verify cache is cleared
     router._invalidate_model_group_info_cache()
     assert router._cached_get_model_group_info.cache_info().currsize == 0
+
+
+def test_filter_deployments_by_model_access_groups_access_group_only_key():
+    """
+    Access-group-only keys should only route to deployments in allowed groups,
+    even when multiple deployments share the same public model name.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "key-1"},
+                "model_info": {"access_groups": ["AG1"]},
+            },
+            {
+                "model_name": "gpt-5",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "key-2"},
+                "model_info": {"access_groups": ["AG2"]},
+            },
+        ]
+    )
+
+    scoped_key = UserAPIKeyAuth(
+        api_key="hashed-key",
+        team_id="team-2",
+        models=["AG2"],
+        team_models=["AG2"],
+    )
+
+    filtered = router._filter_deployments_by_model_access_groups(
+        model="gpt-5",
+        healthy_deployments=router._get_all_deployments(model_name="gpt-5"),
+        request_kwargs={
+            "metadata": {
+                "user_api_key_team_id": "team-2",
+                "user_api_key_auth": scoped_key,
+            }
+        },
+        request_team_id="team-2",
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0].get("model_info", {}).get("access_groups") == ["AG2"]
+
+
+class TestAddModelFileIdMappings:
+    """Test cases for add_model_file_id_mappings.
+
+    The router may pass either a list of deployment dicts (multiple matched
+    deployments) or a single deployment dict (when a specific deployment was
+    resolved, e.g. because the requested model matched a `model_info.id`).
+    Both shapes must produce a `{model_id: file_id}` mapping by extracting
+    `model_info.id` from each deployment.
+    """
+
+    @staticmethod
+    def _make_response(file_id: str):
+        response = Mock()
+        response.id = file_id
+        return response
+
+    def test_should_map_each_deployment_id_when_given_list(self):
+        deployments = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "deployment-1"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "deployment-2"},
+            },
+        ]
+        responses = [self._make_response("file-1"), self._make_response("file-2")]
+
+        result = add_model_file_id_mappings(deployments, responses)
+
+        assert result == {"deployment-1": "file-1", "deployment-2": "file-2"}
+
+    def test_should_extract_model_info_id_when_given_single_deployment_dict(self):
+        """Regression test: when `_common_checks_available_deployment` resolves
+        a specific deployment (returned as a dict, not a list), the function
+        must still extract `model_info.id` rather than iterate over the
+        deployment's own keys (`model_name`, `litellm_params`, `model_info`).
+        """
+        deployment = {
+            "model_name": "gpt-4",
+            "litellm_params": {"model": "gpt-4", "api_key": "sk-test"},
+            "model_info": {"id": "deployment-1", "mode": "chat"},
+        }
+        responses = [self._make_response("file-1")]
+
+        result = add_model_file_id_mappings(deployment, responses)
+
+        assert result == {"deployment-1": "file-1"}
+        assert all(isinstance(v, str) for v in result.values())
+
+    def test_should_handle_batch_model_when_id_matches_model_name(self):
+        """Regression test for the batch-model case: when `model_info.id` is
+        intentionally set equal to `model_name`, the router resolves a single
+        deployment via `has_model_id` and returns it as a dict. The mapping
+        must contain only `{id: file_id}` with string values so the resulting
+        `LiteLLM_ManagedFileTable` Pydantic validation passes.
+        """
+        deployment = {
+            "model_name": "openai/openai/gpt-5.5-batch",
+            "litellm_params": {
+                "model": "openai/gpt-5.5",
+                "api_key": "sk-test",
+                "tpm": 40000000,
+                "rpm": 15000,
+            },
+            "model_info": {
+                "id": "openai/openai/gpt-5.5-batch",
+                "mode": "batch",
+                "base_model": "gpt-5.5",
+                "access_groups": ["default-models"],
+            },
+        }
+        responses = [self._make_response("file-batch-1")]
+
+        result = add_model_file_id_mappings(deployment, responses)
+
+        # Bug case would have produced keys ["model_name", "litellm_params",
+        # "model_info"] with non-string values.
+        assert result == {"openai/openai/gpt-5.5-batch": "file-batch-1"}
+        assert "litellm_params" not in result
+        assert "model_info" not in result
+
+    def test_should_skip_deployment_when_model_info_id_missing(self):
+        deployments = [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "deployment-2"},
+            },
+        ]
+        responses = [self._make_response("file-1"), self._make_response("file-2")]
+
+        result = add_model_file_id_mappings(deployments, responses)
+
+        assert result == {"deployment-2": "file-2"}
+
+    def test_should_return_empty_mapping_when_given_empty_list(self):
+        result = add_model_file_id_mappings([], [])
+        assert result == {}

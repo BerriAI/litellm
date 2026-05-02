@@ -5261,11 +5261,34 @@ class Router:
         """
         Initialize the Containers API endpoints on the router.
 
-        Container operations don't need model-based routing, so we call the
-        original function directly with the custom_llm_provider.
+        LiteLLM-managed container IDs (``cntr_...``) encode ``model_id`` and provider
+        metadata. When present, decode the ID, replace ``container_id`` with the
+        upstream value, and route through ``_ageneric_api_call_with_fallbacks`` so
+        deployment credentials (e.g. regional ``api_base`` for Azure) match
+        :meth:`_init_responses_api_endpoints`. Otherwise call the handler directly.
         """
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
+
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        container_id = kwargs.get("container_id")
+        if isinstance(container_id, str):
+            decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+            original_id = decoded.get("response_id", container_id)
+            if original_id != container_id:
+                kwargs["container_id"] = original_id
+            decoded_provider = decoded.get("custom_llm_provider")
+            if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
+                kwargs["custom_llm_provider"] = decoded_provider
+            model_id = decoded.get("model_id")
+            if model_id:
+                kwargs["model"] = model_id
+                return await self._ageneric_api_call_with_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
+
         return await original_function(**kwargs)
 
     async def _init_responses_api_endpoints(
@@ -9328,6 +9351,52 @@ class Router:
         """
         return [m for m in self.model_list if m["litellm_params"]["model"] == model]
 
+    def _try_early_resolve_deployments_for_model_not_in_names(
+        self, model: str, request_team_id: Optional[str]
+    ) -> Optional[Tuple[str, Union[List, Dict]]]:
+        """
+        When ``model`` is not in ``self.model_names``, try team routes, pattern routes,
+        team pattern routers, then default deployment. Returns None if none apply.
+        """
+        if model in self.model_names:
+            return None
+        # Check for team-specific deployments by team_public_model_name.
+        # This intentionally takes priority over team pattern routers below,
+        # so that named team deployments shadow wildcard/pattern routes.
+        if request_team_id is not None:
+            team_deployments = self._get_all_deployments(
+                model_name=model, team_id=request_team_id
+            )
+            if team_deployments:
+                return model, team_deployments
+
+        pattern_deployments = self.pattern_router.get_deployments_by_pattern(
+            model=model,
+        )
+
+        if pattern_deployments:
+            return model, pattern_deployments
+
+        if request_team_id is not None and request_team_id in self.team_pattern_routers:
+            pattern_deployments = self.team_pattern_routers[
+                request_team_id
+            ].get_deployments_by_pattern(
+                model=model,
+            )
+            if pattern_deployments:
+                return model, pattern_deployments
+
+        if self.default_deployment is not None:
+            # Shallow copy with nested litellm_params copy (100x+ faster than deepcopy)
+            updated_deployment = self.default_deployment.copy()
+            updated_deployment["litellm_params"] = self.default_deployment[
+                "litellm_params"
+            ].copy()
+            updated_deployment["litellm_params"]["model"] = model
+            return model, updated_deployment
+
+        return None
+
     def _common_checks_available_deployment(
         self,
         model: str,
@@ -9370,56 +9439,52 @@ class Router:
         if _model_from_alias is not None:
             model = _model_from_alias
 
-        if model not in self.model_names:
-            # Check for team-specific deployments by team_public_model_name.
-            # This intentionally takes priority over team pattern routers below,
-            # so that named team deployments shadow wildcard/pattern routes.
-            if request_team_id is not None:
-                team_deployments = self._get_all_deployments(
-                    model_name=model, team_id=request_team_id
-                )
-                if team_deployments:
-                    return model, team_deployments
-
-            # check if provider/ specific wildcard routing use pattern matching
-            pattern_deployments = self.pattern_router.get_deployments_by_pattern(
-                model=model,
-            )
-
-            if pattern_deployments:
-                return model, pattern_deployments
-
-            if (
-                request_team_id is not None
-                and request_team_id in self.team_pattern_routers
-            ):
-                pattern_deployments = self.team_pattern_routers[
-                    request_team_id
-                ].get_deployments_by_pattern(
-                    model=model,
-                )
-                if pattern_deployments:
-                    return model, pattern_deployments
-
-            # check if default deployment is set
-            if self.default_deployment is not None:
-                # Shallow copy with nested litellm_params copy (100x+ faster than deepcopy)
-                updated_deployment = self.default_deployment.copy()
-                updated_deployment["litellm_params"] = self.default_deployment[
-                    "litellm_params"
-                ].copy()
-                updated_deployment["litellm_params"]["model"] = model
-                return model, updated_deployment
+        early = self._try_early_resolve_deployments_for_model_not_in_names(
+            model=model, request_team_id=request_team_id
+        )
+        if early is not None:
+            return early
 
         ## get healthy deployments
         ### get all deployments
         healthy_deployments = self._get_all_deployments(
             model_name=model, team_id=request_team_id
         )
+        _pre_model_access_group_filter_len = len(healthy_deployments)
+        healthy_deployments = self._filter_deployments_by_model_access_groups(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+            request_team_id=request_team_id,
+        )
+        _access_group_filter_emptied_candidates = (
+            _pre_model_access_group_filter_len > 0 and len(healthy_deployments) == 0
+        )
 
         if len(healthy_deployments) == 0:
             # check if the user sent in a deployment name instead
-            healthy_deployments = self._get_deployment_by_litellm_model(model=model)
+            # Do not fall back when access-group filtering removed every candidate;
+            # _get_deployment_by_litellm_model does not re-apply that filter.
+            if _pre_model_access_group_filter_len == 0:
+                _litellm_model_deployments = self._get_deployment_by_litellm_model(
+                    model=model
+                )
+                healthy_deployments = self._filter_deployments_by_model_access_groups(
+                    model=model,
+                    healthy_deployments=_litellm_model_deployments,
+                    request_kwargs=request_kwargs,
+                    request_team_id=request_team_id,
+                )
+                # If the litellm-model lookup produced candidates that access-group
+                # filtering then removed, treat this the same as the by-name path
+                # being emptied: prevent default-model fallback from bypassing the
+                # restriction (the fallback model may have no access_groups and
+                # would short-circuit the filter).
+                if (
+                    len(_litellm_model_deployments) > 0
+                    and len(healthy_deployments) == 0
+                ):
+                    _access_group_filter_emptied_candidates = True
 
         if verbose_router_logger.isEnabledFor(logging.DEBUG):
             verbose_router_logger.debug(
@@ -9428,7 +9493,13 @@ class Router:
 
         if len(healthy_deployments) == 0:
             # Check for default fallbacks if no deployments are found for the requested model
-            if self._has_default_fallbacks():
+            # Do not fall back to another model when access-group filtering removed every
+            # candidate for the requested name: re-filtering the fallback model can be a
+            # no-op when it has no access_groups, incorrectly serving a different model.
+            if (
+                self._has_default_fallbacks()
+                and not _access_group_filter_emptied_candidates
+            ):
                 fallback_model = self._get_first_default_fallback()
                 if fallback_model:
                     verbose_router_logger.info(
@@ -9438,6 +9509,14 @@ class Router:
                     model = fallback_model
                     healthy_deployments = self._get_all_deployments(
                         model_name=model, team_id=request_team_id
+                    )
+                    healthy_deployments = (
+                        self._filter_deployments_by_model_access_groups(
+                            model=model,
+                            healthy_deployments=healthy_deployments,
+                            request_kwargs=request_kwargs,
+                            request_team_id=request_team_id,
+                        )
                     )
 
             # If still no deployments after checking for fallbacks, raise an error
@@ -9463,6 +9542,70 @@ class Router:
             ]  # update the model to the actual value if an alias has been passed in
 
         return model, healthy_deployments
+
+    def _filter_deployments_by_model_access_groups(
+        self,
+        model: str,
+        healthy_deployments: List,
+        request_kwargs: Optional[Dict],
+        request_team_id: Optional[str],
+    ) -> List:
+        """
+        Restrict candidate deployments to caller-authorized model access groups.
+
+        This is only applied when:
+        - request metadata includes `user_api_key_auth`, and
+        - caller permissions for this model are access-group-only
+          (no explicit model, wildcard, or all-proxy grants).
+        """
+        if not healthy_deployments or request_kwargs is None:
+            return healthy_deployments
+
+        metadata = request_kwargs.get("metadata") or {}
+        litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+        user_api_key_auth = metadata.get("user_api_key_auth") or litellm_metadata.get(
+            "user_api_key_auth"
+        )
+        if user_api_key_auth is None:
+            return healthy_deployments
+
+        object_models = set(getattr(user_api_key_auth, "models", []) or [])
+        object_team_models = set(getattr(user_api_key_auth, "team_models", []) or [])
+        allowed_models = object_models | object_team_models
+        if not allowed_models:
+            return healthy_deployments
+
+        # If caller has direct model/wildcard/all-proxy access, do not constrain
+        # deployment choice by access group.
+        if (
+            model in allowed_models
+            or "*" in allowed_models
+            or "all-proxy-models" in allowed_models
+        ):
+            return healthy_deployments
+
+        access_groups_for_model = self.get_model_access_groups(
+            model_name=model, team_id=request_team_id
+        )
+        if len(access_groups_for_model) == 0:
+            return healthy_deployments
+
+        allowed_access_groups = set(access_groups_for_model.keys()) & allowed_models
+        if not allowed_access_groups:
+            # No overlap means this request was not authorized via model access
+            # group membership for this model, so do not force group filtering.
+            return healthy_deployments
+
+        filtered_deployments = []
+        for deployment in healthy_deployments:
+            deployment_model_info = deployment.get("model_info") or {}
+            deployment_access_groups = set(
+                deployment_model_info.get("access_groups", []) or []
+            )
+            if deployment_access_groups & allowed_access_groups:
+                filtered_deployments.append(deployment)
+
+        return filtered_deployments
 
     async def async_get_healthy_deployments(
         self,
@@ -9984,6 +10127,7 @@ class Router:
             messages=messages,
             input=input,
             specific_deployment=specific_deployment,
+            request_kwargs=request_kwargs,
         )
 
         if isinstance(healthy_deployments, dict):

@@ -10,6 +10,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
 from ....anthropic.chat.transformation import AnthropicConfig
+from .output_params_utils import sanitize_vertex_anthropic_output_params
 
 
 class VertexAIError(Exception):
@@ -105,11 +106,12 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
 
-        # VertexAI doesn't support output_format parameter, remove it if present
-        data.pop("output_format", None)
-
-        # VertexAI doesn't support output_config parameter, remove it if present
-        data.pop("output_config", None)
+        # Vertex AI Claude accepts ``output_config.format`` (structured outputs /
+        # JSON Schema) but NOT ``output_config.effort`` — sending ``effort`` to
+        # Vertex returns 400 "Extra inputs are not permitted". Sanitize in place:
+        # forward the structured-output bits, drop the unsupported keys.
+        # Same treatment for the legacy top-level ``output_format`` field.
+        sanitize_vertex_anthropic_output_params(data)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)

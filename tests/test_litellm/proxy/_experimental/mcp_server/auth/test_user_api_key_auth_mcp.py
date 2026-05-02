@@ -2143,3 +2143,275 @@ async def test_tool_permission_servers_included_in_allowed_servers():
             assert "server_id_123" in result
     finally:
         global_mcp_server_manager.registry.pop("server_id_123", None)
+
+
+# ---------------------------------------------------------------------------
+# Org-level MCP permission tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestOrgMCPPermissions:
+    """Tests for org-level MCP server permission enforcement."""
+
+    def _make_auth(self, org_id=None, team_id=None) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id=team_id,
+            org_id=org_id,
+        )
+
+    @pytest.mark.parametrize(
+        "key_servers,team_servers,org_servers,expected,scenario",
+        [
+            (
+                ["s1", "s2"],
+                [],
+                None,
+                ["s1", "s2"],
+                "no_org_id",
+            ),
+            (
+                ["s1", "s2"],
+                [],
+                [],
+                ["s1", "s2"],
+                "org_empty_no_restriction",
+            ),
+            (
+                [],
+                [],
+                ["org_s1", "org_s2"],
+                ["org_s1", "org_s2"],
+                "org_only_ceiling",
+            ),
+            (
+                ["s1", "s2"],
+                [],
+                ["s1", "org_only"],
+                ["s1"],
+                "org_intersection",
+            ),
+            (
+                ["s1", "s2"],
+                [],
+                ["org_s1"],
+                [],
+                "no_overlap_denied",
+            ),
+            (
+                ["s1", "s2"],
+                ["s1", "s2", "s3"],
+                ["s1"],
+                ["s1"],
+                "team_then_org",
+            ),
+            (
+                ["s1"],
+                ["s2"],
+                ["s1", "s2", "org_s1"],
+                [],
+                "key_team_conflict_not_expanded_by_org",
+            ),
+        ],
+    )
+    async def test_get_allowed_mcp_servers_with_org(
+        self,
+        key_servers,
+        team_servers,
+        org_servers,
+        expected,
+        scenario,
+    ):
+        org_id = "org-123" if org_servers is not None else None
+        auth = self._make_auth(org_id=org_id)
+
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_key",
+                new_callable=AsyncMock,
+                return_value=key_servers,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_team",
+                new_callable=AsyncMock,
+                return_value=team_servers,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_allowed_mcp_servers_for_org",
+                new_callable=AsyncMock,
+                return_value=org_servers if org_servers is not None else [],
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            assert sorted(result) == sorted(expected), f"scenario={scenario}"
+
+    async def test_get_org_object_permission_no_org_id(self):
+        auth = self._make_auth(org_id=None)
+        result = await MCPRequestHandler._get_org_object_permission(auth)
+        assert result is None
+
+    async def test_get_org_object_permission_no_prisma(self):
+        auth = self._make_auth(org_id="org-123")
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler._get_org_object_permission",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_org(auth)
+            assert result == []
+
+    async def test_get_allowed_mcp_servers_for_org_direct_servers(self):
+        auth = self._make_auth(org_id="org-123")
+
+        mock_perm = MagicMock()
+        mock_perm.mcp_servers = ["org_server_1", "org_server_2"]
+        mock_perm.mcp_access_groups = []
+        mock_perm.mcp_tool_permissions = {}
+
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_org_object_permission",
+                new_callable=AsyncMock,
+                return_value=mock_perm,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_org(auth)
+            assert sorted(result) == ["org_server_1", "org_server_2"]
+
+    async def test_get_allowed_mcp_servers_for_org_access_groups(self):
+        auth = self._make_auth(org_id="org-123")
+
+        mock_perm = MagicMock()
+        mock_perm.mcp_servers = []
+        mock_perm.mcp_access_groups = ["group-a"]
+        mock_perm.mcp_tool_permissions = {}
+
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_org_object_permission",
+                new_callable=AsyncMock,
+                return_value=mock_perm,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=["group_server_1"],
+            ),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_org(auth)
+            assert "group_server_1" in result
+
+    async def test_get_allowed_mcp_servers_for_org_tool_permissions_only(self):
+        auth = self._make_auth(org_id="org-123")
+
+        mock_perm = MagicMock()
+        mock_perm.mcp_servers = []
+        mock_perm.mcp_access_groups = []
+        mock_perm.mcp_tool_permissions = {"tool_only_server": ["tool_x"]}
+
+        with (
+            patch.object(
+                MCPRequestHandler,
+                "_get_org_object_permission",
+                new_callable=AsyncMock,
+                return_value=mock_perm,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_mcp_servers_from_access_groups",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_org(auth)
+            assert "tool_only_server" in result
+
+    async def test_get_allowed_mcp_servers_for_org_no_object_permission(self):
+        auth = self._make_auth(org_id="org-123")
+
+        with patch.object(
+            MCPRequestHandler,
+            "_get_org_object_permission",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            result = await MCPRequestHandler._get_allowed_mcp_servers_for_org(auth)
+            assert result == []
+
+    async def test_get_allowed_tools_for_server_org_ceiling(self):
+        auth = self._make_auth(org_id="org-123")
+
+        key_perm = MagicMock()
+        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b", "tool_c"]}
+
+        org_perm = MagicMock()
+        org_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+
+        with (
+            patch.object(
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_team_object_permission",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_org_object_permission",
+                new_callable=AsyncMock,
+                return_value=org_perm,
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server_1",
+                user_api_key_auth=auth,
+            )
+            assert sorted(result) == ["tool_a", "tool_b"]
+
+    async def test_get_allowed_tools_for_server_org_no_restriction(self):
+        auth = self._make_auth(org_id="org-123")
+
+        key_perm = MagicMock()
+        key_perm.mcp_tool_permissions = {"server_1": ["tool_a", "tool_b"]}
+
+        org_perm = MagicMock()
+        org_perm.mcp_tool_permissions = {}
+
+        with (
+            patch.object(
+                MCPRequestHandler, "_get_key_object_permission", return_value=key_perm
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_team_object_permission",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch.object(
+                MCPRequestHandler,
+                "_get_org_object_permission",
+                new_callable=AsyncMock,
+                return_value=org_perm,
+            ),
+        ):
+            result = await MCPRequestHandler.get_allowed_tools_for_server(
+                server_id="server_1",
+                user_api_key_auth=auth,
+            )
+            assert sorted(result) == ["tool_a", "tool_b"]
