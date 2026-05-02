@@ -63,17 +63,6 @@ def _sanitize_gcp_label_value(value: str) -> str:
     return sanitized[:_GCP_LABEL_VALUE_MAX_LEN]
 
 
-def _encode_gcp_label_value(value: str) -> str:
-    """Encode arbitrary text into a GCP-label-safe value."""
-    max_encoded_len = _GCP_LABEL_VALUE_MAX_LEN - len(_CUSTOM_ID_RAW_LABEL_PREFIX)
-    encoded = (
-        base64.b32encode(value.encode("utf-8")).decode("ascii").rstrip("=").lower()
-    )
-    if len(encoded) > max_encoded_len:
-        raise ValueError("Encoded label value exceeds GCP label length")
-    return f"{_CUSTOM_ID_RAW_LABEL_PREFIX}{encoded}"
-
-
 def _encode_gcp_label_value_chunks(value: str) -> List[str]:
     """Encode arbitrary text across one or more GCP-label-safe values."""
     max_encoded_len = _GCP_LABEL_VALUE_MAX_LEN - len(_CUSTOM_ID_RAW_LABEL_PREFIX)
@@ -84,11 +73,6 @@ def _encode_gcp_label_value_chunks(value: str) -> List[str]:
         f"{_CUSTOM_ID_RAW_LABEL_PREFIX}{encoded[i : i + max_encoded_len]}"
         for i in range(0, len(encoded), max_encoded_len)
     ] or [_CUSTOM_ID_RAW_LABEL_PREFIX]
-
-
-def _decode_gcp_label_value(value: str) -> Optional[str]:
-    """Decode values produced by _encode_gcp_label_value."""
-    return _decode_gcp_label_value_chunks([value])
 
 
 def _decode_gcp_label_value_chunks(values: List[str]) -> Optional[str]:
@@ -170,7 +154,7 @@ def _openai_batch_jsonl_entries_to_vertex_wrapped_requests(
 
         # Add custom_id as a label for correlation in batch outputs
         custom_id = _openai_jsonl_content.get("custom_id")
-        if custom_id:
+        if custom_id is not None:
             if "labels" not in vertex_request_body:
                 vertex_request_body["labels"] = {}
             _set_litellm_batch_custom_id_labels(
