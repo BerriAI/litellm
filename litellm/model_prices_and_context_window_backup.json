@@ -6574,6 +6574,44 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "azure_ai/MAI-Image-2": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3.3e-05,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-mai-transcribe-1-mai-voice-1-and-mai-image-2-in-microsoft-foundry/4507787",
+        "supports_mai_endpoint": true,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "azure_ai/MAI-Image-2e": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "image_generation",
+        "output_cost_per_image_token": 1.95e-05,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-mai-image-2-efficient-faster-more-efficient-image-generation/4510918",
+        "supports_mai_endpoint": true,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
     "azure_ai/cohere-rerank-v3-english": {
         "input_cost_per_query": 0.002,
         "input_cost_per_token": 0.0,
