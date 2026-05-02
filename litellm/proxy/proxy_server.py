@@ -6,6 +6,7 @@ import inspect
 import io
 import os
 import random
+import re
 import secrets
 import shutil
 import subprocess
@@ -78,8 +79,11 @@ from litellm.proxy._types import (
     InvitationNew,
     InvitationUpdate,
     Litellm_EntityType,
+    LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
+    LiteLLM_TagTable,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     PassThroughGenericEndpoint,
@@ -94,6 +98,7 @@ from litellm.proxy._types import (
     UI_TEAM_ID,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
@@ -206,6 +211,7 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     _REALTIME_BODY_CACHE_SIZE,
     APSCHEDULER_COALESCE,
@@ -236,36 +242,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
-from litellm.proxy._experimental.mcp_server.byok_oauth_endpoints import (
-    router as mcp_byok_oauth_router,
-)
-from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-    router as mcp_discoverable_endpoints_router,
-)
-from litellm.proxy._experimental.mcp_server.rest_endpoints import (
-    router as mcp_rest_endpoints_router,
-)
-from litellm.proxy._experimental.mcp_server.server import app as mcp_app
-from litellm.proxy._experimental.mcp_server.tool_registry import (
-    global_mcp_tool_registry,
-)
 from litellm.proxy._types import *
-from litellm.proxy.agent_endpoints.a2a_endpoints import router as a2a_router
-from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_router
-from litellm.proxy.agent_endpoints.model_list_helpers import (
-    append_agents_to_model_group,
-    append_agents_to_model_info,
-)
+from litellm.proxy._lazy_features import attach_lazy_features
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
-)
-from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
-    claude_code_marketplace_router,
-)
-from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
-from litellm.proxy.anthropic_endpoints.skills_endpoints import (
-    router as anthropic_skills_router,
 )
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
@@ -329,7 +309,6 @@ from litellm.proxy.discovery_endpoints import ui_discovery_endpoints_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import router as fine_tuning_router
 from litellm.proxy.fine_tuning_endpoints.endpoints import set_fine_tuning_config
 from litellm.proxy.google_endpoints.endpoints import router as google_router
-from litellm.proxy.guardrails.guardrail_endpoints import router as guardrails_router
 from litellm.proxy.guardrails.init_guardrails import (
     init_guardrails_v2,
     initialize_guardrails,
@@ -345,9 +324,6 @@ from litellm.proxy.hooks.prompt_injection_detection import (
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-from litellm.proxy.management_endpoints.access_group_endpoints import (
-    router as access_group_router,
-)
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     router as budget_management_router,
 )
@@ -359,13 +335,8 @@ from litellm.proxy.management_endpoints.callback_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_privileges,
+    _user_has_admin_view,
     admin_can_invite_user,
-)
-from litellm.proxy.management_endpoints.compliance_endpoints import (
-    router as compliance_router,
-)
-from litellm.proxy.management_endpoints.config_override_endpoints import (
-    router as config_override_router,
 )
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
@@ -380,9 +351,6 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
-from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
-    router as jwt_key_mapping_router,
-)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
     duration_in_seconds,
@@ -390,9 +358,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     router as key_management_router,
-)
-from litellm.proxy.management_endpoints.mcp_management_endpoints import (
-    router as mcp_management_router,
 )
 from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
     router as model_access_group_management_router,
@@ -408,11 +373,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
-from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
-from litellm.proxy.management_endpoints.scim.scim_v2 import scim_router
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     router as tag_management_router,
 )
@@ -424,9 +387,6 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     update_team,
     validate_membership,
 )
-from litellm.proxy.management_endpoints.tool_management_endpoints import (
-    router as tool_management_router,
-)
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     router as workflow_management_router,
 )
@@ -435,7 +395,6 @@ from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
-from litellm.proxy.management_endpoints.usage_endpoints import router as usage_ai_router
 from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
@@ -445,7 +404,6 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
-from litellm.proxy.openai_evals_endpoints.endpoints import router as evals_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
 )
@@ -465,27 +423,16 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
-from litellm.proxy.policy_engine.policy_endpoints import router as policy_crud_router
-from litellm.proxy.policy_engine.policy_resolve_endpoints import (
-    router as policy_resolve_router,
-)
-from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
-from litellm.proxy.realtime_endpoints.endpoints import router as webrtc_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
-from litellm.proxy.search_endpoints.search_tool_management import (
-    router as search_tool_management_router,
-)
-from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
-from litellm.proxy.spend_tracking.vantage_endpoints import router as vantage_router
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
@@ -514,16 +461,6 @@ from litellm.proxy.utils import (
     model_dump_with_preserved_fields,
     prefetch_config_params,
     update_spend,
-)
-from litellm.proxy.vector_store_endpoints.endpoints import router as vector_store_router
-from litellm.proxy.vector_store_endpoints.management_endpoints import (
-    router as vector_store_management_router,
-)
-from litellm.proxy.vector_store_files_endpoints.endpoints import (
-    router as vector_store_files_router,
-)
-from litellm.proxy.vertex_ai_endpoints.langfuse_endpoints import (
-    router as langfuse_router,
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
 from litellm.router import (
@@ -1020,6 +957,85 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
 
+def _generate_stable_operation_id(route: Any) -> str:
+    operation_id = re.sub(r"\W", "_", f"{route.name}{route.path_format}")
+    route_methods = sorted(route.methods or [])
+    if len(route_methods) == 1:
+        operation_id = f"{operation_id}_{route_methods[0].lower()}"
+    return operation_id
+
+
+_OPENAPI_HTTP_METHODS = {
+    "delete",
+    "get",
+    "head",
+    "options",
+    "patch",
+    "post",
+    "put",
+    "trace",
+}
+
+
+def _strip_operation_id_method_suffix(operation_id: str) -> str:
+    base, separator, suffix = operation_id.rpartition("_")
+    if separator and suffix in _OPENAPI_HTTP_METHODS:
+        return base
+    return operation_id
+
+
+def ensure_unique_openapi_operation_ids(
+    openapi_schema: Dict[str, Any],
+    reserved_operation_ids: Optional[Set[str]] = None,
+) -> Dict[str, Any]:
+    operation_entries = []
+    operation_id_counts: Dict[str, int] = {}
+    for path_item in openapi_schema.get("paths", {}).values():
+        if not isinstance(path_item, dict):
+            continue
+        for method, operation in path_item.items():
+            if method not in _OPENAPI_HTTP_METHODS or not isinstance(operation, dict):
+                continue
+            operation_id = operation.get("operationId")
+            if not isinstance(operation_id, str):
+                continue
+            operation_entries.append((method, operation, operation_id))
+            operation_id_counts[operation_id] = (
+                operation_id_counts.get(operation_id, 0) + 1
+            )
+
+    used_operation_ids = set(reserved_operation_ids or set())
+    seen_operation_ids: Set[str] = set()
+    for method, operation, operation_id in operation_entries:
+        should_rewrite = (
+            operation_id_counts[operation_id] > 1
+            or operation_id in used_operation_ids
+            or operation_id in seen_operation_ids
+        )
+        if not should_rewrite:
+            seen_operation_ids.add(operation_id)
+            used_operation_ids.add(operation_id)
+            continue
+
+        base_operation_id = _strip_operation_id_method_suffix(operation_id)
+        new_operation_id = f"{base_operation_id}_{method}"
+        suffix = 2
+        while (
+            new_operation_id in used_operation_ids
+            or new_operation_id in seen_operation_ids
+        ):
+            new_operation_id = f"{base_operation_id}_{method}_{suffix}"
+            suffix += 1
+        operation["operationId"] = new_operation_id
+        seen_operation_ids.add(new_operation_id)
+        used_operation_ids.add(new_operation_id)
+
+    if reserved_operation_ids is not None:
+        reserved_operation_ids.update(used_operation_ids)
+
+    return openapi_schema
+
+
 app = FastAPI(
     docs_url=_get_docs_url(),
     redoc_url=_get_redoc_url(),
@@ -1029,6 +1045,7 @@ app = FastAPI(
     version=version,
     root_path=server_root_path,
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
+    generate_unique_id_function=_generate_stable_operation_id,
 )
 
 vertex_live_passthrough_vertex_base = VertexBase()
@@ -1104,6 +1121,12 @@ def get_openapi_schema():
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
+    # Stub unloaded lazy features so they appear as Swagger sections.
+    from litellm.proxy._lazy_features import inject_lazy_stubs
+
+    openapi_schema = inject_lazy_stubs(openapi_schema)
+    openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -1129,6 +1152,12 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+
+    # Stub unloaded lazy features so they appear as Swagger sections.
+    from litellm.proxy._lazy_features import inject_lazy_stubs
+
+    openapi_schema = inject_lazy_stubs(openapi_schema)
+    openapi_schema = ensure_unique_openapi_operation_ids(openapi_schema)
 
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
@@ -1557,14 +1586,78 @@ def mount_swagger_ui():
 
     app.mount("/swagger", StaticFiles(directory=swagger_directory), name="swagger")
 
+    # On dropdown expand: one-time fetch to the prefix (triggers lazy load),
+    # then spec re-download so real routes replace the stub. Raw JS (no
+    # <script> tag) since it's injected inside the existing inline script.
+    from fastapi.responses import HTMLResponse
+
+    from litellm.proxy._lazy_features import lazy_tag_to_prefix
+
+    _lazy_plugin_js = (
+        "const TAG_TO_PREFIX = " + json.dumps(lazy_tag_to_prefix()) + ";"
+        "const warmedTags = new Set();"
+        "const LAZY_TAGS = new Set(Object.keys(TAG_TO_PREFIX));"
+        "const hideStubRows = () => {"
+        "document.querySelectorAll('.opblock').forEach(op => {"
+        "const d = op.querySelector('.opblock-summary-description');"
+        "if (d && LAZY_TAGS.has(d.textContent.trim())) op.style.display = 'none';"
+        "});};"
+        "const annotateLazyHeaders = () => {"
+        "document.querySelectorAll('.opblock-tag').forEach(tagEl => {"
+        "const m = (tagEl.id || '').match(/^operations-tag-(.+)$/);"
+        "if (!m || !LAZY_TAGS.has(m[1])) return;"
+        "const existing = tagEl.querySelector('.lazy-load-hint');"
+        "if (warmedTags.has(m[1])) { if (existing) existing.remove(); return; }"
+        "if (existing) return;"
+        "const hint = document.createElement('small');"
+        "hint.className = 'lazy-load-hint';"
+        "hint.textContent = ' (expand to load routes)';"
+        "hint.style.opacity = '0.6';"
+        "hint.style.marginLeft = '6px';"
+        "const target = tagEl.querySelector('a span') || tagEl.querySelector('span') || tagEl;"
+        "target.appendChild(hint);"
+        "});};"
+        "setInterval(() => { hideStubRows(); annotateLazyHeaders(); }, 200);"
+        "const LazyLoadPlugin = () => ({"
+        "afterLoad:function(system){setTimeout(()=>{"
+        "for(const tag of LAZY_TAGS)system.layoutActions.show(['operations-tag',tag],false);"
+        "},200);},"
+        "statePlugins:{layout:{wrapActions:{show:(ori,sys)=>(...args)=>{"
+        "const thing=args[0];const shown=args[1];let tag=null;"
+        "if(Array.isArray(thing)){for(const t of thing)if(TAG_TO_PREFIX[t])tag=t;}"
+        "if(shown!==false&&tag&&!warmedTags.has(tag)){warmedTags.add(tag);"
+        "fetch('/lazy/warm/'+tag,{method:'POST',credentials:'include'}).then(r=>r.json()).then(d=>{"
+        "if(!d.paths||Object.keys(d.paths).length===0)return;"
+        "const cur=sys.specSelectors.specJson().toJS();"
+        "const merged={};let inserted=false;"
+        "for(const k in (cur.paths||{})){"
+        "if(k===d.stub_path){for(const nk in d.paths)merged[nk]=d.paths[nk];inserted=true;}"
+        "else{merged[k]=cur.paths[k];}}"
+        "if(!inserted)Object.assign(merged,d.paths);"
+        "cur.paths=merged;"
+        "cur.components=cur.components||{};"
+        "cur.components.schemas=Object.assign(cur.components.schemas||{},(d.components||{}).schemas||{});"
+        "sys.specActions.updateSpec(JSON.stringify(cur));"
+        "}).catch(()=>{});}"
+        "return ori(...args);}}}}});"
+    )
+
     def swagger_monkey_patch(*args, **kwargs):
-        return get_swagger_ui_html(
+        response = get_swagger_ui_html(
             *args,
             **kwargs,
             swagger_js_url=f"{custom_root_path_swagger_path}/swagger-ui-bundle.js",
             swagger_css_url=f"{custom_root_path_swagger_path}/swagger-ui.css",
             swagger_favicon_url=f"{custom_root_path_swagger_path}/favicon.png",
         )
+        body = response.body.decode("utf-8")
+        body = body.replace(
+            "const ui = SwaggerUIBundle({",
+            _lazy_plugin_js
+            + 'const ui = SwaggerUIBundle({plugins:[LazyLoadPlugin],tagsSorter:"alpha",',
+            1,
+        )
+        return HTMLResponse(content=body)
 
     applications.get_swagger_ui_html = swagger_monkey_patch
 
@@ -1608,7 +1701,7 @@ prisma_client: Optional[PrismaClient] = None
 shared_aiohttp_session: Optional["ClientSession"] = (
     None  # Global shared session for connection reuse
 )
-user_api_key_cache = DualCache(
+user_api_key_cache: UserApiKeyCache = UserApiKeyCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
 spend_counter_cache = DualCache(
@@ -1794,12 +1887,16 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
     3. Reseed from authoritative DB spend (counter expired, cross-pod stale)
     4. Caller-supplied fallback (DB unavailable, cold start)
     """
-    # 1. Try Redis first (cross-pod authoritative)
+    # 1. Redis first (cross-pod authoritative). On clean miss, skip
+    # in-memory: per-pod in-memory only has this pod's writes, so it
+    # would mask cross-pod increments.
+    redis_clean_miss = False
     if spend_counter_cache.redis_cache is not None:
         try:
             val = await spend_counter_cache.redis_cache.async_get_cache(key=counter_key)
             if val is not None:
                 return float(val)
+            redis_clean_miss = True
         except Exception as e:
             verbose_proxy_logger.debug(
                 "get_current_spend: Redis read failed for %s, falling back to in-memory: %s",
@@ -1807,10 +1904,11 @@ async def get_current_spend(counter_key: str, fallback_spend: float) -> float:
                 e,
             )
 
-    # 2. Fall back to in-memory counter (single-instance or Redis failure)
-    val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
-    if val is not None:
-        return float(val)
+    # 2. In-memory only when Redis is unreachable.
+    if not redis_clean_miss:
+        val = spend_counter_cache.in_memory_cache.get_cache(key=counter_key)
+        if val is not None:
+            return float(val)
 
     # 3. Reseed from DB - fallback_spend lags cross-pod, would allow bypass.
     db_spend = await SpendCounterReseed.coalesced(
@@ -1831,6 +1929,9 @@ async def increment_spend_counters(
     user_id: Optional[str],
     response_cost: Optional[float],
     org_id: Optional[str] = None,
+    budget_reservation: Optional[dict] = None,
+    end_user_id: Optional[str] = None,
+    tags: Optional[List[str]] = None,
 ):
     """
     Atomically increment spend counters for budget enforcement.
@@ -1842,7 +1943,14 @@ async def increment_spend_counters(
     Awaited (not create_task) in the cost callback, so the counter is
     updated before the next request's auth check runs.
     """
+    reserved_counter_keys = await _reconcile_budget_reservation_for_counter_update(
+        budget_reservation=budget_reservation,
+        response_cost=response_cost,
+    )
+
     if response_cost is None or response_cost == 0:
+        if budget_reservation is not None:
+            budget_reservation["finalized"] = True
         return
 
     if token is not None:
@@ -1857,11 +1965,13 @@ async def increment_spend_counters(
             if isinstance(token, str) and token.startswith("sk-")
             else token
         )
-        await _init_and_increment_spend_counter(
-            counter_key=f"spend:key:{hashed_token}",
-            source_cache_key=hashed_token,
-            increment=response_cost,
-        )
+        key_counter_key = f"spend:key:{hashed_token}"
+        if key_counter_key not in reserved_counter_keys:
+            await _init_and_increment_spend_counter(
+                counter_key=key_counter_key,
+                source_cache_key=hashed_token,
+                increment=response_cost,
+            )
 
         # Increment per-window budget counters for multi-budget keys
         key_obj = await user_api_key_cache.async_get_cache(key=hashed_token)
@@ -1878,17 +1988,28 @@ async def increment_spend_counters(
                         if isinstance(window, dict)
                         else window.budget_duration
                     )
-                    await spend_counter_cache.async_increment_cache(
-                        key=f"spend:key:{hashed_token}:window:{duration}",
-                        value=response_cost,
-                    )
+                    key_window_counter = f"spend:key:{hashed_token}:window:{duration}"
+                    if key_window_counter not in reserved_counter_keys:
+                        from litellm.proxy.spend_tracking.budget_reservation import (
+                            get_budget_window_start,
+                        )
+
+                        await _init_and_increment_window_spend_counter(
+                            counter_key=key_window_counter,
+                            entity_type="Key",
+                            entity_id=hashed_token,
+                            window_start=get_budget_window_start(window),
+                            increment=response_cost,
+                        )
 
     if team_id is not None:
-        await _init_and_increment_spend_counter(
-            counter_key=f"spend:team:{team_id}",
-            source_cache_key=f"team_id:{team_id}",
-            increment=response_cost,
-        )
+        team_counter_key = f"spend:team:{team_id}"
+        if team_counter_key not in reserved_counter_keys:
+            await _init_and_increment_spend_counter(
+                counter_key=team_counter_key,
+                source_cache_key=f"team_id:{team_id}",
+                increment=response_cost,
+            )
 
         # Increment per-window budget counters for multi-budget teams
         team_obj = await user_api_key_cache.async_get_cache(key=f"team_id:{team_id}")
@@ -1905,36 +2026,157 @@ async def increment_spend_counters(
                         if isinstance(window, dict)
                         else window.budget_duration
                     )
-                    await spend_counter_cache.async_increment_cache(
-                        key=f"spend:team:{team_id}:window:{duration}",
-                        value=response_cost,
-                    )
+                    team_window_counter = f"spend:team:{team_id}:window:{duration}"
+                    if team_window_counter not in reserved_counter_keys:
+                        from litellm.proxy.spend_tracking.budget_reservation import (
+                            get_budget_window_start,
+                        )
+
+                        await _init_and_increment_window_spend_counter(
+                            counter_key=team_window_counter,
+                            entity_type="Team",
+                            entity_id=team_id,
+                            window_start=get_budget_window_start(window),
+                            increment=response_cost,
+                        )
 
     if user_id is not None and team_id is not None:
-        await _init_and_increment_spend_counter(
-            counter_key=f"spend:team_member:{user_id}:{team_id}",
-            source_cache_key=f"team_membership:{user_id}:{team_id}",
-            increment=response_cost,
-        )
+        team_member_counter_key = f"spend:team_member:{user_id}:{team_id}"
+        if team_member_counter_key not in reserved_counter_keys:
+            await _init_and_increment_spend_counter(
+                counter_key=team_member_counter_key,
+                source_cache_key=f"team_membership:{user_id}:{team_id}",
+                increment=response_cost,
+            )
 
     if user_id is not None:
-        await _init_and_increment_spend_counter(
-            counter_key=f"spend:user:{user_id}",
-            source_cache_key=user_id,
+        user_counter_key = f"spend:user:{user_id}"
+        if user_counter_key not in reserved_counter_keys:
+            await _init_and_increment_spend_counter(
+                counter_key=user_counter_key,
+                source_cache_key=user_id,
+                increment=response_cost,
+            )
+
+    await _increment_end_user_and_tag_spend_counters(
+        end_user_id=end_user_id,
+        tags=tags,
+        response_cost=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+
+    await _increment_org_spend_counter(
+        org_id=org_id,
+        response_cost=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+    if budget_reservation is not None:
+        budget_reservation["finalized"] = True
+
+
+async def _reconcile_budget_reservation_for_counter_update(
+    budget_reservation: Optional[dict],
+    response_cost: Optional[float],
+) -> Set[str]:
+    if budget_reservation is None:
+        return set()
+
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        get_reserved_counter_keys,
+        invalidate_budget_reservation_counters,
+        reconcile_budget_reservation,
+    )
+
+    reserved_counter_keys = get_reserved_counter_keys(
+        budget_reservation=budget_reservation
+    )
+    try:
+        await reconcile_budget_reservation(
+            budget_reservation=budget_reservation,
+            actual_cost=response_cost or 0.0,
+            finalize=False,
+        )
+    except Exception:
+        verbose_proxy_logger.warning(
+            "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and continuing",
+            exc_info=True,
+        )
+        try:
+            await invalidate_budget_reservation_counters(
+                budget_reservation=budget_reservation
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Failed to invalidate reserved counters after reservation reconciliation failed"
+            )
+    return reserved_counter_keys
+
+
+async def _increment_end_user_and_tag_spend_counters(
+    end_user_id: Optional[str],
+    tags: Optional[List[str]],
+    response_cost: float,
+    reserved_counter_keys: Set[str],
+) -> None:
+    if end_user_id is not None:
+        await _init_and_increment_unreserved_spend_counter(
+            counter_key=f"spend:end_user:{end_user_id}",
+            source_cache_key=f"end_user_id:{end_user_id}",
             increment=response_cost,
+            reserved_counter_keys=reserved_counter_keys,
         )
 
-    if org_id is not None:
-        await _init_and_increment_spend_counter(
-            counter_key=f"spend:org:{org_id}",
-            source_cache_key=f"org_id:{org_id}",
+    if tags is None:
+        return
+
+    seen_tags: Set[str] = set()
+    for tag_name in tags:
+        if not tag_name or not isinstance(tag_name, str) or tag_name in seen_tags:
+            continue
+        seen_tags.add(tag_name)
+        await _init_and_increment_unreserved_spend_counter(
+            counter_key=f"spend:tag:{tag_name}",
+            source_cache_key=f"tag:{tag_name}",
             increment=response_cost,
+            reserved_counter_keys=reserved_counter_keys,
         )
+
+
+async def _increment_org_spend_counter(
+    org_id: Optional[str],
+    response_cost: float,
+    reserved_counter_keys: Set[str],
+) -> None:
+    if org_id is None:
+        return
+
+    await _init_and_increment_unreserved_spend_counter(
+        counter_key=f"spend:org:{org_id}",
+        source_cache_key=[f"org_id:{org_id}:with_budget", f"org_id:{org_id}"],
+        increment=response_cost,
+        reserved_counter_keys=reserved_counter_keys,
+    )
+
+
+async def _init_and_increment_unreserved_spend_counter(
+    counter_key: str,
+    source_cache_key: Union[str, List[str]],
+    increment: float,
+    reserved_counter_keys: Set[str],
+) -> None:
+    if counter_key in reserved_counter_keys:
+        return
+
+    await _init_and_increment_spend_counter(
+        counter_key=counter_key,
+        source_cache_key=source_cache_key,
+        increment=increment,
+    )
 
 
 async def _init_and_increment_spend_counter(
     counter_key: str,
-    source_cache_key: str,
+    source_cache_key: Union[str, List[str]],
     increment: float,
 ):
     """
@@ -1953,29 +2195,163 @@ async def _init_and_increment_spend_counter(
        under-counting (would allow overspend).
     4. Increment atomically (both in-memory + Redis)
     """
-    current = await spend_counter_cache.async_get_cache(key=counter_key)
-    if current is None:
+    await _ensure_spend_counter_initialized(
+        counter_key=counter_key,
+        source_cache_key=source_cache_key,
+    )
+    await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+
+
+async def _init_and_increment_window_spend_counter(
+    counter_key: str,
+    entity_type: str,
+    entity_id: str,
+    window_start: Optional[datetime],
+    increment: float,
+):
+    if window_start is None:
+        verbose_proxy_logger.warning(
+            "Skipping spend counter increment for invalid budget window %s",
+            counter_key,
+        )
+        return
+
+    initialized = await _ensure_window_spend_counter_initialized(
+        counter_key=counter_key,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        window_start=window_start,
+    )
+    if initialized is False:
+        return
+    await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+
+
+async def _ensure_spend_counter_initialized(
+    counter_key: str,
+    source_cache_key: Union[str, List[str]],
+):
+    is_warm = await _is_spend_counter_cache_warm(counter_key=counter_key)
+    if is_warm is False:
         # Shares the per-counter lock with get_current_spend.
         db_spend = await SpendCounterReseed.coalesced(
             prisma_client=prisma_client,
             spend_counter_cache=spend_counter_cache,
             counter_key=counter_key,
+            require_cache_warm=True,
         )
         if db_spend is None:
             # DB unavailable - fall back to in-process cache (may be stale).
-            source = await user_api_key_cache.async_get_cache(key=source_cache_key)
-            base_spend: float = 0.0
-            if source is not None:
-                if isinstance(source, dict):
-                    base_spend = source.get("spend", 0.0) or 0.0
-                else:
-                    base_spend = getattr(source, "spend", 0.0) or 0.0
+            base_spend = await _get_source_cache_base_spend(
+                source_cache_key=source_cache_key
+            )
             if base_spend > 0:
-                await spend_counter_cache.async_increment_cache(
-                    key=counter_key, value=base_spend
+                await _increment_spend_counter_cache(
+                    counter_key=counter_key, increment=base_spend
                 )
 
-    await spend_counter_cache.async_increment_cache(key=counter_key, value=increment)
+
+async def _get_source_cache_base_spend(
+    source_cache_key: Union[str, List[str]],
+) -> float:
+    source_cache_keys = (
+        [source_cache_key] if isinstance(source_cache_key, str) else source_cache_key
+    )
+    for cache_key in source_cache_keys:
+        source = await user_api_key_cache.async_get_cache(key=cache_key)
+        if source is None:
+            continue
+        if isinstance(source, dict):
+            return float(source.get("spend", 0.0) or 0.0)
+        return float(getattr(source, "spend", 0.0) or 0.0)
+    return 0.0
+
+
+async def _ensure_window_spend_counter_initialized(
+    counter_key: str,
+    entity_type: str,
+    entity_id: str,
+    window_start: datetime,
+) -> bool:
+    is_warm = await _is_spend_counter_cache_warm(counter_key=counter_key)
+    if is_warm is True:
+        return True
+
+    window_spend = await SpendCounterReseed.coalesced_window(
+        prisma_client=prisma_client,
+        spend_counter_cache=spend_counter_cache,
+        counter_key=counter_key,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        window_start=window_start,
+    )
+    if window_spend is None:
+        verbose_proxy_logger.warning(
+            "Skipping cold spend counter seed for %s because window spend could not be loaded",
+            counter_key,
+        )
+        return False
+    return True
+
+
+async def _is_spend_counter_cache_warm(counter_key: str) -> bool:
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            current_value = await spend_counter_cache.redis_cache.async_get_cache(
+                key=counter_key,
+            )
+            if current_value is None:
+                return False
+            spend_counter_cache.in_memory_cache.set_cache(
+                key=counter_key,
+                value=current_value,
+            )
+            return True
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Unable to read Redis spend counter %s before initialization, falling back to in-memory: %s",
+                counter_key,
+                e,
+            )
+
+    return spend_counter_cache.in_memory_cache.get_cache(key=counter_key) is not None
+
+
+async def _increment_spend_counter_cache(counter_key: str, increment: float):
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            current_value = await spend_counter_cache.redis_cache.async_increment(
+                key=counter_key,
+                value=increment,
+                refresh_ttl=True,
+            )
+        except Exception:
+            await _invalidate_spend_counter(counter_key=counter_key)
+            raise
+        spend_counter_cache.in_memory_cache.set_cache(
+            key=counter_key,
+            value=current_value,
+        )
+        return current_value
+
+    return await spend_counter_cache.async_increment_cache(
+        key=counter_key,
+        value=increment,
+        refresh_ttl=True,
+    )
+
+
+async def _invalidate_spend_counter(counter_key: str):
+    spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
+    if spend_counter_cache.redis_cache is not None:
+        try:
+            await spend_counter_cache.redis_cache.async_delete_cache(key=counter_key)
+        except Exception:
+            verbose_proxy_logger.debug(
+                "Unable to delete stale spend counter %s after increment failure",
+                counter_key,
+                exc_info=True,
+            )
 
 
 async def update_cache(  # noqa: PLR0915
@@ -2003,14 +2379,16 @@ async def update_cache(  # noqa: PLR0915
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj: LiteLLM_VerificationTokenView = await user_api_key_cache.async_get_cache(key=hashed_token)  # type: ignore
+        existing_spend_obj = await user_api_key_cache.async_get_cache(
+            key=hashed_token, model_type=UserAPIKeyAuth
+        )
         verbose_proxy_logger.debug(
             f"_update_key_cache: existing_spend_obj={existing_spend_obj}"
         )
         if existing_spend_obj is None:
             return
-        else:
-            existing_spend = existing_spend_obj.spend
+
+        existing_spend = existing_spend_obj.spend or 0.0
         # Calculate the new cost by adding the existing cost and response_cost
         new_spend = existing_spend + response_cost
 
@@ -2068,41 +2446,48 @@ async def update_cache(  # noqa: PLR0915
                 existing_team_member_spend + response_cost
             )
 
-        # Update the cost column for the given token
+        # Existing spend_obj is mutated; UserApiKeyCache.async_set_cache_pipeline turns
+        # BaseModel values into dicts for Redis (same Codec path as async_set_cache).
         existing_spend_obj.spend = new_spend
         values_to_update_in_cache.append((hashed_token, existing_spend_obj))
 
     ### UPDATE USER SPEND ###
     async def _update_user_cache():
         ## UPDATE CACHE FOR USER ID + GLOBAL PROXY
+        if response_cost is None:
+            return
         user_ids = [user_id]
         try:
             for _id in user_ids:
                 # Fetch the existing cost for the given user
                 if _id is None:
                     continue
-                existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
-                if existing_spend_obj is None:
+                cached_user = await user_api_key_cache.async_get_cache(key=_id)
+                if cached_user is None:
                     # do nothing if there is no cache value
+                    return
+                existing_spend_obj = CacheCodec.deserialize(
+                    cached_user, LiteLLM_UserTable
+                )
+                if existing_spend_obj is None:
                     return
                 verbose_proxy_logger.debug(
                     f"_update_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
                 )
 
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
+                existing_spend = existing_spend_obj.spend or 0.0
                 # Calculate the new cost by adding the existing cost and response_cost
                 new_spend = existing_spend + response_cost
 
-                # Update the cost column for the given user
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend_obj["spend"] = new_spend
-                    values_to_update_in_cache.append((_id, existing_spend_obj))
-                else:
-                    existing_spend_obj.spend = new_spend
-                    values_to_update_in_cache.append((_id, existing_spend_obj.json()))
+                existing_spend_obj.spend = new_spend
+                values_to_update_in_cache.append(
+                    (
+                        _id,
+                        CacheCodec.serialize(
+                            existing_spend_obj, model_type=LiteLLM_UserTable
+                        ),
+                    )
+                )
             ## UPDATE GLOBAL PROXY ##
             global_proxy_spend = await user_api_key_cache.async_get_cache(
                 key="{}:spend".format(litellm_proxy_admin_name)
@@ -2134,31 +2519,33 @@ async def update_cache(  # noqa: PLR0915
         _id = "end_user_id:{}".format(end_user_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj = await user_api_key_cache.async_get_cache(key=_id)
-            if existing_spend_obj is None:
+            cached_end_user = await user_api_key_cache.async_get_cache(key=_id)
+            if cached_end_user is None:
                 # if user does not exist in LiteLLM_UserTable, create a new user
                 # do nothing if end-user not in api key cache
+                return
+            existing_spend_obj = CacheCodec.deserialize(
+                cached_end_user, LiteLLM_EndUserTable
+            )
+            if existing_spend_obj is None:
                 return
             verbose_proxy_logger.debug(
                 f"_update_end_user_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
             )
-            if existing_spend_obj is None:
-                existing_spend = 0
-            else:
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
+
+            existing_spend = existing_spend_obj.spend or 0.0
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            # Update the cost column for the given user
-            if isinstance(existing_spend_obj, dict):
-                existing_spend_obj["spend"] = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
-            else:
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj.json()))
+            existing_spend_obj.spend = new_spend
+            values_to_update_in_cache.append(
+                (
+                    _id,
+                    CacheCodec.serialize(
+                        existing_spend_obj, model_type=LiteLLM_EndUserTable
+                    ),
+                )
+            )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update end user spend in cache. "
@@ -2177,36 +2564,32 @@ async def update_cache(  # noqa: PLR0915
 
         _id = "team_id:{}".format(team_id)
         try:
-            # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
+            cached_team = await user_api_key_cache.async_get_cache(key=_id)
+            if cached_team is None:
+                # do nothing if team not in api key cache
+                return
+            existing_spend_obj: Optional[LiteLLM_TeamTableCachedObj] = (
+                CacheCodec.deserialize(cached_team, LiteLLM_TeamTableCachedObj)
             )
             if existing_spend_obj is None:
-                # do nothing if team not in api key cache
                 return
             verbose_proxy_logger.debug(
                 f"_update_team_db: existing spend: {existing_spend_obj}; response_cost: {response_cost}"
             )
-            if existing_spend_obj is None:
-                existing_spend: Optional[float] = 0.0
-            else:
-                if isinstance(existing_spend_obj, dict):
-                    existing_spend = existing_spend_obj["spend"]
-                else:
-                    existing_spend = existing_spend_obj.spend
 
-            if existing_spend is None:
-                existing_spend = 0.0
+            existing_spend: float = existing_spend_obj.spend or 0.0
             # Calculate the new cost by adding the existing cost and response_cost
             new_spend = existing_spend + response_cost
 
-            # Update the cost column for the given user
-            if isinstance(existing_spend_obj, dict):
-                existing_spend_obj["spend"] = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
-            else:
-                existing_spend_obj.spend = new_spend
-                values_to_update_in_cache.append((_id, existing_spend_obj))
+            existing_spend_obj.spend = new_spend
+            values_to_update_in_cache.append(
+                (
+                    _id,
+                    CacheCodec.serialize(
+                        existing_spend_obj, model_type=LiteLLM_TeamTableCachedObj
+                    ),
+                )
+            )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update team spend in cache. "
@@ -2233,32 +2616,32 @@ async def update_cache(  # noqa: PLR0915
 
                 cache_key = f"tag:{tag_name}"
                 # Fetch the existing tag object from cache
-                existing_tag_obj = await user_api_key_cache.async_get_cache(
-                    key=cache_key
-                )
-                if existing_tag_obj is None:
+                cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
+                if cached_tag is None:
                     # do nothing if tag not in api key cache
+                    continue
+
+                existing_tag_obj = CacheCodec.deserialize(cached_tag, LiteLLM_TagTable)
+                if existing_tag_obj is None:
                     continue
 
                 verbose_proxy_logger.debug(
                     f"_update_tag_cache: existing spend for tag={tag_name}: {existing_tag_obj}; response_cost: {response_cost}"
                 )
 
-                if isinstance(existing_tag_obj, dict):
-                    existing_spend = existing_tag_obj.get("spend", 0) or 0
-                else:
-                    existing_spend = getattr(existing_tag_obj, "spend", 0) or 0
-
+                existing_spend = existing_tag_obj.spend or 0.0
                 # Calculate the new cost by adding the existing cost and response_cost
                 new_spend = existing_spend + response_cost
 
-                # Update the spend column for the given tag
-                if isinstance(existing_tag_obj, dict):
-                    existing_tag_obj["spend"] = new_spend
-                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
-                else:
-                    existing_tag_obj.spend = new_spend
-                    values_to_update_in_cache.append((cache_key, existing_tag_obj))
+                existing_tag_obj.spend = new_spend
+                values_to_update_in_cache.append(
+                    (
+                        cache_key,
+                        CacheCodec.serialize(
+                            existing_tag_obj, model_type=LiteLLM_TagTable
+                        ),
+                    )
+                )
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Spend tracking - failed to update tag spend in cache. "
@@ -2926,8 +3309,9 @@ class ProxyConfig:
     def _init_cache(
         self,
         cache_params: dict,
+        enable_redis_auth_cache: bool = False,
     ):
-        global redis_usage_cache, llm_router
+        global redis_usage_cache, llm_router, general_settings
         from litellm import Cache
 
         if "default_in_memory_ttl" in cache_params:
@@ -2943,7 +3327,29 @@ class ProxyConfig:
         ):
             ## INIT PROXY REDIS USAGE CLIENT ##
             redis_usage_cache = litellm.cache.cache
-            spend_counter_cache.redis_cache = redis_usage_cache
+            spend_counter_cache.attach_redis_cache(
+                redis_usage_cache,
+                default_redis_ttl=litellm.default_redis_ttl,
+            )
+            # Note: PKCE verifier storage uses redis_usage_cache directly (not
+            # user_api_key_cache) to avoid routing all API-key lookups through Redis.
+            if enable_redis_auth_cache is True:
+                user_api_key_cache.attach_redis_cache(
+                    redis_usage_cache,
+                    default_redis_ttl=litellm.default_redis_ttl,
+                )
+                verbose_proxy_logger.info(
+                    "enable_redis_auth_cache=True: attached Redis to "
+                    "user_api_key_cache — virtual-key lookups are now "
+                    "shared across all proxy workers."
+                )
+            else:
+                verbose_proxy_logger.info(
+                    "enable_redis_auth_cache is not set: user_api_key_cache "
+                    "remains in-memory only (per-worker). Set "
+                    "litellm_settings.enable_redis_auth_cache: true to share "
+                    "the auth cache across workers and reduce DB load."
+                )
             litellm_config_cache.redis_cache = redis_usage_cache
             # Note: PKCE verifier storage uses redis_usage_cache directly (not
             # user_api_key_cache) to avoid routing all API-key lookups through Redis.
@@ -3269,7 +3675,13 @@ class ProxyConfig:
                             cache_params[key] = get_secret(value)
 
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
-                    self._init_cache(cache_params=cache_params)
+                    self._init_cache(
+                        cache_params=cache_params,
+                        enable_redis_auth_cache=litellm_settings.get(
+                            "enable_redis_auth_cache", False
+                        )
+                        is True,
+                    )
                     if litellm.cache is not None:
                         verbose_proxy_logger.debug(
                             f"{blue_color_code}Set Cache on LiteLLM Proxy{reset_color_code}"
@@ -3540,21 +3952,23 @@ class ProxyConfig:
                 verbose_proxy_logger.critical(
                     "LITELLM_MASTER_KEY is not set! All requests will be treated as INTERNAL_USER with no admin access. Set LITELLM_MASTER_KEY for production use."
                 )
-            ### USER API KEY CACHE IN-MEMORY TTL ###
+            ### USER API KEY CACHE TTL (in-memory + Redis when Redis auth sharing is enabled) ###
             user_api_key_cache_ttl = general_settings.get(
                 "user_api_key_cache_ttl", None
             )
             if user_api_key_cache_ttl is not None:
+                ttl = float(user_api_key_cache_ttl)
+                # Mirror TTL on Redis as well when ``litellm_settings.enable_redis_auth_cache``
+                # attaches Redis to ``user_api_key_cache``; otherwise DualCache misses in
+                # memory fall back to a key that outlasts ``user_api_key_cache_ttl``.
                 user_api_key_cache.update_cache_ttl(
-                    default_in_memory_ttl=float(user_api_key_cache_ttl),
-                    default_redis_ttl=None,  # user_api_key_cache uses in-memory TTL only; Redis not configured for key lookups
+                    default_in_memory_ttl=ttl,
+                    default_redis_ttl=ttl,
                 )
 
             ### PKCE MULTI-INSTANCE PREREQUISITE CHECK ###
             # PKCE verifiers are stored in redis_usage_cache when available so they can
             # be read back by any instance (not just the one that started the auth flow).
-            # user_api_key_cache is intentionally left in-memory-only to avoid routing
-            # all API-key lookups through Redis.
             use_pkce = os.getenv("GENERIC_CLIENT_USE_PKCE", "false").lower() == "true"
             if use_pkce and redis_usage_cache is None:
                 global _pkce_no_redis_warning_emitted
@@ -3865,11 +4279,19 @@ class ProxyConfig:
         ## MCP TOOLS
         mcp_tools_config = config.get("mcp_tools", None)
         if mcp_tools_config:
+            from litellm.proxy._experimental.mcp_server.tool_registry import (
+                global_mcp_tool_registry,
+            )
+
             global_mcp_tool_registry.load_tools_from_config(mcp_tools_config)
 
         ## AGENTS
         agent_config = config.get("agent_list", None)
         if agent_config:
+            from litellm.proxy.agent_endpoints.agent_registry import (
+                global_agent_registry,
+            )
+
             global_agent_registry.load_agents_from_config(agent_config)  # type: ignore
 
         mcp_servers_config = config.get("mcp_servers", None)
@@ -6280,7 +6702,7 @@ class ProxyStartupEvent:
         cls,
         general_settings: dict,
         prisma_client: Optional[PrismaClient],
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
     ):
         """Initialize JWT auth on startup"""
         if general_settings.get("litellm_jwtauth", None) is not None:
@@ -6329,7 +6751,7 @@ class ProxyStartupEvent:
     async def _warm_global_spend_cache(
         cls,
         litellm_proxy_admin_name: str,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         prisma_client: PrismaClient,
     ) -> None:
         """Warm global spend cache once at startup to reduce impact of first wave of requests."""
@@ -6969,7 +7391,7 @@ class ProxyStartupEvent:
         cls,
         database_url: Optional[str],
         proxy_logging_obj: ProxyLogging,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
     ) -> Optional[PrismaClient]:
         """
         - Sets up prisma client
@@ -10271,6 +10693,101 @@ def _paginate_models_response(
     }
 
 
+def _team_models_resolve_to_names(
+    team_models: List[str], access_groups: Dict[str, Any]
+) -> List[str]:
+    """Expand team model entries (including access group names) to concrete model names."""
+    resolved: List[str] = []
+    for name in team_models:
+        if name in access_groups:
+            resolved.extend(access_groups[name])
+        else:
+            resolved.append(name)
+    return resolved
+
+
+async def _load_team_object_for_model_filter(
+    team_id: str, prisma_client: PrismaClient
+) -> Optional[LiteLLM_TeamTable]:
+    """Load team row from DB; returns None if missing or on error."""
+    try:
+        team_db_object = await prisma_client.db.litellm_teamtable.find_unique(
+            where={"team_id": team_id}
+        )
+        if team_db_object is None:
+            verbose_proxy_logger.warning(f"Team {team_id} not found in database")
+            return None
+        return LiteLLM_TeamTable(**team_db_object.model_dump())
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
+        return None
+
+
+async def _gather_team_accessible_model_ids(
+    team_object: LiteLLM_TeamTable,
+    team_id: str,
+    prisma_client: PrismaClient,
+    llm_router: Router,
+) -> Set[str]:
+    """Collect model IDs the team can use from router config and DB."""
+    team_accessible_model_ids: Set[str] = set()
+    access_groups = llm_router.get_model_access_groups() if llm_router else {}
+
+    if (
+        not team_object.models
+        or SpecialModelNames.all_proxy_models.value in team_object.models
+    ):
+        model_list = llm_router.get_model_list() if llm_router else []
+        if model_list is not None:
+            for model in model_list:
+                model_id = model.get("model_info", {}).get("id", None)
+                if model_id is None:
+                    continue
+                team_model_id = model.get("model_info", {}).get("team_id", None)
+                if team_model_id is None or team_model_id == team_id:
+                    team_accessible_model_ids.add(model_id)
+    else:
+        resolved_model_names: Set[str] = set()
+        for model_name in team_object.models:
+            if model_name in access_groups:
+                resolved_model_names.update(access_groups[model_name])
+            else:
+                resolved_model_names.add(model_name)
+
+        for model_name in resolved_model_names:
+            _models = (
+                llm_router.get_model_list(model_name=model_name, team_id=team_id)
+                if llm_router
+                else []
+            )
+            if _models is not None:
+                for model in _models:
+                    model_id = model.get("model_info", {}).get("id", None)
+                    if model_id is not None:
+                        team_accessible_model_ids.add(model_id)
+
+    try:
+        if (
+            team_object.models
+            and SpecialModelNames.all_proxy_models.value not in team_object.models
+        ):
+            _resolved_names = _team_models_resolve_to_names(
+                team_object.models, access_groups
+            )
+            db_models = await prisma_client.db.litellm_proxymodeltable.find_many(
+                where={"model_name": {"in": _resolved_names}}
+            )
+            for db_model in db_models:
+                if db_model.model_id:
+                    team_accessible_model_ids.add(db_model.model_id)
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"Error querying database models for team {team_id}: {str(e)}"
+        )
+
+    return team_accessible_model_ids
+
+
 async def _filter_models_by_team_id(
     all_models: List[Dict[str, Any]],
     team_id: str,
@@ -10293,78 +10810,13 @@ async def _filter_models_by_team_id(
     Returns:
         Filtered list of models
     """
-    # Get team from database
-    try:
-        team_db_object = await prisma_client.db.litellm_teamtable.find_unique(
-            where={"team_id": team_id}
-        )
-        if team_db_object is None:
-            verbose_proxy_logger.warning(f"Team {team_id} not found in database")
-            # If team doesn't exist, return empty list
-            return []
-
-        team_object = LiteLLM_TeamTable(**team_db_object.model_dump())
-    except Exception as e:
-        verbose_proxy_logger.exception(f"Error fetching team {team_id}: {str(e)}")
+    team_object = await _load_team_object_for_model_filter(team_id, prisma_client)
+    if team_object is None:
         return []
 
-    # Get models accessible to this team (similar to _add_team_models_to_all_models)
-    team_accessible_model_ids: Set[str] = set()
-
-    if (
-        not team_object.models  # empty list = all model access
-        or SpecialModelNames.all_proxy_models.value in team_object.models
-    ):
-        # Team has access to all models
-        model_list = llm_router.get_model_list() if llm_router else []
-        if model_list is not None:
-            for model in model_list:
-                model_id = model.get("model_info", {}).get("id", None)
-                if model_id is None:
-                    continue
-                # if team model id set, check if team id matches
-                team_model_id = model.get("model_info", {}).get("team_id", None)
-                can_add_model = False
-                if team_model_id is None:
-                    can_add_model = True
-                elif team_model_id == team_id:
-                    can_add_model = True
-
-                if can_add_model:
-                    team_accessible_model_ids.add(model_id)
-    else:
-        # Team has access to specific models
-        for model_name in team_object.models:
-            _models = (
-                llm_router.get_model_list(model_name=model_name, team_id=team_id)
-                if llm_router
-                else []
-            )
-            if _models is not None:
-                for model in _models:
-                    model_id = model.get("model_info", {}).get("id", None)
-                    if model_id is not None:
-                        team_accessible_model_ids.add(model_id)
-
-    # Also search database for models accessible to this team
-    # This complements the config search done above
-    try:
-        if (
-            team_object.models
-            and SpecialModelNames.all_proxy_models.value not in team_object.models
-        ):
-            # Team has specific models - check database for those model names
-            db_models = await prisma_client.db.litellm_proxymodeltable.find_many(
-                where={"model_name": {"in": team_object.models}}
-            )
-            for db_model in db_models:
-                model_id = db_model.model_id
-                if model_id:
-                    team_accessible_model_ids.add(model_id)
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            f"Error querying database models for team {team_id}: {str(e)}"
-        )
+    team_accessible_model_ids = await _gather_team_accessible_model_ids(
+        team_object, team_id, prisma_client, llm_router
+    )
 
     # Filter models based on direct_access or access_via_team_ids
     # Models are already enriched with these fields before this function is called
@@ -10592,6 +11044,10 @@ async def model_info_v2(
     verbose_proxy_logger.debug("all_models: %s", all_models)
 
     # Append A2A agents to models list
+    from litellm.proxy.agent_endpoints.model_list_helpers import (
+        append_agents_to_model_info,
+    )
+
     all_models = await append_agents_to_model_info(
         models=all_models,
         user_api_key_dict=user_api_key_dict,
@@ -11441,6 +11897,10 @@ async def model_group_info(
     )
 
     # Append A2A agents to model groups
+    from litellm.proxy.agent_endpoints.model_list_helpers import (
+        append_agents_to_model_group,
+    )
+
     model_groups = await append_agents_to_model_group(
         model_groups=model_groups,
         user_api_key_dict=user_api_key_dict,
@@ -11508,7 +11968,7 @@ async def alerting_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={
@@ -12389,9 +12849,20 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
 
 @app.get("/get_logo_url", include_in_schema=False)
 def get_logo_url():
-    """Get the current logo URL from environment"""
+    """Get the current logo URL from environment.
+
+    Only HTTP(S) URLs are returned — those are intended to be loaded
+    directly by the browser from a public/internal CDN. Local file
+    paths set via ``UI_LOGO_PATH`` are NOT returned: they are admin-
+    only filesystem details, the dashboard falls back to ``/get_image``
+    which serves the file only when it is a supported image. Without
+    this filter, the unauthenticated endpoint would disclose internal
+    hostnames or filesystem paths to any caller.
+    """
     logo_path = os.getenv("UI_LOGO_PATH", "")
-    return {"logo_url": logo_path}
+    if logo_path.startswith(("http://", "https://")):
+        return {"logo_url": logo_path}
+    return {"logo_url": ""}
 
 
 @app.get("/get_image", include_in_schema=False)
@@ -12430,61 +12901,44 @@ async def get_image():
     if assets_dir != current_dir and not os.path.exists(default_logo):
         default_logo = default_site_logo
 
-    cache_dir = assets_dir if os.access(assets_dir, os.W_OK) else current_dir
-    cache_path = os.path.join(cache_dir, "cached_logo.jpg")
-
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
-    # If UI_LOGO_PATH points to a local file, serve it directly (skip cache)
+    from litellm.proxy.common_utils.static_asset_utils import (
+        resolve_validated_local_image_path,
+    )
+
     if logo_path != default_logo and not logo_path.startswith(("http://", "https://")):
-        if os.path.exists(logo_path):
-            return FileResponse(logo_path, media_type="image/jpeg")
-        # Custom path doesn't exist — fall back to default
+        safe_logo = resolve_validated_local_image_path(logo_path)
+        if safe_logo is not None:
+            safe_logo_path, media_type = safe_logo
+            return FileResponse(safe_logo_path, media_type=media_type)
         verbose_proxy_logger.warning(
-            f"UI_LOGO_PATH '{logo_path}' does not exist, falling back to default logo"
+            "UI_LOGO_PATH %r is not a supported image file or does not exist, "
+            "falling back to default logo",
+            logo_path,
         )
         logo_path = default_logo
 
-    # [OPTIMIZATION] For HTTP URLs and default logo, check if the cached image exists
-    if os.path.exists(cache_path):
-        return FileResponse(cache_path, media_type="image/jpeg")
-
-    # Check if the logo path is an HTTP/HTTPS URL
+    # Remote logo URLs are loaded by the browser. The proxy should not fetch
+    # arbitrary admin-configured URLs server-side.
     if logo_path.startswith(("http://", "https://")):
-        try:
-            # Download the image and cache it
-            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-            from litellm.types.llms.custom_http import httpxSpecialProvider
+        return RedirectResponse(url=logo_path)
 
-            async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.UI,
-                params={"timeout": 5.0},
-            )
-            response = await async_client.get(logo_path)
-            if response.status_code == 200:
-                # Save the image to a local file
-                with open(cache_path, "wb") as f:
-                    f.write(response.content)
-
-                # Return the cached image as a FileResponse
-                return FileResponse(cache_path, media_type="image/jpeg")
-            else:
-                # Handle the case when the image cannot be downloaded
-                return FileResponse(default_logo, media_type="image/jpeg")
-        except Exception as e:
-            # Handle any exceptions during the download (e.g., timeout, connection error)
-            verbose_proxy_logger.debug(f"Error downloading logo from {logo_path}: {e}")
-            return FileResponse(default_logo, media_type="image/jpeg")
-    else:
-        # Return the local image file if the logo path is not an HTTP/HTTPS URL
-        return FileResponse(logo_path, media_type="image/jpeg")
+    # Default logo (resolved from the bundled asset, not user-controlled).
+    safe_logo = resolve_validated_local_image_path(logo_path)
+    if safe_logo is not None:
+        safe_logo_path, media_type = safe_logo
+        return FileResponse(safe_logo_path, media_type=media_type)
+    return FileResponse(default_site_logo, media_type="image/jpeg")
 
 
 @app.get("/get_favicon", include_in_schema=False)
 async def get_favicon():
     """Get custom favicon for the admin UI."""
-    from fastapi.responses import Response
+    from litellm.proxy.common_utils.static_asset_utils import (
+        resolve_validated_local_image_path,
+    )
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     default_favicon = os.path.join(current_dir, "_experimental", "out", "favicon.ico")
@@ -12497,42 +12951,17 @@ async def get_favicon():
         raise HTTPException(status_code=404, detail="Default favicon not found")
 
     if favicon_url.startswith(("http://", "https://")):
-        try:
-            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-            from litellm.types.llms.custom_http import httpxSpecialProvider
-
-            async_client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.UI,
-                params={"timeout": 5.0},
-            )
-            response = await async_client.get(favicon_url)
-            if response.status_code == 200:
-                content_type = response.headers.get("content-type", "image/x-icon")
-                return Response(
-                    content=response.content,
-                    media_type=content_type,
-                )
-            else:
-                verbose_proxy_logger.warning(
-                    "Failed to fetch favicon from %s: status %s",
-                    favicon_url,
-                    response.status_code,
-                )
-                if os.path.exists(default_favicon):
-                    return FileResponse(default_favicon, media_type="image/x-icon")
-                raise HTTPException(status_code=404, detail="Favicon not found")
-        except HTTPException:
-            raise
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "Error downloading favicon from %s: %s", favicon_url, e
-            )
-            if os.path.exists(default_favicon):
-                return FileResponse(default_favicon, media_type="image/x-icon")
-            raise HTTPException(status_code=404, detail="Favicon not found")
+        return RedirectResponse(url=favicon_url)
     else:
-        if os.path.exists(favicon_url):
-            return FileResponse(favicon_url, media_type="image/x-icon")
+        safe_favicon = resolve_validated_local_image_path(favicon_url)
+        if safe_favicon is not None:
+            safe_favicon_path, media_type = safe_favicon
+            return FileResponse(safe_favicon_path, media_type=media_type)
+        verbose_proxy_logger.warning(
+            "LITELLM_FAVICON_URL %r is not a supported image file or does not "
+            "exist, falling back to default favicon",
+            favicon_url,
+        )
         if os.path.exists(default_favicon):
             return FileResponse(default_favicon, media_type="image/x-icon")
         raise HTTPException(status_code=404, detail="Favicon not found")
@@ -12651,7 +13080,7 @@ async def invitation_info(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={
@@ -12827,9 +13256,12 @@ async def update_config(  # noqa: PLR0915
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    For Admin UI - allows admin to update config via UI
+    For Admin UI - allows admin to update config via UI.
 
-    Currently supports modifying General Settings + LiteLLM settings
+    Writes only the sections present in the request body to LiteLLM_Config rows
+    (one row per top-level section). Sections the caller did not send are left
+    untouched — this endpoint never persists pre-existing YAML values to DB as
+    a side effect of an unrelated update.
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
     try:
@@ -12837,109 +13269,96 @@ async def update_config(  # noqa: PLR0915
             raise HTTPException(
                 status_code=403, detail="Only proxy admins can update config"
             )
-        import base64
 
-        """
-        - Update the ConfigTable DB
-        - Run 'add_deployment'
-        """
         if prisma_client is None:
             raise Exception("No DB Connected")
 
-        if store_model_in_db is not True:
-            raise HTTPException(
-                status_code=500,
-                detail={
-                    "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+        async def _read_section(param_name: str) -> dict:
+            row = await prisma_client.db.litellm_config.find_first(
+                where={"param_name": param_name}
+            )
+            if row is None or row.param_value is None:
+                return {}
+            return dict(row.param_value)
+
+        async def _upsert_section(param_name: str, value: dict) -> None:
+            serialized = json.dumps(value)
+            await prisma_client.db.litellm_config.upsert(
+                where={"param_name": param_name},
+                data={
+                    "create": {"param_name": param_name, "param_value": serialized},
+                    "update": {"param_value": serialized},
                 },
             )
+            # invalidate the DualCache entry so the next reader (this process
+            # or any other proxy in the cluster) goes to DB.
+            await invalidate_config_param(param_name)
 
-        updated_settings = config_info.json(exclude_none=True)
-        updated_settings = prisma_client.jsonify_object(updated_settings)
-        for k, v in updated_settings.items():
-            if k == "router_settings":
-                await prisma_client.db.litellm_config.upsert(
-                    where={"param_name": k},
-                    data={
-                        "create": {"param_name": k, "param_value": v},
-                        "update": {"param_value": v},
-                    },
-                )
-                await invalidate_config_param(k)
-
-        ### OLD LOGIC [TODO] MOVE TO DB ###
-
-        # Load existing config
-        config = await proxy_config.get_config()
-        verbose_proxy_logger.debug("Loaded config: %s", config)
-
-        # update the general settings
+        # general_settings: merge per-key, with the alert_to_webhook_url side
+        # effect of auto-enabling slack alerting.
         if config_info.general_settings is not None:
-            config.setdefault("general_settings", {})
-            updated_general_settings = config_info.general_settings.dict(
-                exclude_none=True
-            )
-
-            _existing_settings = config["general_settings"]
-            for k, v in updated_general_settings.items():
-                # overwrite existing settings with updated values
+            existing = await _read_section("general_settings")
+            updates = config_info.general_settings.dict(exclude_none=True)
+            for k, v in updates.items():
                 if k == "alert_to_webhook_url":
-                    # check if slack is already enabled. if not, enable it
-                    if "alerting" not in _existing_settings:
-                        _existing_settings = {"alerting": ["slack"]}
-                    elif isinstance(_existing_settings["alerting"], list):
-                        if "slack" not in _existing_settings["alerting"]:
-                            _existing_settings["alerting"].append("slack")
-                _existing_settings[k] = v
-            config["general_settings"] = _existing_settings
+                    if "alerting" not in existing:
+                        existing["alerting"] = ["slack"]
+                    elif (
+                        isinstance(existing["alerting"], list)
+                        and "slack" not in existing["alerting"]
+                    ):
+                        existing["alerting"].append("slack")
+                existing[k] = v
+            await _upsert_section("general_settings", existing)
 
+        # environment_variables: encrypt request values, then merge into existing.
         if config_info.environment_variables is not None:
-            config.setdefault("environment_variables", {})
-            _updated_environment_variables = config_info.environment_variables
+            existing = await _read_section("environment_variables")
+            for k, v in config_info.environment_variables.items():
+                existing[k] = encrypt_value_helper(value=v)
+            await _upsert_section("environment_variables", existing)
 
-            # encrypt updated_environment_variables #
-            for k, v in _updated_environment_variables.items():
-                encrypted_value = encrypt_value_helper(value=v)
-                _updated_environment_variables[k] = encrypted_value
-
-            _existing_env_variables = config["environment_variables"]
-
-            for k, v in _updated_environment_variables.items():
-                # overwrite existing env variables with updated values
-                _existing_env_variables[k] = _updated_environment_variables[k]
-
-        # update the litellm settings
+        # litellm_settings: merge existing + request, request wins (matching
+        # router_settings semantics — the caller's value for any given key is
+        # what gets persisted). success_callback is special-cased: it is
+        # always normalized + deduped, and unioned with any existing list,
+        # because callbacks are additive (callers send the new entry, not
+        # the full set). Normalizing on every write — not only when an
+        # existing entry is present — keeps the DB free of mixed-case
+        # entries that delete_callback (lowercase lookup) cannot find.
         if config_info.litellm_settings is not None:
-            config.setdefault("litellm_settings", {})
-            updated_litellm_settings = config_info.litellm_settings
-            config["litellm_settings"] = {
-                **updated_litellm_settings,
-                **config["litellm_settings"],
-            }
+            existing = await _read_section("litellm_settings")
+            updated_litellm_settings = dict(config_info.litellm_settings)
 
-            # if litellm.success_callback in updated_litellm_settings and config["litellm_settings"]
-            if (
-                "success_callback" in updated_litellm_settings
-                and "success_callback" in config["litellm_settings"]
-            ):
-                # check both success callback are lists
-                if isinstance(
-                    config["litellm_settings"]["success_callback"], list
-                ) and isinstance(updated_litellm_settings["success_callback"], list):
-                    updated_success_callbacks_normalized = normalize_callback_names(
-                        updated_litellm_settings["success_callback"]
-                    )
-                    combined_success_callback = (
-                        config["litellm_settings"]["success_callback"]
-                        + updated_success_callbacks_normalized
-                    )
-                    combined_success_callback = list(set(combined_success_callback))
-                    config["litellm_settings"][
-                        "success_callback"
-                    ] = combined_success_callback
+            incoming_cb = updated_litellm_settings.get("success_callback")
+            if isinstance(incoming_cb, list):
+                updated_litellm_settings["success_callback"] = normalize_callback_names(
+                    incoming_cb
+                )
 
-        # Save the updated config
-        await proxy_config.save_config(new_config=config)
+            merged = {**existing, **updated_litellm_settings}
+
+            incoming_cb = updated_litellm_settings.get("success_callback")
+            existing_cb = existing.get("success_callback")
+            if isinstance(incoming_cb, list):
+                if isinstance(existing_cb, list):
+                    # Normalize the existing list too — a row written by a
+                    # different code path may still hold mixed-case names,
+                    # which would otherwise dedup-miss against the lowercase
+                    # incoming entries.
+                    merged["success_callback"] = list(
+                        set(normalize_callback_names(existing_cb) + incoming_cb)
+                    )
+                else:
+                    merged["success_callback"] = list(set(incoming_cb))
+
+            await _upsert_section("litellm_settings", merged)
+
+        # router_settings: merge existing + request, request wins.
+        if config_info.router_settings is not None:
+            existing = await _read_section("router_settings")
+            updates = config_info.router_settings.dict(exclude_none=True)
+            await _upsert_section("router_settings", {**existing, **updates})
 
         await proxy_config.add_deployment(
             prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
@@ -13083,7 +13502,7 @@ async def get_config_general_settings(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -13147,7 +13566,7 @@ async def get_config_list(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=400,
             detail={
@@ -13859,8 +14278,8 @@ async def get_model_cost_map_reload_status(
 
     Get the status of the scheduled model cost map reload job.
     """
-    # Check if user is admin
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Read-only status check — admin viewers can read.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
@@ -13962,7 +14381,8 @@ async def get_model_cost_map_source(
     - fallback_reason: human-readable reason why remote failed (null on success)
     - model_count: number of models in the currently loaded cost map
     """
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Read-only source info — admin viewers can read.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
@@ -14219,8 +14639,8 @@ async def get_anthropic_beta_headers_reload_status(
 
     Get the status of the scheduled Anthropic beta headers reload job.
     """
-    # Check if user is admin
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Read-only status — admin viewers can read.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail=f"Access denied. Admin role required. Current role: {user_api_key_dict.user_role}",
@@ -14326,7 +14746,8 @@ async def get_adaptive_router_state(
     adaptive-router deployment. Each snapshot's `router_name` field identifies
     which deployment it came from.
     """
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Read-only state — admin viewers can read.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},
@@ -14403,66 +14824,41 @@ app.include_router(container_router)
 app.include_router(search_router)
 app.include_router(image_router)
 app.include_router(fine_tuning_router)
-app.include_router(vector_store_router)
-app.include_router(vector_store_management_router)
-app.include_router(vector_store_files_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
-app.include_router(webrtc_router)
-app.include_router(mcp_management_router)
-app.include_router(mcp_byok_oauth_router)
-app.include_router(anthropic_router)
-app.include_router(anthropic_skills_router)
-app.include_router(evals_router)
-app.include_router(claude_code_marketplace_router)
-app.include_router(google_router)
-app.include_router(langfuse_router)
 app.include_router(pass_through_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
 app.include_router(team_router)
 app.include_router(ui_sso_router)
-app.include_router(scim_router)
 app.include_router(organization_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
-app.include_router(cloudzero_router)
-app.include_router(vantage_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
-app.include_router(guardrails_router)
-app.include_router(policy_router)
-app.include_router(usage_ai_router)
-app.include_router(policy_crud_router)
-app.include_router(policy_resolve_router)
-app.include_router(search_tool_management_router)
-app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(openai_files_router)
 app.include_router(team_callback_router)
-app.include_router(jwt_key_mapping_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(tag_management_router)
-app.include_router(tool_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
-app.include_router(config_override_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
-app.include_router(agent_endpoints_router)
-app.include_router(compliance_router)
-app.include_router(a2a_router)
-app.include_router(access_group_router)
+# Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.
+app.include_router(google_router)
+
+attach_lazy_features(app)
 
 
 async def _stream_mcp_asgi_response(
@@ -14695,8 +15091,3 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             f"Error handling dynamic MCP route for {mcp_server_name}: {str(e)}"
         )
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-
-app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
-app.include_router(mcp_rest_endpoints_router)
-app.include_router(mcp_discoverable_endpoints_router)

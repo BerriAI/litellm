@@ -65,6 +65,7 @@ def cost_per_token(
     usage: Usage,
     response_time_ms: Optional[float] = 0.0,
     request_model: Optional[str] = None,
+    service_tier: Optional[str] = None,
 ) -> Tuple[float, float]:
     """
     Calculate the cost per token for Azure AI models.
@@ -102,6 +103,7 @@ def cost_per_token(
             model=model,
             usage=usage,
             custom_llm_provider="azure_ai",
+            service_tier=service_tier,
         )
     except Exception as e:
         # For Model Router, the model name (e.g., "azure-model-router") may not be in the cost map

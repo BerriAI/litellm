@@ -1331,14 +1331,14 @@ def test_gemini_function_args_preserve_unicode():
     assert "José" in arguments_str
 
 
-def test_anthropic_thinking_param_to_gemini_3_thinkingLevel():
+def test_anthropic_thinking_param_to_gemini_3_provider_defaults():
     """
-    Test that Anthropic thinking parameters are correctly transformed to Gemini 3 thinkingLevel
-    instead of thinkingBudget.
+    Test that Anthropic thinking parameters for Gemini 3+ follow provider defaults
+    unless force-low behavior is explicitly enabled.
 
     For Gemini 3+ models (gemini-3-flash, gemini-3-pro, gemini-3-flash-preview):
-    - Should use thinkingLevel instead of thinkingBudget
-    - budget_tokens should map to thinkingLevel
+    - Should not force thinkingLevel by default
+    - Should still set includeThoughts correctly
 
     Related issue: https://github.com/BerriAI/litellm/issues/XXXX
     """
@@ -1347,72 +1347,102 @@ def test_anthropic_thinking_param_to_gemini_3_thinkingLevel():
     )
     from litellm.types.llms.anthropic import AnthropicThinkingParam
 
+    original_force_low_flag = litellm.enable_gemini_default_thinking_level_low
+    litellm.enable_gemini_default_thinking_level_low = False
+
     # Test 1: Anthropic thinking enabled with budget_tokens for Gemini 3 model
     thinking_param: AnthropicThinkingParam = {
         "type": "enabled",
         "budget_tokens": 10000,
     }
+    try:
+        result = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-flash",
+        )
 
-    result = VertexGeminiConfig._map_thinking_param(
-        thinking_param=thinking_param,
-        model="gemini-3-flash",
+        # For Gemini 3, should not force thinkingLevel by default
+        assert "thinkingLevel" not in result, "Should not force thinkingLevel for Gemini 3"
+        assert "thinkingBudget" not in result, "Should NOT have thinkingBudget for Gemini 3"
+        assert result["includeThoughts"] is True
+
+        # Test 2: Anthropic thinking disabled for Gemini 3
+        thinking_param_disabled: AnthropicThinkingParam = {
+            "type": "disabled",
+            "budget_tokens": None,
+        }
+
+        result_disabled = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param_disabled,
+            model="gemini-3-pro-preview",
+        )
+
+        assert result_disabled.get("includeThoughts") is False
+        assert (
+            "thinkingLevel" not in result_disabled
+            or result_disabled.get("thinkingLevel") is None
+        )
+
+        # Test 3: Budget tokens = 0 for Gemini 3
+        thinking_param_zero: AnthropicThinkingParam = {
+            "type": "enabled",
+            "budget_tokens": 0,
+        }
+
+        result_zero = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param_zero,
+            model="gemini-3-flash",
+        )
+
+        assert result_zero["includeThoughts"] is False
+        assert "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
+
+        # Test 4: Gemini 3 flash-preview should also follow provider defaults by default
+        result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-flash-preview",
+        )
+
+        assert "thinkingLevel" not in result_gemini3flashpreview
+        assert "thinkingBudget" not in result_gemini3flashpreview
+        assert result_gemini3flashpreview["includeThoughts"] is True
+    finally:
+        litellm.enable_gemini_default_thinking_level_low = original_force_low_flag
+
+
+def test_anthropic_thinking_param_to_gemini_3_force_low_feature_flag():
+    """
+    Test that Gemini 3 thinkingLevel forced mapping is available behind a feature flag.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
     )
+    from litellm.types.llms.anthropic import AnthropicThinkingParam
 
-    # For Gemini 3, should use thinkingLevel, not thinkingBudget
-    assert "thinkingLevel" in result, "Should have thinkingLevel for Gemini 3"
-    assert "thinkingBudget" not in result, "Should NOT have thinkingBudget for Gemini 3"
-    assert result["includeThoughts"] is True
-    assert result["thinkingLevel"] in [
-        "minimal",
-        "low",
-    ], "thinkingLevel should be 'minimal' or 'low'"
+    original_force_low_flag = litellm.enable_gemini_default_thinking_level_low
+    litellm.enable_gemini_default_thinking_level_low = True
 
-    # Test 2: Anthropic thinking disabled for Gemini 3
-    thinking_param_disabled: AnthropicThinkingParam = {
-        "type": "disabled",
-        "budget_tokens": None,
-    }
-
-    result_disabled = VertexGeminiConfig._map_thinking_param(
-        thinking_param=thinking_param_disabled,
-        model="gemini-3-pro-preview",
-    )
-
-    assert result_disabled.get("includeThoughts") is False
-    assert (
-        "thinkingLevel" not in result_disabled
-        or result_disabled.get("thinkingLevel") is None
-    )
-
-    # Test 3: Budget tokens = 0 for Gemini 3
-    thinking_param_zero: AnthropicThinkingParam = {
+    thinking_param: AnthropicThinkingParam = {
         "type": "enabled",
-        "budget_tokens": 0,
+        "budget_tokens": 10000,
     }
 
-    result_zero = VertexGeminiConfig._map_thinking_param(
-        thinking_param=thinking_param_zero,
-        model="gemini-3-flash",
-    )
+    try:
+        result_flash = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-flash",
+        )
+        assert result_flash["thinkingLevel"] == "minimal"
+        assert result_flash["includeThoughts"] is True
 
-    assert result_zero["includeThoughts"] is False
-    assert (
-        "thinkingLevel" not in result_zero or result_zero.get("thinkingLevel") is None
-    )
-
-    # Test 4: Fiercefalcon model (Gemini 3 Flash checkpoint) should use thinkingLevel
-    result_gemini3flashpreview = VertexGeminiConfig._map_thinking_param(
-        thinking_param=thinking_param,
-        model="gemini-3-flash-preview",
-    )
-
-    assert (
-        "thinkingLevel" in result_gemini3flashpreview
-    ), "Should have thinkingLevel for gemini-3-flash-preview"
-    assert (
-        "thinkingBudget" not in result_gemini3flashpreview
-    ), "Should NOT have thinkingBudget for gemini-3-flash-preview"
-    assert result_gemini3flashpreview["includeThoughts"] is True
+        result_pro = VertexGeminiConfig._map_thinking_param(
+            thinking_param=thinking_param,
+            model="gemini-3-pro-preview",
+        )
+        assert result_pro["thinkingLevel"] == "low"
+        assert result_pro["includeThoughts"] is True
+    finally:
+        litellm.enable_gemini_default_thinking_level_low = original_force_low_flag
 
 
 def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
@@ -1465,7 +1495,7 @@ def test_anthropic_thinking_param_to_gemini_2_thinkingBudget():
 def test_anthropic_thinking_param_via_map_openai_params():
     """
     Test that the thinking parameter is correctly transformed through the full map_openai_params flow
-    for Gemini 3 models, resulting in thinkingConfig with thinkingLevel.
+    for Gemini 3 models, without forcing thinkingLevel by default.
 
     This tests the full integration from Anthropic API format to Gemini format.
     """
@@ -1492,13 +1522,11 @@ def test_anthropic_thinking_param_via_map_openai_params():
         drop_params=False,
     )
 
-    # Check that thinkingConfig was created with thinkingLevel
+    # Check that thinkingConfig was created without forced thinkingLevel
     assert "thinkingConfig" in result, "Should have thinkingConfig in optional_params"
     thinking_config = result["thinkingConfig"]
-    assert "thinkingLevel" in thinking_config, "Should have thinkingLevel for Gemini 3"
-    assert (
-        "thinkingBudget" not in thinking_config
-    ), "Should NOT have thinkingBudget for Gemini 3"
+    assert "thinkingLevel" not in thinking_config, "Should not force thinkingLevel for Gemini 3 by default"
+    assert "thinkingBudget" not in thinking_config, "Should NOT have thinkingBudget for Gemini 3"
     assert thinking_config["includeThoughts"] is True
 
     # Test with Gemini 2 model
