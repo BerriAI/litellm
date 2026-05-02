@@ -10,7 +10,84 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
+    remove_custom_field_from_tools,
+    strip_custom_from_tools_list,
+)
+
+
+def test_strip_custom_from_tools_list():
+    """
+    Ensure strip_custom_from_tools_list removes custom field from tools.
+
+    Claude Code sends custom: {eager_input_streaming: true} or custom: {input_examples: [...]}
+    on tool definitions. Bedrock Converse rejects these for some models (e.g. Haiku 4.5)
+    with "Extra inputs are not permitted".
+
+    Ref: https://github.com/BerriAI/litellm/issues/23825
+    Ref: https://github.com/BerriAI/litellm/issues/16679
+    """
+    # Case 1: OpenAI format - custom at tool level
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            "custom": {"eager_input_streaming": True},
+        },
+    ]
+    strip_custom_from_tools_list(tools)
+    assert "custom" not in tools[0]
+    assert tools[0]["function"]["name"] == "get_weather"
+
+    # Case 2: OpenAI format - custom nested in function
+    tools2 = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "parameters": {},
+                "custom": {"input_examples": [{"query": "test"}]},
+            },
+        },
+    ]
+    strip_custom_from_tools_list(tools2)
+    assert "custom" not in tools2[0]["function"]
+
+    # Case 3: Anthropic format - custom at top level
+    tools3 = [
+        {
+            "name": "some_tool",
+            "input_schema": {"type": "object"},
+            "custom": {"eager_input_streaming": True},
+        },
+    ]
+    strip_custom_from_tools_list(tools3)
+    assert "custom" not in tools3[0]
+    assert tools3[0]["name"] == "some_tool"
+
+    # Case 4: empty list (no-op)
+    tools4 = []
+    strip_custom_from_tools_list(tools4)
+    assert tools4 == []
+
+    # Case 5: None (no-op)
+    strip_custom_from_tools_list(None)  # type: ignore
+
+
+def test_remove_custom_field_from_tools_uses_strip_custom_from_tools_list():
+    """Ensure remove_custom_field_from_tools delegates to strip_custom_from_tools_list."""
+    request = {
+        "tools": [
+            {"name": "tool1", "input_schema": {}, "custom": {"eager_input_streaming": True}},
+        ]
+    }
+    remove_custom_field_from_tools(request)
+    assert "custom" not in request["tools"][0]
 
 
 def test_deepseek_cris():
