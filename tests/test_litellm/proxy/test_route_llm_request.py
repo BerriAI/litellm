@@ -241,6 +241,53 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["timeout"] == 30
 
 
+def test_mock_testing_kwarg_names_matches_dataclass():
+    """``_MOCK_TESTING_KWARG_NAMES`` is hardcoded to avoid a cyclic import
+    against ``litellm.types.router``. This test guards against drift —
+    if a new ``mock_testing_*`` field is added to ``MockRouterTestingParams``
+    the strip list must be updated to keep covering it."""
+    from dataclasses import fields
+
+    from litellm.proxy.route_llm_request import _MOCK_TESTING_KWARG_NAMES
+    from litellm.types.router import MockRouterTestingParams
+
+    assert set(_MOCK_TESTING_KWARG_NAMES) == {
+        f.name for f in fields(MockRouterTestingParams)
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mock_flag",
+    [
+        "mock_testing_fallbacks",
+        "mock_testing_context_fallbacks",
+        "mock_testing_content_policy_fallbacks",
+    ],
+)
+async def test_route_request_strips_mock_testing_flags(mock_flag):
+    """VERIA-44: router-internal testing flags must not survive a
+    user-supplied request body. Without this strip, an attacker can
+    combine ``mock_testing_fallbacks=true`` with an unauthorized fallback
+    in ``router_settings_override`` to deterministically execute requests
+    against restricted models."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        mock_flag: True,
+    }
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "ok"
+
+    await route_request(data, llm_router, None, "acompletion")
+
+    call_kwargs = llm_router.acompletion.call_args[1]
+    assert mock_flag not in call_kwargs
+    # The flag is also gone from the original data dict so any subsequent
+    # processing (e.g. logging) doesn't see it either.
+    assert mock_flag not in data
+
+
 @pytest.mark.parametrize(
     "route_type", ["agenerate_content", "agenerate_content_stream"]
 )
