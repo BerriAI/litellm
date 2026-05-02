@@ -26,6 +26,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -8948,7 +8949,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -9015,7 +9019,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -9214,7 +9221,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
@@ -9297,7 +9307,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
@@ -9363,7 +9376,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -9428,7 +9444,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",

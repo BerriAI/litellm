@@ -28,6 +28,8 @@ import { useBudgets, useDeleteBudget } from "@/app/(dashboard)/hooks/budgets/use
 import BudgetModal from "./budget_modal";
 import EditBudgetModal from "./edit_budget_modal";
 import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK_PYTHON_CODE } from "./constants";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isProxyAdminRole } from "@/utils/roles";
 
 interface BudgetSettingsPageProps {
   accessToken: string | null;
@@ -46,6 +48,10 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
+
+  const { userRole } = useAuthorized();
+  // Admin Viewer follows the read-parity rule: see budgets, no writes.
+  const canModify = isProxyAdminRole(userRole ?? "");
 
   const { data: budgetList = [] } = useBudgets();
   const deleteBudget = useDeleteBudget();
@@ -89,9 +95,11 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      <Button size="sm" variant="primary" className="mb-2" onClick={() => setIsCreateModelVisible(true)}>
-        + Create Budget
-      </Button>
+      {canModify && (
+        <Button size="sm" variant="primary" className="mb-2" onClick={() => setIsCreateModelVisible(true)}>
+          + Create Budget
+        </Button>
+      )}
       <TabGroup>
         <TabList>
           <Tab>Budgets</Tab>
@@ -133,18 +141,22 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                           <TableCell>{value.max_budget ? value.max_budget : "n/a"}</TableCell>
                           <TableCell>{value.tpm_limit ? value.tpm_limit : "n/a"}</TableCell>
                           <TableCell>{value.rpm_limit ? value.rpm_limit : "n/a"}</TableCell>
-                          <TableIconActionButton
-                            variant="Edit"
-                            tooltipText="Edit budget"
-                            onClick={() => handleEditCall(value)}
-                            dataTestId="edit-budget-button"
-                          />
-                          <TableIconActionButton
-                            variant="Delete"
-                            tooltipText="Delete budget"
-                            onClick={() => handleDeleteClick(value)}
-                            dataTestId="delete-budget-button"
-                          />
+                          {canModify && (
+                            <>
+                              <TableIconActionButton
+                                variant="Edit"
+                                tooltipText="Edit budget"
+                                onClick={() => handleEditCall(value)}
+                                dataTestId="edit-budget-button"
+                              />
+                              <TableIconActionButton
+                                variant="Delete"
+                                tooltipText="Delete budget"
+                                onClick={() => handleDeleteClick(value)}
+                                dataTestId="delete-budget-button"
+                              />
+                            </>
+                          )}
                         </TableRow>
                       ))}
                   </TableBody>
