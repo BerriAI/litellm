@@ -134,6 +134,21 @@ class TestRunwayMLVideoTransformation:
         with pytest.raises(ValueError, match="still processing"):
             self.config._extract_video_url_from_response(processing_response)
 
+    def test_transform_video_status_encodes_video_id_path_segment(self):
+        """Test task IDs are encoded before being appended to Runway URLs."""
+        url, params = self.config.transform_video_status_retrieve_request(
+            video_id="../../tasks/other?x=1#frag",
+            api_base="https://api.dev.runwayml.com/v1",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert (
+            url
+            == "https://api.dev.runwayml.com/v1/tasks/..%2F..%2Ftasks%2Fother%3Fx%3D1%23frag"
+        )
+        assert params == {}
+
     def test_full_video_workflow(self):
         """Test complete video generation workflow from creation to status check."""
         config = RunwayMLVideoConfig()
