@@ -1530,6 +1530,17 @@ def _allow_public_health_readiness_details() -> bool:
     return general_settings.get("allow_public_health_readiness_details") is True
 
 
+async def _set_public_readiness_status(response: Response) -> None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return
+
+    db_health_status = await _db_health_readiness_check()
+    if db_health_status["status"] != "connected":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+
 @router.get(
     "/health/readiness",
     tags=["health"],
@@ -1542,6 +1553,8 @@ async def health_readiness(response: Response):
     """
     if _allow_public_health_readiness_details():
         return await _get_health_readiness_details(response=response)
+
+    await _set_public_readiness_status(response=response)
     return {"status": "healthy"}
 
 
