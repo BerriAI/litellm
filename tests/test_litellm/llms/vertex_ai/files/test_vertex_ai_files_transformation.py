@@ -210,6 +210,47 @@ class TestTransformFileContent:
         assert logging_obj.optional_params == original_optional_params
         assert result.response is not raw_response
 
+    def test_should_skip_batch_output_transformation_when_opt_out_flag_set(
+        self, config, monkeypatch
+    ):
+        """When `litellm.disable_vertex_batch_output_transformation` is True the
+        Vertex predictions.jsonl content must be returned untouched, so callers
+        that parse raw `candidates`/`modelVersion` keep working."""
+        import litellm
+
+        raw_jsonl = json.dumps(
+            {
+                "status": "",
+                "processed_time": "2024-11-01T18:13:16.826+00:00",
+                "request": {"labels": {"litellm_custom_id": "request-1"}},
+                "response": {
+                    "candidates": [
+                        {"content": {"parts": [{"text": "ok"}], "role": "model"}}
+                    ],
+                    "modelVersion": "gemini-2.0-flash-001@default",
+                },
+            }
+        ).encode("utf-8")
+        raw_response = httpx.Response(
+            status_code=200,
+            content=raw_jsonl,
+            headers={"content-type": "application/octet-stream"},
+            request=httpx.Request("GET", "https://example.com"),
+        )
+
+        monkeypatch.setattr(
+            litellm, "disable_vertex_batch_output_transformation", True, raising=False
+        )
+
+        result = config.transform_file_content_response(
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+            litellm_params={},
+        )
+
+        assert isinstance(result, HttpxBinaryResponseContent)
+        assert result.response.content == raw_jsonl
+
 
 class TestTransformDeleteFile:
     def test_should_build_correct_gcs_delete_url(self, config):

@@ -9,6 +9,7 @@ import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
 
+import litellm
 from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -573,6 +574,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         is returned as-is to maintain backward compatibility.
         """
         try:
+            # Allow users to opt out of automatic Vertex batch output -> OpenAI
+            # transformation, e.g. if they consume raw `predictions.jsonl` directly.
+            if getattr(litellm, "disable_vertex_batch_output_transformation", False):
+                return HttpxBinaryResponseContent(response=raw_response)
+
             # Try to transform batch output if it's a JSONL file
             content = raw_response.content
             if content:
