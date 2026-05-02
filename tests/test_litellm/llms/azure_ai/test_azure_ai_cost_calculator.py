@@ -474,6 +474,19 @@ def test_azure_ai_deepseek_v4_flash_model_info(model_name: str):
     assert model_info["max_tokens"] == 1_000_000
     assert model_info["input_cost_per_token"] == pytest.approx(1.03e-06)
     assert model_info["output_cost_per_token"] == pytest.approx(4.12e-06)
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_tool_choice"] is True
+
+
+def test_azure_ai_deepseek_v4_flash_raw_model_cost_entry():
+    model_info = litellm.model_cost["azure_ai/deepseek-v4-flash"]
+
+    assert model_info["supported_modalities"] == ["text"]
+    assert model_info["supported_output_modalities"] == ["text"]
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_tool_choice"] is True
 
 
 @pytest.mark.parametrize(
