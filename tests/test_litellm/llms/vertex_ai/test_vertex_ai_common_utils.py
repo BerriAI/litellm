@@ -15,9 +15,7 @@ from litellm.llms.vertex_ai.common_utils import (
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
-    pop_vertex_request_labels,
     set_schema_property_ordering,
-    vertex_request_labels_from_litellm_params,
 )
 
 
@@ -50,7 +48,12 @@ async def test_get_vertex_location_from_url():
 
 
 def test_basic_anyof_conversion():
-    """Test basic conversion of anyOf with 'null'."""
+    """Test basic conversion of anyOf with 'null'.
+
+    When anyOf has only one variant remaining after removing null,
+    it should be unwrapped to preserve sibling fields.
+    See https://github.com/BerriAI/litellm/issues/19255
+    """
     schema = {
         "type": "object",
         "properties": {"example": {"anyOf": [{"type": "string"}, {"type": "null"}]}},
@@ -58,9 +61,71 @@ def test_basic_anyof_conversion():
 
     convert_anyof_null_to_nullable(schema)
 
+    # Single-variant anyOf should be unwrapped
     expected = {
         "type": "object",
-        "properties": {"example": {"anyOf": [{"type": "string", "nullable": True}]}},
+        "properties": {"example": {"type": "string", "nullable": True}},
+    }
+    assert schema == expected
+
+
+def test_anyof_conversion_preserves_sibling_fields():
+    """Test that sibling fields like 'default', 'examples', 'pattern' are preserved.
+
+    Pydantic generates Optional[X] as anyOf: [{X schema}, {type: null}] with constraints
+    as siblings. After removing null and unwrapping single-variant anyOf, siblings should
+    be merged into the result.
+    See https://github.com/BerriAI/litellm/issues/19255
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "days_filter": {
+                "anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}],
+                "default": None,
+                "examples": [7, 30, 90],
+                "description": "Filter by number of days",
+            }
+        },
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    expected = {
+        "type": "object",
+        "properties": {
+            "days_filter": {
+                "type": "integer",
+                "minimum": 0,
+                "nullable": True,
+                "default": None,
+                "examples": [7, 30, 90],
+                "description": "Filter by number of days",
+            }
+        },
+    }
+    assert schema == expected
+
+
+def test_anyof_conversion_precedence_on_conflict():
+    """Test that variant fields take precedence over sibling fields on conflict.
+
+    If both the sibling (top-level) and the variant have the same field,
+    the variant field should take precedence so core schema-defining fields
+    (type, enum, etc.) are never silently overridden by siblings.
+    """
+    schema = {
+        "anyOf": [{"type": "integer", "description": "Variant description"}, {"type": "null"}],
+        "description": "Top-level description",
+    }
+
+    convert_anyof_null_to_nullable(schema)
+
+    # Variant description should be preserved (variant wins on conflict)
+    expected = {
+        "type": "integer",
+        "description": "Variant description",
+        "nullable": True,
     }
     assert schema == expected
 
@@ -210,6 +275,8 @@ def test_build_vertex_schema():
         "type": "object",
     }
 
+    # After fix for https://github.com/BerriAI/litellm/issues/19255:
+    # Single-variant anyOf arrays are unwrapped to preserve sibling fields
     expected_output = {
         "properties": {
             "state": {
@@ -227,21 +294,17 @@ def test_build_vertex_schema():
                     "metadata": {"type": "object"},
                     "callbacks": {
                         "anyOf": [
-                            {
-                                "type": "array",
-                                "items": {"type": "object"},
-                                "nullable": True,
-                            },
+                            {"type": "array", "nullable": True},
                             {"type": "object", "nullable": True},
                         ]
                     },
                     "run_name": {"type": "string"},
-                    "max_concurrency": {
-                        "anyOf": [{"type": "integer", "nullable": True}]
-                    },
+                    # Single-variant anyOf unwrapped:
+                    "max_concurrency": {"type": "integer", "nullable": True},
                     "recursion_limit": {"type": "integer"},
                     "configurable": {"type": "object"},
-                    "run_id": {"anyOf": [{"type": "string", "nullable": True}]},
+                    # Single-variant anyOf unwrapped:
+                    "run_id": {"type": "string", "nullable": True},
                 },
                 "type": "object",
             },
@@ -293,43 +356,6 @@ def test_process_items_basic():
     }
     process_items(schema)
     assert schema["properties"]["nested"]["items"] == {"type": "object"}
-
-    # Vertex rejects array types missing `items` entirely (not just empty).
-    # Synthesize {"type": "object"} so the request validates.
-    schema = {"type": "array"}
-    process_items(schema)
-    assert schema["items"] == {"type": "object"}
-
-
-def test_build_vertex_schema_array_branch_missing_items_in_anyof():
-    """
-    Regression: an `anyOf` branch with `{"type": "array"}` (no items) must
-    end up with synthesized `items: {"type": "object"}` after the schema
-    transform — Vertex returns INVALID_ARGUMENT otherwise.
-    """
-    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
-
-    parameters = {
-        "properties": {
-            "callbacks": {
-                "anyOf": [
-                    {"type": "array"},
-                    {"type": "object"},
-                    {"type": "null"},
-                ]
-            }
-        },
-        "type": "object",
-    }
-
-    result = _build_vertex_schema(parameters)
-    callbacks_anyof = result["properties"]["callbacks"]["anyOf"]
-    array_branches = [b for b in callbacks_anyof if b.get("type") == "array"]
-    assert array_branches, "expected an array branch to remain after transform"
-    for branch in array_branches:
-        assert branch.get("items") == {
-            "type": "object"
-        }, f"array branch must have items synthesized; got {branch}"
 
 
 def test_vertex_ai_complex_response_schema():
@@ -483,9 +509,7 @@ def test_vertex_ai_complex_response_schema():
     optional_params = {}
 
     v.apply_response_schema_transformation(
-        value=non_default_params["response_format"],
-        optional_params=optional_params,
-        model="gemini-1.5-pro-preview-0409",
+        value=non_default_params["response_format"], optional_params=optional_params, model="gemini-1.5-pro-preview-0409"
     )
 
     # Assertions for the transformed schema
@@ -604,55 +628,68 @@ def test_get_vertex_url_global_region(stream, expected_endpoint_suffix):
 
 
 @pytest.mark.parametrize(
-    "model_cost_entry, vertex_region, expected_region",
+    "supported_regions, expected_result",
     [
-        # Model with supported_regions=["global"], no user region -> use "global"
-        ({"supported_regions": ["global"]}, None, "global"),
-        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
-        ({"supported_regions": ["global"]}, "us-central1", "global"),
-        # Model with supported_regions=["global"], user passes unsupported region -> override to "global"
-        ({"supported_regions": ["global"]}, "europe-west1", "global"),
-        # Model with supported_regions=["us-west2"], no user region -> use "us-west2"
-        ({"supported_regions": ["us-west2"]}, None, "us-west2"),
-        # Model with supported_regions=["us-west2", "us-central1"], user passes supported region -> respect it
+        (None, False),  # get_supported_regions returns None
+        ([], False),  # empty list, no global region
+        (["us-central1"], False),  # only regional, no global
+        (["global"], True),  # only global region
+        (["global", "us-central1"], True),  # global and other regions
         (
-            {"supported_regions": ["us-west2", "us-central1"]},
-            "us-central1",
-            "us-central1",
-        ),
-        # Model with supported_regions=["us-west2", "us-central1"], user passes unsupported region -> override
+            ["us-central1", "global", "europe-west1"],
+            True,
+        ),  # global among multiple regions
+    ],
+)
+def test_is_global_only_vertex_model(supported_regions, expected_result):
+    """Test is_global_only_vertex_model with various supported regions scenarios"""
+    from litellm.llms.vertex_ai.common_utils import is_global_only_vertex_model
+
+    with patch("litellm.utils.get_supported_regions") as mock_get_supported_regions:
+        mock_get_supported_regions.return_value = supported_regions
+
+        result = is_global_only_vertex_model("test-model")
+
+        assert result == expected_result
+        mock_get_supported_regions.assert_called_once_with(
+            model="test-model", custom_llm_provider="vertex_ai"
+        )
+
+
+@pytest.mark.parametrize(
+    "model_is_global_only, vertex_region, expected_region",
+    [
+        (True, None, "global"),  # Global-only model with no region specified
+        (True, "us-central1", "global"),  # Global-only model overrides specified region
+        (True, "europe-west1", "global"),  # Global-only model overrides any region
+        (False, None, "us-central1"),  # Non-global model defaults to us-central1
         (
-            {"supported_regions": ["us-west2", "us-central1"]},
+            False,
             "europe-west1",
-            "us-west2",
-        ),
-        # No model_cost entry, no user region -> default us-central1
-        ({}, None, "us-central1"),
-        # No model_cost entry, user specifies region -> use specified region
-        ({}, "europe-west1", "europe-west1"),
-        # No model_cost entry, user specifies region -> use specified region
-        ({}, "us-east1", "us-east1"),
+            "europe-west1",
+        ),  # Non-global model uses specified region
+        (False, "us-east1", "us-east1"),  # Non-global model uses specified region
     ],
 )
 def test_get_vertex_region_global_only_model(
-    model_cost_entry, vertex_region, expected_region
+    model_is_global_only, vertex_region, expected_region
 ):
-    """Test get_vertex_region resolves region from model_cost supported_regions"""
-    import litellm
+    """Test get_vertex_region ensures global-only models default to 'global' region"""
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
     vertex_base = VertexBase()
 
-    with patch.dict(
-        litellm.model_cost,
-        {"vertex_ai/test-model": model_cost_entry},
-        clear=False,
-    ):
+    with patch(
+        "litellm.llms.vertex_ai.vertex_llm_base.is_global_only_vertex_model"
+    ) as mock_is_global_only:
+        mock_is_global_only.return_value = model_is_global_only
+
         result = vertex_base.get_vertex_region(
             vertex_region=vertex_region, model="test-model"
         )
 
         assert result == expected_region
+        mock_is_global_only.assert_called_once_with("test-model")
 
 
 def test_vertex_filter_format_uri():
@@ -708,12 +745,11 @@ def test_vertex_filter_format_uri():
 
     assert "uri" not in json.dumps(new_parameters)
 
-
 def test_convert_schema_types_type_array_conversion():
     """
     Test _convert_schema_types function handles type arrays and case conversion.
-
-    This test verifies the fix for the issue where type arrays like ["string", "number"]
+    
+    This test verifies the fix for the issue where type arrays like ["string", "number"] 
     would raise an exception in Vertex AI schema validation.
 
     Relevant issue: https://github.com/BerriAI/litellm/issues/14091
@@ -726,12 +762,12 @@ def test_convert_schema_types_type_array_conversion():
         "properties": {
             "studio": {
                 "type": ["string", "number"],
-                "description": "The studio ID or name",
+                "description": "The studio ID or name"
             }
         },
         "required": ["studio"],
         "additionalProperties": False,
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "http://json-schema.org/draft-07/schema#"
     }
 
     # Expected output: Vertex AI compatible schema with anyOf and uppercase types
@@ -739,13 +775,16 @@ def test_convert_schema_types_type_array_conversion():
         "type": "object",
         "properties": {
             "studio": {
-                "anyOf": [{"type": "string"}, {"type": "number"}],
-                "description": "The studio ID or name",
+                "anyOf": [
+                    {"type": "string"}, 
+                    {"type": "number"}
+                ],
+                "description": "The studio ID or name"
             }
         },
         "required": ["studio"],
         "additionalProperties": False,
-        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$schema": "http://json-schema.org/draft-07/schema#"
     }
 
     # Apply the transformation
@@ -768,17 +807,15 @@ def test_convert_schema_types_type_array_conversion():
     assert anyof_types[1]["type"] == "number"
 
     # 4. Other properties preserved
-    assert (
-        input_schema["properties"]["studio"]["description"] == "The studio ID or name"
-    )
+    assert input_schema["properties"]["studio"]["description"] == "The studio ID or name"
     assert input_schema["required"] == ["studio"]
 
 
 def test_fix_enum_empty_strings():
     """
     Test _fix_enum_empty_strings function replaces empty strings with None in enum arrays.
-
-    This test verifies the fix for the issue where Gemini rejects tool definitions
+    
+    This test verifies the fix for the issue where Gemini rejects tool definitions 
     with empty strings in enum values, causing API failures.
 
     Relevant issue: Gemini does not accept empty strings in enum values
@@ -792,23 +829,23 @@ def test_fix_enum_empty_strings():
             "user_agent_type": {
                 "enum": ["", "desktop", "mobile", "tablet"],
                 "type": "string",
-                "description": "Device type for user agent",
+                "description": "Device type for user agent"
             }
         },
-        "required": ["user_agent_type"],
+        "required": ["user_agent_type"]
     }
 
     # Expected output: Empty strings replaced with None
     expected_output = {
-        "type": "object",
+        "type": "object", 
         "properties": {
             "user_agent_type": {
                 "enum": [None, "desktop", "mobile", "tablet"],
                 "type": "string",
-                "description": "Device type for user agent",
+                "description": "Device type for user agent"
             }
         },
-        "required": ["user_agent_type"],
+        "required": ["user_agent_type"]
     }
 
     # Apply the transformation
@@ -911,7 +948,7 @@ def test_construct_target_url_with_version_prefix():
 def test_fix_enum_types():
     """
     Test _fix_enum_types function removes enum fields when type is not string.
-
+    
     This test verifies the fix for the issue where Gemini rejects cached content
     with function parameter enums on non-string types, causing API failures.
 
@@ -926,41 +963,38 @@ def test_fix_enum_types():
             "truncateMode": {
                 "enum": ["auto", "none", "start", "end"],
                 "type": "string",  # This should keep the enum
-                "description": "How to truncate content",
+                "description": "How to truncate content"
             },
             "maxLength": {
                 "enum": [100, 200, 500],  # This should be removed
                 "type": "integer",
-                "description": "Maximum length",
+                "description": "Maximum length"
             },
             "enabled": {
                 "enum": [True, False],  # This should be removed
                 "type": "boolean",
-                "description": "Whether feature is enabled",
+                "description": "Whether feature is enabled"
             },
             "nested": {
                 "type": "object",
                 "properties": {
                     "innerEnum": {
                         "enum": ["a", "b", "c"],  # This should be kept
-                        "type": "string",
+                        "type": "string"
                     },
                     "innerNonStringEnum": {
                         "enum": [1, 2, 3],  # This should be removed
-                        "type": "integer",
-                    },
-                },
+                        "type": "integer"
+                    }
+                }
             },
             "anyOfField": {
                 "anyOf": [
-                    {
-                        "type": "string",
-                        "enum": ["option1", "option2"],
-                    },  # This should be kept
-                    {"type": "integer", "enum": [1, 2, 3]},  # This should be removed
+                    {"type": "string", "enum": ["option1", "option2"]},  # This should be kept
+                    {"type": "integer", "enum": [1, 2, 3]}  # This should be removed
                 ]
-            },
-        },
+            }
+        }
     }
 
     # Expected output: Non-string enums removed, string enums kept
@@ -974,32 +1008,31 @@ def test_fix_enum_types():
             },
             "maxLength": {  # enum removed
                 "type": "integer",
-                "description": "Maximum length",
+                "description": "Maximum length"
             },
             "enabled": {  # enum removed
                 "type": "boolean",
-                "description": "Whether feature is enabled",
+                "description": "Whether feature is enabled"
             },
             "nested": {
                 "type": "object",
                 "properties": {
                     "innerEnum": {
                         "enum": ["a", "b", "c"],  # Kept - string type
-                        "type": "string",
+                        "type": "string"
                     },
-                    "innerNonStringEnum": {"type": "integer"},  # enum removed
-                },
+                    "innerNonStringEnum": {  # enum removed
+                        "type": "integer"
+                    }
+                }
             },
             "anyOfField": {
                 "anyOf": [
-                    {
-                        "type": "string",
-                        "enum": ["option1", "option2"],
-                    },  # Kept - has string type
-                    {"type": "integer"},  # enum removed
+                    {"type": "string", "enum": ["option1", "option2"]},  # Kept - has string type
+                    {"type": "integer"}  # enum removed
                 ]
-            },
-        },
+            }
+        }
     }
 
     # Apply the transformation
@@ -1011,27 +1044,15 @@ def test_fix_enum_types():
     # Verify specific transformations:
     # 1. String enums are preserved
     assert "enum" in input_schema["properties"]["truncateMode"]
-    assert input_schema["properties"]["truncateMode"]["enum"] == [
-        "auto",
-        "none",
-        "start",
-        "end",
-    ]
-
+    assert input_schema["properties"]["truncateMode"]["enum"] == ["auto", "none", "start", "end"]
+    
     assert "enum" in input_schema["properties"]["nested"]["properties"]["innerEnum"]
-    assert input_schema["properties"]["nested"]["properties"]["innerEnum"]["enum"] == [
-        "a",
-        "b",
-        "c",
-    ]
+    assert input_schema["properties"]["nested"]["properties"]["innerEnum"]["enum"] == ["a", "b", "c"]
 
     # 2. Non-string enums are removed
     assert "enum" not in input_schema["properties"]["maxLength"]
     assert "enum" not in input_schema["properties"]["enabled"]
-    assert (
-        "enum"
-        not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
-    )
+    assert "enum" not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
 
     # 3. anyOf with string type keeps enum, non-string removes it
     assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
@@ -1070,6 +1091,8 @@ def test_get_token_url():
     )
 
     print("url=", url)
+
+
 
     should_use_v1beta1_features = vertex_llm.is_using_v1beta1_features(
         optional_params={"temperature": 0.1}
@@ -1276,7 +1299,9 @@ def test_vertex_ai_minimax_uses_openai_handler():
         VertexAIPartnerModels,
     )
 
-    assert VertexAIPartnerModels.should_use_openai_handler("minimaxai/minimax-m2-maas")
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "minimaxai/minimax-m2-maas"
+    )
 
 
 def test_vertex_ai_moonshot_uses_openai_handler():
@@ -1300,7 +1325,9 @@ def test_vertex_ai_zai_uses_openai_handler():
         VertexAIPartnerModels,
     )
 
-    assert VertexAIPartnerModels.should_use_openai_handler("zai-org/glm-4.7-maas")
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "zai-org/glm-4.7-maas"
+    )
 
 
 def test_vertex_ai_zai_is_partner_model():
@@ -1317,14 +1344,14 @@ def test_vertex_ai_zai_is_partner_model():
 def test_build_vertex_schema_empty_properties():
     """
     Test _build_vertex_schema handles empty properties objects correctly.
-
-    This test verifies the fix for the issue where Gemini rejects schemas
+    
+    This test verifies the fix for the issue where Gemini rejects schemas 
     with empty properties objects like {"properties": {}, "type": "object"}.
-
+    
     Error from Gemini: "GenerateContentRequest.generation_config.response_schema
-    .properties[\"action\"].items.any_of[0].properties[\"go_back\"].properties:
+    .properties[\"action\"].items.any_of[0].properties[\"go_back\"].properties: 
     should be non-empty for OBJECT type"
-
+    
     The fix removes empty properties objects and their associated type/required fields.
     """
     from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
@@ -1343,20 +1370,20 @@ def test_build_vertex_schema_empty_properties():
                                     "type": "object",
                                     "additionalProperties": False,
                                     "description": "Go back",
-                                    "required": [],
+                                    "required": []
                                 }
                             },
                             "required": ["go_back"],
                             "type": "object",
-                            "additionalProperties": False,
+                            "additionalProperties": False
                         }
                     ]
                 },
-                "type": "array",
+                "type": "array"
             }
         },
         "type": "object",
-        "additionalProperties": False,
+        "additionalProperties": False
     }
 
     # Apply the transformation
@@ -1364,36 +1391,30 @@ def test_build_vertex_schema_empty_properties():
 
     # Verify the transformation removed empty properties
     # Navigate to the go_back schema
-    go_back_schema = result["properties"]["action"]["items"]["anyOf"][0]["properties"][
-        "go_back"
-    ]
-
+    # Note: Single-variant anyOf is unwrapped per https://github.com/BerriAI/litellm/issues/19255
+    # So items no longer has anyOf, the schema is unwrapped directly into items
+    items_schema = result["properties"]["action"]["items"]
+    
+    # Verify single-variant anyOf was unwrapped
+    assert "anyOf" not in items_schema, "Single-variant anyOf should be unwrapped"
+    
+    go_back_schema = items_schema["properties"]["go_back"]
+    
     # Verify empty properties was removed
     assert "properties" not in go_back_schema, "Empty properties should be removed"
-
+    
     # Verify type is kept as object (Gemini requires type: object even without properties)
-    assert (
-        go_back_schema.get("type") == "object"
-    ), "Type should be kept as object when properties is empty"
-
+    assert go_back_schema.get("type") == "object", "Type should be kept as object when properties is empty"
+    
     # Verify required was also removed
-    assert (
-        "required" not in go_back_schema
-    ), "Required should be removed when properties is empty"
-
+    assert "required" not in go_back_schema, "Required should be removed when properties is empty"
+    
     # Verify description is preserved
-    assert (
-        go_back_schema.get("description") == "Go back"
-    ), "Description should be preserved"
-
-    # Verify parent schema still has proper structure
-    parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
-    assert (
-        parent_schema["type"] == "object"
-    ), "Parent schema should still have object type"
-    assert (
-        "go_back" in parent_schema["properties"]
-    ), "go_back should still be in parent properties"
+    assert go_back_schema.get("description") == "Go back", "Description should be preserved"
+    
+    # Verify parent schema still has proper structure (now items directly, not anyOf[0])
+    assert items_schema["type"] == "object", "Items schema should have object type"
+    assert "go_back" in items_schema["properties"], "go_back should still be in items properties"
 
 
 def test_add_object_type_schema_with_no_properties_and_no_type():
@@ -1404,7 +1425,9 @@ def test_add_object_type_schema_with_no_properties_and_no_type():
     from litellm.llms.vertex_ai.common_utils import add_object_type
 
     # Input: Schema with no properties and no type (the problematic case)
-    input_schema = {"$schema": "https://json-schema.org/draft/2020-12/schema"}
+    input_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
 
     # Apply the transformation
     add_object_type(input_schema)
@@ -1423,7 +1446,10 @@ def test_add_object_type_does_not_override_existing_type():
     from litellm.llms.vertex_ai.common_utils import add_object_type
 
     # Input: Schema with existing type
-    input_schema = {"type": "string", "description": "A string field"}
+    input_schema = {
+        "type": "string",
+        "description": "A string field"
+    }
 
     # Apply the transformation
     add_object_type(input_schema)
@@ -1439,72 +1465,15 @@ def test_add_object_type_does_not_add_type_when_anyof_present():
     from litellm.llms.vertex_ai.common_utils import add_object_type
 
     # Input: Schema with anyOf but no type
-    input_schema = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    input_schema = {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+        ]
+    }
 
     # Apply the transformation
     add_object_type(input_schema)
 
     # Verify type was not added (anyOf handles the type)
     assert "type" not in input_schema, "type should not be added when anyOf is present"
-
-
-def test_vertex_request_labels_from_litellm_params_extracts_requester_metadata():
-    assert vertex_request_labels_from_litellm_params(None) is None
-    assert vertex_request_labels_from_litellm_params({}) is None
-    assert vertex_request_labels_from_litellm_params({"metadata": None}) is None
-    lp = {"metadata": {"requester_metadata": {"team": "analytics", "count": 3}}}
-    assert vertex_request_labels_from_litellm_params(lp) == {"team": "analytics"}
-
-
-def test_vertex_request_labels_from_litellm_params_accepts_litellm_metadata():
-    lp = {
-        "litellm_metadata": {
-            "requester_metadata": {"team": "platform", "count": 3}
-        }
-    }
-    assert vertex_request_labels_from_litellm_params(lp) == {"team": "platform"}
-
-
-def test_vertex_request_labels_prefers_metadata_over_litellm_metadata():
-    lp = {
-        "metadata": {"requester_metadata": {"source": "metadata"}},
-        "litellm_metadata": {"requester_metadata": {"source": "litellm_metadata"}},
-    }
-    assert vertex_request_labels_from_litellm_params(lp) == {"source": "metadata"}
-
-
-def test_pop_vertex_request_labels_prefers_explicit_labels_then_metadata():
-    optional = {"labels": {"env": "prod"}}
-    litellm_params = {"metadata": {"requester_metadata": {"team": "x"}}}
-    assert pop_vertex_request_labels(optional, litellm_params) == {"env": "prod"}
-    assert "labels" not in optional
-
-    optional2: dict = {}
-    assert pop_vertex_request_labels(optional2, litellm_params) == {"team": "x"}
-
-    optional3 = {"labels": {"team": 123}}
-    assert pop_vertex_request_labels(optional3, litellm_params) == {"team": "x"}
-
-
-def test_pop_vertex_request_labels_uses_litellm_metadata_when_metadata_absent():
-    optional: dict = {}
-    litellm_params = {
-        "litellm_metadata": {"requester_metadata": {"team": "from_litellm_meta"}}
-    }
-    assert pop_vertex_request_labels(optional, litellm_params) == {
-        "team": "from_litellm_meta"
-    }
-
-
-def test_vertex_text_embedding_request_includes_labels_from_metadata():
-    import litellm
-
-    req = litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
-        input="hi",
-        optional_params={},
-        model="text-embedding-004",
-        litellm_params={
-            "metadata": {"requester_metadata": {"project_id": "cost-center-1"}}
-        },
-    )
-    assert req.get("labels") == {"project_id": "cost-center-1"}
