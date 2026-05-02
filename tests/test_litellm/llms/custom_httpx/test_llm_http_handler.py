@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 from unittest.mock import AsyncMock, Mock, patch
@@ -8,6 +9,8 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import (
     BaseLLMHTTPHandler,
     _google_genai_streaming_hidden_params,
@@ -103,7 +106,9 @@ def test_fingerprint_agentic_tools_is_deterministic():
     tools_a = {"tool_calls": [{"id": "1", "input": {"q": "abc"}, "name": "web_search"}]}
     tools_b = {"tool_calls": [{"name": "web_search", "input": {"q": "abc"}, "id": "1"}]}
 
-    assert handler._fingerprint_agentic_tools(tools_a) == handler._fingerprint_agentic_tools(tools_b)
+    assert handler._fingerprint_agentic_tools(
+        tools_a
+    ) == handler._fingerprint_agentic_tools(tools_b)
 
 
 @pytest.mark.asyncio
@@ -350,3 +355,70 @@ def test_google_genai_streaming_hidden_params_model_info_and_router_fallback():
         response_headers=httpx.Headers({}),
     )
     assert from_router["model_id"] == "router-model-id"
+
+
+def _build_delete_response_mock(captured: dict):
+    """Returns a fake httpx delete that records its kwargs."""
+
+    def _response() -> httpx.Response:
+        return httpx.Response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=b'{"id": "resp_x", "object": "response", "deleted": true}',
+            request=httpx.Request(method="DELETE", url="https://test.openai.azure.com"),
+        )
+
+    async def fake_async_delete(*args, **kwargs):
+        captured.update(kwargs)
+        return _response()
+
+    def fake_sync_delete(*args, **kwargs):
+        captured.update(kwargs)
+        return _response()
+
+    return fake_async_delete, fake_sync_delete
+
+
+def test_async_delete_responses_omits_body_for_azure():
+    """Azure responses DELETE rejects requests with any body. Verify the handler
+    does not pass `json=` to httpx when the transformer returns an empty dict."""
+    captured: dict = {}
+    fake_async_delete, _ = _build_delete_response_mock(captured)
+
+    async def run():
+        with patch.object(AsyncHTTPHandler, "delete", new=fake_async_delete):
+            await litellm.adelete_responses(
+                response_id="resp_xyz",
+                custom_llm_provider="azure",
+                api_base="https://test.openai.azure.com",
+                api_key="test-key",
+                api_version="2025-03-01-preview",
+            )
+
+    asyncio.run(run())
+
+    assert "json" not in captured
+    assert "data" not in captured
+    assert captured["url"].endswith(
+        "/openai/responses/resp_xyz?api-version=2025-03-01-preview"
+    )
+
+
+def test_sync_delete_responses_omits_body_for_azure():
+    captured: dict = {}
+    _, fake_sync_delete = _build_delete_response_mock(captured)
+
+    with patch.object(HTTPHandler, "delete", new=fake_sync_delete):
+        litellm.delete_responses(
+            response_id="resp_xyz",
+            custom_llm_provider="azure",
+            api_base="https://test.openai.azure.com",
+            api_key="test-key",
+            api_version="2025-03-01-preview",
+        )
+
+    assert "json" not in captured
+    assert "data" not in captured
+    assert captured["url"].endswith(
+        "/openai/responses/resp_xyz?api-version=2025-03-01-preview"
+    )

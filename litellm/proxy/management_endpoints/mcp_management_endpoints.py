@@ -56,6 +56,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.management_helpers.audit_logs import get_audit_log_changed_by
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
@@ -2119,7 +2120,8 @@ if MCP_AVAILABLE:
 
         Used by the UI to show a discovery grid when adding new MCP servers.
         """
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Admin Viewer follows the read-parity rule.
+        if not _user_has_admin_view(user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -2176,7 +2178,8 @@ if MCP_AVAILABLE:
     async def get_openapi_registry(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Admin Viewer follows the read-parity rule.
+        if not _user_has_admin_view(user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -2230,7 +2233,12 @@ if MCP_AVAILABLE:
                 detail={"error": "Only proxy admins can create MCP toolsets."},
             )
         touched_by = (
-            litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+            get_audit_log_changed_by(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+            or LITELLM_PROXY_ADMIN_NAME
         )
         try:
             result = await create_mcp_toolset(prisma_client, payload, touched_by)
@@ -2321,7 +2329,12 @@ if MCP_AVAILABLE:
                 detail={"error": "Only proxy admins can update MCP toolsets."},
             )
         touched_by = (
-            litellm_changed_by or user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+            get_audit_log_changed_by(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            )
+            or LITELLM_PROXY_ADMIN_NAME
         )
         try:
             result = await update_mcp_toolset(prisma_client, payload, touched_by)
