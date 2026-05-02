@@ -451,7 +451,9 @@ def image_generation(  # noqa: PLR0915
             )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
-            from litellm.llms.azure_ai.image_generation import is_mai_image_model
+            from litellm.llms.azure_ai.image_generation import (
+                AzureFoundryMAIImageGenerationConfig,
+            )
 
             api_base = AzureFoundryModelInfo.get_api_base(api_base)
             api_key = AzureFoundryModelInfo.get_api_key(api_key)
@@ -460,8 +462,8 @@ def image_generation(  # noqa: PLR0915
 
             litellm_params_dict["api_base"] = api_base
 
-            if image_generation_config is not None and is_mai_image_model(
-                base_model or model
+            if isinstance(
+                image_generation_config, AzureFoundryMAIImageGenerationConfig
             ):
                 return llm_http_handler.image_generation_handler(
                     api_key=api_key,
@@ -473,6 +475,7 @@ def image_generation(  # noqa: PLR0915
                     litellm_params=litellm_params_dict,
                     logging_obj=litellm_logging_obj,
                     timeout=timeout,
+                    extra_headers=headers,
                     client=client,
                     _is_async=aimg_generation,
                 )

@@ -132,7 +132,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
             "size",
             f"{request_data['width']}x{request_data['height']}",
         )
-        image_response.output_format = "png"
+        image_response.output_format = response.get("output_format", "png")
 
         return image_response
 
@@ -153,8 +153,18 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
     @staticmethod
     def _parse_size(size: str) -> Tuple[int, int]:
-        width_str, height_str = size.lower().split("x", maxsplit=1)
-        return int(width_str), int(height_str)
+        parts = size.lower().split("x", maxsplit=1)
+        if len(parts) != 2:
+            raise ValueError(
+                f"Invalid size format '{size}'. Expected 'WxH' (e.g. '1024x1024')."
+            )
+        width_str, height_str = parts
+        try:
+            return int(width_str), int(height_str)
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid size format '{size}'. Expected integer dimensions like '1024x1024'."
+            ) from exc
 
     @classmethod
     def _resolve_dimensions(cls, optional_params: dict) -> Tuple[int, int]:

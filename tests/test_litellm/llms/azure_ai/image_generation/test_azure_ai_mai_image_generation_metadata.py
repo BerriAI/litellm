@@ -64,6 +64,7 @@ def test_azure_ai_mai_image_raw_model_cost_entry(
 ):
     model_info = use_local_model_cost_map.model_cost[model_name]
 
+    assert model_info["supports_mai_endpoint"] is True
     assert model_info["supported_endpoints"] == ["/v1/images/generations"]
     assert model_info["supported_modalities"] == ["text"]
     assert model_info["supported_output_modalities"] == ["image"]
@@ -106,7 +107,9 @@ def test_azure_ai_mai_image_cost_calculator(
 
 
 @pytest.mark.parametrize("model_name", ["MAI-Image-2", "MAI-Image-2e"])
-def test_azure_ai_mai_image_generation_config(model_name: str):
+def test_azure_ai_mai_image_generation_config(
+    use_local_model_cost_map, model_name: str
+):
     from litellm.llms.azure_ai.image_generation import (
         AzureFoundryMAIImageGenerationConfig,
         get_azure_ai_image_generation_config,
@@ -148,10 +151,30 @@ def test_azure_ai_mai_image_generation_request_maps_size():
     }
 
 
+def test_azure_ai_mai_image_generation_request_invalid_size():
+    from litellm.llms.azure_ai.image_generation.mai_transformation import (
+        AzureFoundryMAIImageGenerationConfig,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Invalid size format 'large'. Expected 'WxH'",
+    ):
+        AzureFoundryMAIImageGenerationConfig().transform_image_generation_request(
+            model="MAI-Image-2e",
+            prompt="A glowing jellyfish in a glass ocean",
+            optional_params={"size": "large"},
+            litellm_params={},
+            headers={},
+        )
+
+
 @patch("litellm.images.main.azure_chat_completions.image_generation")
 @patch("litellm.images.main.llm_http_handler.image_generation_handler")
 def test_azure_ai_mai_image_generation_routes_through_http_handler(
-    mock_image_generation_handler, mock_azure_image_generation
+    mock_image_generation_handler,
+    mock_azure_image_generation,
+    use_local_model_cost_map,
 ):
     import litellm
     from litellm.images.main import image_generation
@@ -171,6 +194,7 @@ def test_azure_ai_mai_image_generation_routes_through_http_handler(
         api_base="https://example.services.ai.azure.com",
         api_key="test-key",
         size="1024x1024",
+        headers={"x-trace-id": "abc123"},
     )
 
     assert response == mock_response
@@ -184,6 +208,7 @@ def test_azure_ai_mai_image_generation_routes_through_http_handler(
     assert call_kwargs["image_generation_optional_request_params"] == {
         "size": "1024x1024"
     }
+    assert call_kwargs["extra_headers"] == {"x-trace-id": "abc123"}
     assert call_kwargs["litellm_params"]["api_base"] == (
         "https://example.services.ai.azure.com"
     )
