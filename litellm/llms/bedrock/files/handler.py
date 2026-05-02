@@ -2,7 +2,7 @@ import asyncio
 import base64
 import os
 from types import MappingProxyType
-from typing import Any, Coroutine, Optional, Tuple, Union
+from typing import Any, Coroutine, Mapping, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -101,7 +101,14 @@ class BedrockFilesHandler(BaseAWSLLM):
         )
         bucket_name = None
         if isinstance(trusted_model_credentials, type(MappingProxyType({}))):
-            bucket_name = trusted_model_credentials.get("s3_bucket_name")
+            trusted_model_credentials_mapping = cast(
+                Mapping[str, Any], trusted_model_credentials
+            )
+            candidate_bucket_name = trusted_model_credentials_mapping.get(
+                "s3_bucket_name"
+            )
+            if isinstance(candidate_bucket_name, str):
+                bucket_name = candidate_bucket_name
         bucket_name = bucket_name or os.getenv("AWS_S3_BUCKET_NAME")
         if not bucket_name:
             raise ValueError(

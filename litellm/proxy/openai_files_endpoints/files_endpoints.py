@@ -950,6 +950,7 @@ async def get_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_retrieve(**data)  # type: ignore
@@ -1150,6 +1151,7 @@ async def delete_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_delete(
