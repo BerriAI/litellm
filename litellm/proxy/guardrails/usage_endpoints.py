@@ -279,7 +279,7 @@ async def guardrails_usage_overview(
 
         # Daily metrics in range
         metrics = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
-            where={"date": {"gte": start, "lte": end}}
+            where={"date": {"gte": to_db_date(start), "lte": to_db_date(end)}}
         )
 
         # Previous period for trend
@@ -287,7 +287,7 @@ async def guardrails_usage_overview(
             datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)
         ).strftime("%Y-%m-%d")
         metrics_prev = await prisma_client.db.litellm_dailyguardrailmetrics.find_many(
-            where={"date": {"gte": start_prev, "lt": start}}
+            where={"date": {"gte": to_db_date(start_prev), "lt": to_db_date(start)}}
         )
 
         agg = _aggregate_daily_metrics(metrics, "guardrail_id")
