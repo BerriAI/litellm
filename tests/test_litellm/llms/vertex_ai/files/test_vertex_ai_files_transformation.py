@@ -73,6 +73,40 @@ class TestParseGcsUri:
                 litellm_params={"bucket_name": "my-bucket"},
             )
 
+    def test_should_allow_legacy_object_path_when_server_flag_enabled(self, config):
+        bucket, encoded = config._parse_gcs_uri(
+            "gs://my-bucket/private/object.txt",
+            litellm_params={
+                "bucket_name": "my-bucket",
+                "allow_legacy_cloud_file_ids": True,
+            },
+        )
+
+        assert bucket == "my-bucket"
+        assert encoded == urllib.parse.quote("private/object.txt", safe="")
+
+    def test_should_keep_configured_prefix_for_legacy_object_path(self, config):
+        bucket, encoded = config._parse_gcs_uri(
+            "gs://my-bucket/team-a/private/object.txt",
+            litellm_params={
+                "bucket_name": "my-bucket/team-a",
+                "allow_legacy_cloud_file_ids": True,
+            },
+        )
+
+        assert bucket == "my-bucket"
+        assert encoded == urllib.parse.quote("team-a/private/object.txt", safe="")
+
+    def test_should_reject_legacy_object_outside_configured_prefix(self, config):
+        with pytest.raises(ValueError, match="configured storage prefix"):
+            config._parse_gcs_uri(
+                "gs://my-bucket/team-b/private/object.txt",
+                litellm_params={
+                    "bucket_name": "my-bucket/team-a",
+                    "allow_legacy_cloud_file_ids": True,
+                },
+            )
+
     def test_should_reject_unconfigured_bucket(self, config):
         with pytest.raises(ValueError, match="configured storage bucket"):
             config._parse_gcs_uri(

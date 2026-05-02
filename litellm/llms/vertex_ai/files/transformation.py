@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     build_managed_cloud_object_name,
     encode_gcs_object_name_for_url,
     sanitize_cloud_object_path,
+    should_allow_legacy_cloud_file_ids,
     split_configured_cloud_bucket_name,
     validate_managed_cloud_file_id,
 )
@@ -362,6 +363,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             scheme="gs://",
             configured_bucket_name=configured_bucket_name,
             allowed_object_prefixes=(VERTEX_AI_MANAGED_GCS_PREFIX,),
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(
+                litellm_params
+            ),
         )
         return bucket_name, encode_gcs_object_name_for_url(object_path)
 

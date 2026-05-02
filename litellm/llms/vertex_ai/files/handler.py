@@ -11,6 +11,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import (
 )
 from litellm.litellm_core_utils.cloud_storage_security import (
     VERTEX_AI_MANAGED_GCS_PREFIX,
+    should_allow_legacy_cloud_file_ids,
     validate_managed_cloud_file_id,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -134,6 +135,7 @@ class VertexAIFilesHandler(GCSBucketBase):
             scheme="gs://",
             configured_bucket_name=configured_bucket_name,
             allowed_object_prefixes=(VERTEX_AI_MANAGED_GCS_PREFIX,),
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(),
         )
 
     async def afile_content(
