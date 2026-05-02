@@ -2871,6 +2871,7 @@ async def test_api_created_global_policy_applies_to_new_key_without_restart():
     policy_registry = get_policy_registry()
     attachment_registry = get_attachment_registry()
     policy_registry._policies = {}
+    policy_registry._policies_by_id = {}
     policy_registry._initialized = False
     attachment_registry._attachments = []
     attachment_registry._initialized = False
@@ -2894,6 +2895,7 @@ async def test_api_created_global_policy_applies_to_new_key_without_restart():
         assert "runtime-global-policy" in data["metadata"]["applied_policies"]
     finally:
         policy_registry._policies = {}
+        policy_registry._policies_by_id = {}
         policy_registry._initialized = False
         attachment_registry._attachments = []
         attachment_registry._initialized = False
