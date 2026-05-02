@@ -232,6 +232,79 @@ def test_redis_semantic_cache_uses_isolated_index_for_old_schema(monkeypatch):
         ]
 
 
+def test_redis_semantic_cache_overwrites_stale_isolated_index(monkeypatch):
+    fallback_cache_mock = MagicMock()
+    semantic_cache_mock = MagicMock(
+        side_effect=[
+            ValueError("Existing index schema does not match"),
+            ValueError("Existing index schema does not match"),
+            fallback_cache_mock,
+        ]
+    )
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(
+            similarity_threshold=0.8,
+            index_name="existing_index",
+        )
+
+        assert redis_semantic_cache.llmcache is fallback_cache_mock
+        assert (
+            semantic_cache_mock.call_args_list[2].kwargs["name"]
+            == "existing_index_isolated"
+        )
+        assert semantic_cache_mock.call_args_list[2].kwargs["overwrite"] is True
+        assert semantic_cache_mock.call_args_list[2].kwargs["filterable_fields"] == [
+            RedisSemanticCache.CACHE_KEY_FILTERABLE_FIELD
+        ]
+
+
+def test_redis_semantic_cache_reraises_unexpected_isolated_index_error(monkeypatch):
+    semantic_cache_mock = MagicMock(
+        side_effect=[
+            ValueError("Existing index schema does not match"),
+            ValueError("connection failed"),
+        ]
+    )
+    custom_vectorizer_mock = MagicMock()
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
+            "redisvl.utils.vectorize": MagicMock(
+                CustomTextVectorizer=custom_vectorizer_mock
+            ),
+        },
+    ):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        with pytest.raises(ValueError, match="connection failed"):
+            RedisSemanticCache(
+                similarity_threshold=0.8,
+                index_name="existing_index",
+            )
+
+
 def test_redis_semantic_cache_reraises_unexpected_index_error():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 

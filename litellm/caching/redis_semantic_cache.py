@@ -128,6 +128,9 @@ class RedisSemanticCache(BaseCache):
         redis_url: str,
         cache_vectorizer: Any,
     ) -> Any:
+        def _is_schema_mismatch(exc: ValueError) -> bool:
+            return "schema does not match" in str(exc)
+
         try:
             return semantic_cache_cls(
                 name=index_name,
@@ -138,7 +141,7 @@ class RedisSemanticCache(BaseCache):
                 overwrite=False,
             )
         except ValueError as exc:
-            if "schema does not match" not in str(exc):
+            if not _is_schema_mismatch(exc):
                 raise
 
             isolated_index_name = f"{index_name}_isolated"
@@ -146,14 +149,31 @@ class RedisSemanticCache(BaseCache):
                 "Redis semantic-cache existing index schema is not isolated; "
                 f"using isolated index - {isolated_index_name}"
             )
-            return semantic_cache_cls(
-                name=isolated_index_name,
-                redis_url=redis_url,
-                vectorizer=cache_vectorizer,
-                distance_threshold=self.distance_threshold,
-                filterable_fields=[self.CACHE_KEY_FILTERABLE_FIELD],
-                overwrite=False,
-            )
+            try:
+                return semantic_cache_cls(
+                    name=isolated_index_name,
+                    redis_url=redis_url,
+                    vectorizer=cache_vectorizer,
+                    distance_threshold=self.distance_threshold,
+                    filterable_fields=[self.CACHE_KEY_FILTERABLE_FIELD],
+                    overwrite=False,
+                )
+            except ValueError as isolated_exc:
+                if not _is_schema_mismatch(isolated_exc):
+                    raise
+
+                print_verbose(
+                    "Redis semantic-cache isolated index schema is stale; "
+                    f"recreating isolated index - {isolated_index_name}"
+                )
+                return semantic_cache_cls(
+                    name=isolated_index_name,
+                    redis_url=redis_url,
+                    vectorizer=cache_vectorizer,
+                    distance_threshold=self.distance_threshold,
+                    filterable_fields=[self.CACHE_KEY_FILTERABLE_FIELD],
+                    overwrite=True,
+                )
 
     def _get_cache_filters(self, key: str) -> Dict[str, str]:
         return {self.CACHE_KEY_FIELD_NAME: str(key)}
