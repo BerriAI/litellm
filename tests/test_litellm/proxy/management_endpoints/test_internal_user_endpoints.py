@@ -2050,11 +2050,13 @@ async def test_delete_user_rejects_org_admin_deleting_outside_scope(mocker):
     assert exc.value.status_code == 403
 
     # Critical: no delete_many calls should have executed.
-    assert not hasattr(
-        mock_prisma_client.db.litellm_verificationtoken.delete_many, "mock_calls"
-    ) or len(
-        mock_prisma_client.db.litellm_verificationtoken.delete_many.mock_calls
-    ) == 0
+    assert (
+        not hasattr(
+            mock_prisma_client.db.litellm_verificationtoken.delete_many, "mock_calls"
+        )
+        or len(mock_prisma_client.db.litellm_verificationtoken.delete_many.mock_calls)
+        == 0
+    )
 
 
 @pytest.mark.asyncio
@@ -2732,3 +2734,107 @@ class TestGetUserIdFromRequestValidation:
         request = self._make_request(f"user_id={exact_id}")
         result = get_user_id_from_request(request)
         assert result == exact_id
+
+
+# ---------------------------------------------------------------------------
+# VERIA-60: /user/info post-decode re-authorization
+# ---------------------------------------------------------------------------
+
+
+def test_enforce_user_info_access_admin_bypass():
+    """Proxy admins must always be allowed past the re-check."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _enforce_user_info_access,
+    )
+
+    admin = UserAPIKeyAuth(
+        user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN.value
+    )
+    # Should not raise even when querying a different user
+    _enforce_user_info_access(user_id="someone_else", user_api_key_dict=admin)
+
+
+def test_enforce_user_info_access_view_only_admin_blocked_from_other_users():
+    """PROXY_ADMIN_VIEW_ONLY is not a true admin for /user/info — the upstream
+    route check applies the same `user_id == valid_token.user_id` rule, so the
+    re-check here must mirror that and deny cross-user lookups."""
+    import pytest
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _enforce_user_info_access,
+    )
+
+    viewer = UserAPIKeyAuth(
+        user_id="viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_user_info_access(user_id="someone_else", user_api_key_dict=viewer)
+    assert exc_info.value.status_code == 403
+
+
+def test_enforce_user_info_access_view_only_admin_can_read_own():
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _enforce_user_info_access,
+    )
+
+    viewer = UserAPIKeyAuth(
+        user_id="viewer",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    _enforce_user_info_access(user_id="viewer", user_api_key_dict=viewer)
+
+
+def test_enforce_user_info_access_owner_allowed():
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _enforce_user_info_access,
+    )
+
+    user = UserAPIKeyAuth(
+        user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    _enforce_user_info_access(user_id="alice", user_api_key_dict=user)
+
+
+def test_enforce_user_info_access_no_user_id_allowed():
+    """No user_id in query → handler resolves to caller's own id later, so
+    this branch must not raise."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _enforce_user_info_access,
+    )
+
+    user = UserAPIKeyAuth(
+        user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER.value
+    )
+    _enforce_user_info_access(user_id=None, user_api_key_dict=user)
+
+
+def test_enforce_user_info_access_blocks_cross_user_lookup():
+    """A non-admin caller may not query another user's row, even if URL
+    re-parsing produced a user_id that differs from the one the route check
+    saw (the VERIA-60 bypass)."""
+    import pytest
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _enforce_user_info_access,
+    )
+
+    attacker = UserAPIKeyAuth(
+        user_id="attacker space",  # original (URL-decoded) id seen by route check
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        # Re-parsed id (with literal '+') belongs to the victim
+        _enforce_user_info_access(user_id="victim+target", user_api_key_dict=attacker)
+
+    assert exc_info.value.status_code == 403
+    assert "key not allowed to access this user's info" in str(exc_info.value.detail)
