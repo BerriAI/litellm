@@ -643,6 +643,104 @@ class TestVertexBatchOutputTransformation:
         assert transformed_content == invalid_content
 
 
+class TestTryTransformDoesNotMutateCallerLoggingObj:
+    """Regression tests: _try_transform_vertex_batch_output_to_openai must not mutate
+    the caller's logging_obj (model, start_time, optional_params)."""
+
+    def _make_vertex_batch_line(self) -> bytes:
+        return json.dumps(
+            {
+                "status": "",
+                "processed_time": "2024-11-01T18:13:16.826+00:00",
+                "request": {
+                    "contents": [{"role": "user", "parts": [{"text": "Hello world!"}]}],
+                    "labels": {"litellm_custom_id": "request-1"},
+                },
+                "response": {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [{"text": "Hi!"}],
+                                "role": "model",
+                            },
+                            "finishReason": "STOP",
+                        }
+                    ],
+                    "modelVersion": "gemini-2.0-flash-001@default",
+                    "usageMetadata": {
+                        "promptTokenCount": 5,
+                        "candidatesTokenCount": 3,
+                        "totalTokenCount": 8,
+                    },
+                },
+            }
+        ).encode("utf-8")
+
+    def test_should_not_overwrite_model_on_caller_logging_obj(self, config):
+        sentinel_model = "original-caller-model"
+        logging_obj = MagicMock()
+        logging_obj.model = sentinel_model
+        logging_obj.optional_params = {"temperature": 0.9}
+
+        config._try_transform_vertex_batch_output_to_openai(
+            content=self._make_vertex_batch_line(),
+            logging_obj=logging_obj,
+        )
+
+        assert (
+            logging_obj.model == sentinel_model
+        ), "logging_obj.model was mutated by _try_transform_vertex_batch_output_to_openai"
+
+    def test_should_not_overwrite_start_time_on_caller_logging_obj(self, config):
+        sentinel_start = 1234567890.0
+        logging_obj = MagicMock()
+        logging_obj.start_time = sentinel_start
+        logging_obj.optional_params = {}
+
+        config._try_transform_vertex_batch_output_to_openai(
+            content=self._make_vertex_batch_line(),
+            logging_obj=logging_obj,
+        )
+
+        assert (
+            logging_obj.start_time == sentinel_start
+        ), "logging_obj.start_time was mutated by _try_transform_vertex_batch_output_to_openai"
+
+    def test_should_not_overwrite_optional_params_on_caller_logging_obj(self, config):
+        sentinel_params = {"temperature": 0.5, "top_p": 0.9}
+        logging_obj = MagicMock()
+        logging_obj.optional_params = sentinel_params
+
+        config._try_transform_vertex_batch_output_to_openai(
+            content=self._make_vertex_batch_line(),
+            logging_obj=logging_obj,
+        )
+
+        assert (
+            logging_obj.optional_params is sentinel_params
+        ), "logging_obj.optional_params was replaced by _try_transform_vertex_batch_output_to_openai"
+        assert logging_obj.optional_params == {
+            "temperature": 0.5,
+            "top_p": 0.9,
+        }, "logging_obj.optional_params contents were mutated"
+
+    def test_should_still_transform_content_correctly(self, config):
+        logging_obj = MagicMock()
+        logging_obj.model = "original-model"
+        logging_obj.start_time = 9999.0
+        logging_obj.optional_params = {"max_tokens": 100}
+
+        result = config._try_transform_vertex_batch_output_to_openai(
+            content=self._make_vertex_batch_line(),
+            logging_obj=logging_obj,
+        )
+
+        # Transformation should still succeed
+        transformed = json.loads(result.decode("utf-8"))
+        assert transformed["custom_id"] == "request-1"
+        assert transformed["response"]["status_code"] == 200
+
+
 class TestVertexBatchCustomIdLabels:
     """Test custom_id handling in batch transformations"""
 
