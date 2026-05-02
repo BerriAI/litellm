@@ -1789,6 +1789,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         total_tokens = prompt_tokens + completion_tokens
 
+        iterations: Optional[List[dict]] = None
+        if "iterations" in _usage and _usage["iterations"] is not None:
+            iterations = _usage["iterations"]
+
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -1807,6 +1811,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ),
             inference_geo=inference_geo,
             speed=speed,
+            **({"iterations": iterations} if iterations is not None else {}),
         )
         return usage
 
