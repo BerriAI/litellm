@@ -39,6 +39,23 @@ def test_routes_on_litellm_proxy():
 
     this prevents accidentelly deleting /threads, or /batches etc
     """
+    # Force-load lazy features so the test sees the full route set. Continue
+    # on per-feature import failure — the assertion below still catches
+    # missing-route regressions.
+    import importlib
+
+    from litellm.proxy._lazy_features import LAZY_FEATURES
+
+    registered_paths = [getattr(r, "path", "") for r in app.routes]
+    for feat in LAZY_FEATURES:
+        if any(rp.startswith(p) for p in feat.path_prefixes for rp in registered_paths):
+            continue
+        try:
+            module = importlib.import_module(feat.module_path)
+            feat.register_fn(app, module)
+        except Exception as exc:
+            print(f"warning: failed to force-load {feat.name}: {exc}")
+
     _all_routes = []
     for route in app.routes:
 
@@ -59,9 +76,13 @@ def test_routes_on_litellm_proxy():
         # wildcard patterns like /containers/* - check that base path exists
         elif RouteChecks._is_wildcard_pattern(pattern=route):
             # For wildcard patterns, check that the base path (without * and trailing /) exists
-            base_path = route[:-1].rstrip("/")  # Remove the trailing * and any trailing /
+            base_path = route[:-1].rstrip(
+                "/"
+            )  # Remove the trailing * and any trailing /
             # Check if base path exists (e.g., /containers or /v1/containers)
-            assert base_path in _all_routes, f"Wildcard pattern {route} requires base path {base_path} to exist"
+            assert (
+                base_path in _all_routes
+            ), f"Wildcard pattern {route} requires base path {base_path} to exist"
         else:
             assert route in _all_routes
 

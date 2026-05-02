@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cas
 import httpx
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
@@ -122,7 +123,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             Complete URL for Anthropic batch retrieval: {api_base}/v1/messages/batches/{batch_id}
         """
         api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        return f"{api_base.rstrip('/')}/v1/messages/batches/{batch_id}"
+        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}"
 
     def transform_retrieve_batch_request(
         self,
@@ -229,12 +231,12 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
             completed_at=ended_at if processing_status == "ended" else None,
             failed_at=None,
             expired_at=archived_at if archived_at else None,
-            cancelling_at=cancel_initiated_at
-            if processing_status == "canceling"
-            else None,
-            cancelled_at=ended_at
-            if processing_status == "canceling" and ended_at
-            else None,
+            cancelling_at=(
+                cancel_initiated_at if processing_status == "canceling" else None
+            ),
+            cancelled_at=(
+                ended_at if processing_status == "canceling" and ended_at else None
+            ),
             request_counts=request_counts,
             metadata={},
         )

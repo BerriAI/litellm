@@ -83,9 +83,9 @@ class LangsmithLogger(CustomBatchLogger):
         if _batch_size:
             self.batch_size = int(_batch_size)
         self.log_queue: List[LangsmithQueueObject] = []
-        self._flush_task: Optional[
-            asyncio.Task[Any]
-        ] = self._start_periodic_flush_task()
+        self._flush_task: Optional[asyncio.Task[Any]] = (
+            self._start_periodic_flush_task()
+        )
 
     def _start_periodic_flush_task(self) -> Optional[asyncio.Task[Any]]:
         """Start the periodic flush task only when an event loop is already running."""
@@ -112,17 +112,28 @@ class LangsmithLogger(CustomBatchLogger):
         langsmith_project: Optional[str] = None,
         langsmith_base_url: Optional[str] = None,
         langsmith_tenant_id: Optional[str] = None,
+        allow_env_credentials: bool = True,
     ) -> LangsmithCredentialsObject:
-        _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
-        _credentials_project = (
-            langsmith_project or os.getenv("LANGSMITH_PROJECT") or "litellm-completion"
-        )
-        _credentials_base_url = (
-            langsmith_base_url
-            or os.getenv("LANGSMITH_BASE_URL")
-            or "https://api.smith.langchain.com"
-        )
-        _credentials_tenant_id = langsmith_tenant_id or os.getenv("LANGSMITH_TENANT_ID")
+        if allow_env_credentials is False and langsmith_base_url is not None:
+            _credentials_api_key = langsmith_api_key
+            _credentials_project = langsmith_project or "litellm-completion"
+            _credentials_base_url = langsmith_base_url
+            _credentials_tenant_id = langsmith_tenant_id
+        else:
+            _credentials_api_key = langsmith_api_key or os.getenv("LANGSMITH_API_KEY")
+            _credentials_project = (
+                langsmith_project
+                or os.getenv("LANGSMITH_PROJECT")
+                or "litellm-completion"
+            )
+            _credentials_base_url = (
+                langsmith_base_url
+                or os.getenv("LANGSMITH_BASE_URL")
+                or "https://api.smith.langchain.com"
+            )
+            _credentials_tenant_id = langsmith_tenant_id or os.getenv(
+                "LANGSMITH_TENANT_ID"
+            )
 
         return LangsmithCredentialsObject(
             LANGSMITH_API_KEY=_credentials_api_key,
@@ -501,9 +512,9 @@ class LangsmithLogger(CustomBatchLogger):
         return log_queue_by_credentials
 
     def _get_sampling_rate_to_use_for_request(self, kwargs: Dict[str, Any]) -> float:
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
         sampling_rate: float = self.sampling_rate
         if standard_callback_dynamic_params is not None:
             _sampling_rate = standard_callback_dynamic_params.get(
@@ -523,9 +534,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(
@@ -540,6 +551,10 @@ class LangsmithLogger(CustomBatchLogger):
                 langsmith_tenant_id=standard_callback_dynamic_params.get(
                     "langsmith_tenant_id", None
                 ),
+                allow_env_credentials=standard_callback_dynamic_params.get(
+                    "langsmith_base_url", None
+                )
+                is None,
             )
         else:
             credentials = self.default_credentials

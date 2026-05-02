@@ -97,6 +97,55 @@ def _serialize_http_exception_detail(
     return str(detail), None
 
 
+def _collect_response_file_search_vector_store_ids(data: Dict[str, Any]) -> set[str]:
+    vector_store_ids: set[str] = set()
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        return vector_store_ids
+
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "file_search":
+            continue
+        ids = tool.get("vector_store_ids") or []
+        if not isinstance(ids, list):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "file_search.vector_store_ids must be a list of strings"
+                },
+            )
+        for vector_store_id in ids:
+            if not isinstance(vector_store_id, str) or not vector_store_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "file_search.vector_store_ids must be a list of strings"
+                    },
+                )
+            vector_store_ids.add(vector_store_id)
+
+    return vector_store_ids
+
+
+async def _authorize_response_file_search_vector_stores(
+    data: Dict[str, Any],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    vector_store_ids = _collect_response_file_search_vector_store_ids(data)
+    if not vector_store_ids:
+        return
+
+    from litellm.proxy.vector_store_endpoints.utils import (
+        assert_user_can_access_vector_store_id,
+    )
+
+    for vector_store_id in sorted(vector_store_ids):
+        await assert_user_can_access_vector_store_id(
+            vector_store_id=vector_store_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
     """Parses an event line and returns an error code if present, else None."""
     event_line = (
@@ -619,6 +668,67 @@ class ProxyBaseLLMRequestProcessing:
             verbose_proxy_logger.error(f"Error setting custom headers: {e}")
             return {}
 
+    @staticmethod
+    async def build_litellm_proxy_success_headers_from_llm_response(
+        *,
+        response: Any,
+        request_data: dict,
+        request: Request,
+        user_api_key_dict: UserAPIKeyAuth,
+        logging_obj: LiteLLMLoggingObj,
+        version: Optional[str],
+        proxy_logging_obj: ProxyLogging,
+    ) -> Dict[str, str]:
+        """
+        Build LiteLLM proxy response headers for routes that call the LLM directly
+        (e.g. Google native :generateContent) instead of base_process_llm_request.
+        """
+        if isinstance(response, dict):
+            hidden_params = response.get("_hidden_params") or {}
+        else:
+            hidden_params = getattr(response, "_hidden_params", None) or {}
+        if not isinstance(hidden_params, dict):
+            hidden_params = {}
+
+        model_id = ProxyBaseLLMRequestProcessing._get_model_id_from_response(
+            hidden_params, request_data
+        )
+
+        cache_key = hidden_params.get("cache_key", None) or ""
+        api_base = hidden_params.get("api_base", None) or ""
+        response_cost = hidden_params.get("response_cost", None) or ""
+        fastest_response_batch_completion = hidden_params.get(
+            "fastest_response_batch_completion", None
+        )
+        additional_headers = hidden_params.get("additional_headers", {}) or {}
+
+        custom_headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=user_api_key_dict,
+            call_id=logging_obj.litellm_call_id,
+            model_id=model_id,
+            cache_key=cache_key,
+            api_base=api_base,
+            version=version,
+            response_cost=response_cost,
+            model_region=getattr(user_api_key_dict, "allowed_model_region", ""),
+            fastest_response_batch_completion=fastest_response_batch_completion,
+            request_data=request_data,
+            hidden_params=hidden_params,
+            litellm_logging_obj=logging_obj,
+            **additional_headers,
+        )
+
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=request_data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            custom_headers.update(callback_headers)
+
+        return custom_headers
+
     async def common_processing_pre_call_logic(
         self,
         request: Request,
@@ -683,6 +793,11 @@ class ProxyBaseLLMRequestProcessing:
             "aingest",
             "aretrieve_container",
             "adelete_container",
+            "aupload_container_file",
+            "alist_container_files",
+            "aretrieve_container_file",
+            "adelete_container_file",
+            "aretrieve_container_file_content",
             "acreate_skill",
             "alist_skills",
             "aget_skill",
@@ -725,6 +840,11 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+        if route_type in {"aresponses", "_aresponses_websocket"}:
+            await _authorize_response_file_search_vector_stores(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         # Calculate request queue time after add_litellm_data_to_request
         # which sets arrival_time in proxy_server_request
@@ -866,14 +986,16 @@ class ProxyBaseLLMRequestProcessing:
                 "Request received by LiteLLM: payload too large to log (%d bytes, limit %d). Keys: %s",
                 len(_payload_str),
                 MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
-                list(self.data.keys())
-                if isinstance(self.data, dict)
-                else type(self.data).__name__,
+                (
+                    list(self.data.keys())
+                    if isinstance(self.data, dict)
+                    else type(self.data).__name__
+                ),
             )
         else:
             verbose_proxy_logger.debug(
                 "Request received by LiteLLM:\n%s",
-                json.dumps(self.data, indent=4, default=str),
+                _payload_str,
             )
 
     async def base_process_llm_request(  # noqa: PLR0915
@@ -938,6 +1060,11 @@ class ProxyBaseLLMRequestProcessing:
             "aingest",
             "aretrieve_container",
             "adelete_container",
+            "aupload_container_file",
+            "alist_container_files",
+            "aretrieve_container_file",
+            "adelete_container_file",
+            "aretrieve_container_file_content",
             "acreate_skill",
             "alist_skills",
             "aget_skill",
@@ -1054,6 +1181,7 @@ class ProxyBaseLLMRequestProcessing:
             route_type=route_type,
             llm_router=llm_router,
             user_model=user_model,
+            user_api_key_dict=user_api_key_dict,
         )
         tasks.append(llm_call)
 
@@ -1128,9 +1256,9 @@ class ProxyBaseLLMRequestProcessing:
                 # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
                 # what the client sent.
                 if requested_model_from_client:
-                    self.data[
-                        "_litellm_client_requested_model"
-                    ] = requested_model_from_client
+                    self.data["_litellm_client_requested_model"] = (
+                        requested_model_from_client
+                    )
 
                 # Streaming: attach a closure that fires after all guardrail
                 # end-of-stream blocks complete.  CSW.__anext__ stores the
@@ -1238,20 +1366,10 @@ class ProxyBaseLLMRequestProcessing:
             _exception_raised = True
             raise
         finally:
-            # Enqueue deferred logging after post-call guardrails have written
-            # guardrail_information to metadata.  The finally block ensures
-            # logging fires even if a guardrail raises.
-            # For streaming early-returns: no closure is stored (wrapper_async
-            # returns before the deferred block), so _enqueue_fn is None — no-op.
-            _enqueue_fn = getattr(logging_obj, "_enqueue_deferred_logging", None)
-            if _enqueue_fn is not None:
-                logging_obj._enqueue_deferred_logging = None  # type: ignore[union-attr]
-                try:
-                    _enqueue_fn()
-                except Exception as e:
-                    verbose_proxy_logger.exception(
-                        "Error firing deferred logging: %s", e
-                    )
+            ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
+                logging_obj=logging_obj,
+                exception_raised=_exception_raised,
+            )
 
             # Streaming cleanup: if an exception occurred AND the deferred
             # streaming closure is still set, no streaming route will
@@ -1450,6 +1568,44 @@ class ProxyBaseLLMRequestProcessing:
         return False
 
     @staticmethod
+    def _flush_deferred_async_logging(
+        logging_obj: Any,
+        exception_raised: bool,
+    ) -> None:
+        """
+        Fire the deferred async-success closure stored by wrapper_async, then
+        clear the slot.
+
+        Called from the finally block around post_call_success_hook so the
+        StandardLoggingPayload is built after post-call guardrails write to
+        metadata (deferred logging is enabled for non-streaming requests with
+        a registered post_call guardrail).
+
+        On exception (e.g. a post-call guardrail blocks the response), skip
+        firing the closure — the exception propagates to post_call_failure_hook
+        which writes its own failure spend log via async_failure_handler.
+        Firing both produced a duplicate (Success + Failure) entry per request,
+        with the Success row exposing the blocked LLM response.
+
+        For streaming early-returns the closure is never stored (wrapper_async
+        returns before the deferred block in litellm/utils.py), so this is a
+        no-op there.
+
+        Extracted as a static method so tests can exercise the production
+        gating logic directly rather than reimplementing the finally block.
+        """
+        _enqueue_fn = getattr(logging_obj, "_enqueue_deferred_logging", None)
+        if _enqueue_fn is None:
+            return
+        logging_obj._enqueue_deferred_logging = None  # type: ignore[union-attr]
+        if exception_raised:
+            return
+        try:
+            _enqueue_fn()
+        except Exception as e:
+            verbose_proxy_logger.exception("Error firing deferred logging: %s", e)
+
+    @staticmethod
     async def _run_deferred_stream_guardrails(
         captured_data: dict,
         captured_user_api_key_dict: "UserAPIKeyAuth",
@@ -1480,9 +1636,7 @@ class ProxyBaseLLMRequestProcessing:
         _response = assembled_response
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
-            from litellm.proxy.utils import (
-                _check_and_merge_model_level_guardrails,
-            )
+            from litellm.proxy.utils import _check_and_merge_model_level_guardrails
 
             guardrail_data = _check_and_merge_model_level_guardrails(
                 data=captured_data, llm_router=_global_llm_router
@@ -1503,6 +1657,12 @@ class ProxyBaseLLMRequestProcessing:
                         # streaming iterator pipeline.  Running them again
                         # here would duplicate the guardrail API call
                         # (e.g. double OpenAI Moderation charges).
+                        continue
+                    if "async_post_call_streaming_iterator_hook" in type(cb).__dict__:
+                        # Skip — the guardrail already scanned the assembled
+                        # response via its own streaming iterator hook in the
+                        # streaming pipeline. re running this function async_post_call_success_hook
+                        # here would duplicate the scan and can spuriously block the guardrail that already passed / failed.
                         continue
                     else:
                         guardrail_result = await cb.async_post_call_success_hook(
@@ -1659,11 +1819,12 @@ class ProxyBaseLLMRequestProcessing:
         elif isinstance(e, httpx.HTTPStatusError):
             # Handle httpx.HTTPStatusError - extract actual error from response
             # This matches the original behavior before the refactor in commit 511d435f6f
-            error_body = await e.response.aread()
+            http_status_error: httpx.HTTPStatusError = e
+            error_body = await http_status_error.response.aread()
             error_text = error_body.decode("utf-8")
 
             raise HTTPException(
-                status_code=e.response.status_code,
+                status_code=http_status_error.response.status_code,
                 detail={"error": error_text},
             )
         error_msg = f"{str(e)}"
@@ -1731,7 +1892,9 @@ class ProxyBaseLLMRequestProcessing:
         verbose_proxy_logger.debug("inside generator")
         try:
             str_so_far = ""
-            async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            async for (
+                chunk
+            ) in proxy_logging_obj.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=response,
                 request_data=request_data,
@@ -1959,9 +2122,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs[
-                    "cache_creation_input_tokens"
-                ] = cache_creation_input_tokens
+                usage_kwargs["cache_creation_input_tokens"] = (
+                    cache_creation_input_tokens
+                )
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

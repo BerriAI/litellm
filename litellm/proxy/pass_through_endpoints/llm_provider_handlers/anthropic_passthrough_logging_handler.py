@@ -168,9 +168,9 @@ class AnthropicPassthroughLoggingHandler:
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
             if not logging_obj.model_call_details.get("custom_llm_provider"):
-                logging_obj.model_call_details[
-                    "custom_llm_provider"
-                ] = litellm.LlmProviders.ANTHROPIC.value
+                logging_obj.model_call_details["custom_llm_provider"] = (
+                    litellm.LlmProviders.ANTHROPIC.value
+                )
             return kwargs
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -549,10 +549,16 @@ class AnthropicPassthroughLoggingHandler:
                 # Create a mock user API key dict for the managed object storage
                 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
+                _request_metadata = (kwargs.get("litellm_params", {}) or {}).get(
+                    "metadata", {}
+                ) or {}
+
                 user_api_key_dict = UserAPIKeyAuth(
-                    user_id=kwargs.get("user_id", "default-user"),
+                    user_id=_request_metadata.get(
+                        "user_api_key_user_id", "default-user"
+                    ),
                     api_key="",
-                    team_id=None,
+                    team_id=_request_metadata.get("user_api_key_team_id"),
                     team_alias=None,
                     user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
                     user_email=None,

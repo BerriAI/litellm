@@ -66,7 +66,9 @@ def _make_model_response_stream_chunk(model: str) -> litellm.ModelResponseStream
     return litellm.ModelResponseStream(**chunk_dict)
 
 
-def test_proxy_chat_completion_does_not_return_provider_prefixed_model(tmp_path, monkeypatch):
+def test_proxy_chat_completion_does_not_return_provider_prefixed_model(
+    tmp_path, monkeypatch
+):
     """
     Regression test:
 
@@ -96,13 +98,25 @@ def test_proxy_chat_completion_does_not_return_provider_prefixed_model(tmp_path,
     monkeypatch.setattr(
         proxy_server.llm_router,  # type: ignore[arg-type]
         "acompletion",
-        AsyncMock(return_value=_make_minimal_chat_completion_response(model=internal_model)),
+        AsyncMock(
+            return_value=_make_minimal_chat_completion_response(model=internal_model)
+        ),
     )
 
     # Also no-op proxy logging hooks to keep this test focused and deterministic.
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "during_call_hook", AsyncMock(return_value=None))
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "update_request_status", AsyncMock(return_value=None))
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_success_hook", AsyncMock(side_effect=lambda **kwargs: kwargs["response"]))
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj, "during_call_hook", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "update_request_status",
+        AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "post_call_success_hook",
+        AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
 
     resp = client.post(
         "/v1/chat/completions",
@@ -117,7 +131,9 @@ def test_proxy_chat_completion_does_not_return_provider_prefixed_model(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monkeypatch):
+async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(
+    monkeypatch,
+):
     """
     Regression test for streaming:
 
@@ -138,7 +154,11 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monk
     ):
         yield _make_model_response_stream_chunk(model=internal_model)
 
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "async_post_call_streaming_iterator_hook", _iterator_hook)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        _iterator_hook,
+    )
     monkeypatch.setattr(
         proxy_server.proxy_logging_obj,
         "async_post_call_streaming_hook",
@@ -168,7 +188,9 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monk
 
 
 @pytest.mark.asyncio
-async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_mapping(monkeypatch):
+async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_mapping(
+    monkeypatch,
+):
     """
     Regression test for alias mapping on streaming:
 
@@ -190,7 +212,11 @@ async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_ma
     ):
         yield _make_model_response_stream_chunk(model=internal_model)
 
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "async_post_call_streaming_iterator_hook", _iterator_hook)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        _iterator_hook,
+    )
     monkeypatch.setattr(
         proxy_server.proxy_logging_obj,
         "async_post_call_streaming_hook",
@@ -243,7 +269,11 @@ async def test_proxy_streaming_azure_model_router_preserves_actual_model(monkeyp
     ):
         yield _make_model_response_stream_chunk(model=actual_model_used)
 
-    monkeypatch.setattr(proxy_server.proxy_logging_obj, "async_post_call_streaming_iterator_hook", _iterator_hook)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_iterator_hook",
+        _iterator_hook,
+    )
     monkeypatch.setattr(
         proxy_server.proxy_logging_obj,
         "async_post_call_streaming_hook",

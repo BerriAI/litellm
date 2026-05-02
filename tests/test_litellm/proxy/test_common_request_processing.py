@@ -82,7 +82,9 @@ class TestProxyBaseLLMRequestProcessing:
             pytest.fail("litellm_call_id is not a valid UUID")
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
-    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(self, monkeypatch):
+    def test_add_dd_apm_tags_for_litellm_call_id_uses_dd_tracing_helper(
+        self, monkeypatch
+    ):
         mock_set_active_span_tag = MagicMock(return_value=True)
         import litellm.proxy.dd_span_tagger
 
@@ -215,6 +217,141 @@ class TestProxyBaseLLMRequestProcessing:
             LiteLLMProxyRequestSetup._get_stream_timeout_from_request(
                 headers_with_invalid
             )
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_from_llm_response(self):
+        """
+        Google native :generateContent uses this helper instead of base_process_llm_request;
+        ensure x-litellm-* headers and callback hooks merge like the main proxy path.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        class _FakeGenaiResponse:
+            _hidden_params = {
+                "model_id": "deployment-model-id",
+                "cache_key": "ck-test",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "response_cost": 0.001,
+                "additional_headers": {"llm_provider-ratelimit-requests": "1000"},
+            }
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "call-id-test"
+
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(
+            return_value={"x-ratelimit-remaining-requests": "999"}
+        )
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeGenaiResponse(),
+            request_data={"model": "gemini/gemini-1.5-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="9.9.9",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-call-id"] == "call-id-test"
+        assert headers["x-litellm-model-id"] == "deployment-model-id"
+        assert headers["x-litellm-version"] == "9.9.9"
+        assert headers["llm_provider-ratelimit-requests"] == "1000"
+        assert headers["x-ratelimit-remaining-requests"] == "999"
+        proxy_logging_obj.post_call_response_headers_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_streaming_style_iterator(self):
+        """AsyncGoogleGenAIGenerateContentStreamingIterator sets _hidden_params at init; headers must propagate."""
+
+        class _FakeStreamLike:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+            _hidden_params = {
+                "model_id": "stream-model-id",
+                "api_base": "https://generativelanguage.googleapis.com/v1beta",
+                "cache_key": "",
+                "response_cost": "",
+                "additional_headers": {"llm_provider-x": "y"},
+            }
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-stream"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_FakeStreamLike(),
+            request_data={"model": "gemini/gemini-2.0-flash"},
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-model-id"] == "stream-model-id"
+        assert headers["x-litellm-model-api-base"] == (
+            "https://generativelanguage.googleapis.com/v1beta"
+        )
+        assert headers["llm_provider-x"] == "y"
+
+    @pytest.mark.asyncio
+    async def test_build_litellm_proxy_success_headers_no_hidden_params_metadata_fallback(
+        self,
+    ):
+        """When response has no _hidden_params, model_id can still come from litellm_metadata."""
+
+        class _BareResponse:
+            pass
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "cid-meta"
+        mock_user = MagicMock()
+        mock_user.tpm_limit = None
+        mock_user.rpm_limit = None
+        mock_user.max_budget = None
+        mock_user.spend = 0.0
+        mock_user.allowed_model_region = None
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        headers = await ProxyBaseLLMRequestProcessing.build_litellm_proxy_success_headers_from_llm_response(
+            response=_BareResponse(),
+            request_data={
+                "model": "gemini/gemini-1.5-flash",
+                "litellm_metadata": {"model_info": {"id": "meta-model-id"}},
+            },
+            request=mock_request,
+            user_api_key_dict=mock_user,
+            logging_obj=logging_obj,
+            version="1.0.0",
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        assert headers["x-litellm-model-id"] == "meta-model-id"
 
     @pytest.mark.asyncio
     async def test_add_litellm_data_to_request_with_stream_timeout_header(self):
@@ -1156,13 +1293,6 @@ class TestCommonRequestProcessingHelpers:
             assert mock_tracer.trace.call_count == 4
 
             # Verify that each call was made with the correct operation name
-            expected_calls = [
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-                (("streaming.chunk.yield",), {}),
-            ]
-
             actual_calls = mock_tracer.trace.call_args_list
             assert len(actual_calls) == 4
 
@@ -1661,7 +1791,10 @@ class TestIsAzureModelRouterRequest:
 
     def test_detects_model_router_with_underscore(self):
         assert _is_azure_model_router_request("azure_ai/model_router") is True
-        assert _is_azure_model_router_request("azure_ai/model_router/my-deployment") is True
+        assert (
+            _is_azure_model_router_request("azure_ai/model_router/my-deployment")
+            is True
+        )
 
     def test_detects_model_router_with_hyphen(self):
         assert _is_azure_model_router_request("azure_ai/model-router") is True
@@ -1885,11 +2018,11 @@ class TestDDSpanTaggerTagRequest:
 
     def test_tags_key_alias_and_model(self):
         """key_alias and requested_model are set on the span when present."""
-        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", token="hashed123")
+        user_key = self._make_user_api_key_dict(
+            key_alias="my-prod-key", token="hashed123"
+        )
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="gpt-4o",
@@ -1903,9 +2036,7 @@ class TestDDSpanTaggerTagRequest:
         """No key tags are set when key_alias and token are None (e.g. 401 path)."""
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model=None,
@@ -1917,15 +2048,15 @@ class TestDDSpanTaggerTagRequest:
         """requested_model is tagged even when there's no key info."""
         user_key = self._make_user_api_key_dict(key_alias=None, token=None)
 
-        with patch(
-            "litellm.proxy.dd_span_tagger.set_active_span_tag"
-        ) as mock_set_tag:
+        with patch("litellm.proxy.dd_span_tagger.set_active_span_tag") as mock_set_tag:
             DDSpanTagger.tag_request(
                 user_api_key_dict=user_key,
                 requested_model="claude-3-5-sonnet",
             )
 
-        mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
+        mock_set_tag.assert_called_once_with(
+            "litellm.requested_model", "claude-3-5-sonnet"
+        )
 
 
 class TestHasAttributeErrorInChain:
@@ -2015,8 +2146,7 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Violated guardrail policy"
         assert (
-            proxy_exc.provider_specific_fields["guardrail_name"]
-            == "bedrock-pii-guard"
+            proxy_exc.provider_specific_fields["guardrail_name"] == "bedrock-pii-guard"
         )
         # No Python repr leakage of the dict into the message field.
         assert "{'error':" not in proxy_exc.message

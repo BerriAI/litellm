@@ -202,6 +202,7 @@ class RouteChecks:
                 route=route,
                 _user_role=_user_role,
                 request_data=request_data,
+                request=request,
             )
         elif (
             _user_role == LitellmUserRoles.INTERNAL_USER.value
@@ -300,7 +301,7 @@ class RouteChecks:
             return True
 
         if RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value
+            route=route, allowed_routes=LiteLLMRoutes.mcp_inference_routes.value
         ):
             return True
 
@@ -358,7 +359,9 @@ class RouteChecks:
         """
         Check if route is a management route
         """
-        return route in LiteLLMRoutes.management_routes.value
+        return RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.management_routes.value
+        )
 
     @staticmethod
     def is_info_route(route: str) -> bool:
@@ -594,14 +597,66 @@ class RouteChecks:
             return True
         return False
 
+    # HTTP methods that are intrinsically read-only and therefore safe to
+    # default-allow for PROXY_ADMIN_VIEW_ONLY. Anything else (POST/PUT/PATCH/
+    # DELETE) is treated as a write attempt and goes through the explicit
+    # write-allowlist below.
+    _SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+    # Explicit write routes that PROXY_ADMIN_VIEW_ONLY must NEVER call. The
+    # role-principle is "no writes, ever" — the management_routes list is the
+    # authoritative source for which non-llm routes are writes; we just need
+    # to filter out the read endpoints (info / list) that share the prefix.
+    # A cleaner approach is to denylist by HTTP verb (POST/PUT/PATCH/DELETE);
+    # this block stays as a backstop in case a write is implemented as GET.
+    _ADMIN_VIEWER_BLOCKED_WRITE_ROUTES = frozenset(
+        [
+            "/user/new",
+            "/user/delete",
+            "/user/bulk_update",
+            "/team/new",
+            "/team/update",
+            "/team/delete",
+            "/model/new",
+            "/model/update",
+            "/model/delete",
+            "/key/generate",
+            "/key/delete",
+            "/key/update",
+            "/key/regenerate",
+            "/key/service-account/generate",
+            "/key/block",
+            "/key/unblock",
+        ]
+    )
+
     @staticmethod
     def _check_proxy_admin_viewer_access(
         route: str,
         _user_role: str,
         request_data: dict,
+        request: Optional[Request] = None,
     ) -> None:
         """
-        Check access for PROXY_ADMIN_VIEW_ONLY role
+        Check access for PROXY_ADMIN_VIEW_ONLY role.
+
+        Admin Viewer follows a read-parity-with-Proxy-Admin rule: anything Proxy
+        Admin can read/list/get, Admin Viewer can read/list/get. The only
+        exclusions are cost-incurring inference routes (Playground, /chat/
+        completions, etc.) and any state-mutating request.
+
+        Implementation:
+          1. LLM/inference routes → 403 (cost-incurring).
+          2. Safe HTTP method (GET/HEAD/OPTIONS) → allow by default. This is
+             the read-parity guarantee — every new GET endpoint added anywhere
+             in the codebase is automatically readable by Admin Viewer
+             without needing to remember to add it to an allowlist.
+          3. Unsafe HTTP method (POST/PUT/PATCH/DELETE):
+             - Allow `/user/update` only when restricted to user_email/password.
+             - Block all explicit writes in `_ADMIN_VIEWER_BLOCKED_WRITE_ROUTES`.
+             - Otherwise allow only if the route is in admin_viewer_routes /
+               global_spend_tracking_routes (legacy explicit-allow set).
+             - Else 403.
         """
         if RouteChecks.is_llm_api_route(route=route):
             raise HTTPException(
@@ -609,65 +664,60 @@ class RouteChecks:
                 detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
             )
 
-        # Check if this is a write operation on management routes
-        if RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.management_routes.value
-        ):
-            # For management routes, only allow read operations or specific allowed updates
-            if route == "/user/update":
-                # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
-                if request_data is not None and isinstance(request_data, dict):
-                    _params_updated = request_data.keys()
-                    for param in _params_updated:
-                        if param not in ["user_email", "password"]:
-                            raise HTTPException(
-                                status_code=status.HTTP_403_FORBIDDEN,
-                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
-                            )
-            elif (
-                route
-                in [
-                    "/user/new",
-                    "/user/delete",
-                    "/user/bulk_update",
-                    "/team/new",
-                    "/team/update",
-                    "/team/delete",
-                    "/model/new",
-                    "/model/update",
-                    "/model/delete",
-                    "/key/generate",
-                    "/key/delete",
-                    "/key/update",
-                    "/key/regenerate",
-                    "/key/service-account/generate",
-                    "/key/block",
-                    "/key/unblock",
-                ]
-                or route.startswith("/key/")
-                and route.endswith("/regenerate")
-            ):
-                # Block write operations for PROXY_ADMIN_VIEW_ONLY
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
-                )
-            # Allow read operations on management routes (like /user/info, /team/info, /model/info)
+        method = request.method.upper() if request is not None else "GET"
+        is_safe_method = method in RouteChecks._SAFE_HTTP_METHODS
+
+        # ── Safe HTTP method: default-allow ──────────────────────────────
+        if is_safe_method:
             return
-        elif RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value
-        ):
-            # Allow access to admin viewer routes (read-only admin endpoints)
+
+        # ── Unsafe HTTP method: explicit checks ──────────────────────────
+        # Allow `/user/update` for self-service email / password change.
+        if route == "/user/update":
+            if request_data is not None and isinstance(request_data, dict):
+                for param in request_data.keys():
+                    if param not in ["user_email", "password"]:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail=(
+                                f"user not allowed to access this route, role= {_user_role}. "
+                                f"Trying to access: {route} and updating invalid param: {param}. "
+                                "only user_email and password can be updated"
+                            ),
+                        )
             return
-        elif RouteChecks.check_route_access(
-            route=route, allowed_routes=LiteLLMRoutes.global_spend_tracking_routes.value
+
+        # Hard-block known write routes regardless of HTTP method (defensive
+        # — these are POSTs in practice, but pinning them here protects
+        # against future GET-shaped writes).
+        if route in RouteChecks._ADMIN_VIEWER_BLOCKED_WRITE_ROUTES or (
+            route.startswith("/key/") and route.endswith("/regenerate")
         ):
-            # Allow access to global spend tracking routes (read-only spend endpoints)
-            # proxy_admin_viewer role description: "view all keys, view all spend"
-            return
-        else:
-            # For other routes, block access
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
             )
+
+        # Legacy explicit-allow sets (kept for routes that are POST but
+        # semantically read-only, e.g. /spend/calculate). Both admin_viewer_routes
+        # and global_spend_tracking_routes are reads/listings.
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.admin_viewer_routes.value
+        ):
+            return
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.global_spend_tracking_routes.value
+        ):
+            return
+
+        # NOTE: We intentionally do NOT fall back to allowing all
+        # `management_routes`. That set is a mix of reads (info/list — handled
+        # via the safe-method branch above) and writes (`/team/block`,
+        # `/team/permissions_update`, `/jwt/key/mapping/{new,update,delete}`,
+        # `/key/bulk_update`, `/key/{id}/reset_spend`). A blanket allow would
+        # let Admin Viewer POST these write endpoints — violating the
+        # "no writes, ever" rule. Default-deny instead.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
+        )

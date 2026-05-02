@@ -3,6 +3,7 @@ Supports writing files to Google AI Studio Files API.
 
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
+
 import time
 from typing import Any, List, Literal, Optional
 from urllib.parse import urlparse
@@ -11,6 +12,7 @@ import httpx
 from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
@@ -257,10 +259,14 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             normalized_file_id = file_id
 
         normalized_file_id = normalized_file_id.strip("/")
-        if not normalized_file_id.startswith("files/"):
-            normalized_file_id = f"files/{normalized_file_id}"
+        if normalized_file_id.startswith("files/"):
+            normalized_file_id = normalized_file_id.removeprefix("files/")
 
-        return normalized_file_id
+        encoded_file_id = encode_url_path_segment(
+            normalized_file_id, field_name="file_id"
+        )
+
+        return f"files/{encoded_file_id}"
 
     def transform_retrieve_file_response(
         self,
@@ -300,9 +306,11 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
                 object="file",
                 purpose="user_data",
                 status=status,
-                status_details=str(response_json.get("error", ""))
-                if gemini_state == "FAILED"
-                else None,
+                status_details=(
+                    str(response_json.get("error", ""))
+                    if gemini_state == "FAILED"
+                    else None
+                ),
             )
         except Exception as e:
             verbose_logger.exception(f"Error parsing file retrieve response: {str(e)}")
@@ -334,13 +342,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not api_key:
             raise ValueError("api_key is required")
 
-        # Extract file name from URI if full URI is provided
-        # file_id could be "files/abc123" or "https://generativelanguage.googleapis.com/v1beta/files/abc123"
-        if file_id.startswith("http"):
-            # Extract the file path from full URI
-            file_name = file_id.split("/v1beta/")[-1]
-        else:
-            file_name = file_id if file_id.startswith("files/") else f"files/{file_id}"
+        # Normalize and encode the file name before interpolating it into the URL.
+        file_name = self._normalize_gemini_file_id(file_id)
 
         # Construct the delete URL
         url = f"{api_base}/v1beta/{file_name}"

@@ -13,7 +13,9 @@ import base64
 import hashlib
 import inspect
 import os
+import re
 import secrets
+from html import escape
 from copy import deepcopy
 from typing import (
     TYPE_CHECKING,
@@ -27,20 +29,23 @@ from typing import (
     Union,
     cast,
 )
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 if TYPE_CHECKING:
     import httpx
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching import DualCache
 from litellm.constants import (
+    CLI_SSO_SESSION_CACHE_KEY_PREFIX,
+    CLI_SSO_SESSION_TTL_SECONDS,
+    LITELLM_CLI_SOURCE_IDENTIFIER,
     LITELLM_UI_SESSION_DURATION,
     MAX_SPENDLOG_ROWS_TO_QUERY,
     MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE,
@@ -70,7 +75,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
-from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.auth.auth_utils import (
+    _get_request_ip_address,
+    _has_user_setup_sso,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
@@ -123,6 +132,250 @@ router = APIRouter()
 # Metadata fields (token_type, expires_in, scope) are intentionally kept so
 # response convertors see the same fields in the PKCE path as in the non-PKCE path.
 _OAUTH_TOKEN_FIELDS = frozenset({"access_token", "id_token", "refresh_token"})
+_CLI_SSO_FLOW_CACHE_KEY_PREFIX = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:flow"
+_CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX = (
+    f"{_CLI_SSO_FLOW_CACHE_KEY_PREFIX}:start_rate_limit"
+)
+_CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS = 60
+_CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS = 30
+_CLI_SSO_USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_CLI_SSO_LOGIN_ID_RE = re.compile(r"^cli-[A-Za-z0-9_-]{12,124}$")
+
+
+def _hash_cli_sso_secret(secret: str) -> str:
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def _normalize_cli_sso_user_code(user_code: str) -> str:
+    return "".join(ch for ch in user_code.upper() if ch.isalnum())
+
+
+def _generate_cli_sso_user_code() -> str:
+    user_code = "".join(secrets.choice(_CLI_SSO_USER_CODE_ALPHABET) for _ in range(8))
+    return f"{user_code[:4]}-{user_code[4:]}"
+
+
+def _get_cli_sso_flow_cache_key(login_id: str) -> str:
+    return f"{_CLI_SSO_FLOW_CACHE_KEY_PREFIX}:{login_id}"
+
+
+def _is_valid_cli_sso_login_id(login_id: Optional[str]) -> bool:
+    return isinstance(login_id, str) and bool(_CLI_SSO_LOGIN_ID_RE.fullmatch(login_id))
+
+
+def _get_cli_sso_start_rate_limit_cache_key(
+    request: Request, use_x_forwarded_for: Optional[bool] = False
+) -> str:
+    client_ip = (
+        _get_request_ip_address(
+            request=request, use_x_forwarded_for=use_x_forwarded_for
+        )
+        or "unknown"
+    )
+    client_ip_hash = _hash_cli_sso_secret(client_ip)
+    return f"{_CLI_SSO_START_RATE_LIMIT_CACHE_KEY_PREFIX}:{client_ip_hash}"
+
+
+def _check_cli_sso_start_rate_limit(
+    request: Request,
+    cache: DualCache,
+    use_x_forwarded_for: Optional[bool] = False,
+) -> None:
+    rate_limit_cache_key = _get_cli_sso_start_rate_limit_cache_key(
+        request=request, use_x_forwarded_for=use_x_forwarded_for
+    )
+    current_attempts = cache.increment_cache(
+        key=rate_limit_cache_key,
+        value=1,
+        ttl=_CLI_SSO_START_RATE_LIMIT_WINDOW_SECONDS,
+    )
+    if current_attempts > _CLI_SSO_START_RATE_LIMIT_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many CLI login attempts. Try again later.",
+        )
+
+
+def _get_cli_sso_flow_or_raise(login_id: Optional[str], cache: DualCache) -> dict:
+    if not _is_valid_cli_sso_login_id(login_id):
+        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+
+    cache_key = _get_cli_sso_flow_cache_key(cast(str, login_id))
+    flow = cache.get_cache(key=cache_key)
+    if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
+        raise HTTPException(status_code=400, detail="Invalid CLI login session")
+    return flow
+
+
+def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
+    cache.set_cache(
+        key=_get_cli_sso_flow_cache_key(login_id),
+        value=flow,
+        ttl=CLI_SSO_SESSION_TTL_SECONDS,
+    )
+
+
+def _verify_cli_sso_poll_secret(flow: dict, poll_secret: Optional[str]) -> bool:
+    expected_poll_secret_hash = flow.get("poll_secret_hash")
+    if not isinstance(expected_poll_secret_hash, str) or not isinstance(
+        poll_secret, str
+    ):
+        return False
+    supplied_poll_secret_hash = _hash_cli_sso_secret(poll_secret)
+    return secrets.compare_digest(supplied_poll_secret_hash, expected_poll_secret_hash)
+
+
+def _render_cli_sso_verification_page(
+    verify_url: str, browser_complete_token: str
+) -> str:
+    escaped_verify_url = escape(verify_url, quote=True)
+    escaped_browser_complete_token = escape(browser_complete_token, quote=True)
+    return f"""
+    <!doctype html>
+    <html>
+      <head>
+        <title>LiteLLM CLI Login</title>
+        <style>
+          body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f8fafc;
+            color: #0f172a;
+          }}
+          main {{
+            width: min(420px, calc(100vw - 32px));
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 28px;
+            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+          }}
+          h1 {{ font-size: 22px; margin: 0 0 12px; }}
+          p {{ line-height: 1.5; margin: 0 0 18px; color: #334155; }}
+          label {{ display: block; font-weight: 600; margin-bottom: 8px; }}
+          input {{
+            box-sizing: border-box;
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-size: 20px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+          }}
+          button {{
+            margin-top: 16px;
+            width: 100%;
+            padding: 12px;
+            border: 0;
+            border-radius: 6px;
+            background: #0f172a;
+            color: #ffffff;
+            font-weight: 600;
+            cursor: pointer;
+          }}
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>Complete CLI Login</h1>
+          <p>Enter the verification code shown in your terminal to finish this login.</p>
+          <form method="post" action="{escaped_verify_url}">
+            <input type="hidden" name="browser_complete_token" value="{escaped_browser_complete_token}" />
+            <label for="user_code">Verification code</label>
+            <input id="user_code" name="user_code" autocomplete="one-time-code" required autofocus />
+            <button type="submit">Continue</button>
+          </form>
+        </main>
+      </body>
+    </html>
+    """
+
+
+@router.post("/sso/cli/start", tags=["experimental"], include_in_schema=False)
+async def cli_sso_start(request: Request):
+    from litellm.proxy.proxy_server import general_settings, user_api_key_cache
+
+    _check_cli_sso_start_rate_limit(
+        request=request,
+        cache=user_api_key_cache,
+        use_x_forwarded_for=bool(
+            (general_settings or {}).get("use_x_forwarded_for", False)
+        ),
+    )
+
+    login_id = f"cli-{secrets.token_urlsafe(24)}"
+    poll_secret = secrets.token_urlsafe(32)
+    user_code = _generate_cli_sso_user_code()
+
+    flow = {
+        "poll_secret_hash": _hash_cli_sso_secret(poll_secret),
+        "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code(user_code)),
+        "sso_complete": False,
+        "user_code_verified": False,
+        "session_data": None,
+    }
+    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+
+    return {
+        "login_id": login_id,
+        "poll_secret": poll_secret,
+        "user_code": user_code,
+        "expires_in": CLI_SSO_SESSION_TTL_SECONDS,
+    }
+
+
+@router.post(
+    "/sso/cli/complete/{login_id}", tags=["experimental"], include_in_schema=False
+)
+async def cli_sso_complete(request: Request, login_id: str):
+    from fastapi.responses import HTMLResponse
+
+    from litellm.proxy.common_utils.html_forms.cli_sso_success import (
+        render_cli_sso_success_page,
+    )
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    flow = _get_cli_sso_flow_or_raise(login_id=login_id, cache=user_api_key_cache)
+    if not flow.get("sso_complete") or not flow.get("session_data"):
+        raise HTTPException(status_code=400, detail="CLI login is not ready")
+
+    body = (await request.body()).decode("utf-8")
+    form_values = parse_qs(body)
+    supplied_user_code = (form_values.get("user_code") or [""])[0]
+    supplied_browser_complete_token = (
+        form_values.get("browser_complete_token") or [""]
+    )[0]
+    supplied_user_code_hash = _hash_cli_sso_secret(
+        _normalize_cli_sso_user_code(supplied_user_code)
+    )
+    supplied_browser_complete_token_hash = _hash_cli_sso_secret(
+        supplied_browser_complete_token
+    )
+
+    expected_user_code_hash = flow.get("user_code_hash")
+    if not isinstance(expected_user_code_hash, str) or not secrets.compare_digest(
+        supplied_user_code_hash, expected_user_code_hash
+    ):
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    expected_browser_complete_token_hash = flow.get("browser_complete_token_hash")
+    if not isinstance(
+        expected_browser_complete_token_hash, str
+    ) or not secrets.compare_digest(
+        supplied_browser_complete_token_hash, expected_browser_complete_token_hash
+    ):
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    flow["user_code_verified"] = True
+    _set_cli_sso_flow(login_id=login_id, cache=user_api_key_cache, flow=flow)
+
+    html_content = render_cli_sso_success_page()
+    return HTMLResponse(content=html_content, status_code=200)
 
 
 def normalize_email(email: Optional[str]) -> Optional[str]:
@@ -333,6 +586,7 @@ async def google_login(
     from litellm.proxy.proxy_server import (
         premium_user,
         prisma_client,
+        user_api_key_cache,
         user_custom_ui_sso_sign_in_handler,
     )
 
@@ -382,14 +636,15 @@ async def google_login(
     redirect_url = SSOAuthenticationHandler.get_redirect_url_for_sso(
         request=request,
         sso_callback_route="sso/callback",
-        existing_key=existing_key,
     )
 
-    # Store CLI key in state for OAuth flow
+    if source == LITELLM_CLI_SOURCE_IDENTIFIER:
+        _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
+
+    # Store CLI login handle in state for OAuth flow
     cli_state: Optional[str] = SSOAuthenticationHandler._get_cli_state(
         source=source,
         key=key,
-        existing_key=existing_key,
     )
 
     # check if user defined a custom auth sso sign in handler, if yes, use it
@@ -423,6 +678,7 @@ async def google_login(
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
             state=cli_state,
+            request=request,
         )
         if return_to is not None and sso_redirect is not None:
             if SSOAuthenticationHandler._validate_return_to(return_to):
@@ -722,9 +978,9 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
         import ast
 
         try:
-            generic_user_role_mappings_data: Dict[
-                LitellmUserRoles, List[str]
-            ] = ast.literal_eval(generic_role_mappings)
+            generic_user_role_mappings_data: Dict[LitellmUserRoles, List[str]] = (
+                ast.literal_eval(generic_role_mappings)
+            )
             if isinstance(generic_user_role_mappings_data, dict):
                 from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
 
@@ -881,9 +1137,9 @@ async def get_generic_sso_response(
     verbose_proxy_logger.debug("calling generic_sso.verify_and_process")
     additional_generic_sso_headers_dict = _parse_generic_sso_headers()
 
-    code_verifier: Optional[
-        str
-    ] = None  # assigned inside try; initialized for type tracking
+    code_verifier: Optional[str] = (
+        None  # assigned inside try; initialized for type tracking
+    )
     access_token_payload: Optional[dict] = None  # decoded JWT access token claims
 
     try:
@@ -904,6 +1160,30 @@ async def get_generic_sso_response(
         authorization_code = request.query_params.get("code")
 
         if code_verifier:
+            # State-to-session-cookie binding.  The non-PKCE branch below
+            # delegates to fastapi-sso's ``verify_and_process``, which
+            # performs its own session-cookie check.  The PKCE branch
+            # bypasses that helper, so we validate the URL ``state``
+            # against the ``litellm_oauth_state`` cookie set on the
+            # redirect response — without this an attacker can pre-mint
+            # a state + cached PKCE verifier and hijack a victim's auth
+            # code (Login-CSRF / token theft).
+            url_state = request.query_params.get("state")
+            cookie_state = request.cookies.get("litellm_oauth_state")
+            if (
+                not url_state
+                or not cookie_state
+                or not secrets.compare_digest(url_state, cookie_state)
+            ):
+                raise ProxyException(
+                    message=(
+                        "Invalid OAuth state parameter — does not match "
+                        "the browser-bound state cookie."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="state",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
             if not authorization_code:
                 raise ProxyException(
                     message="Missing authorization code in callback",
@@ -1050,7 +1330,7 @@ async def get_existing_user_info_from_db(
     user_id: Optional[str],
     user_email: Optional[str],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[LiteLLM_UserTable]:
     try:
@@ -1074,7 +1354,7 @@ async def get_existing_user_info_from_db(
 async def get_user_info_from_db(
     result: Union[CustomOpenID, OpenID, dict],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     user_email: Optional[str],
     user_defined_values: Optional[SSOUserDefinedValues],
@@ -1194,7 +1474,7 @@ async def _sync_user_role_from_jwt_role_map(
     received_response: Optional[dict],
     user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_defined_values: Optional[SSOUserDefinedValues],
 ) -> None:
     """
@@ -1233,9 +1513,8 @@ async def _sync_user_role_from_jwt_role_map(
         user_info.user_role = mapped_role.value
         await user_api_key_cache.async_set_cache(
             key=user_info.user_id,
-            value=user_info.model_dump()
-            if hasattr(user_info, "model_dump")
-            else dict(user_info),
+            value=user_info,
+            model_type=LiteLLM_UserTable,
         )
 
 
@@ -1261,9 +1540,9 @@ def apply_user_info_values_to_sso_user_defined_values(
     else:
         # SSO didn't provide a valid role, fall back to DB role or default
         if user_info is None or user_info.user_role is None:
-            user_defined_values[
-                "user_role"
-            ] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+            user_defined_values["user_role"] = (
+                LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
+            )
             verbose_proxy_logger.debug(
                 "No SSO or DB role found, using default: INTERNAL_USER_VIEW_ONLY"
             )
@@ -1390,18 +1669,12 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
         )
 
     if state and state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
-        # Extract the key ID and existing_key from the state
-        # State format: {PREFIX}:{key}:{existing_key} or {PREFIX}:{key}
-        state_parts = state.split(":", 2)  # Split into max 3 parts
+        # State format: {PREFIX}:{login_id}
+        state_parts = state.split(":", 1)
         key_id = state_parts[1] if len(state_parts) > 1 else None
-        existing_key = state_parts[2] if len(state_parts) > 2 else None
 
-        verbose_proxy_logger.info(
-            f"CLI SSO callback detected for key: {key_id}, existing_key: {existing_key}"
-        )
-        return await cli_sso_callback(
-            request=request, key=key_id, existing_key=existing_key, result=result
-        )
+        verbose_proxy_logger.info("CLI SSO callback detected")
+        return await cli_sso_callback(request=request, key=key_id, result=result)
 
     # Control-plane cross-origin: read return_to from cookie.
     # Starlette's cookie_parser already handles RFC 2109 unquoting.
@@ -1422,13 +1695,10 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
 async def cli_sso_callback(
     request: Request,
     key: Optional[str] = None,
-    existing_key: Optional[str] = None,
     result: Optional[Union[OpenID, dict]] = None,
 ):
     """CLI SSO callback - stores session info for JWT generation on polling"""
-    verbose_proxy_logger.info(
-        f"CLI SSO callback for key: {key}, existing_key: {existing_key}"
-    )
+    verbose_proxy_logger.info("CLI SSO callback")
 
     from litellm.proxy.proxy_server import (
         prisma_client,
@@ -1436,11 +1706,7 @@ async def cli_sso_callback(
         user_api_key_cache,
     )
 
-    if not key or not key.startswith("sk-"):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid key parameter. Must be a valid key ID starting with 'sk-'",
-        )
+    flow = _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
 
     if prisma_client is None:
         raise HTTPException(
@@ -1477,9 +1743,6 @@ async def cli_sso_callback(
             raise HTTPException(
                 status_code=500, detail="Failed to retrieve user information from SSO"
             )
-
-        # Store session info in cache (10 min TTL)
-        from litellm.constants import CLI_SSO_SESSION_CACHE_KEY_PREFIX
 
         # Get all teams from user_info - CLI will let user select which one
         teams: List[str] = []
@@ -1521,21 +1784,25 @@ async def cli_sso_callback(
             "team_details": team_details,
         }
 
-        cache_key = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:{key}"
-        user_api_key_cache.set_cache(key=cache_key, value=session_data, ttl=600)
+        flow["session_data"] = session_data
+        flow["sso_complete"] = True
+        browser_complete_token = secrets.token_urlsafe(32)
+        flow["browser_complete_token_hash"] = _hash_cli_sso_secret(
+            browser_complete_token
+        )
+        _set_cli_sso_flow(login_id=cast(str, key), cache=user_api_key_cache, flow=flow)
 
         verbose_proxy_logger.info(
             f"Stored CLI SSO session for user: {user_info.user_id}, teams: {teams}, num_teams: {len(teams)}"
         )
 
-        # Return success page
         from fastapi.responses import HTMLResponse
 
-        from litellm.proxy.common_utils.html_forms.cli_sso_success import (
-            render_cli_sso_success_page,
+        verify_url = str(request.url_for("cli_sso_complete", login_id=key))
+        html_content = _render_cli_sso_verification_page(
+            verify_url=verify_url,
+            browser_complete_token=browser_complete_token,
         )
-
-        html_content = render_cli_sso_success_page()
         return HTMLResponse(content=html_content, status_code=200)
 
     except Exception as e:
@@ -1546,7 +1813,11 @@ async def cli_sso_callback(
 
 
 @router.get("/sso/cli/poll/{key_id}", tags=["experimental"], include_in_schema=False)
-async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
+async def cli_poll_key(
+    key_id: str,
+    team_id: Optional[str] = None,
+    x_litellm_cli_poll_secret: Optional[str] = Header(default=None),
+):
     """
     CLI polling endpoint - retrieves session from cache and generates JWT.
 
@@ -1555,22 +1826,25 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
     2. Second poll (with team_id): Generates JWT with selected team and deletes session
 
     Args:
-        key_id: The session key ID
+        key_id: The CLI login session ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
-    from litellm.constants import CLI_SSO_SESSION_CACHE_KEY_PREFIX
     from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    if not key_id.startswith("sk-"):
-        raise HTTPException(status_code=400, detail="Invalid key ID format")
-
     try:
-        # Look up session in cache
-        cache_key = f"{CLI_SSO_SESSION_CACHE_KEY_PREFIX}:{key_id}"
-        session_data = user_api_key_cache.get_cache(key=cache_key)
+        flow = _get_cli_sso_flow_or_raise(login_id=key_id, cache=user_api_key_cache)
+        if not _verify_cli_sso_poll_secret(
+            flow=flow, poll_secret=x_litellm_cli_poll_secret
+        ):
+            raise HTTPException(status_code=403, detail="Invalid CLI polling secret")
 
-        if session_data:
+        if not flow.get("sso_complete") or not flow.get("user_code_verified"):
+            return {"status": "pending"}
+
+        session_data = flow.get("session_data")
+
+        if isinstance(session_data, dict):
             user_teams = session_data.get("teams", [])
             user_team_details = session_data.get("team_details")
             user_id = session_data["user_id"]
@@ -1630,7 +1904,7 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
             )
 
             # Delete cache entry (single-use)
-            user_api_key_cache.delete_cache(key=cache_key)
+            user_api_key_cache.delete_cache(key=_get_cli_sso_flow_cache_key(key_id))
 
             verbose_proxy_logger.info(
                 f"CLI JWT generated for user: {user_id}, team: {team_id}"
@@ -1648,6 +1922,8 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
         else:
             return {"status": "pending"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(f"Error polling for CLI JWT: {e}")
         raise HTTPException(
@@ -1703,9 +1979,9 @@ async def insert_sso_user(
         if user_defined_values.get("max_budget") is None:
             user_defined_values["max_budget"] = litellm.max_internal_user_budget
         if user_defined_values.get("budget_duration") is None:
-            user_defined_values[
-                "budget_duration"
-            ] = litellm.internal_user_budget_duration
+            user_defined_values["budget_duration"] = (
+                litellm.internal_user_budget_duration
+            )
 
     if user_defined_values["user_role"] is None:
         user_defined_values["user_role"] = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
@@ -1896,6 +2172,7 @@ class SSOAuthenticationHandler:
         microsoft_client_id: Optional[str] = None,
         generic_client_id: Optional[str] = None,
         state: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Step 1. Call Get Login Redirect for the SSO provider. Send the redirect response to `redirect_url`
@@ -1905,6 +2182,8 @@ class SSOAuthenticationHandler:
             google_client_id (Optional[str], optional): The Google Client ID. Defaults to None.
             microsoft_client_id (Optional[str], optional): The Microsoft Client ID. Defaults to None.
             generic_client_id (Optional[str], optional): The Generic Client ID. Defaults to None.
+            request: Optional FastAPI request, used to drive the ``Secure``
+                attribute on the ``litellm_oauth_state`` CSRF cookie.
 
         Returns:
             RedirectResponse: The redirect response from the SSO provider.
@@ -2015,6 +2294,7 @@ class SSOAuthenticationHandler:
                 generic_sso=generic_sso,
                 state=state,
                 generic_authorization_endpoint=generic_authorization_endpoint,
+                request=request,
             )
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -2025,6 +2305,7 @@ class SSOAuthenticationHandler:
         generic_sso: Any,
         state: Optional[str] = None,
         generic_authorization_endpoint: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Get the redirect response for Generic SSO
@@ -2034,10 +2315,13 @@ class SSOAuthenticationHandler:
         from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
         with generic_sso:
-            # TODO: state should be a random string and added to the user session with cookie
-            # or a cryptographicly signed state that we can verify stateless
-            # For simplification we are using a static state, this is not perfect but some
-            # SSO providers do not allow stateless verification
+            # State is bound to the caller's browser via a ``litellm_oauth_state``
+            # HttpOnly cookie set on the redirect response below; the SSO
+            # callback validates the URL ``state`` against that cookie before
+            # completing the PKCE token exchange.  Without this binding, an
+            # attacker who pre-mints a state + a cached PKCE verifier can hand
+            # the link to a victim and capture the resulting access token
+            # (Login CSRF / token theft).
             (
                 redirect_params,
                 code_verifier,
@@ -2104,6 +2388,31 @@ class SSOAuthenticationHandler:
 
                     # Update the redirect response
                     redirect_response.headers["location"] = new_url
+
+                # Bind state to the user's browser session.  The /callback
+                # handler validates the URL ``state`` against this cookie via
+                # ``secrets.compare_digest`` before exchanging the PKCE
+                # code_verifier.  Only set the cookie when PKCE is in use
+                # (i.e. inside this ``code_verifier`` branch) so two
+                # concurrent SSO sessions — one PKCE, one plain — cannot
+                # overwrite each other's state cookie.
+                state_value = redirect_params.get("state")
+                if state_value and redirect_response is not None:
+                    # Production-safe default: require HTTPS for the
+                    # CSRF-protection cookie unless we can prove the
+                    # incoming request is HTTP (local dev).  Without
+                    # ``Secure`` the cookie is sent over plain HTTP,
+                    # letting a network observer read and replay the
+                    # state value and bypass this protection.
+                    secure_flag = request is None or request.url.scheme == "https"
+                    redirect_response.set_cookie(
+                        key="litellm_oauth_state",
+                        value=state_value,
+                        max_age=600,
+                        httponly=True,
+                        samesite="lax",
+                        secure=secure_flag,
+                    )
             return redirect_response
 
     @staticmethod
@@ -2391,20 +2700,15 @@ class SSOAuthenticationHandler:
 
         This is used to authenticate through the CLI login flow.
 
-        The state parameter format is: {PREFIX}:{key}:{existing_key}
-        - If existing_key is provided, it's included in the state
+        The state parameter format is: {PREFIX}:{login_id}
         - The state parameter is used to pass data through the OAuth flow without changing the callback URL
         """
         from litellm.constants import (
             LITELLM_CLI_SESSION_TOKEN_PREFIX,
-            LITELLM_CLI_SOURCE_IDENTIFIER,
         )
 
         if source == LITELLM_CLI_SOURCE_IDENTIFIER and key:
-            if existing_key:
-                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}:{existing_key}"
-            else:
-                return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
+            return f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{key}"
         else:
             return None
 
@@ -3348,9 +3652,9 @@ class MicrosoftSSOHandler:
 
         # if user is trying to get the raw sso response for debugging, return the raw sso response
         if return_raw_sso_response:
-            original_msft_result[
-                MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY
-            ] = user_team_ids
+            original_msft_result[MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY] = (
+                user_team_ids
+            )
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
@@ -3469,9 +3773,9 @@ class MicrosoftSSOHandler:
 
             # Fetch user membership from Microsoft Graph API
             all_group_ids = []
-            next_link: Optional[
-                str
-            ] = MicrosoftSSOHandler.graph_api_user_groups_endpoint
+            next_link: Optional[str] = (
+                MicrosoftSSOHandler.graph_api_user_groups_endpoint
+            )
             auth_headers = {"Authorization": f"Bearer {access_token}"}
             page_count = 0
 
@@ -3726,6 +4030,7 @@ async def debug_sso_login(request: Request):
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
+            request=request,
         )
 
 

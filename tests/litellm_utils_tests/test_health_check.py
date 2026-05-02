@@ -314,11 +314,11 @@ def test_update_litellm_params_for_health_check():
     # Issue #15807: Fixes health checks sending "region/model" as model ID to AWS
     model_info = {}
     litellm_params = {
-        "model": "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0",
         "api_key": "fake_key",
     }
     updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
-    assert updated_params["model"] == "anthropic.claude-3-7-sonnet-20250219-v1:0"
+    assert updated_params["model"] == "anthropic.claude-sonnet-4-5-20250929-v1:0"
 
     # Test with Bedrock cross-region inference profile - should preserve the inference profile prefix
     # AWS requires inference profile IDs like "us.anthropic.claude..." for cross-region routing
@@ -473,9 +473,11 @@ async def test_perform_health_check_filters_by_model_id():
 
     async def mock_perform_health_check(m_list, details=True, **kwargs):
         captured_list.append(m_list)
-        return [
-            {"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}
-        ], [], {}
+        return (
+            [{"model": "gpt-4", "api_key": m_list[0]["litellm_params"]["api_key"]}],
+            [],
+            {},
+        )
 
     with patch(
         "litellm.proxy.health_check._perform_health_check",
@@ -521,7 +523,9 @@ async def test_perform_health_check_with_health_check_model():
         return {"status": "healthy"}
 
     with patch("litellm.ahealth_check", side_effect=mock_health_check):
-        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(model_list)
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
+            model_list
+        )
         print("health check calls: ", health_check_calls)
 
         # Verify the health check used the override model
@@ -574,7 +578,9 @@ async def test_health_check_bad_model():
         "litellm.ahealth_check", side_effect=mock_health_check
     ) as mock_health_check:
         start_time = time.time()
-        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(model_list)
+        healthy_endpoints, unhealthy_endpoints, _ = await _perform_health_check(
+            model_list
+        )
         end_time = time.time()
         print("health check calls: ", health_check_calls)
         assert len(healthy_endpoints) == 0
@@ -631,9 +637,12 @@ async def test_health_check_creates_only_bounded_initial_tasks():
         create_task_call_count += 1
         return real_create_task(coro)
 
-    with patch("litellm.ahealth_check", side_effect=mock_health_check), patch(
-        "litellm.proxy.health_check.asyncio.create_task",
-        side_effect=tracked_create_task,
+    with (
+        patch("litellm.ahealth_check", side_effect=mock_health_check),
+        patch(
+            "litellm.proxy.health_check.asyncio.create_task",
+            side_effect=tracked_create_task,
+        ),
     ):
         perform_task = real_create_task(
             _perform_health_check(model_list, max_concurrency=2)

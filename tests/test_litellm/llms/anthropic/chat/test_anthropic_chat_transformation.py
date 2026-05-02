@@ -8,6 +8,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -36,6 +37,39 @@ def test_response_format_transformation_unit_test():
         "agent_doing": {"title": "Agent Doing", "type": "string"}
     }
     print(result)
+
+
+def test_anthropic_json_mode_non_streaming_mixed_internal_and_user_tools():
+    """Non-streaming + response_format: internal json tool must not require len(tool_calls)==1."""
+    config = AnthropicConfig()
+    tool_calls = [
+        {
+            "id": "toolu_json",
+            "type": "function",
+            "function": {
+                "name": RESPONSE_FORMAT_TOOL_NAME,
+                "arguments": '{"values": {"answer": 42}}',
+            },
+            "index": 0,
+        },
+        {
+            "id": "toolu_user",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "NY"}',
+            },
+            "index": 1,
+        },
+    ]
+    replacement, filtered, extra = config._resolve_json_mode_non_streaming(
+        json_mode=True,
+        tool_calls=tool_calls,
+    )
+    assert replacement is None
+    assert len(filtered) == 1
+    assert filtered[0]["function"]["name"] == "get_weather"
+    assert extra == '{"answer": 42}'
 
 
 def test_calculate_usage():
@@ -1653,9 +1687,7 @@ def test_max_effort_rejected_for_opus_45():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(
-        ValueError, match="effort='max' is only supported by Claude Opus 4.6"
-    ):
+    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -2213,13 +2245,11 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
 
 
 def test_max_effort_rejected_for_sonnet_46():
-    """Test that effort='max' is rejected for Sonnet 4.6 (only Opus 4.6 supports max)."""
+    """Test that effort='max' is rejected for Sonnet 4.6 (Opus-only effort level)."""
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(
-        ValueError, match="effort='max' is only supported by Claude Opus 4.6"
-    ):
+    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
         config.transform_request(
             model="claude-sonnet-4-6-20260219",
             messages=messages,
@@ -2236,6 +2266,22 @@ def test_max_effort_accepted_for_opus_46():
 
     result = config.transform_request(
         model="claude-opus-4-6-20250514",
+        messages=messages,
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
+
+
+def test_max_effort_accepted_for_opus_47():
+    """Test that effort='max' works for Opus 4.7."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Test"}]
+
+    result = config.transform_request(
+        model="claude-opus-4-7",
         messages=messages,
         optional_params={"output_config": {"effort": "max"}},
         litellm_params={},

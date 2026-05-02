@@ -15,6 +15,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_async_httpx_client
 from litellm.types.files import get_file_extension_from_mime_type
 from litellm.types.llms.anthropic import *
@@ -1041,14 +1042,7 @@ def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
             )
         else:
             parameters = f"<result>{parsed_args}</result>\n"
-        invokes += (
-            "<invoke>\n"
-            f"<tool_name>{tool_name}</tool_name>\n"
-            "<parameters>\n"
-            f"{parameters}"
-            "</parameters>\n"
-            "</invoke>\n"
-        )
+        invokes += f"<invoke>\n<tool_name>{tool_name}</tool_name>\n<parameters>\n{parameters}</parameters>\n</invoke>\n"
 
     anthropic_tool_invoke = f"<function_calls>\n{invokes}</function_calls>"
 
@@ -1393,10 +1387,10 @@ def convert_to_gemini_tool_call_invoke(
         if tool_calls is not None:
             for idx, tool in enumerate(tool_calls):
                 if "function" in tool:
-                    gemini_function_call: Optional[
-                        VertexFunctionCall
-                    ] = _gemini_tool_call_invoke_helper(
-                        function_call_params=tool["function"]
+                    gemini_function_call: Optional[VertexFunctionCall] = (
+                        _gemini_tool_call_invoke_helper(
+                            function_call_params=tool["function"]
+                        )
                     )
                     if gemini_function_call is not None:
                         part_dict: VertexPartType = {
@@ -1574,9 +1568,7 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
                         file_data = (
                             file_content.get("file_data", "")
                             if isinstance(file_content, dict)
-                            else file_content
-                            if isinstance(file_content, str)
-                            else ""
+                            else file_content if isinstance(file_content, str) else ""
                         )
 
                     if file_data:
@@ -1637,7 +1629,8 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
     _function_response = VertexFunctionResponse(
-        name=name, response=response_data  # type: ignore
+        name=name,
+        response=response_data,  # type: ignore
     )
 
     # Create part with function_response, and optionally inline_data for images (Computer Use)
@@ -1666,6 +1659,20 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
     if not sanitized:
         sanitized = "tool_use_id"
     return sanitized
+
+
+_ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES = {"application/pdf", "text/plain"}
+
+
+def _is_anthropic_document_data_uri(url: str) -> bool:
+    # Anthropic's base64 document source accepts only application/pdf and
+    # text/plain (see select_anthropic_content_block_type_for_file). Routing
+    # other mimes here would produce a document block the API rejects, so we
+    # leave them on the image code path.
+    match = re.match(r"data:([^;,]+)", url)
+    if not match:
+        return False
+    return match.group(1) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
 
 
 def convert_to_anthropic_tool_result(
@@ -1705,14 +1712,24 @@ def convert_to_anthropic_tool_result(
     """
     anthropic_content: Union[
         str,
-        List[Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]],
+        List[
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
+        ],
     ] = ""
     if isinstance(message["content"], str):
         anthropic_content = message["content"]
     elif isinstance(message["content"], List):
         content_list = message["content"]
         anthropic_content_list: List[
-            Union[AnthropicMessagesToolResultContent, AnthropicMessagesImageParam]
+            Union[
+                AnthropicMessagesToolResultContent,
+                AnthropicMessagesImageParam,
+                AnthropicMessagesDocumentParam,
+            ]
         ] = []
         for content in content_list:
             if content["type"] == "text":
@@ -1727,21 +1744,62 @@ def convert_to_anthropic_tool_result(
                     text_content["cache_control"] = cache_control_value
                 anthropic_content_list.append(text_content)
             elif content["type"] == "image_url":
+                image_url_value = content["image_url"]
                 format = (
-                    content["image_url"].get("format")
-                    if isinstance(content["image_url"], dict)
+                    image_url_value.get("format")
+                    if isinstance(image_url_value, dict)
                     else None
                 )
-                _anthropic_image_param = create_anthropic_image_param(
-                    content["image_url"], format=format, is_bedrock_invoke=force_base64
+                url_str = (
+                    image_url_value.get("url")
+                    if isinstance(image_url_value, dict)
+                    else image_url_value
                 )
-                _anthropic_image_param = add_cache_control_to_content(
-                    anthropic_content_element=_anthropic_image_param,
+                # Data URIs with non-image mime types (e.g. application/pdf) must
+                # translate to Anthropic document blocks, not image blocks —
+                # wrapping a PDF in `type: "image"` is rejected by the API.
+                if isinstance(url_str, str) and _is_anthropic_document_data_uri(
+                    url_str
+                ):
+                    synth_file_message: ChatCompletionFileObject = {
+                        "type": "file",
+                        "file": {"file_data": url_str},
+                    }
+                    _document_block = anthropic_process_openai_file_message(
+                        synth_file_message
+                    )
+                    _document_block = add_cache_control_to_content(
+                        anthropic_content_element=cast(
+                            AnthropicMessagesDocumentParam, _document_block
+                        ),
+                        original_content_element=content,
+                    )
+                    anthropic_content_list.append(
+                        cast(AnthropicMessagesDocumentParam, _document_block)
+                    )
+                else:
+                    _anthropic_image_param = create_anthropic_image_param(
+                        image_url_value,
+                        format=format,
+                        is_bedrock_invoke=force_base64,
+                    )
+                    _anthropic_image_param = add_cache_control_to_content(
+                        anthropic_content_element=_anthropic_image_param,
+                        original_content_element=content,
+                    )
+                    anthropic_content_list.append(
+                        cast(AnthropicMessagesImageParam, _anthropic_image_param)
+                    )
+            elif content["type"] == "file":
+                file_content = cast(ChatCompletionFileObject, content)
+                _file_block = anthropic_process_openai_file_message(file_content)
+                _file_block = add_cache_control_to_content(
+                    anthropic_content_element=cast(
+                        AnthropicMessagesDocumentParam, _file_block
+                    ),
                     original_content_element=content,
                 )
-                anthropic_content_list.append(
-                    cast(AnthropicMessagesImageParam, _anthropic_image_param)
-                )
+                anthropic_content_list.append(_file_block)
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -2081,9 +2139,9 @@ def _sanitize_empty_text_content(
         if isinstance(content, str):
             if not content or not content.strip():
                 message = cast(AllMessageValues, dict(message))  # Make a copy
-                message[
-                    "content"
-                ] = "[System: Empty message content sanitised to satisfy protocol]"
+                message["content"] = (
+                    "[System: Empty message content sanitised to satisfy protocol]"
+                )
                 verbose_logger.debug(
                     f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
                 )
@@ -2423,9 +2481,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             # Convert ChatCompletionImageUrlObject to dict if needed
                             image_url_value = m["image_url"]
                             if isinstance(image_url_value, str):
-                                image_url_input: Union[
-                                    str, dict[str, Any]
-                                ] = image_url_value
+                                image_url_input: Union[str, dict[str, Any]] = (
+                                    image_url_value
+                                )
                             else:
                                 # ChatCompletionImageUrlObject or dict case - convert to dict
                                 image_url_input = {
@@ -2452,9 +2510,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                             )
 
                             if "cache_control" in _content_element:
-                                _anthropic_content_element[
-                                    "cache_control"
-                                ] = _content_element["cache_control"]
+                                _anthropic_content_element["cache_control"] = (
+                                    _content_element["cache_control"]
+                                )
                             user_content.append(_anthropic_content_element)
                         elif m.get("type", "") == "text":
                             m = cast(ChatCompletionTextObject, m)
@@ -2514,9 +2572,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_content_text_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_content_text_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     user_content.append(_anthropic_content_text_element)
 
@@ -2649,9 +2707,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         original_content_element=dict(assistant_content_block),
                     )
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
                     text_element = _anthropic_text_content_element
 
                 # Interleave: each thinking block precedes its server tool group.
@@ -2811,9 +2869,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     )
 
                     if "cache_control" in _content_element:
-                        _anthropic_text_content_element[
-                            "cache_control"
-                        ] = _content_element["cache_control"]
+                        _anthropic_text_content_element["cache_control"] = (
+                            _content_element["cache_control"]
+                        )
 
                     assistant_content.append(_anthropic_text_content_element)
 
@@ -3326,7 +3384,7 @@ def _load_image_from_url(image_url):
     try:
         # Send a GET request to the image URL
         client = HTTPHandler(concurrent_limit=1)
-        response = client.get(image_url)
+        response = safe_get(client, image_url)
         response.raise_for_status()  # Raise an exception for HTTP errors
 
         # Check the response's content type to ensure it is an image
@@ -3564,7 +3622,7 @@ class BedrockImageProcessor:
                 params={"concurrent_limit": 1},
             )
             # Send a GET request to the image URL
-            response = await client.get(image_url, follow_redirects=True)
+            response = await async_safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(
@@ -3579,7 +3637,7 @@ class BedrockImageProcessor:
         try:
             client = HTTPHandler(concurrent_limit=1)
             # Send a GET request to the image URL
-            response = client.get(image_url, follow_redirects=True)
+            response = safe_get(client, image_url)
             response.raise_for_status()  # Raise an exception for HTTP errors
 
             return BedrockImageProcessor._post_call_image_processing(
@@ -3984,6 +4042,55 @@ def _convert_to_bedrock_tool_call_result(
                     tool_result_content_blocks.append(
                         BedrockToolResultContentBlock(image=_block["image"])
                     )
+                elif "document" in _block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_block["document"])
+                    )
+                else:
+                    verbose_logger.warning(
+                        "Bedrock Converse: unrecognized BedrockContentBlock keys "
+                        "%s for image_url tool-result block %s; dropping.",
+                        list(_block.keys()),
+                        content,
+                    )
+            elif content["type"] == "file":
+                # Match the user-message path (_process_file_message): accept
+                # either file_data (base64 data URI) or file_id (server-side
+                # reference / URL) and hand off to BedrockImageProcessor. Raise
+                # BadRequestError on both-None rather than silently dropping.
+                file_obj = content.get("file") or {}
+                file_data = file_obj.get("file_data")
+                file_id = file_obj.get("file_id")
+                if file_data is None and file_id is None:
+                    raise litellm.BadRequestError(
+                        message="file_data and file_id cannot both be None. Got={}".format(
+                            content
+                        ),
+                        model="",
+                        llm_provider="bedrock",
+                    )
+                file_format = file_obj.get("format")
+                _file_block: BedrockContentBlock = (
+                    BedrockImageProcessor.process_image_sync(
+                        image_url=cast(str, file_id or file_data),
+                        format=file_format,
+                    )
+                )
+                if "document" in _file_block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(document=_file_block["document"])
+                    )
+                elif "image" in _file_block:
+                    tool_result_content_blocks.append(
+                        BedrockToolResultContentBlock(image=_file_block["image"])
+                    )
+                else:
+                    verbose_logger.warning(
+                        "Bedrock Converse: unrecognized BedrockContentBlock keys "
+                        "%s for file tool-result block %s; dropping.",
+                        list(_file_block.keys()),
+                        content,
+                    )
 
     message.get("name", "")
     id = str(message.get("tool_call_id", str(uuid.uuid4())))
@@ -4049,6 +4156,40 @@ def _deduplicate_bedrock_tool_content(
 ) -> List[BedrockContentBlock]:
     """Convenience wrapper: deduplicate ``toolResult`` blocks by ``toolUseId``."""
     return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
+
+
+def _sort_bedrock_assistant_content_blocks(
+    blocks: List[BedrockContentBlock],
+) -> List[BedrockContentBlock]:
+    """
+    Sort assistant content blocks so that ``text`` blocks appear before
+    ``toolUse`` blocks.
+
+    Bedrock requires all ``text`` blocks to precede any ``toolUse`` blocks
+    within an assistant message.  When the Responses API converts
+    function_call items before message items, the resulting ``toolUse``
+    blocks can end up before ``text`` blocks, causing Bedrock to reject
+    the request with a 400 error because the ``toolUse`` → ``toolResult``
+    pairing is broken by the intervening ``text`` block.
+
+    Sort order (stable):
+      0 - reasoningContent
+      1 - text / image / document / video / other non-tool blocks
+      2 - toolUse
+    """
+
+    def _sort_key(block: BedrockContentBlock) -> int:
+        if "reasoningContent" in block:
+            return 0
+        if "toolUse" in block:
+            return 2
+        if "cachePoint" in block:
+            # cachePoint blocks are paired with their preceding toolUse block.
+            # Same key as toolUse so Python's stable sort keeps them together.
+            return 2
+        return 1
+
+    return sorted(blocks, key=_sort_key)
 
 
 def _insert_assistant_continue_message(
@@ -4441,6 +4582,11 @@ class BedrockConverseMessagesProcessor:
                                     message=cast(ChatCompletionFileObject, element)
                                 )
                                 _parts.append(_part)
+                            elif element["type"] == "document":
+                                _part = BedrockConverseMessagesProcessor._process_document_message(
+                                    element
+                                )
+                                _parts.append(_part)
                             _cache_point_block = (
                                 litellm.AmazonConverseConfig()._get_cache_point_block(
                                     message_block=cast(
@@ -4644,6 +4790,9 @@ class BedrockConverseMessagesProcessor:
             assistant_content = _deduplicate_bedrock_content_blocks(
                 assistant_content, "toolUse"
             )
+            assistant_content = _sort_bedrock_assistant_content_blocks(
+                assistant_content
+            )
 
             if assistant_content:
                 contents.append(
@@ -4718,6 +4867,44 @@ class BedrockConverseMessagesProcessor:
             )
         return await BedrockImageProcessor.process_image_async(
             image_url=cast(str, file_id or file_data), format=format
+        )
+
+    @staticmethod
+    def _process_document_message(element: dict) -> BedrockContentBlock:
+        """Convert a document content block to a Bedrock DocumentBlock.
+
+        Handles the Anthropic-style document format:
+        {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "..."}}
+        """
+        source = element["source"]
+        source_type = source.get("type")
+        if source_type != "base64":
+            raise ValueError(
+                f"Bedrock Converse only supports base64-encoded document sources, got '{source_type}'. "
+                "Please convert the document to base64 before sending to Bedrock."
+            )
+        media_type: str = source["media_type"]
+        data: str = source["data"]
+        doc_format = BedrockImageProcessor._validate_format(
+            mime_type=media_type, image_format=media_type.split("/")[1]
+        )
+
+        # Deterministic name using the same hashing pattern as _create_bedrock_block
+        HASH_SAMPLE_BYTES = 64 * 1024
+        normalized = "".join(data.split()).encode("utf-8")
+        sample = normalized[:HASH_SAMPLE_BYTES]
+        hasher = hashlib.sha256()
+        hasher.update(sample)
+        hasher.update(str(len(normalized)).encode("utf-8"))
+        content_hash = hasher.hexdigest()[:16]
+        document_name = f"Document_{content_hash}_{doc_format}"
+
+        return BedrockContentBlock(
+            document=BedrockDocumentBlock(
+                source=BedrockSourceBlock(bytes=data),
+                format=doc_format,
+                name=document_name,
+            )
         )
 
     @staticmethod
@@ -4815,6 +5002,11 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                                 BedrockConverseMessagesProcessor._process_file_message(
                                     message=cast(ChatCompletionFileObject, element)
                                 )
+                            )
+                            _parts.append(_part)
+                        elif element["type"] == "document":
+                            _part = BedrockConverseMessagesProcessor._process_document_message(
+                                element
                             )
                             _parts.append(_part)
                         _cache_point_block = (
@@ -5009,6 +5201,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
         assistant_content = _deduplicate_bedrock_content_blocks(
             assistant_content, "toolUse"
         )
+        assistant_content = _sort_bedrock_assistant_content_blocks(assistant_content)
 
         if assistant_content:
             contents.append(
@@ -5060,12 +5253,25 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
     return valid_string
 
 
-def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
+def add_cache_point_tool_block(
+    tool: dict, model: Optional[str] = None
+) -> Optional[BedrockToolBlock]:
+    from litellm.llms.bedrock.common_utils import is_claude_4_5_on_bedrock
+
     cache_control = tool.get("cache_control", None)
     if cache_control is not None:
         cache_point = cache_control.get("type", "ephemeral")
         if cache_point == "ephemeral":
-            return {"cachePoint": {"type": "default"}}
+            cache_point_block: CachePointBlock = {"type": "default"}
+            if isinstance(cache_control, dict) and "ttl" in cache_control:
+                ttl = cache_control["ttl"]
+                if (
+                    ttl in ["5m", "1h"]
+                    and model is not None
+                    and is_claude_4_5_on_bedrock(model)
+                ):
+                    cache_point_block["ttl"] = ttl
+            return {"cachePoint": cache_point_block}
     return None
 
 
@@ -5095,7 +5301,9 @@ def _is_bedrock_tool_block(tool: dict) -> bool:
     )
 
 
-def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
+def _bedrock_tools_pt(
+    tools: List, model: Optional[str] = None
+) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
     tools = [
@@ -5211,7 +5419,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
         tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##
-        cache_point_tool_block = add_cache_point_tool_block(tool)
+        cache_point_tool_block = add_cache_point_tool_block(tool, model=model)
         if cache_point_tool_block is not None:
             tool_block_list.append(cache_point_tool_block)
 
