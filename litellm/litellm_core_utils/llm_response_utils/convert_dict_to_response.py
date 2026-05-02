@@ -615,7 +615,7 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         ),
                     )
                     finish_reason = choice.get("finish_reason", None)
-                if finish_reason is None:
+                if not finish_reason:  # Handle both None and empty string
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
                 if (
