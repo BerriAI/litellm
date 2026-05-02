@@ -74,17 +74,15 @@ class TestParseGcsUri:
                 litellm_params={"bucket_name": "my-bucket"},
             )
 
-    def test_should_allow_legacy_object_path_when_server_flag_enabled(self, config):
-        bucket, encoded = config._parse_gcs_uri(
-            "gs://my-bucket/private/object.txt",
-            litellm_params={
-                "bucket_name": "my-bucket",
-                "allow_legacy_cloud_file_ids": True,
-            },
-        )
-
-        assert bucket == "my-bucket"
-        assert encoded == urllib.parse.quote("private/object.txt", safe="")
+    def test_should_reject_request_supplied_legacy_flag(self, config):
+        with pytest.raises(ValueError, match="LiteLLM-managed"):
+            config._parse_gcs_uri(
+                "gs://my-bucket/private/object.txt",
+                litellm_params={
+                    "bucket_name": "my-bucket",
+                    "allow_legacy_cloud_file_ids": True,
+                },
+            )
 
     def test_should_allow_legacy_object_path_with_trusted_server_flag(self, config):
         trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
@@ -112,11 +110,12 @@ class TestParseGcsUri:
             )
 
     def test_should_keep_configured_prefix_for_legacy_object_path(self, config):
+        trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
         bucket, encoded = config._parse_gcs_uri(
             "gs://my-bucket/team-a/private/object.txt",
             litellm_params={
                 "bucket_name": "my-bucket/team-a",
-                "allow_legacy_cloud_file_ids": True,
+                "_litellm_internal_model_credentials": trusted_credentials,
             },
         )
 
@@ -124,12 +123,13 @@ class TestParseGcsUri:
         assert encoded == urllib.parse.quote("team-a/private/object.txt", safe="")
 
     def test_should_reject_legacy_object_outside_configured_prefix(self, config):
+        trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
         with pytest.raises(ValueError, match="configured storage prefix"):
             config._parse_gcs_uri(
                 "gs://my-bucket/team-b/private/object.txt",
                 litellm_params={
                     "bucket_name": "my-bucket/team-a",
-                    "allow_legacy_cloud_file_ids": True,
+                    "_litellm_internal_model_credentials": trusted_credentials,
                 },
             )
 
