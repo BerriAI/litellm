@@ -1040,6 +1040,113 @@ def test_get_logging_payload_handles_missing_overhead_gracefully():
     ), "litellm_overhead_time_ms should be None when overhead is not provided"
 
 
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+@pytest.mark.parametrize(
+    "disable_end_user_cost_tracking, expected_end_user",
+    [
+        (True, ""),
+        (False, "test-end-user"),
+    ],
+)
+def test_get_logging_payload_honors_disable_end_user_cost_tracking_for_standard_logging_fallback(
+    disable_end_user_cost_tracking: bool,
+    expected_end_user: str,
+):
+    standard_logging_payload = StandardLoggingPayload(
+        id="test-id-end-user",
+        call_type="completion",
+        stream=False,
+        response_cost=0.001,
+        status="success",
+        total_tokens=100,
+        prompt_tokens=50,
+        completion_tokens=50,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=None,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-3.5-turbo", model_map_value=None
+        ),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai",
+        custom_llm_provider="openai",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_org_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            requester_metadata=None,
+            user_api_key_end_user_id="test-end-user",
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user="test-end-user",
+        requester_ip_address=None,
+        messages=[],
+        response={},
+        error_str=None,
+        model_parameters={},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.001",
+            litellm_overhead_time_ms=None,
+            additional_headers=None,
+            batch_models=None,
+            litellm_model_name=None,
+            usage_object=None,
+        ),
+    )
+
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+
+    response_obj = {
+        "id": "test-response-end-user",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+    original_disable_end_user_cost_tracking = litellm.disable_end_user_cost_tracking
+
+    try:
+        litellm.disable_end_user_cost_tracking = disable_end_user_cost_tracking
+
+        payload = get_logging_payload(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=start_time,
+            end_time=end_time,
+        )
+    finally:
+        litellm.disable_end_user_cost_tracking = original_disable_end_user_cost_tracking
+
+    assert payload["end_user"] == expected_end_user
+
+
 @patch(
     "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
 )
