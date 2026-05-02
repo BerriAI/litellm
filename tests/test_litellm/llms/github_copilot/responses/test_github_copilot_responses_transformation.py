@@ -14,6 +14,8 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
+import litellm
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 from litellm.llms.github_copilot.responses.transformation import (
@@ -22,13 +24,26 @@ from litellm.llms.github_copilot.responses.transformation import (
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
 
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+    """Pin litellm.model_cost to the bundled local backup so tests don't depend
+    on remote catalog fetches (and don't change behavior across remote refreshes)."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm, "model_cost", get_model_cost_map(url=litellm.model_cost_map_url)
+    )
+    litellm.add_known_models(model_cost_map=litellm.model_cost)
+
+
 class TestGithubCopilotResponsesAPITransformation:
     """Test GitHub Copilot Responses API configuration and transformations"""
 
     def test_github_copilot_provider_config_registration(self):
-        """Test that GitHub Copilot provider returns GithubCopilotResponsesAPIConfig"""
+        """Test that GitHub Copilot provider returns the native Responses API
+        config for a Responses-capable catalog model. Exercises the full stack:
+        catalog lookup -> github_copilot_supports_responses_api -> native config."""
         config = ProviderConfigManager.get_provider_responses_api_config(
-            model="github_copilot/gpt-5.1-codex",
+            model="github_copilot/gpt-5.3-codex",
             provider=LlmProviders.GITHUB_COPILOT,
         )
 
@@ -373,3 +388,174 @@ class TestGithubCopilotResponsesAPITransformation:
 
         # Non-reasoning items should pass through unchanged
         assert result == message_item
+
+
+class TestGithubCopilotResponsesAPIRouting:
+    """``ProviderConfigManager.get_provider_responses_api_config`` for github_copilot
+    returns the native Responses config only when the model has ``mode=responses``
+    in the (already-merged) model info; otherwise returns None so the dispatcher
+    routes through the chat-completions translation bridge."""
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._get_model_info_helper"
+    )
+    def test_returns_config_when_mode_is_responses(self, mock_get_info):
+        """``mode=responses`` returns native config."""
+        mock_get_info.return_value = {"mode": "responses"}
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-responses-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._get_model_info_helper"
+    )
+    def test_returns_none_when_mode_is_chat(self, mock_get_info):
+        """``mode=chat`` returns None so dispatcher uses bridge."""
+        mock_get_info.return_value = {"mode": "chat"}
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-chat-only-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._get_model_info_helper"
+    )
+    def test_returns_none_when_mode_is_unset_and_no_endpoints(self, mock_get_info):
+        """Entry without ``mode`` and without ``supported_endpoints`` returns None
+        (conservative default)."""
+        mock_get_info.return_value = {}
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._get_model_info_helper"
+    )
+    def test_returns_config_when_mode_unset_but_endpoints_have_responses(
+        self, mock_get_info
+    ):
+        """``mode`` unset but ``supported_endpoints`` declaring /v1/responses
+        returns native config (endpoint-list fallback for stale-but-correct
+        catalog entries that lack ``mode``)."""
+        mock_get_info.return_value = {
+            "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+        }
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._get_model_info_helper"
+    )
+    def test_mode_chat_overrides_endpoints_with_responses(self, mock_get_info):
+        """``mode=chat`` is a hard opt-out: forces bridge even when
+        ``supported_endpoints`` includes /v1/responses. Lets users force the
+        bridge for dual-endpoint models without clearing endpoint metadata."""
+        mock_get_info.return_value = {
+            "mode": "chat",
+            "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+        }
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    def test_returns_config_when_model_is_none(self):
+        """Follow-up GET/DELETE operations pass model=None and keep the native
+        config path (no per-model lookup is possible)."""
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._get_model_info_helper"
+    )
+    def test_returns_none_when_get_model_info_raises(self, mock_get_info):
+        """Catalog lookup failure (model not registered) returns None
+        (conservative default; bridge handles unknown models safely)."""
+        mock_get_info.side_effect = Exception("model not in catalog")
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/never-seen-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._get_model_info_helper"
+    )
+    def test_user_override_via_register_model(self, mock_get_info):
+        """User-supplied per-deployment ``model_info`` flows through
+        ``litellm.register_model`` (called by the router) into the merged
+        catalog read by ``_get_model_info_helper``. Setting ``mode=responses``
+        for a model whose catalog entry says ``mode=chat`` therefore opts in
+        to native dispatch without any per-call argument plumbing."""
+        mock_get_info.return_value = {"mode": "responses"}
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-chat-only-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._get_model_info_helper"
+    )
+    def test_realistic_chat_only_entry_returns_none(self, mock_get_info):
+        """Realistic ``model_prices_and_context_window.json`` shape for a
+        chat-only Copilot model (e.g. github_copilot/gemini-3.1-pro-preview)
+        returns None so /v1/responses calls fall back to the bridge."""
+        mock_get_info.return_value = {
+            "litellm_provider": "github_copilot",
+            "max_input_tokens": 136000,
+            "max_output_tokens": 64000,
+            "max_tokens": 64000,
+            "mode": "chat",
+            "supported_endpoints": ["/v1/chat/completions"],
+            "supports_function_calling": True,
+            "supports_tool_choice": True,
+            "supports_parallel_function_calling": True,
+            "supports_vision": True,
+            "supports_reasoning": True,
+        }
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-chat-only-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None
+
+    @patch(
+        "litellm.llms.github_copilot.responses.transformation._get_model_info_helper"
+    )
+    def test_realistic_responses_only_entry_returns_config(self, mock_get_info):
+        """Realistic catalog entry for a Responses-only Copilot model
+        (e.g. github_copilot/gpt-5.5) returns the native config."""
+        mock_get_info.return_value = {
+            "litellm_provider": "github_copilot",
+            "max_input_tokens": 272000,
+            "max_output_tokens": 128000,
+            "max_tokens": 128000,
+            "mode": "responses",
+            "supported_endpoints": ["/v1/responses"],
+            "supports_function_calling": True,
+            "supports_tool_choice": True,
+            "supports_parallel_function_calling": True,
+            "supports_response_schema": True,
+            "supports_vision": True,
+            "supports_reasoning": True,
+            "supports_none_reasoning_effort": True,
+            "supports_xhigh_reasoning_effort": True,
+        }
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/some-responses-only-model",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)

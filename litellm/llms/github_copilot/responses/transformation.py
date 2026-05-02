@@ -22,6 +22,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
+from litellm.utils import _get_model_info_helper
 
 from ..authenticator import Authenticator
 from ..common_utils import (
@@ -36,6 +37,53 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def github_copilot_supports_responses_api(model: str) -> bool:
+    """
+    Resolve whether to use the native Responses API for a github_copilot model.
+
+    Copilot's /v1/responses endpoint is per-model (only some models like
+    gpt-5.5, gpt-5.4, gpt-5.4-mini opt in upstream). The Responses API config
+    is registered for github_copilot provider-wide, so this function gates
+    per-model to keep /v1/responses calls from failing upstream on chat-only
+    Copilot models like claude-opus-4.7 or gemini-3.1-pro-preview.
+
+    The router calls ``litellm.register_model`` for every proxy deployment,
+    which merges the user's per-deployment ``model_info`` (e.g. ``mode: chat``
+    to force a chat-only override) into ``litellm.model_cost`` before any
+    request runs. ``_get_model_info_helper`` therefore returns merged data
+    with user overrides already applied.
+
+    Resolution order (first match wins):
+      1. ``mode == "responses"`` → True (positive opt-in; user or catalog).
+      2. ``mode == "chat"`` → False (explicit opt-out wins over endpoint
+         declarations, letting users force the bridge for dual-endpoint models).
+      3. ``"/v1/responses"`` in ``supported_endpoints`` → True.
+      4. Otherwise → False (conservative default; the bridge always works
+         because every Copilot model supports /chat/completions).
+
+    Catalog lookup raising (model not registered) → False (conservative).
+    """
+    try:
+        info = _get_model_info_helper(model=model, custom_llm_provider="github_copilot")
+    except Exception as e:
+        verbose_logger.debug(
+            "github_copilot_supports_responses_api: get_model_info failed "
+            "for %s: %s",
+            model,
+            e,
+        )
+        return False
+
+    mode = info.get("mode")
+    if mode == "responses":
+        return True
+    if mode == "chat":
+        return False
+
+    endpoints = info.get("supported_endpoints")
+    return isinstance(endpoints, list) and "/v1/responses" in endpoints
 
 
 class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
