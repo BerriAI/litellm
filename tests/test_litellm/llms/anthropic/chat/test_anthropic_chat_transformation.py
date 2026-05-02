@@ -3677,3 +3677,65 @@ def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
     original_content = [dict(b) for b in messages[1]["content"]]
     result = strip_advisor_blocks_from_messages(messages)
     assert result[1]["content"] == original_content
+
+
+def test_calculate_usage_compaction_iterations():
+    """
+    Verify that compaction iteration usage data is preserved through calculate_usage.
+
+    When compaction fires, Anthropic includes usage.iterations[] with per-iteration
+    token totals. The top-level input_tokens/output_tokens only reflect non-compaction
+    iterations. The iterations array provides the data needed for accurate billing.
+
+    See: https://github.com/BerriAI/litellm/issues/27060
+    """
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 50,
+        "output_tokens": 100,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "iterations": [
+            {
+                "iteration_type": "compaction",
+                "input_tokens": 5000,
+                "output_tokens": 200,
+            },
+            {
+                "iteration_type": "message",
+                "input_tokens": 50,
+                "output_tokens": 100,
+            },
+        ],
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    # Top-level tokens reflect only non-compaction iterations (Anthropic behavior)
+    assert usage.prompt_tokens == 50
+    assert usage.completion_tokens == 100
+    assert usage.total_tokens == 150
+
+    # Iterations array is preserved for accurate billing
+    assert hasattr(usage, "iterations")
+    assert usage.iterations is not None
+    assert len(usage.iterations) == 2
+    assert usage.iterations[0]["iteration_type"] == "compaction"
+    assert usage.iterations[0]["input_tokens"] == 5000
+    assert usage.iterations[1]["iteration_type"] == "message"
+    assert usage.iterations[1]["input_tokens"] == 50
+
+
+def test_calculate_usage_no_iterations():
+    """Verify calculate_usage works normally when iterations is not present."""
+    config = AnthropicConfig()
+
+    usage_object = {
+        "input_tokens": 100,
+        "output_tokens": 200,
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 200
+    assert not hasattr(usage, "iterations") or usage.get("iterations") is None
