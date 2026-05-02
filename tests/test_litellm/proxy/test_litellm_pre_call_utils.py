@@ -2847,6 +2847,61 @@ async def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_po
 
 
 @pytest.mark.asyncio
+async def test_api_created_global_policy_applies_to_new_key_without_restart():
+    """
+    Regression: policies created at runtime via policy builder must apply
+    immediately when attached globally, even if the server started with no
+    initialized policy config.
+    """
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyAttachment,
+        PolicyGuardrails,
+    )
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    policy_registry = get_policy_registry()
+    attachment_registry = get_attachment_registry()
+    policy_registry._policies = {}
+    policy_registry._policies_by_id = {}
+    policy_registry._initialized = False
+    attachment_registry._attachments = []
+    attachment_registry._initialized = False
+
+    try:
+        policy_registry.add_policy(
+            "runtime-global-policy",
+            Policy(guardrails=PolicyGuardrails(add=["runtime-guardrail"])),
+        )
+        attachment_registry.add_attachment(
+            PolicyAttachment(policy="runtime-global-policy", scope="*")
+        )
+
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert "runtime-guardrail" in data["metadata"]["guardrails"]
+        assert "runtime-global-policy" in data["metadata"]["applied_policies"]
+    finally:
+        policy_registry._policies = {}
+        policy_registry._policies_by_id = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
+
+
+@pytest.mark.asyncio
 async def test_add_guardrails_from_policy_engine_policy_version_by_id():
     """
     Test that add_guardrails_from_policy_engine executes a specific policy version

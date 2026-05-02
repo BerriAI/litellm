@@ -44,6 +44,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             "logprobs",
             "max_tokens",
             "n",
+            "parallel_tool_calls",
             "presence_penalty",
             "response_format",
             "seed",
