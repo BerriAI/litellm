@@ -808,6 +808,98 @@ class TestFunctionCallTransformation:
 
         assert result["extra_headers"] == {"X-Test-Header": "test-value"}
 
+    def test_request_transformation_merges_instructions_and_developer_messages(self):
+        """Responses instructions and developer messages should become one system message."""
+        test_input = [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": "Use concise responses.",
+            },
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Never expose secrets."}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": "Hello",
+            },
+        ]
+        responses_api_request = {"instructions": "You are helpful."}
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="custom_openai/qwen",
+            input=test_input,
+            responses_api_request=responses_api_request,
+        )
+
+        messages = result["messages"]
+        assert messages == [
+            {
+                "role": "system",
+                "content": "You are helpful.\n\nUse concise responses.\n\nNever expose secrets.",
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+
+    def test_request_transformation_preserves_messages_without_system_content(self):
+        """Requests without instructions/developer content should not be rewritten."""
+        test_input = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": "Hello",
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": "Hi there",
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="custom_openai/qwen",
+            input=test_input,
+            responses_api_request={},
+        )
+
+        assert result["messages"] == [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+
+    def test_merge_responses_system_messages_extracts_supported_text_content(self):
+        """System/developer content blocks should merge only supported text parts."""
+        messages = [
+            {"role": "system", "content": None},
+            {
+                "role": "developer",
+                "content": [
+                    "Plain text",
+                    {"type": "text", "text": "Text block"},
+                    {"type": "input_text", "text": "Input text block"},
+                    {"type": "image_url", "text": "Ignored image text"},
+                    {"type": "text", "text": 123},
+                ],
+            },
+            {"role": "developer", "content": 123},
+            {"role": "user", "content": "Hello"},
+        ]
+
+        result = LiteLLMCompletionResponsesConfig._merge_responses_system_messages(
+            messages=messages
+        )
+
+        assert result == [
+            {
+                "role": "system",
+                "content": "Plain text\n\nText block\n\nInput text block\n\n123",
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+
     def test_function_call_without_call_id_fallback_to_id(self):
         """Test that function_call items can use 'id' field when 'call_id' is missing"""
         function_call_item = {
