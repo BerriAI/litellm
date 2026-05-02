@@ -1041,3 +1041,12 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # `metadata` is part of the common Anthropic Messages API shape.
     thinking: dict
     metadata: dict
+
+    # `output_config` carries the Anthropic ``effort`` parameter. Bedrock
+    # accepts it on the Invoke Messages API for Claude 4.6+ adaptive thinking
+    # (no beta header) and for Opus 4.5 with the ``effort-2025-11-24`` beta.
+    # Older Claude models on Bedrock reject this field, so the runtime strips
+    # it for them — see ``AmazonAnthropicClaudeMessagesConfig`` for that
+    # model-aware filtering. Including it here lets the allowlist preserve it
+    # for the supported-model path.
+    output_config: dict

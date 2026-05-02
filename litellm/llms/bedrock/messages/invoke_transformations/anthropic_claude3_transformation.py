@@ -290,6 +290,19 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
         return True
 
+    def _supports_effort_on_bedrock(self, model: str) -> bool:
+        """
+        Whether Bedrock accepts ``output_config.effort`` for this model.
+
+        Adaptive-thinking models (Claude 4.6 / 4.7) take ``effort`` natively
+        with no beta header. Claude Opus 4.5 takes ``effort`` only when the
+        ``effort-2025-11-24`` beta header is attached. Older Claude models
+        reject the field outright.
+        """
+        return AnthropicModelInfo._is_adaptive_thinking_model(
+            model
+        ) or self._is_claude_opus_4_5(model)
+
     def _is_claude_opus_4_5(self, model: str) -> bool:
         """
         Check if the model is Claude Opus 4.5.
@@ -510,6 +523,16 @@ class AmazonAnthropicClaudeMessagesConfig(
                 output_format=output_format,
                 anthropic_messages_request=anthropic_messages_request,
             )
+
+        # 5b. ``output_config`` (carries the Anthropic ``effort`` parameter)
+        # is accepted by Bedrock on:
+        #   - Claude 4.6/4.7 adaptive-thinking models (no beta header needed)
+        #   - Claude Opus 4.5 with the ``effort-2025-11-24`` beta header
+        # Other Claude models on Bedrock reject the field, so strip it for
+        # them. The allowlist (step 7 below) only preserves keys that survive
+        # this filter.
+        if not self._supports_effort_on_bedrock(model):
+            anthropic_messages_request.pop("output_config", None)
 
         # 5a. Remove `custom` field from tools (Bedrock doesn't support it)
         # Claude Code sends `custom: {defer_loading: true}` on tool definitions,

@@ -3284,6 +3284,98 @@ def test_transform_request_with_output_config():
     )
 
 
+def test_converse_folds_output_config_effort_into_thinking_for_46():
+    """
+    Bedrock Converse exposes the Anthropic ``effort`` parameter through
+    ``additionalModelRequestFields.thinking.effort`` (per AWS adaptive thinking
+    docs), not as a top-level ``output_config`` block. The transform must
+    fold ``output_config.effort`` into ``thinking`` for adaptive-thinking
+    models so the value survives onto the wire body.
+
+    Customer regression: Sonnet 4.6 ``output_config.effort`` was being dropped
+    on Bedrock Converse and never reached the request payload.
+    """
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hello"}]
+
+    result = config._transform_request(
+        model="us.anthropic.claude-sonnet-4-6-v1:0",
+        messages=messages,
+        optional_params={
+            "maxTokens": 64,
+            "output_config": {"effort": "low"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert "outputConfig" not in result
+    additional_fields = result.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional_fields
+    thinking = additional_fields.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "adaptive"
+    assert thinking.get("effort") == "low"
+
+
+def test_converse_folds_output_config_effort_preserves_existing_thinking():
+    """
+    When the caller already supplied a ``thinking`` block, fold ``effort``
+    into it without overriding any explicit ``thinking.effort``.
+    """
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hello"}]
+
+    # Caller already set thinking with no effort — fold into it.
+    result = config._transform_request(
+        model="us.anthropic.claude-opus-4-7-v1",
+        messages=messages,
+        optional_params={
+            "maxTokens": 64,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
+        },
+        litellm_params={},
+        headers={},
+    )
+    thinking = result["additionalModelRequestFields"].get("thinking")
+    assert thinking == {"type": "adaptive", "effort": "high"}
+
+    # Caller set thinking.effort explicitly — must not be overridden.
+    result = config._transform_request(
+        model="us.anthropic.claude-opus-4-7-v1",
+        messages=messages,
+        optional_params={
+            "maxTokens": 64,
+            "thinking": {"type": "adaptive", "effort": "max"},
+            "output_config": {"effort": "low"},
+        },
+        litellm_params={},
+        headers={},
+    )
+    thinking = result["additionalModelRequestFields"].get("thinking")
+    assert thinking.get("effort") == "max"
+
+
+def test_converse_reasoning_effort_sets_thinking_effort_for_46():
+    """
+    On adaptive-thinking models, OpenAI ``reasoning_effort`` should produce
+    ``thinking.type=adaptive`` plus ``thinking.effort`` so Converse forwards
+    the value through ``additionalModelRequestFields``.
+    """
+    config = AmazonConverseConfig()
+    optional_params: dict = {}
+    config._handle_reasoning_effort_parameter(
+        model="us.anthropic.claude-sonnet-4-6-v1:0",
+        reasoning_effort="medium",
+        optional_params=optional_params,
+    )
+    thinking = optional_params.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "adaptive"
+    assert thinking.get("effort") == "medium"
+
+
 def test_transform_request_strips_anthropic_output_config():
     """
     output_config is Anthropic-specific and must never be forwarded to Bedrock.
