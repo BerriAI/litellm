@@ -1,7 +1,7 @@
-import os
 import posixpath
 import re
-from typing import Optional, Sequence, Tuple
+from types import MappingProxyType
+from typing import Any, Mapping, Optional, Sequence, Tuple, cast
 from urllib.parse import quote, unquote
 
 from litellm._uuid import uuid
@@ -15,6 +15,7 @@ BEDROCK_MANAGED_S3_PREFIXES = (
     BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
     BEDROCK_MANAGED_S3_OUTPUT_PREFIX,
 )
+_MAPPING_PROXY_TYPE: type = type(MappingProxyType({}))
 
 _SAFE_OBJECT_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -110,12 +111,20 @@ def encode_s3_object_key_for_url(object_key: str) -> str:
     return quote(unquote(object_key), safe="/")
 
 
-def should_allow_legacy_cloud_file_ids(litellm_params: Optional[dict] = None) -> bool:
+def should_allow_legacy_cloud_file_ids(
+    litellm_params: Optional[Mapping[str, Any]] = None,
+) -> bool:
     value = None
-    if isinstance(litellm_params, dict):
+    if isinstance(litellm_params, Mapping):
         value = litellm_params.get("allow_legacy_cloud_file_ids")
-    if value is None:
-        value = os.getenv("LITELLM_ALLOW_LEGACY_CLOUD_FILE_IDS")
+        if value is None:
+            trusted_model_credentials = litellm_params.get(
+                "_litellm_internal_model_credentials"
+            )
+            if isinstance(trusted_model_credentials, _MAPPING_PROXY_TYPE):
+                value = cast(Mapping[str, Any], trusted_model_credentials).get(
+                    "allow_legacy_cloud_file_ids"
+                )
 
     if isinstance(value, bool):
         return value

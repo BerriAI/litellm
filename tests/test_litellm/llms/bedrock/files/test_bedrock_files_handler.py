@@ -184,3 +184,23 @@ def test_should_forward_trusted_model_credentials_to_bedrock_provider_config():
     litellm_params = mock_retrieve_file_content.call_args.kwargs["litellm_params"]
     assert litellm_params["_litellm_internal_model_credentials"] is trusted_credentials
     assert "s3_bucket_name" not in litellm_params
+
+
+def test_should_forward_trusted_model_credentials_to_retrieve_provider_config():
+    trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
+    mock_response = MagicMock()
+
+    with patch.object(
+        files_main.base_llm_http_handler,
+        "retrieve_file",
+        return_value=mock_response,
+    ) as mock_retrieve_file:
+        response = files_main.file_retrieve(
+            file_id="gs://safe-bucket/private/file.jsonl",
+            custom_llm_provider="vertex_ai",
+            _litellm_internal_model_credentials=trusted_credentials,
+        )
+
+    assert response is mock_response
+    litellm_params = mock_retrieve_file.call_args.kwargs["litellm_params"]
+    assert litellm_params["_litellm_internal_model_credentials"] is trusted_credentials
