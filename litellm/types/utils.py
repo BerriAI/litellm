@@ -1541,6 +1541,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
+    iterations: Optional[List[Any]] = None
+    """Anthropic-specific field: per-iteration token usage for compaction events."""
+
     def __init__(  # noqa: PLR0915
         self,
         prompt_tokens: Optional[int] = None,
@@ -1555,6 +1558,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         ] = None,
         server_tool_use: Optional[ServerToolUse] = None,
         cost: Optional[float] = None,
+        iterations: Optional[List[Any]] = None,
         **params,
     ):
         # handle reasoning_tokens
@@ -1679,7 +1683,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
         if "prompt_cache_hit_tokens" in params and isinstance(
             params["prompt_cache_hit_tokens"], int
         ):
-            self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
+            self._prompt_cache_hit_tokens = params["prompt_cache_hit_tokens"]
+
+        if iterations is not None:
+            self.iterations = iterations
 
         for k, v in params.items():
             setattr(self, k, v)

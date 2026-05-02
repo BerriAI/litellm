@@ -1718,6 +1718,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         web_search_requests: Optional[int] = None
         tool_search_requests: Optional[int] = None
         inference_geo: Optional[str] = None
+        iterations: Optional[List[Any]] = usage_object.get("iterations")
+        if iterations:
+            prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
+            completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in iterations)
+
         if "inference_geo" in _usage and _usage["inference_geo"] is not None:
             inference_geo = _usage["inference_geo"]
 
@@ -1771,7 +1776,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
 
-        raw_input_tokens = usage_object.get("input_tokens", 0) or 0
+        raw_input_tokens = prompt_tokens - cache_creation_input_tokens - cache_read_input_tokens
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
@@ -1812,6 +1817,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ),
             inference_geo=inference_geo,
             speed=speed,
+            iterations=iterations,
         )
         return usage
 
