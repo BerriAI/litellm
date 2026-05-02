@@ -6673,6 +6673,16 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "azure_ai/deepseek-v4-flash": {
+        "input_cost_per_token": 1.03e-06,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 1000000,
+        "max_tokens": 1000000,
+        "mode": "chat",
+        "output_cost_per_token": 4.12e-06,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-deepseek-v4-flash-and-v4-pro-in-microsoft-foundry/4515174"
+    },
     "azure_ai/deepseek-v3": {
         "input_cost_per_token": 1.14e-06,
         "litellm_provider": "azure_ai",
