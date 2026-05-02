@@ -4,39 +4,9 @@ from typing import Literal, Optional, Union
 
 import httpx
 
-from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 HF_HUB_URL = "https://huggingface.co"
-
-
-def is_url_model_destination(model: str) -> bool:
-    return model.startswith(("http://", "https://"))
-
-
-def _is_url_model_destination_allowed(model: str) -> bool:
-    import litellm
-
-    allowed_hosts = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
-    return is_url_destination_allowed_by_host(model, allowed_hosts)
-
-
-def validate_huggingface_model_identifier(model: str) -> None:
-    """Reject URL-valued model identifiers before provider credentials are added."""
-    if "://" not in model:
-        return
-    if is_url_model_destination(model) and _is_url_model_destination_allowed(model):
-        return
-    raise HuggingFaceError(
-        status_code=400,
-        message=(
-            "Invalid Hugging Face model identifier. Configure custom endpoints with "
-            "api_base or HF_API_BASE/HUGGINGFACE_API_BASE instead of passing a URL "
-            "as the model. To keep legacy URL-valued models for trusted endpoints, "
-            "add the destination host or origin to "
-            "`provider_url_destination_allowed_hosts` in litellm_settings."
-        ),
-    )
 
 
 class HuggingFaceError(BaseLLMException):

@@ -12,11 +12,8 @@ import httpx
 from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-from litellm.litellm_core_utils.url_utils import (
-    encode_url_path_segment,
-    is_url_destination_allowed_by_host,
-)
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     LiteLLMLoggingObj,
@@ -228,21 +225,20 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not api_key:
             raise ValueError("api_key is required")
 
+        file_part = self._normalize_gemini_file_id(file_id)
+
         api_base = (
             self.get_api_base(litellm_params.get("api_base"))
             or "https://generativelanguage.googleapis.com"
         )
         api_base = api_base.rstrip("/")
-        file_part = self._normalize_gemini_file_id(file_id, api_base=api_base)
 
         url = f"{api_base}/v1beta/{file_part}"
 
         # API key is passed via x-goog-api-key header (set in validate_environment)
         return url, {}
 
-    def _normalize_gemini_file_id(
-        self, file_id: str, api_base: Optional[str] = None
-    ) -> str:
+    def _normalize_gemini_file_id(self, file_id: str) -> str:
         """
         Normalize file identifier into `files/{id}` form.
 
@@ -253,14 +249,6 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         """
         if file_id.startswith(("http://", "https://")):
             parsed = urlparse(file_id)
-            if (
-                parsed.username is not None
-                or parsed.password is not None
-                or not self._is_allowed_gemini_file_url(
-                    file_url=file_id, api_base=api_base
-                )
-            ):
-                raise ValueError("Invalid Gemini file URL")
             path = parsed.path.lstrip("/")
             files_index = path.find("files/")
             if files_index != -1:
@@ -279,20 +267,6 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         )
 
         return f"files/{encoded_file_id}"
-
-    @staticmethod
-    def _is_allowed_gemini_file_url(
-        file_url: str, api_base: Optional[str] = None
-    ) -> bool:
-        import litellm
-
-        allowed_hosts: List[str] = []
-        if api_base:
-            allowed_hosts.append(api_base)
-        allowed_hosts.extend(
-            getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
-        )
-        return is_url_destination_allowed_by_host(file_url, allowed_hosts)
 
     def transform_retrieve_file_response(
         self,
@@ -368,8 +342,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         if not api_key:
             raise ValueError("api_key is required")
 
-        api_base = api_base.rstrip("/")
-        file_name = self._normalize_gemini_file_id(file_id, api_base=api_base)
+        # Normalize and encode the file name before interpolating it into the URL.
+        file_name = self._normalize_gemini_file_id(file_id)
 
         # Construct the delete URL
         url = f"{api_base}/v1beta/{file_name}"
