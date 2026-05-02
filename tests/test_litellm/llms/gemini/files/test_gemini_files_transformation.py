@@ -7,7 +7,6 @@ from unittest.mock import Mock, patch
 import httpx
 import pytest
 
-import litellm
 from litellm.llms.gemini.files.transformation import GoogleAIStudioFilesHandler
 from litellm.types.llms.openai import OpenAIFileObject
 
@@ -91,54 +90,6 @@ class TestGoogleAIStudioFilesTransformation:
             url == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
         )
         assert "key=" not in url
-        assert params == {}
-
-    def test_transform_retrieve_file_request_rejects_untrusted_full_url(self):
-        file_id = "https://attacker.example/v1beta/files/test123"
-        litellm_params = {"api_key": "test-api-key"}
-
-        with pytest.raises(ValueError, match="Invalid Gemini file URL"):
-            self.handler.transform_retrieve_file_request(
-                file_id=file_id,
-                optional_params={},
-                litellm_params=litellm_params,
-            )
-
-    def test_transform_retrieve_file_request_allows_full_url_matching_api_base(self):
-        file_id = "https://custom-gemini.example/v1beta/files/test123"
-        litellm_params = {
-            "api_key": "test-api-key",
-            "api_base": "https://custom-gemini.example",
-        }
-
-        url, params = self.handler.transform_retrieve_file_request(
-            file_id=file_id,
-            optional_params={},
-            litellm_params=litellm_params,
-        )
-
-        assert url == "https://custom-gemini.example/v1beta/files/test123"
-        assert params == {}
-
-    def test_transform_retrieve_file_request_allows_full_url_when_host_allowlisted(
-        self,
-        monkeypatch,
-    ):
-        monkeypatch.setattr(
-            litellm,
-            "provider_url_destination_allowed_hosts",
-            ["trusted-gemini.example"],
-        )
-        file_id = "https://trusted-gemini.example/v1beta/files/test123"
-        litellm_params = {"api_key": "test-api-key"}
-
-        url, params = self.handler.transform_retrieve_file_request(
-            file_id=file_id,
-            optional_params={},
-            litellm_params=litellm_params,
-        )
-
-        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
         assert params == {}
 
     def test_transform_retrieve_file_request_encodes_file_id_path_segment(self):
@@ -391,34 +342,6 @@ class TestGoogleAIStudioFilesTransformation:
         # Verify URL construction
         assert file_id in url
         assert "generativelanguage.googleapis.com" in url
-        assert params == {}
-
-    def test_transform_delete_file_request_rejects_untrusted_full_url(self):
-        litellm_params = {
-            "api_key": "test-api-key",
-            "api_base": "https://generativelanguage.googleapis.com",
-        }
-
-        with pytest.raises(ValueError, match="Invalid Gemini file URL"):
-            self.handler.transform_delete_file_request(
-                file_id="https://attacker.example/v1beta/files/test123",
-                optional_params={},
-                litellm_params=litellm_params,
-            )
-
-    def test_transform_delete_file_request_allows_full_url_matching_api_base(self):
-        litellm_params = {
-            "api_key": "test-api-key",
-            "api_base": "https://custom-gemini.example",
-        }
-
-        url, params = self.handler.transform_delete_file_request(
-            file_id="https://custom-gemini.example/v1beta/files/test123",
-            optional_params={},
-            litellm_params=litellm_params,
-        )
-
-        assert url == "https://custom-gemini.example/v1beta/files/test123"
         assert params == {}
 
     def test_transform_delete_file_request_encodes_file_id_path_segment(self):

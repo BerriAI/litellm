@@ -14,11 +14,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import EmbeddingResponse
 
 from ...base import BaseLLM
-from ..common_utils import (
-    HuggingFaceError,
-    is_url_model_destination,
-    validate_huggingface_model_identifier,
-)
+from ..common_utils import HuggingFaceError
 from .transformation import HuggingFaceEmbeddingConfig
 
 config = HuggingFaceEmbeddingConfig()
@@ -158,8 +154,6 @@ class HuggingFaceEmbedding(BaseLLM):
         embed_url: str,
     ) -> dict:
         data: Dict = {}
-        validate_huggingface_model_identifier(model)
-        model_uses_url_destination = is_url_model_destination(model)
 
         ## TRANSFORMATION ##
         if "sentence-transformers" in model:
@@ -175,12 +169,8 @@ class HuggingFaceEmbedding(BaseLLM):
             task_type = optional_params.pop("input_type", None)
 
             if call_type == "sync":
-                hf_task = (
-                    task_type
-                    if model_uses_url_destination
-                    else get_hf_task_embedding_for_model(
-                        model=model, task_type=task_type, api_base=HF_HUB_URL
-                    )
+                hf_task = get_hf_task_embedding_for_model(
+                    model=model, task_type=task_type, api_base=HF_HUB_URL
                 )
             elif call_type == "async":
                 return self._async_transform_input(
@@ -344,7 +334,6 @@ class HuggingFaceEmbedding(BaseLLM):
         headers={},
     ) -> EmbeddingResponse:
         super().embedding()
-        validate_huggingface_model_identifier(model)
         headers = config.validate_environment(
             api_key=api_key,
             headers=headers,
@@ -354,17 +343,12 @@ class HuggingFaceEmbedding(BaseLLM):
             litellm_params=litellm_params,
         )
         task_type = optional_params.get("input_type", None)
-        model_uses_url_destination = is_url_model_destination(model)
-        task = (
-            task_type
-            if model_uses_url_destination
-            else get_hf_task_embedding_for_model(
-                model=model, task_type=task_type, api_base=HF_HUB_URL
-            )
+        task = get_hf_task_embedding_for_model(
+            model=model, task_type=task_type, api_base=HF_HUB_URL
         )
         # print_verbose(f"{model}, {task}")
         embed_url = ""
-        if model_uses_url_destination:
+        if "https" in model:
             embed_url = model
         elif api_base:
             embed_url = api_base
