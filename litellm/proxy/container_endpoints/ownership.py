@@ -1,4 +1,5 @@
 import os
+import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -21,6 +22,38 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV = "LITELLM_ALLOW_UNTRACKED_CONTAINER_ACCESS"
 MAX_IN_MEMORY_CONTAINER_OWNERS = 10000
 _IN_MEMORY_CONTAINER_OWNERS: "OrderedDict[str, str]" = OrderedDict()
+
+# Short-lived cache keeps every container access check from hitting the DB
+# (`_get_container_owner` is invoked on retrieve / delete / list / file-content
+# paths). Mirrors the `_byok_cred_cache` pattern in mcp_server/server.py:
+# (value, monotonic_timestamp) tuples, TTL'd, capped, invalidated by writes.
+# A `None` value caches "untracked" so repeated negative lookups also avoid DB.
+_CONTAINER_OWNER_CACHE: Dict[str, Tuple[Optional[str], float]] = {}
+_CONTAINER_OWNER_CACHE_TTL = 60  # seconds
+_CONTAINER_OWNER_CACHE_MAX_SIZE = 10000
+
+
+def _read_container_owner_cache(model_object_id: str) -> Tuple[bool, Optional[str]]:
+    """Return (hit, value). hit=False means caller must consult the DB."""
+    entry = _CONTAINER_OWNER_CACHE.get(model_object_id)
+    if entry is None:
+        return False, None
+    value, timestamp = entry
+    if time.monotonic() - timestamp > _CONTAINER_OWNER_CACHE_TTL:
+        _CONTAINER_OWNER_CACHE.pop(model_object_id, None)
+        return False, None
+    return True, value
+
+
+def _write_container_owner_cache(model_object_id: str, owner: Optional[str]) -> None:
+    if len(_CONTAINER_OWNER_CACHE) >= _CONTAINER_OWNER_CACHE_MAX_SIZE:
+        _CONTAINER_OWNER_CACHE.clear()
+    _CONTAINER_OWNER_CACHE[model_object_id] = (owner, time.monotonic())
+
+
+def _invalidate_container_owner_cache(model_object_id: str) -> None:
+    """Drop a cache entry after a write so the next read sees the new owner."""
+    _CONTAINER_OWNER_CACHE.pop(model_object_id, None)
 
 
 def _allow_untracked_container_access() -> bool:
@@ -139,6 +172,7 @@ async def record_container_owner(
             ):
                 raise HTTPException(status_code=403, detail="Forbidden")
             _remember_container_owner(model_object_id, owner)
+            _invalidate_container_owner_cache(model_object_id)
             return response
 
         store = ContainerOwnershipStore(prisma_client)
@@ -185,6 +219,7 @@ async def record_container_owner(
             raise HTTPException(status_code=403, detail="Forbidden")
         _remember_container_owner(model_object_id, owner)
 
+    _invalidate_container_owner_cache(model_object_id)
     return response
 
 
@@ -196,15 +231,23 @@ async def _get_container_owner(
         original_container_id,
         custom_llm_provider,
     )
+
+    cached_hit, cached_value = _read_container_owner_cache(model_object_id)
+    if cached_hit:
+        return cached_value
+
     try:
         prisma_client = await _get_prisma_client()
         if prisma_client is None:
-            return _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
+            owner = _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
+            _write_container_owner_cache(model_object_id, owner)
+            return owner
 
         owner = await ContainerOwnershipStore(prisma_client).get_owner(model_object_id)
-        if owner is not None:
-            return owner
-        return _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
+        if owner is None:
+            owner = _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
+        _write_container_owner_cache(model_object_id, owner)
+        return owner
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to load container ownership for container_id=%s; "
@@ -212,6 +255,7 @@ async def _get_container_owner(
             model_object_id,
             e,
         )
+        # Don't cache transient DB errors — let the next request retry.
         return _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
 
 
