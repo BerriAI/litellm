@@ -2244,7 +2244,7 @@ class CustomStreamWrapper:
                 asyncio.create_task(
                     self.logging_obj.async_failure_handler(e, traceback_exception)
                 )
-            raise e
+            self._handle_stream_fallback_error(e)
         except Exception as e:
             traceback_exception = traceback.format_exc()
             if self.logging_obj is not None:

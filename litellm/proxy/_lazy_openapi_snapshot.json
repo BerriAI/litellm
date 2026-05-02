@@ -5454,7 +5454,7 @@
       },
       "/cloudzero/settings": {
         "get": {
-          "description": "View current CloudZero settings.\n\nReturns the current CloudZero configuration with the API key masked for security.\nOnly the first 4 and last 4 characters of the API key are shown.\nReturns null/empty values when settings are not configured (consistent with other settings endpoints).\n\nOnly admin users can view CloudZero settings.",
+          "description": "View current CloudZero settings.\n\nReturns the current CloudZero configuration with the API key masked for security.\nOnly the first 4 and last 4 characters of the API key are shown.\nReturns null/empty values when settings are not configured (consistent with other settings endpoints).\n\nOnly admin users (Proxy Admin or Admin Viewer) can view CloudZero settings.",
           "operationId": "get_cloudzero_settings_cloudzero_settings_get",
           "responses": {
             "200": {
@@ -28202,7 +28202,7 @@
       },
       "/vantage/settings": {
         "get": {
-          "description": "View current Vantage settings.\n\nReturns the current Vantage configuration with the API key masked for security.\nOnly admin users can view Vantage settings.",
+          "description": "View current Vantage settings.\n\nReturns the current Vantage configuration with the API key masked for security.\nOnly admin users (Proxy Admin or Admin Viewer) can view Vantage settings.",
           "operationId": "get_vantage_settings_vantage_settings_get",
           "responses": {
             "200": {
