@@ -18,6 +18,7 @@ import pytest
 import litellm
 import litellm.utils
 from litellm import completion
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 
 
@@ -653,3 +654,44 @@ class TestMoonshotConfig:
             result[1].get("reasoning_content")
             == "<thinking>Planning to call weather tool</thinking>"
         )
+
+
+class TestKimiK26ModelRegistry:
+    """Tests that kimi-k2.6 is correctly registered in the model registry."""
+
+    @pytest.fixture(autouse=True)
+    def model_cost_map(self):
+        """Load directly from the bundled backup so tests don't depend on remote fetch."""
+        return GetModelCostMap.load_local_model_cost_map()
+
+    def test_kimi_k26_in_model_cost_map(self, model_cost_map):
+        """kimi-k2.6 should be present in the model cost map."""
+        assert "moonshot/kimi-k2.6" in model_cost_map, "moonshot/kimi-k2.6 not found in model_cost"
+
+    def test_kimi_k26_pricing(self, model_cost_map):
+        """kimi-k2.6 pricing should match official Kimi API rates."""
+        model_info = model_cost_map["moonshot/kimi-k2.6"]
+        assert model_info["input_cost_per_token"] == pytest.approx(9.5e-07)
+        assert model_info["output_cost_per_token"] == pytest.approx(4e-06)
+        assert model_info["cache_read_input_token_cost"] == pytest.approx(1.6e-07)
+
+    def test_kimi_k26_context_window(self, model_cost_map):
+        """kimi-k2.6 should have a 256K (262144 token) context window."""
+        model_info = model_cost_map["moonshot/kimi-k2.6"]
+        assert model_info["max_input_tokens"] == 262144
+        assert model_info["max_output_tokens"] == 262144
+        assert model_info["max_tokens"] == 262144
+
+    def test_kimi_k26_capabilities(self, model_cost_map):
+        """kimi-k2.6 should support function calling, vision, video input, tool choice, and reasoning."""
+        model_info = model_cost_map["moonshot/kimi-k2.6"]
+        assert model_info.get("supports_function_calling") is True
+        assert model_info.get("supports_tool_choice") is True
+        assert model_info.get("supports_vision") is True
+        assert model_info.get("supports_video_input") is True
+        assert model_info.get("supports_reasoning") is True
+
+    def test_kimi_k26_provider(self, model_cost_map):
+        """kimi-k2.6 should be assigned to the moonshot provider."""
+        model_info = model_cost_map["moonshot/kimi-k2.6"]
+        assert model_info["litellm_provider"] == "moonshot"

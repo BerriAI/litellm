@@ -267,9 +267,11 @@ async def get_hashicorp_vault_config(
     Get current Hashicorp Vault configuration.
     Returns decrypted values from DB, or falls back to current env vars.
     """
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.proxy_server import prisma_client, proxy_config
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Admin Viewer follows the read-parity rule.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail="Only admin users can view config overrides",

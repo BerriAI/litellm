@@ -7,6 +7,11 @@ const __dirname = path.dirname(__filename);
 
 const nextConfig = {
   output: "export",
+  // Required with output: "export" — default image optimizer runs only in server mode.
+  // See https://nextjs.org/docs/messages/export-image-api
+  images: {
+    unoptimized: true,
+  },
   basePath: "",
   assetPrefix: "/litellm-asset-prefix",
   turbopack: {

@@ -35,6 +35,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
     _user_has_admin_view,
+    require_caller_user_id_for_non_admin,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -2069,6 +2070,9 @@ async def delete_user(
         litellm_proxy_admin_name,
         prisma_client,
     )
+    from litellm.proxy.management_helpers.audit_logs import (
+        get_audit_log_changed_by,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -2162,9 +2166,11 @@ async def delete_user(
                     request_data=LiteLLM_AuditLogs(
                         id=str(uuid.uuid4()),
                         updated_at=datetime.now(timezone.utc),
-                        changed_by=litellm_changed_by
-                        or user_api_key_dict.user_id
-                        or litellm_proxy_admin_name,
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
                         changed_by_api_key=user_api_key_dict.api_key,
                         table_name=LitellmTableNames.USER_TABLE_NAME,
                         object_id=user_id,
@@ -2582,9 +2588,10 @@ async def get_user_daily_activity(
         if is_admin:
             entity_id = user_id  # None means global view, otherwise filter by user
         else:
+            caller_user_id = require_caller_user_id_for_non_admin(user_api_key_dict)
             if user_id is None:
-                user_id = user_api_key_dict.user_id
-            if user_id != user_api_key_dict.user_id:
+                user_id = caller_user_id
+            if user_id != caller_user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={
@@ -2679,9 +2686,10 @@ async def get_user_daily_activity_aggregated(
         if is_admin:
             entity_id = user_id  # None means global view, otherwise filter by user
         else:
+            caller_user_id = require_caller_user_id_for_non_admin(user_api_key_dict)
             if user_id is None:
-                user_id = user_api_key_dict.user_id
-            if user_id != user_api_key_dict.user_id:
+                user_id = caller_user_id
+            if user_id != caller_user_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail={

@@ -2,9 +2,9 @@ import asyncio
 import json
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 from fastapi import HTTPException, Request
 
@@ -25,7 +25,6 @@ from litellm.proxy.management_endpoints.ui_sso import (
     SSOAuthenticationHandler,
     _setup_team_mappings,
     _sync_user_role_from_jwt_role_map,
-    determine_role_from_groups,
     normalize_email,
     process_sso_jwt_access_token,
 )
@@ -1471,13 +1470,13 @@ class TestAuthCallbackRouting:
         from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
 
         # Test CLI state detection logic
-        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-test123"
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-test1234567890"
 
         # This mimics the logic in auth_callback
         if cli_state and cli_state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:"):
-            # Extract the key ID from the state
+            # Extract the login ID from the state
             key_id = cli_state.split(":", 1)[1]
-            assert key_id == "sk-test123"
+            assert key_id == "cli-test1234567890"
         else:
             assert False, "CLI state should have been detected"
 
@@ -1510,13 +1509,13 @@ class TestGoogleLoginCLIIntegration:
 
         # Test the CLI state generation logic used in google_login
         source = "litellm-cli"
-        key = "sk-test123"
+        key = "cli-test1234567890"
 
         cli_state = SSOAuthenticationHandler._get_cli_state(source=source, key=key)
 
         assert cli_state is not None
         assert cli_state.startswith("litellm-session-token:")
-        assert "sk-test123" in cli_state
+        assert "cli-test1234567890" in cli_state
 
     def test_google_login_no_cli_state_when_missing_params(self):
         """Test that google_login doesn't generate CLI state when CLI parameters are missing"""
@@ -1526,8 +1525,8 @@ class TestGoogleLoginCLIIntegration:
         test_cases = [
             (None, None),
             ("litellm-cli", None),
-            (None, "sk-test123"),
-            ("wrong-source", "sk-test123"),
+            (None, "cli-test1234567890"),
+            ("wrong-source", "cli-test1234567890"),
         ]
 
         for source, key in test_cases:
@@ -1634,19 +1633,19 @@ class TestSSOStateHandling:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         state = SSOAuthenticationHandler._get_cli_state(
-            source="litellm-cli", key="sk-test123"
+            source="litellm-cli", key="cli-test1234567890"
         )
 
         assert state is not None
         assert state.startswith("litellm-session-token:")
-        assert "sk-test123" in state
+        assert "cli-test1234567890" in state
 
     def test_get_cli_state_invalid_source(self):
         """Test generating CLI state with invalid source"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         state = SSOAuthenticationHandler._get_cli_state(
-            source="invalid_source", key="sk-test123"
+            source="invalid_source", key="cli-test1234567890"
         )
 
         assert state is None
@@ -1663,40 +1662,40 @@ class TestSSOStateHandling:
         """Test generating CLI state without source"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
-        state = SSOAuthenticationHandler._get_cli_state(source=None, key="sk-test123")
+        state = SSOAuthenticationHandler._get_cli_state(
+            source=None, key="cli-test1234567890"
+        )
 
         assert state is None
 
-    def test_get_cli_state_with_existing_key(self):
-        """Test generating CLI state with existing_key embedded in state parameter"""
+    def test_get_cli_state_ignores_existing_key(self):
+        """Test CLI state does not embed an existing key"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         state = SSOAuthenticationHandler._get_cli_state(
             source="litellm-cli",
-            key="sk-new-key-123",
+            key="cli-new-key-1234567890",
             existing_key="sk-existing-key-456",
         )
 
         assert state is not None
         assert state.startswith("litellm-session-token:")
-        assert "sk-new-key-123" in state
-        assert "sk-existing-key-456" in state
-        # Verify the format: {PREFIX}:{key}:{existing_key}
-        assert state == "litellm-session-token:sk-new-key-123:sk-existing-key-456"
+        assert "cli-new-key-1234567890" in state
+        assert "sk-existing-key-456" not in state
+        assert state == "litellm-session-token:cli-new-key-1234567890"
 
     def test_get_cli_state_without_existing_key(self):
         """Test generating CLI state without existing_key"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         state = SSOAuthenticationHandler._get_cli_state(
-            source="litellm-cli", key="sk-new-key-789", existing_key=None
+            source="litellm-cli", key="cli-new-key-789123456", existing_key=None
         )
 
         assert state is not None
         assert state.startswith("litellm-session-token:")
-        assert "sk-new-key-789" in state
-        # Verify the format: {PREFIX}:{key} (no third part)
-        assert state == "litellm-session-token:sk-new-key-789"
+        assert "cli-new-key-789123456" in state
+        assert state == "litellm-session-token:cli-new-key-789123456"
         assert state.count(":") == 1  # Only one colon separator
 
 
@@ -1708,44 +1707,37 @@ class TestStateRouting:
         from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
 
         # Test CLI state format
-        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-test123"
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-test1234567890"
         assert cli_state.startswith(f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:")
 
         # Test extraction of key from state
         key_id = cli_state.split(":", 1)[1]
-        assert key_id == "sk-test123"
+        assert key_id == "cli-test1234567890"
 
-    def test_cli_state_parsing_with_existing_key(self):
-        """Test parsing CLI state with existing_key embedded"""
+    def test_cli_state_parsing_uses_single_login_id(self):
+        """Test parsing CLI state with a single login ID"""
         from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
 
-        # State format: {PREFIX}:{key}:{existing_key}
-        cli_state = (
-            f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-key-456:sk-existing-key-789"
-        )
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-key-456123"
 
         # Parse as done in auth_callback
-        state_parts = cli_state.split(":", 2)  # Split into max 3 parts
+        state_parts = cli_state.split(":", 1)
         key_id = state_parts[1] if len(state_parts) > 1 else None
-        existing_key = state_parts[2] if len(state_parts) > 2 else None
 
-        assert key_id == "sk-new-key-456"
-        assert existing_key == "sk-existing-key-789"
+        assert key_id == "cli-new-key-456123"
 
-    def test_cli_state_parsing_without_existing_key(self):
-        """Test parsing CLI state without existing_key"""
+    def test_cli_state_parsing_without_extra_segments(self):
+        """Test parsing CLI state uses a single login ID"""
         from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
 
         # State format: {PREFIX}:{key}
-        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-key-999"
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-key-999123"
 
         # Parse as done in auth_callback
-        state_parts = cli_state.split(":", 2)  # Split into max 3 parts
+        state_parts = cli_state.split(":", 1)
         key_id = state_parts[1] if len(state_parts) > 1 else None
-        existing_key = state_parts[2] if len(state_parts) > 2 else None
 
-        assert key_id == "sk-new-key-999"
-        assert existing_key is None
+        assert key_id == "cli-new-key-999123"
 
     def test_non_cli_state_detection(self):
         """Test detection of non-CLI state parameters"""
@@ -2007,6 +1999,178 @@ class TestCustomUISSO:
 class TestCLIKeyRegenerationFlow:
     """Test the end-to-end CLI key regeneration flow"""
 
+    def test_cli_sso_login_id_validation_restricts_charset(self):
+        """Test CLI SSO login IDs only allow the generated character set"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _is_valid_cli_sso_login_id,
+        )
+
+        assert _is_valid_cli_sso_login_id("cli-test_1234567890")
+        assert not _is_valid_cli_sso_login_id("cli-session")
+        assert not _is_valid_cli_sso_login_id("cli-test\n1234567890")
+        assert not _is_valid_cli_sso_login_id("cli-test\x001234567890")
+        assert not _is_valid_cli_sso_login_id("sk-test1234567890")
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_start_creates_bound_flow(self):
+        """Test CLI SSO start creates a polling secret bound flow"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_start,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
+        mock_cache = MagicMock()
+        mock_cache.increment_cache.return_value = 1
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            result = await cli_sso_start(request=mock_request)
+
+        assert result["login_id"].startswith("cli-")
+        assert result["poll_secret"]
+        assert result["user_code"]
+
+        mock_cache.increment_cache.assert_called_once()
+        assert mock_cache.increment_cache.call_args.kwargs["ttl"] == 60
+        mock_cache.set_cache.assert_called_once()
+        flow_data = mock_cache.set_cache.call_args.kwargs["value"]
+        assert flow_data["poll_secret_hash"] == _hash_cli_sso_secret(
+            result["poll_secret"]
+        )
+        assert flow_data["user_code_hash"] == _hash_cli_sso_secret(
+            _normalize_cli_sso_user_code(result["user_code"])
+        )
+        assert flow_data["poll_secret_hash"] != result["poll_secret"]
+        assert flow_data["user_code_hash"] != result["user_code"]
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_start_rate_limits_by_client_ip(self):
+        """Test CLI SSO start enforces a coarse per-client rate limit"""
+        from litellm.proxy.management_endpoints.ui_sso import cli_sso_start
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.client = SimpleNamespace(host="127.0.0.1")
+        mock_request.headers = {}
+        mock_cache = MagicMock()
+        mock_cache.increment_cache.return_value = 31
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_sso_start(request=mock_request)
+
+        assert exc_info.value.status_code == 429
+        mock_cache.set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_complete_verifies_user_code(self):
+        """Test CLI SSO complete marks a session as verified"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(
+            return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token"
+        )
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(
+                _normalize_cli_sso_user_code("ABCD-EFGH")
+            ),
+            "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
+            "sso_complete": True,
+            "user_code_verified": False,
+            "session_data": {"user_id": "test-user-123"},
+        }
+
+        with (
+            patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+            patch(
+                "litellm.proxy.common_utils.html_forms.cli_sso_success.render_cli_sso_success_page",
+                return_value="<html>Success</html>",
+            ),
+        ):
+            result = await cli_sso_complete(
+                request=mock_request, login_id="cli-session-4567890"
+            )
+
+        assert result.status_code == 200
+        flow_data = mock_cache.set_cache.call_args.kwargs["value"]
+        assert flow_data["user_code_verified"] is True
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_complete_requires_callback_token(self):
+        """Test CLI SSO complete requires the callback-delivered token"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(return_value=b"user_code=ABCD-EFGH")
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(
+                _normalize_cli_sso_user_code("ABCD-EFGH")
+            ),
+            "browser_complete_token_hash": _hash_cli_sso_secret("browser-token"),
+            "sso_complete": True,
+            "user_code_verified": False,
+            "session_data": {"user_id": "test-user-123"},
+        }
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_sso_complete(
+                    request=mock_request, login_id="cli-session-4567890"
+                )
+
+        assert exc_info.value.status_code == 400
+        mock_cache.set_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cli_sso_complete_waits_for_callback_before_token_checks(self):
+        """Test CLI SSO complete returns not-ready before verification checks"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            _normalize_cli_sso_user_code,
+            cli_sso_complete,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.body = AsyncMock(
+            return_value=b"user_code=ABCD-EFGH&browser_complete_token=browser-token"
+        )
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "user_code_hash": _hash_cli_sso_secret(
+                _normalize_cli_sso_user_code("ABCD-EFGH")
+            ),
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+        }
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_sso_complete(
+                    request=mock_request, login_id="cli-session-4567890"
+                )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "CLI login is not ready"
+        mock_request.body.assert_not_awaited()
+        mock_cache.set_cache.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_cli_sso_callback_stores_session(self):
         """Test CLI SSO callback stores session data in cache for JWT generation"""
@@ -2017,7 +2181,7 @@ class TestCLIKeyRegenerationFlow:
         mock_request = MagicMock(spec=Request)
 
         # Test data
-        session_key = "sk-session-456"
+        session_key = "cli-session-4567890"
 
         # Mock user info
         mock_user_info = LiteLLM_UserTable(
@@ -2032,6 +2196,16 @@ class TestCLIKeyRegenerationFlow:
 
         # Mock cache
         mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": "poll-secret-hash",
+            "user_code_hash": "user-code-hash",
+            "sso_complete": False,
+            "user_code_verified": False,
+            "session_data": None,
+        }
+        mock_request.url_for.return_value = (
+            "https://test.example.com/sso/cli/complete/cli-session-4567890"
+        )
 
         with (
             patch(
@@ -2049,7 +2223,6 @@ class TestCLIKeyRegenerationFlow:
             result = await cli_sso_callback(
                 request=mock_request,
                 key=session_key,
-                existing_key=None,
                 result=mock_sso_result,
             )
 
@@ -2062,14 +2235,18 @@ class TestCLIKeyRegenerationFlow:
             assert session_key in call_args.kwargs["key"]
 
             # Verify session data structure
-            session_data = call_args.kwargs["value"]
+            flow_data = call_args.kwargs["value"]
+            session_data = flow_data["session_data"]
+            assert flow_data["sso_complete"] is True
+            assert flow_data["user_code_verified"] is False
+            assert isinstance(flow_data["browser_complete_token_hash"], str)
             assert session_data["user_id"] == "test-user-123"
             assert session_data["user_role"] == "internal_user"
             assert session_data["teams"] == ["team1", "team2"]
             assert session_data["models"] == ["gpt-4"]
 
             # Verify TTL
-            assert call_args.kwargs["ttl"] == 600  # 10 minutes
+            assert call_args.kwargs["ttl"] == 600
 
             assert result.status_code == 200
             # Verify response contains success message (response is HTML)
@@ -2078,10 +2255,13 @@ class TestCLIKeyRegenerationFlow:
     @pytest.mark.asyncio
     async def test_cli_poll_key_returns_teams_for_selection(self):
         """Test CLI poll endpoint returns teams for user selection when multiple teams exist"""
-        from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            cli_poll_key,
+        )
 
         # Test data
-        session_key = "sk-session-789"
+        session_key = "cli-session-789123"
         session_data = {
             "user_id": "test-user-456",
             "user_role": "internal_user",
@@ -2091,11 +2271,20 @@ class TestCLIKeyRegenerationFlow:
 
         # Mock cache
         mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = session_data
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "sso_complete": True,
+            "user_code_verified": True,
+            "session_data": session_data,
+        }
 
         with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
             # Act - First poll without team_id
-            result = await cli_poll_key(key_id=session_key, team_id=None)
+            result = await cli_poll_key(
+                key_id=session_key,
+                team_id=None,
+                x_litellm_cli_poll_secret="poll-secret",
+            )
 
             # Assert - should return teams list for selection
             assert result["status"] == "ready"
@@ -2108,16 +2297,72 @@ class TestCLIKeyRegenerationFlow:
             mock_cache.delete_cache.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_auth_callback_routes_to_cli_with_existing_key(self):
-        """Test that auth_callback properly routes CLI requests and extracts existing_key from state parameter"""
+    async def test_cli_poll_key_requires_poll_secret(self):
+        """Test CLI poll endpoint rejects callers without the polling secret"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            cli_poll_key,
+        )
+
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "sso_complete": True,
+            "user_code_verified": True,
+            "session_data": {
+                "user_id": "test-user-456",
+                "user_role": "internal_user",
+                "teams": [],
+                "models": ["gpt-4"],
+            },
+        }
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            with pytest.raises(HTTPException) as exc_info:
+                await cli_poll_key(key_id="cli-session-789123", team_id=None)
+
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_cli_poll_key_waits_for_user_code_verification(self):
+        """Test CLI poll endpoint stays pending until user code verification"""
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            cli_poll_key,
+        )
+
+        mock_cache = MagicMock()
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "sso_complete": True,
+            "user_code_verified": False,
+            "session_data": {
+                "user_id": "test-user-456",
+                "user_role": "internal_user",
+                "teams": [],
+                "models": ["gpt-4"],
+            },
+        }
+
+        with patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache):
+            result = await cli_poll_key(
+                key_id="cli-session-789123",
+                team_id=None,
+                x_litellm_cli_poll_secret="poll-secret",
+            )
+
+        assert result == {"status": "pending"}
+
+    @pytest.mark.asyncio
+    async def test_auth_callback_routes_to_cli(self):
+        """Test that auth_callback properly routes CLI requests"""
         from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
         from litellm.proxy.management_endpoints.ui_sso import auth_callback
 
-        # Mock request (no query params needed - existing_key is in state)
+        # Mock request
         mock_request = MagicMock(spec=Request)
 
-        # CLI state with existing_key embedded: {PREFIX}:{key}:{existing_key}
-        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:sk-new-session-key-456:sk-existing-cli-key-123"
+        cli_state = f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:cli-new-session-key-456"
 
         # Mock the CLI callback and required proxy server components
         mock_result = {"user_id": "test-user", "email": "test@example.com"}
@@ -2142,16 +2387,14 @@ class TestCLIKeyRegenerationFlow:
             # Act
             await auth_callback(request=mock_request, state=cli_state)
 
-            # Assert - existing_key should be extracted from state parameter
             mock_cli_callback.assert_called_once_with(
                 request=mock_request,
-                key="sk-new-session-key-456",
-                existing_key="sk-existing-cli-key-123",
+                key="cli-new-session-key-456",
                 result=mock_result,
             )
 
     def test_get_redirect_url_does_not_include_existing_key_in_url(self):
-        """Test that redirect URL generation does NOT include existing_key in URL (uses state parameter instead)"""
+        """Test that redirect URL generation does NOT include existing_key in URL"""
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Mock request
@@ -2194,10 +2437,13 @@ class TestCLIKeyRegenerationFlow:
     async def test_cli_poll_key_generates_jwt_with_team(self):
         """Test CLI poll endpoint generates JWT when team_id is provided"""
         from litellm.proxy._types import LiteLLM_UserTable
-        from litellm.proxy.management_endpoints.ui_sso import cli_poll_key
+        from litellm.proxy.management_endpoints.ui_sso import (
+            _hash_cli_sso_secret,
+            cli_poll_key,
+        )
 
         # Test data
-        session_key = "sk-session-999"
+        session_key = "cli-session-999123"
         selected_team = "team-b"
         session_data = {
             "user_id": "test-user-789",
@@ -2217,7 +2463,12 @@ class TestCLIKeyRegenerationFlow:
 
         # Mock cache
         mock_cache = MagicMock()
-        mock_cache.get_cache.return_value = session_data
+        mock_cache.get_cache.return_value = {
+            "poll_secret_hash": _hash_cli_sso_secret("poll-secret"),
+            "sso_complete": True,
+            "user_code_verified": True,
+            "session_data": session_data,
+        }
 
         mock_jwt_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.token"
 
@@ -2235,7 +2486,11 @@ class TestCLIKeyRegenerationFlow:
             )
 
             # Act - Second poll with team_id
-            result = await cli_poll_key(key_id=session_key, team_id=selected_team)
+            result = await cli_poll_key(
+                key_id=session_key,
+                team_id=selected_team,
+                x_litellm_cli_poll_secret="poll-secret",
+            )
 
             # Assert - should return JWT
             assert result["status"] == "ready"
@@ -2901,7 +3156,7 @@ class TestGetGenericSSORedirectParams:
         from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
         # Arrange
-        cli_state = "litellm-session-token:sk-test123"
+        cli_state = "litellm-session-token:cli-test1234567890"
 
         with patch.dict(os.environ, {"GENERIC_CLIENT_STATE": "env_state_value"}):
             # Act

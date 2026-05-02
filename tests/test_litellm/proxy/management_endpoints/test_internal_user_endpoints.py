@@ -1733,6 +1733,107 @@ async def test_get_user_daily_activity_non_admin_cannot_view_other_users(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_get_user_daily_activity_rejects_service_account_caller(monkeypatch):
+    """
+    Security regression: a non-admin caller with user_id=None (a service-account
+    key, where user_id is forced to None at key creation) must not be able to
+    bypass the entity filter and read every tenant's daily spend.
+
+    Before the fix, the endpoint silently defaulted user_id to
+    user_api_key_dict.user_id, which is itself None for service-account keys.
+    None != None is False, the same-user check passed, and entity_id=None
+    flowed into get_daily_activity, where the SQL builder treats None as
+    "no filter".
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Tripwire: ensure get_daily_activity is never reached
+    mock_get_daily = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity",
+        mock_get_daily,
+    )
+
+    service_account_key = UserAPIKeyAuth(
+        user_id=None,  # service-account keys have user_id forced to None
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_user_daily_activity(
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            model=None,
+            api_key=None,
+            user_id=None,
+            page=1,
+            page_size=50,
+            timezone=None,
+            user_api_key_dict=service_account_key,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Service-account keys" in str(exc_info.value.detail)
+    mock_get_daily.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_user_daily_activity_aggregated_rejects_service_account_caller(
+    monkeypatch,
+):
+    """
+    Same security regression as
+    test_get_user_daily_activity_rejects_service_account_caller, on the
+    aggregated route. Same shape, raw-SQL builder, same fix.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_aggregated,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_get_daily_agg = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        mock_get_daily_agg,
+    )
+
+    service_account_key = UserAPIKeyAuth(
+        user_id=None,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_user_daily_activity_aggregated(
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            model=None,
+            api_key=None,
+            user_id=None,
+            timezone=None,
+            user_api_key_dict=service_account_key,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "Service-account keys" in str(exc_info.value.detail)
+    mock_get_daily_agg.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch):
     """
     Test that admin users can call the aggregated endpoint without a user_id
