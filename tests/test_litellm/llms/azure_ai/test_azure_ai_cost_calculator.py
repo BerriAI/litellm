@@ -4,18 +4,55 @@ Test Azure AI cost calculator, especially Model Router flat cost.
 
 import pytest
 
-from litellm.llms.azure_ai.cost_calculator import (
-    _is_azure_model_router,
-    cost_per_token,
-)
-from litellm.types.utils import Usage
-from litellm.utils import get_model_info
+litellm = None
+_is_azure_model_router = None
+cost_per_token = None
+Usage = None
+get_model_info = None
+_invalidate_model_cost_lowercase_map = None
 
-# Get the flat cost from model_prices_and_context_window.json
-_model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
-AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS = (
-    _model_info.get("input_cost_per_token", 0) * 1_000_000
-)
+
+@pytest.fixture(autouse=True)
+def use_local_model_cost_map(monkeypatch):
+    global litellm, _is_azure_model_router, cost_per_token
+    global Usage, get_model_info, _invalidate_model_cost_lowercase_map
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    import litellm as litellm_module
+    from litellm.llms.azure_ai.cost_calculator import (
+        _is_azure_model_router as is_azure_model_router,
+        cost_per_token as azure_ai_cost_per_token,
+    )
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
+    from litellm.types.utils import Usage as UsageType
+    from litellm.utils import (
+        _invalidate_model_cost_lowercase_map as invalidate_model_cost_lowercase_map,
+        get_model_info as get_model_info_fn,
+    )
+
+    litellm = litellm_module
+    _is_azure_model_router = is_azure_model_router
+    cost_per_token = azure_ai_cost_per_token
+    Usage = UsageType
+    get_model_info = get_model_info_fn
+    _invalidate_model_cost_lowercase_map = invalidate_model_cost_lowercase_map
+
+    original_model_cost = litellm.model_cost
+    litellm.model_cost = get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+        _invalidate_model_cost_lowercase_map()
+
+
+def _get_azure_model_router_flat_cost_per_m_input_tokens() -> float:
+    model_info = get_model_info(model="model_router", custom_llm_provider="azure_ai")
+    return model_info.get("input_cost_per_token", 0) * 1_000_000
 
 
 class TestAzureModelRouterDetection:
@@ -97,7 +134,7 @@ class TestAzureModelRouterFlatCost:
         # Calculate expected flat cost
         expected_flat_cost = (
             usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
+            * _get_azure_model_router_flat_cost_per_m_input_tokens()
             / 1_000_000
         )
 
@@ -126,7 +163,7 @@ class TestAzureModelRouterFlatCost:
         # Calculate expected flat cost
         expected_flat_cost = (
             usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
+            * _get_azure_model_router_flat_cost_per_m_input_tokens()
             / 1_000_000
         )
 
@@ -153,7 +190,7 @@ class TestAzureModelRouterFlatCost:
         prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
 
         # Calculate expected flat cost
-        expected_flat_cost = AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
+        expected_flat_cost = _get_azure_model_router_flat_cost_per_m_input_tokens()
 
         # Flat cost should be exactly $0.14 for 1M tokens
         assert expected_flat_cost == pytest.approx(0.14, rel=1e-9)
@@ -195,7 +232,7 @@ class TestAzureModelRouterFlatCost:
         # Flat cost is based on ALL prompt tokens (including cached)
         expected_flat_cost = (
             usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
+            * _get_azure_model_router_flat_cost_per_m_input_tokens()
             / 1_000_000
         )
 
@@ -234,7 +271,7 @@ class TestAzureModelRouterFlatCost:
         # Expected: model cost (from gpt-5-nano) + router flat cost
         expected_flat_cost = (
             usage.prompt_tokens
-            * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS
+            * _get_azure_model_router_flat_cost_per_m_input_tokens()
             / 1_000_000
         )
         assert expected_flat_cost == pytest.approx(0.0014, rel=1e-9)
@@ -266,7 +303,9 @@ class TestAzureModelRouterCostBreakdown:
 
         # Expected flat cost
         expected_flat_cost = (
-            prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+            prompt_tokens
+            * _get_azure_model_router_flat_cost_per_m_input_tokens()
+            / 1_000_000
         )
 
         assert flat_cost > 0
@@ -314,7 +353,7 @@ class TestAzureModelRouterCostBreakdown:
 
         # Expected flat cost
         expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+            5000 * _get_azure_model_router_flat_cost_per_m_input_tokens() / 1_000_000
         )
 
         # Cost should include the flat cost (use approx for floating-point comparison)
@@ -389,7 +428,7 @@ class TestAzureModelRouterCostBreakdown:
 
         # Verify the flat cost value
         expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+            5000 * _get_azure_model_router_flat_cost_per_m_input_tokens() / 1_000_000
         )
         actual_flat_cost = additional_costs["Azure Model Router Flat Cost"]
         assert actual_flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
@@ -439,7 +478,7 @@ class TestAzureModelRouterCostBreakdown:
             litellm_logging_obj=logging_obj,
         )
         expected_flat_cost = (
-            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+            5000 * _get_azure_model_router_flat_cost_per_m_input_tokens() / 1_000_000
         )
         assert cost >= expected_flat_cost
         assert logging_obj.cost_breakdown is not None
@@ -451,3 +490,49 @@ class TestAzureModelRouterCostBreakdown:
         assert logging_obj.cost_breakdown["additional_costs"][
             "Azure Model Router Flat Cost"
         ] == pytest.approx(expected_flat_cost, rel=1e-9)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["azure_ai/deepseek-v4-flash"],
+)
+def test_azure_ai_deepseek_v4_flash_model_info(model_name: str):
+    model_info = get_model_info(model=model_name)
+
+    assert model_info["litellm_provider"] == "azure_ai"
+    assert model_info["mode"] == "chat"
+    assert model_info["max_input_tokens"] == 1_000_000
+    assert model_info["max_output_tokens"] == 1_000_000
+    assert model_info["max_tokens"] == 1_000_000
+    assert model_info["input_cost_per_token"] == pytest.approx(1.03e-06)
+    assert model_info["output_cost_per_token"] == pytest.approx(4.12e-06)
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_tool_choice"] is True
+
+
+def test_azure_ai_deepseek_v4_flash_raw_model_cost_entry():
+    model_info = litellm.model_cost["azure_ai/deepseek-v4-flash"]
+
+    assert model_info["supported_modalities"] == ["text"]
+    assert model_info["supported_output_modalities"] == ["text"]
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_tool_choice"] is True
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["deepseek-v4-flash"],
+)
+def test_azure_ai_deepseek_v4_flash_cost_per_token(model_name: str):
+    usage = Usage(
+        prompt_tokens=1_000_000,
+        completion_tokens=1_000_000,
+        total_tokens=2_000_000,
+    )
+
+    prompt_cost, completion_cost = cost_per_token(model=model_name, usage=usage)
+
+    assert prompt_cost == pytest.approx(1.03)
+    assert completion_cost == pytest.approx(4.12)
