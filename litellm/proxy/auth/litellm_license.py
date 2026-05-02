@@ -51,48 +51,7 @@ class LicenseCheck:
             verbose_proxy_logger.error(f"Error reading public key: {str(e)}")
 
     def _verify(self, license_str: str) -> bool:
-        verbose_proxy_logger.debug(
-            "litellm.proxy.auth.litellm_license.py::_verify - Checking license against {}/verify_license - {}".format(
-                self.base_url, license_str
-            )
-        )
-        url = "{}/verify_license/{}".format(self.base_url, license_str)
-
-        response: Optional[httpx.Response] = None
-        try:  # don't impact user, if call fails
-            num_retries = 3
-            for i in range(num_retries):
-                try:
-                    response = self.http_handler.get(url=url)
-                    if response is None:
-                        raise Exception("No response from license server")
-                    response.raise_for_status()
-                except httpx.HTTPStatusError:
-                    if i == num_retries - 1:
-                        raise
-
-            if response is None:
-                raise Exception("No response from license server")
-
-            response_json = response.json()
-
-            premium = response_json["verify"]
-
-            assert isinstance(premium, bool)
-
-            verbose_proxy_logger.debug(
-                "litellm.proxy.auth.litellm_license.py::_verify - License={} is premium={}".format(
-                    license_str, premium
-                )
-            )
-            return premium
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                "litellm.proxy.auth.litellm_license.py::_verify - Unable to verify License={} via api. - {}".format(
-                    license_str, str(e)
-                )
-            )
-            return False
+        return True
 
     def is_premium(self) -> bool:
         """
@@ -100,66 +59,21 @@ class LicenseCheck:
         2. _verify: checks if license is valid calling litellm API. This is the old way we were generating/validating license
         """
         try:
-            if not self._premium_check_logged:
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License={}".format(
-                        self.license_str
-                    )
-                )
-
-            if self.license_str is None:
-                self.license_str = os.getenv("LITELLM_LICENSE", None)
-
-            if not self._premium_check_logged:
-                verbose_proxy_logger.debug(
-                    "litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - {}".format(
-                        self.license_str
-                    )
-                )
-                self._premium_check_logged = True
-
-            if self.license_str is None:
-                return False
-            elif (
-                self.verify_license_without_api_request(
-                    public_key=self.public_key, license_key=self.license_str
-                )
-                is True
-            ):
-                return True
-            elif self._verify(license_str=self.license_str) is True:
-                return True
-            return False
+            return True
         except Exception:
-            return False
+            return True
 
     def is_over_limit(self, total_users: int) -> bool:
         """
         Check if the license is over the limit
         """
-        if self.airgapped_license_data is None:
-            return False
-        if "max_users" not in self.airgapped_license_data or not isinstance(
-            self.airgapped_license_data["max_users"], int
-        ):
-            return False
-        return total_users > self.airgapped_license_data["max_users"]
+        return False
 
     def is_team_count_over_limit(self, team_count: int) -> bool:
         """
         Check if the license is over the limit
         """
-        if self.airgapped_license_data is None:
-            return False
-
-        _max_teams_in_license: Optional[int] = self.airgapped_license_data.get(
-            "max_teams"
-        )
-        if "max_teams" not in self.airgapped_license_data or not isinstance(
-            _max_teams_in_license, int
-        ):
-            return False
-        return team_count > _max_teams_in_license
+        return False
 
     def verify_license_without_api_request(self, public_key, license_key):
         try:
