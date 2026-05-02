@@ -8,12 +8,35 @@ any drift as a neutral check.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 
 SNAPSHOT_FILE = Path(__file__).parent / "_lazy_openapi_snapshot.json"
-HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
+HTTP_METHOD_SUFFIXES = {
+    "delete",
+    "get",
+    "head",
+    "options",
+    "patch",
+    "post",
+    "put",
+    "trace",
+}
+
+
+def _stabilize_multi_method_route_ids(routes) -> None:
+    """FastAPI derives route IDs from a set of methods; make snapshots stable."""
+
+    for route in routes:
+        methods = sorted(getattr(route, "methods", None) or [])
+        if len(methods) <= 1 or not getattr(route, "path_format", None):
+            continue
+
+        operation_id = f"{route.name}{route.path_format}"
+        operation_id = re.sub(r"\W", "_", operation_id)
+        route.unique_id = f"{operation_id}_{methods[0].lower()}"
 
 
 def load_snapshot() -> Optional[Dict[str, Dict]]:
@@ -38,12 +61,12 @@ def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
         if not isinstance(path_ops, dict):
             continue
 
-        methods = {method for method in path_ops if method in HTTP_METHODS}
+        methods = {method for method in path_ops if method in HTTP_METHOD_SUFFIXES}
         if not methods:
             continue
 
         for method, operation in path_ops.items():
-            if method not in HTTP_METHODS or not isinstance(operation, dict):
+            if method not in HTTP_METHOD_SUFFIXES or not isinstance(operation, dict):
                 continue
 
             operation_id = operation.get("operationId")
@@ -59,13 +82,13 @@ def _normalize_operation_ids(paths: Dict[str, Dict]) -> None:
                     break
 
 
-def generate_snapshot() -> Dict[str, Dict]:  # pragma: no cover
+def generate_snapshot() -> Dict[str, Dict]:
     import importlib
 
     from fastapi.openapi.utils import get_openapi
 
     from litellm.proxy._lazy_features import LAZY_FEATURES
-    from litellm.proxy.proxy_server import app
+    from litellm.proxy.proxy_server import app, ensure_unique_openapi_operation_ids
 
     for feat in LAZY_FEATURES:
         if feat.module_path in sys.modules:
@@ -77,6 +100,7 @@ def generate_snapshot() -> Dict[str, Dict]:  # pragma: no cover
             sys.stderr.write(f"warning: skip {feat.name}: {exc}\n")
 
     fragments: Dict[str, Dict] = {}
+    used_operation_ids: Set[str] = set()
     for feat in LAZY_FEATURES:
         feat_routes = [
             r
@@ -85,14 +109,24 @@ def generate_snapshot() -> Dict[str, Dict]:  # pragma: no cover
         ]
         if not feat_routes:
             continue
+        _stabilize_multi_method_route_ids(feat_routes)
         full = get_openapi(title=app.title, version=app.version, routes=feat_routes)
         paths = full.get("paths", {})
         _normalize_operation_ids(paths)
         # Group all of a feature's routes under one tag.
-        for path_ops in paths.values():
-            for op in path_ops.values():
+        for path_ops in full.get("paths", {}).values():
+            for method, op in path_ops.items():
                 if isinstance(op, dict):
+                    operation_id = op.get("operationId")
+                    if isinstance(operation_id, str):
+                        for suffix in HTTP_METHOD_SUFFIXES:
+                            if operation_id.endswith(f"_{suffix}"):
+                                op["operationId"] = (
+                                    operation_id[: -len(suffix)] + method
+                                )
+                                break
                     op["tags"] = [feat.name]
+        full = ensure_unique_openapi_operation_ids(full, used_operation_ids)
         fragments[feat.name] = {
             "paths": paths,
             "components": {"schemas": full.get("components", {}).get("schemas", {})},
@@ -100,7 +134,7 @@ def generate_snapshot() -> Dict[str, Dict]:  # pragma: no cover
     return fragments
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     fragments = generate_snapshot()
     SNAPSHOT_FILE.write_text(json.dumps(fragments, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(f"wrote {len(fragments)} feature fragments to {SNAPSHOT_FILE}\n")
