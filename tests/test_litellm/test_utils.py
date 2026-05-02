@@ -3983,3 +3983,34 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_azure_ai_gpt_image_models_in_cost_map():
+    """
+    Test that azure_ai/gpt-image-2 and azure_ai/gpt-image-to-image entries 
+    are correctly configured in model_prices_and_context_window.json.
+
+    Prices:
+    - Text Input:  $5/M tokens
+    - Image Input: $8/M tokens
+    - Image Output: $30/M tokens
+
+    Closes https://github.com/BerriAI/litellm/issues/26765
+    """
+    import json
+    from pathlib import Path
+
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    for key in ["azure_ai/gpt-image-2", "azure_ai/gpt-image-to-image"]:
+        info = model_cost.get(key)
+        assert info is not None, f"{key} missing from model_prices_and_context_window.json"
+        assert info["litellm_provider"] == "azure_ai"
+        assert info["mode"] == "image_generation"
+        assert info["input_cost_per_token"] == 5e-06
+        assert info["input_cost_per_image_token"] == 8e-06
+        assert info["output_cost_per_image_token"] == 3e-05
+        assert info["cache_read_input_image_token_cost"] == 2e-06
+        assert info["supports_vision"] is True
