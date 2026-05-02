@@ -3067,6 +3067,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "ZAI",
+    "provider_display_name": "Z.AI",
+    "litellm_provider": "zai",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": "your-zai-api-key",
+        "tooltip": "Z.AI API Key from https://z.ai/manage-apikey/apikey-list",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.z.ai/api/paas/v4",
+        "tooltip": "General: https://api.z.ai/api/paas/v4. GLM Coding Plan: https://api.z.ai/api/coding/paas/v4. Override for self-hosted endpoints.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://api.z.ai/api/paas/v4"
+      }
+    ],
+    "default_model_placeholder": "zai/glm-4.6"
+  },
+  {
     "provider": "CURSOR",
     "provider_display_name": "Cursor",
     "litellm_provider": "cursor",

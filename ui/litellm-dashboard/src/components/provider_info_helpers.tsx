@@ -103,6 +103,7 @@ export enum Providers {
   WATSONX_TEXT = "Watsonx Text",
   xAI = "xAI",
   XINFERENCE = "Xinference",
+  ZAI = "Z.AI",
 }
 
 export const provider_map: Record<string, string> = {
@@ -210,6 +211,7 @@ export const provider_map: Record<string, string> = {
   WATSONX_TEXT: "watsonx_text",
   xAI: "xai",
   XINFERENCE: "xinference",
+  ZAI: "zai",
 };
 
 const asset_logos_folder = "../ui/assets/logos/";
@@ -299,6 +301,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.WATSONX_TEXT]: `${asset_logos_folder}watsonx.svg`,
   [Providers.xAI]: `${asset_logos_folder}xai.svg`,
   [Providers.XINFERENCE]: `${asset_logos_folder}xinference.svg`,
+  [Providers.ZAI]: `${asset_logos_folder}zai.svg`,
 };
 
 export const getProviderLogoAndName = (providerValue: string): { logo: string; displayName: string } => {
