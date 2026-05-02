@@ -11,6 +11,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket_base import (
 )
 from litellm.litellm_core_utils.cloud_storage_security import (
     VERTEX_AI_MANAGED_GCS_PREFIX,
+    should_allow_legacy_cloud_file_ids,
     validate_managed_cloud_file_id,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -117,7 +118,10 @@ class VertexAIFilesHandler(GCSBucketBase):
             )
 
     def _extract_bucket_and_object_from_file_id(
-        self, file_id: str, configured_bucket_name: str
+        self,
+        file_id: str,
+        configured_bucket_name: str,
+        litellm_params: Optional[dict] = None,
     ) -> Tuple[str, str]:
         """
         Validate and extract bucket name and object path from file_id.
@@ -134,6 +138,9 @@ class VertexAIFilesHandler(GCSBucketBase):
             scheme="gs://",
             configured_bucket_name=configured_bucket_name,
             allowed_object_prefixes=(VERTEX_AI_MANAGED_GCS_PREFIX,),
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(
+                litellm_params
+            ),
         )
 
     async def afile_content(
@@ -144,6 +151,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
+        litellm_params: Optional[dict] = None,
     ) -> HttpxBinaryResponseContent:
         """
         Download file content from GCS bucket for VertexAI files.
@@ -169,6 +177,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         bucket_name, object_path = self._extract_bucket_and_object_from_file_id(
             file_id=file_id,
             configured_bucket_name=gcs_logging_config["bucket_name"],
+            litellm_params=litellm_params,
         )
 
         download_kwargs = {
@@ -205,6 +214,7 @@ class VertexAIFilesHandler(GCSBucketBase):
         vertex_location: Optional[str],
         timeout: Union[float, httpx.Timeout],
         max_retries: Optional[int],
+        litellm_params: Optional[dict] = None,
     ) -> Union[
         HttpxBinaryResponseContent, Coroutine[Any, Any, HttpxBinaryResponseContent]
     ]:
@@ -233,6 +243,7 @@ class VertexAIFilesHandler(GCSBucketBase):
                 vertex_location=vertex_location,
                 timeout=timeout,
                 max_retries=max_retries,
+                litellm_params=litellm_params,
             )
         else:
             return asyncio.run(
@@ -243,5 +254,6 @@ class VertexAIFilesHandler(GCSBucketBase):
                     vertex_location=vertex_location,
                     timeout=timeout,
                     max_retries=max_retries,
+                    litellm_params=litellm_params,
                 )
             )
