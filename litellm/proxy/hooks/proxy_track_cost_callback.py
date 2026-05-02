@@ -88,9 +88,7 @@ class _ProxyDBLogger(CustomLogger):
             # noisy ``"traceback": ""`` line. Downstream consumers all use
             # ``.get("traceback")`` / truthy checks, and the TypedDict marks
             # the field as optional, so omitting is type-safe.
-            _error_information = {
-                k: v for k, v in _error_information.items() if k != "traceback"
-            }
+            _error_information.pop("traceback", None)
         _metadata["error_information"] = _error_information
 
         _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
