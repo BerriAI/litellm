@@ -405,9 +405,9 @@ async def test_sync_user_role_and_teams_cache_invalidation_on_role_change():
     mock_cache.async_set_cache.assert_called_once()
     call_kwargs = mock_cache.async_set_cache.call_args
     assert call_kwargs.kwargs["key"] == "u1"
-    assert (
-        call_kwargs.kwargs["value"]["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
-    )
+    assert isinstance(call_kwargs.kwargs["value"], LiteLLM_UserTable)
+    assert call_kwargs.kwargs["value"].user_role == LitellmUserRoles.PROXY_ADMIN.value
+    assert call_kwargs.kwargs["model_type"] == LiteLLM_UserTable
 
 
 @pytest.mark.asyncio
@@ -452,7 +452,9 @@ async def test_sync_user_role_and_teams_cache_invalidation_on_team_change():
     mock_cache.async_set_cache.assert_called_once()
     call_kwargs = mock_cache.async_set_cache.call_args
     assert call_kwargs.kwargs["key"] == "u1"
-    assert set(call_kwargs.kwargs["value"]["teams"]) == {"team1", "team2"}
+    assert isinstance(call_kwargs.kwargs["value"], LiteLLM_UserTable)
+    assert set(call_kwargs.kwargs["value"].teams) == {"team1", "team2"}
+    assert call_kwargs.kwargs["model_type"] == LiteLLM_UserTable
 
 
 @pytest.mark.asyncio

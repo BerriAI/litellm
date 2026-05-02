@@ -16,6 +16,7 @@ import httpx
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_BudgetTable,
@@ -48,9 +49,15 @@ async def test_get_end_user_object(customer_spend, customer_budget):
         litellm_budget_table=_budget,
         blocked=False,
     )
-    _cache = DualCache()
+    # UserApiKeyCache applies model_type on get/set; plain DualCache returns raw dicts
+    # and breaks get_end_user_object's typed async_get_cache path.
+    _cache = UserApiKeyCache()
     _key = "end_user_id:{}".format(end_user_id)
-    _cache.set_cache(key=_key, value=end_user_obj.model_dump())
+    await _cache.async_set_cache(
+        key=_key,
+        value=end_user_obj,
+        model_type=LiteLLM_EndUserTable,
+    )
     try:
         await get_end_user_object(
             end_user_id=end_user_id,
