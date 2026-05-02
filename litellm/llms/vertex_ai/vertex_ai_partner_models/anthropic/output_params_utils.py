@@ -36,12 +36,17 @@ def sanitize_vertex_anthropic_output_params(data: dict) -> None:
     Strip Vertex-unsupported keys from ``output_config`` /
     ``output_format`` in-place; forward whatever remains.
 
+    Today ``VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS`` is empty (Vertex 4.6+
+    accepts both ``format`` and ``effort``), so this helper is effectively
+    a passthrough plus a defensive non-dict guard. The filtering scaffold
+    is kept so that adding a new Vertex-unsupported key — should one
+    surface — is a one-line change to the frozenset.
+
     Behavior:
-      * ``output_config`` containing only unsupported keys (e.g. ``effort``
-        alone) is removed entirely so the request body has no empty dict.
-      * ``output_config`` containing a mix of supported + unsupported keys
-        has the unsupported subset filtered out and the rest forwarded.
-      * ``output_config`` that is supported in full passes through unchanged.
+      * ``output_config`` is filtered against
+        ``VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS``; whatever survives is
+        forwarded. If filtering empties the dict, it's removed entirely
+        rather than sending an empty object downstream.
       * ``output_format`` is forwarded as-is (Vertex AI Claude accepts it).
       * Non-dict values for ``output_config`` are dropped to avoid sending
         malformed payloads downstream.
