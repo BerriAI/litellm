@@ -979,15 +979,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = True
-                    if thinking_budget >= 10000:
-                        is_gemini3flash = (
-                            "gemini-3-flash-preview" in model.lower()
-                            or "gemini-3-flash" in model.lower()
-                        )
-                        params["thinkingLevel"] = (
-                            "minimal" if is_gemini3flash else "low"
-                        )
-                    else:
+                    # Follow provider defaults unless explicitly opted into legacy behavior.
+                    if litellm.enable_gemini_default_thinking_level_low is True:
                         is_gemini3flash = (
                             "gemini-3-flash-preview" in model.lower()
                             or "gemini-3-flash" in model.lower()
@@ -1805,6 +1798,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.audio_tokens = (
                         response_tokens_details.audio_tokens or 0
                     ) + token_count
+                elif modality == "DOCUMENT":
+                    response_tokens_details.text_tokens = (
+                        response_tokens_details.text_tokens or 0
+                    ) + token_count
 
         #########################################################
 
@@ -1830,6 +1827,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 elif modality == "VIDEO":
                     response_tokens_details.video_tokens = (
                         response_tokens_details.video_tokens or 0
+                    ) + token_count
+                elif modality == "DOCUMENT":
+                    response_tokens_details.text_tokens = (
+                        response_tokens_details.text_tokens or 0
                     ) + token_count
 
         # Calculate text_tokens if not explicitly provided in candidatesTokensDetails
@@ -1864,6 +1865,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     prompt_image_tokens = (prompt_image_tokens or 0) + token_count
                 elif modality == "VIDEO":
                     prompt_video_tokens = (prompt_video_tokens or 0) + token_count
+                elif modality == "DOCUMENT":
+                    prompt_text_tokens = (prompt_text_tokens or 0) + token_count
 
         ## Parse cacheTokensDetails (breakdown of cached tokens by modality)
         ## When explicit caching is used, Gemini provides this field to show which modalities were cached
@@ -1884,6 +1887,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     cached_image_tokens = (cached_image_tokens or 0) + token_count
                 elif modality == "VIDEO":
                     cached_video_tokens = (cached_video_tokens or 0) + token_count
+                elif modality == "DOCUMENT":
+                    cached_text_tokens = (cached_text_tokens or 0) + token_count
 
         ## Calculate non-cached tokens by subtracting cached from total (per modality)
         ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
@@ -2383,8 +2388,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_response = GenerateContentResponseBody(**raw_response.json())  # type: ignore
         except Exception as e:
             raise VertexAIError(
-                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
-                    raw_response.text, str(e)
+                message="Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
+                    str(e)
                 ),
                 status_code=422,
                 headers=raw_response.headers,
@@ -2462,6 +2467,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             usage = VertexGeminiConfig._calculate_usage(
                 completion_response=completion_response
             )
+
+            web_search_requests = VertexGeminiConfig._calculate_web_search_requests(
+                grounding_metadata
+            )
+            if web_search_requests is not None:
+                cast(
+                    PromptTokensDetailsWrapper, usage.prompt_tokens_details
+                ).web_search_requests = web_search_requests
+
             setattr(model_response, "usage", usage)
 
             ## ADD METADATA TO RESPONSE ##
@@ -2509,8 +2523,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         except Exception as e:
             raise VertexAIError(
-                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
-                    completion_response, str(e)
+                message="Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
+                    str(e)
                 ),
                 status_code=422,
                 headers=raw_response.headers,

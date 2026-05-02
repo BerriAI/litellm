@@ -1534,12 +1534,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 f"Invalid effort value: {effort}. Must be one of: "
                 f"'high', 'medium', 'low', 'xhigh', 'max'"
             )
-        # ``max`` is Claude Opus 4.6 only (not Sonnet 4.6, not Opus 4.5/4.7).
-        # Keep this hardcoded so the error message is specific and stable.
-        if effort == "max" and not self._is_opus_4_6_model(model):
+        # ``max`` is for Opus 4.6+ output effort (not Sonnet 4.6, not Opus 4.5).
+        # Accept known Opus 4.6/4.7 id patterns and/or ``supports_max_reasoning_effort``
+        # in the model map (same pattern as ``xhigh`` below).
+        if effort == "max" and not (
+            self._is_opus_4_6_model(model)
+            or self._is_opus_4_7_model(model)
+            or self._supports_effort_level(model, "max")
+        ):
             raise ValueError(
-                f"effort='max' is only supported by Claude Opus 4.6. "
-                f"Got model: {model}"
+                f"effort='max' is not supported by this model. Got model: {model}"
             )
         # ``xhigh`` is data-driven via ``supports_xhigh_reasoning_effort`` so
         # enabling it for a new model is a pure model-map change.
@@ -1549,25 +1553,43 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         data["output_config"] = output_config
 
-    def _transform_response_for_json_mode(
+    def _resolve_json_mode_non_streaming(
         self,
         json_mode: Optional[bool],
         tool_calls: List[ChatCompletionToolCallChunk],
-    ) -> Optional[LitellmMessage]:
-        _message: Optional[LitellmMessage] = None
-        if json_mode is True and len(tool_calls) == 1:
-            # check if tool name is the default tool name
-            json_mode_content_str: Optional[str] = None
-            if (
-                "name" in tool_calls[0]["function"]
-                and tool_calls[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
-            ):
-                json_mode_content_str = tool_calls[0]["function"].get("arguments")
-            if json_mode_content_str is not None:
-                _message = AnthropicConfig._convert_tool_response_to_message(
-                    tool_calls=tool_calls,
-                )
-        return _message
+    ) -> Tuple[
+        Optional[LitellmMessage],
+        List[ChatCompletionToolCallChunk],
+        Optional[str],
+    ]:
+        """Strip internal response_format tool calls; merge payload into content when mixed with user tools."""
+        if json_mode is not True or not tool_calls:
+            return None, tool_calls, None
+
+        json_indices = [
+            i
+            for i, t in enumerate(tool_calls)
+            if t.get("function", {}).get("name") == RESPONSE_FORMAT_TOOL_NAME
+        ]
+        if not json_indices:
+            return None, tool_calls, None
+
+        if len(json_indices) == len(tool_calls):
+            json_tool = tool_calls[json_indices[0]]
+            if json_tool.get("function", {}).get("arguments") is None:
+                return None, tool_calls, None
+            _message = AnthropicConfig._convert_tool_response_to_message(
+                tool_calls=[json_tool]
+            )
+            return _message, [], None
+
+        first_json = tool_calls[json_indices[0]]
+        json_msg = AnthropicConfig._convert_tool_response_to_message([first_json])
+        extra_content: Optional[str] = (
+            json_msg.content if json_msg is not None else None
+        )
+        filtered_tools = [t for i, t in enumerate(tool_calls) if i not in json_indices]
+        return None, filtered_tools, extra_content
 
     def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
@@ -1927,19 +1949,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_calls,
         )
 
+        json_mode_message, tool_calls_for_message, json_extra_content = (
+            self._resolve_json_mode_non_streaming(
+                json_mode=json_mode,
+                tool_calls=tool_calls,
+            )
+        )
+        merged_text = text_content or ""
+        if json_extra_content:
+            merged_text = (
+                merged_text + json_extra_content if merged_text else json_extra_content
+            )
+
         _message = litellm.Message(
-            tool_calls=tool_calls,
-            content=text_content or None,
+            tool_calls=tool_calls_for_message,
+            content=merged_text or None,
             provider_specific_fields=provider_specific_fields,
             thinking_blocks=thinking_blocks,
             reasoning_content=reasoning_content,
         )
         _message.provider_specific_fields = provider_specific_fields
 
-        json_mode_message = self._transform_response_for_json_mode(
-            json_mode=json_mode,
-            tool_calls=tool_calls,
-        )
         if json_mode_message is not None:
             completion_response["stop_reason"] = "stop"
             _message = json_mode_message

@@ -47,6 +47,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_user_can_access_vector_store,
+    get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -127,18 +129,14 @@ async def llm_passthrough_factory_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Construct the full target URL using httpx
+    # Construct the full target URL using httpx, preserving any base path
+    # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
-    # Join paths correctly by removing trailing/leading slashes as needed
-    if not base_url.path or base_url.path == "/":
-        # If base URL has no path, just use the new path
-        updated_url = base_url.copy_with(path=encoded_endpoint)
-    else:
-        # Otherwise, combine the paths
-        base_path = base_url.path.rstrip("/")
-        clean_path = encoded_endpoint.lstrip("/")
-        full_path = f"{base_path}/{clean_path}"
-        updated_url = base_url.copy_with(path=full_path)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+            base_url, encoded_endpoint
+        )
+    )
 
     # Add or update query parameters
     provider_api_key = passthrough_endpoint_router.get_credentials(
@@ -215,9 +213,14 @@ async def gemini_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Construct the full target URL using httpx
+    # Construct the full target URL using httpx, preserving any base path
+    # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+            base_url, encoded_endpoint
+        )
+    )
 
     # Add or update query parameters
     gemini_api_key: Optional[str] = passthrough_endpoint_router.get_credentials(
@@ -275,9 +278,14 @@ async def cohere_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Construct the full target URL using httpx
+    # Construct the full target URL using httpx, preserving any base path
+    # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+            base_url, encoded_endpoint
+        )
+    )
 
     # Add or update query parameters
     cohere_api_key = passthrough_endpoint_router.get_credentials(
@@ -401,9 +409,14 @@ async def mistral_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Construct the full target URL using httpx
+    # Construct the full target URL using httpx, preserving any base path
+    # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+            base_url, encoded_endpoint
+        )
+    )
 
     # Add or update query parameters
     mistral_api_key = passthrough_endpoint_router.get_credentials(
@@ -522,6 +535,10 @@ async def milvus_proxy_route(
     )
     if vector_store is None:
         raise Exception(f"Vector store not found for {vector_store_name}")
+    await assert_user_can_access_vector_store(
+        vector_store=vector_store,
+        user_api_key_dict=user_api_key_dict,
+    )
     litellm_params = vector_store.get("litellm_params") or {}
     auth_credentials = provider_config.get_auth_credentials(
         litellm_params=litellm_params
@@ -546,9 +563,14 @@ async def milvus_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Construct the full target URL using httpx
+    # Construct the full target URL using httpx, preserving any base path
+    # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+            base_url, encoded_endpoint
+        )
+    )
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
@@ -601,9 +623,14 @@ async def anthropic_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Construct the full target URL using httpx
+    # Construct the full target URL using httpx, preserving any base path
+    # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+            base_url, encoded_endpoint
+        )
+    )
 
     # Add or update query parameters
     anthropic_api_key = passthrough_endpoint_router.get_credentials(
@@ -1055,9 +1082,14 @@ async def bedrock_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Construct the full target URL using httpx
+    # Construct the full target URL using httpx, preserving any base path
+    # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+            base_url, encoded_endpoint
+        )
+    )
 
     # Add or update query parameters
     from litellm.llms.bedrock.chat import BedrockConverseLLM
@@ -1231,9 +1263,14 @@ async def assemblyai_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
-    # Construct the full target URL using httpx
+    # Construct the full target URL using httpx, preserving any base path
+    # prefix that the operator configured on base_target_url.
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+            base_url, encoded_endpoint
+        )
+    )
 
     # Add or update query parameters
     assemblyai_api_key = passthrough_endpoint_router.get_credentials(
@@ -1407,6 +1444,10 @@ async def azure_proxy_route(
                 )
                 if vector_store is None:
                     raise Exception(f"Vector store not found for {vector_store_name}")
+                await assert_user_can_access_vector_store(
+                    vector_store=vector_store,
+                    user_api_key_dict=user_api_key_dict,
+                )
                 litellm_params = vector_store.get("litellm_params") or {}
                 auth_credentials = provider_config.get_auth_credentials(
                     litellm_params=litellm_params
@@ -1746,6 +1787,11 @@ async def _base_vertex_proxy_route(
             request=request,
             api_key=api_key_to_use,
         )
+    if router_credentials is not None:
+        await assert_user_can_access_vector_store(
+            vector_store=router_credentials,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     vertex_project: Optional[str] = get_vertex_project_id_from_url(endpoint)
     vertex_location: Optional[str] = get_vertex_location_from_url(endpoint)
@@ -1882,11 +1928,11 @@ async def vertex_discovery_proxy_route(
             "Extracted vector store ID from endpoint: %s", vector_store_id
         )
 
-        # Retrieve vector store credentials from the registry
-        vector_store_credentials = (
-            passthrough_endpoint_router.get_vector_store_credentials(
-                vector_store_id=vector_store_id
-            )
+        # Retrieve LiteLLM-managed vector store credentials if the datastore id
+        # is registered with LiteLLM. Unknown datastore ids keep the existing
+        # direct Vertex pass-through behavior.
+        vector_store_credentials = await get_litellm_managed_vector_store(
+            vector_store_id=vector_store_id
         )
 
         if vector_store_credentials:
@@ -1894,7 +1940,7 @@ async def vertex_discovery_proxy_route(
                 "Found vector store credentials for ID: %s", vector_store_id
             )
         else:
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.debug(
                 "Vector store ID %s found in endpoint but no credentials found in registry",
                 vector_store_id,
             )
@@ -2086,16 +2132,15 @@ class BaseOpenAIPassThroughHandler:
         """
         Properly joins a base URL with a path, preserving any existing path in the base URL.
         """
-        # Join paths correctly by removing trailing/leading slashes as needed
-        if not base_url.path or base_url.path == "/":
-            # If base URL has no path, just use the new path
-            joined_path_str = str(base_url.copy_with(path=path))
-        else:
-            # Otherwise, combine the paths
-            base_path = base_url.path.rstrip("/")
-            clean_path = path.lstrip("/")
-            full_path = f"{base_path}/{clean_path}"
-            joined_path_str = str(base_url.copy_with(path=full_path))
+        # Combine paths via the shared helper so any '..' in the path cannot
+        # climb above the configured base path.
+        joined_path_str = str(
+            base_url.copy_with(
+                path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+                    base_url, path
+                )
+            )
+        )
 
         # Apply OpenAI-specific path handling for both branches
         if (
@@ -2176,7 +2221,11 @@ async def cursor_proxy_route(
         encoded_endpoint = "/" + encoded_endpoint
 
     base_url = httpx.URL(base_target_url)
-    updated_url = base_url.copy_with(path=encoded_endpoint)
+    updated_url = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(
+            base_url, encoded_endpoint
+        )
+    )
 
     auth_value = base64.b64encode(f"{cursor_api_key}:".encode("utf-8")).decode("ascii")
 

@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { isAdminRole, isProxyAdminRole, isUserTeamAdminForAnyTeam, isUserTeamAdminForSingleTeam } from "./roles";
+import {
+  isAdminRole,
+  isProxyAdminRole,
+  isUserTeamAdminForAnyTeam,
+  isUserTeamAdminForSingleTeam,
+  rolesAllowedToViewWriteScopedPages,
+  rolesWithWriteAccess,
+} from "./roles";
 import { Team } from "@/components/networking";
 
 describe("roles", () => {
@@ -142,6 +149,29 @@ describe("roles", () => {
 
     it("should return false when teams is empty array", () => {
       expect(isUserTeamAdminForAnyTeam([], "user-1")).toBe(false);
+    });
+  });
+
+  describe("rolesAllowedToViewWriteScopedPages", () => {
+    it("includes Admin Viewer (both display and stored forms)", () => {
+      // Admin Viewer follows the read-parity rule — they must be able to
+      // see Models + Endpoints and Agents read-only.
+      expect(rolesAllowedToViewWriteScopedPages).toContain("Admin Viewer");
+      expect(rolesAllowedToViewWriteScopedPages).toContain("proxy_admin_viewer");
+    });
+
+    it("includes everything in rolesWithWriteAccess (read parity is a superset)", () => {
+      for (const role of rolesWithWriteAccess) {
+        expect(rolesAllowedToViewWriteScopedPages).toContain(role);
+      }
+    });
+
+    it("is a strict superset of rolesWithWriteAccess", () => {
+      // Admin Viewer is added on top — the new set must be larger than
+      // the write-only set, otherwise the constant has no purpose.
+      expect(rolesAllowedToViewWriteScopedPages.length).toBeGreaterThan(
+        rolesWithWriteAccess.length,
+      );
     });
   });
 });

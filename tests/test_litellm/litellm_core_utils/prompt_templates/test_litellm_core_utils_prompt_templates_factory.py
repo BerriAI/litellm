@@ -9,8 +9,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BAD_MESSAGE_ERROR_STR,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
-    anthropic_messages_pt,
+    _bedrock_converse_messages_pt,
     _convert_to_bedrock_tool_call_invoke,
+    _convert_to_bedrock_tool_call_result,
+    anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
     ollama_pt,
     sanitize_messages_for_tool_calling,
@@ -77,7 +79,7 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
     # test _bedrock_converse_messages_pt_async
     result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
         messages=messages,
-        model="us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         llm_provider="bedrock",
     )
 
@@ -2367,3 +2369,239 @@ def test_anthropic_messages_pt_file_block_preserves_cache_control():
     assert text_block["type"] == "text"
     assert "cache_control" in text_block
     assert text_block["cache_control"]["type"] == "ephemeral"
+
+
+def test_add_cache_point_tool_block_passes_ttl_for_claude_4_5():
+    """
+    Tools with cache_control ttl should preserve the ttl in the cachePoint
+    block for Claude 4.5+ models on Bedrock, matching the behavior of system
+    block cache_control.
+
+    Without this fix, tool cachePoint is always {"type": "default"} (5m),
+    while system blocks can have ttl="1h", violating Bedrock's non-increasing
+    TTL ordering constraint (tools -> system -> messages).
+
+    Ref: https://github.com/BerriAI/litellm/issues/XXXXX
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        add_cache_point_tool_block,
+    )
+
+    tool_with_1h = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object"}},
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+    }
+
+    # Claude 4.5 model: ttl should be preserved
+    result = add_cache_point_tool_block(
+        tool_with_1h, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    assert result is not None
+    assert result["cachePoint"]["type"] == "default"
+    assert result["cachePoint"]["ttl"] == "1h"
+
+    # Claude 4.5 model with 5m ttl: also preserved
+    tool_with_5m = {
+        "cache_control": {"type": "ephemeral", "ttl": "5m"},
+    }
+    result_5m = add_cache_point_tool_block(
+        tool_with_5m, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    assert result_5m is not None
+    assert result_5m["cachePoint"]["ttl"] == "5m"
+
+    # Older model: ttl should be stripped
+    result_old = add_cache_point_tool_block(
+        tool_with_1h, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+    assert result_old is not None
+    assert result_old["cachePoint"]["type"] == "default"
+    assert "ttl" not in result_old["cachePoint"]
+
+    # No model provided: ttl should be stripped (safe default)
+    result_no_model = add_cache_point_tool_block(tool_with_1h, model=None)
+    assert result_no_model is not None
+    assert "ttl" not in result_no_model["cachePoint"]
+
+    # No cache_control: returns None (unchanged behavior)
+    tool_no_cache = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object"}},
+    }
+    assert add_cache_point_tool_block(tool_no_cache) is None
+
+    # cache_control without ttl: returns default cachePoint (unchanged behavior)
+    tool_no_ttl = {"cache_control": {"type": "ephemeral"}}
+    result_no_ttl = add_cache_point_tool_block(
+        tool_no_ttl, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    assert result_no_ttl is not None
+    assert result_no_ttl["cachePoint"]["type"] == "default"
+    assert "ttl" not in result_no_ttl["cachePoint"]
+
+
+def test_bedrock_tools_pt_passes_ttl_for_claude_4_5():
+    """
+    End-to-end: _bedrock_tools_pt should produce cachePoint blocks with ttl
+    for Claude 4.5+ models when tools have cache_control with ttl.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                },
+            },
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+
+    # Claude 4.5: cachePoint should have ttl
+    result = _bedrock_tools_pt(
+        tools, model="us.anthropic.claude-sonnet-4-5-20250514-v1:0"
+    )
+    cache_blocks = [b for b in result if "cachePoint" in b]
+    assert len(cache_blocks) == 1
+    assert cache_blocks[0]["cachePoint"]["ttl"] == "1h"
+
+    # Older model: cachePoint should not have ttl
+    result_old = _bedrock_tools_pt(
+        tools, model="anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
+    cache_blocks_old = [b for b in result_old if "cachePoint" in b]
+    assert len(cache_blocks_old) == 1
+    assert "ttl" not in cache_blocks_old[0]["cachePoint"]
+
+
+def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
+    """
+    OpenAI `{type: "file", file: {file_data: "data:application/pdf;..."}}` inside
+    a tool-message content list should translate to an Anthropic document block
+    inside the tool_result content. Reuses anthropic_process_openai_file_message,
+    which already handles this for user messages.
+    """
+    pdf_b64 = "JVBERi0xLjQKJeLjz9MK"
+    message = {
+        "tool_call_id": "toolu_pdf_1",
+        "role": "tool",
+        "name": "fetch_document",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "file_data": f"data:application/pdf;base64,{pdf_b64}",
+                    "filename": "summary.pdf",
+                },
+            },
+        ],
+    }
+
+    result = _convert_to_bedrock_tool_call_result(message)
+
+    tool_result = result["toolResult"]
+    assert len(tool_result["content"]) == 1
+    assert "document" in tool_result["content"][0]
+    assert tool_result["content"][0]["document"]["format"] == "pdf"
+    assert tool_result["content"][0]["document"]["source"]["bytes"] == pdf_b64
+
+
+def test_bedrock_converse_messages_pt_document_various_formats():
+    """Test that various document media types produce the correct format value."""
+    test_cases = [
+        ("application/pdf", "pdf"),
+        ("text/csv", "csv"),
+        ("text/html", "html"),
+        ("text/plain", "txt"),
+        ("text/markdown", "md"),
+        (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "docx",
+        ),
+    ]
+
+    for media_type, expected_format in test_cases:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": "dGVzdA==",
+                        },
+                    },
+                ],
+            }
+        ]
+
+        result = _bedrock_converse_messages_pt(
+            messages, "anthropic.claude-sonnet-4-6", "bedrock"
+        )
+
+        doc_block = result[0]["content"][0]
+        assert doc_block["document"]["format"] == expected_format, (
+            f"Expected format '{expected_format}' for media_type '{media_type}', "
+            f"got '{doc_block['document']['format']}'"
+        )
+
+
+def test_bedrock_converse_messages_pt_document_deterministic_name():
+    """Test that the same document data always produces the same name."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "dGVzdA==",
+                    },
+                },
+            ],
+        }
+    ]
+
+    result1 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    result2 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    name1 = result1[0]["content"][0]["document"]["name"]
+    name2 = result2[0]["content"][0]["document"]["name"]
+    assert name1 == name2
+
+
+def test_bedrock_converse_messages_pt_document_rejects_url_source():
+    """Test that a URL-type document source raises a clear error instead of KeyError."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "url",
+                        "url": "https://example.com/doc.pdf",
+                    },
+                },
+            ],
+        }
+    ]
+
+    with pytest.raises(ValueError, match="only supports base64-encoded"):
+        _bedrock_converse_messages_pt(
+            messages, "anthropic.claude-sonnet-4-6", "bedrock"
+        )

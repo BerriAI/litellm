@@ -809,6 +809,50 @@ def test_responses_api_bridge_check_handles_exception():
         assert model_info["mode"] == "responses"
 
 
+def test_responses_api_bridge_check_global_flag_routes_openai():
+    """When route_all_chat_openai_to_responses is True, any OpenAI model routes to responses."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch.object(litellm, "route_all_chat_openai_to_responses", True):
+        model_info, model = responses_api_bridge_check(
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+
+    assert model == "gpt-4o"
+    assert model_info.get("mode") == "responses"
+
+
+def test_responses_api_bridge_check_global_flag_does_not_affect_azure():
+    """route_all_chat_openai_to_responses should not affect Azure models."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch.object(litellm, "route_all_chat_openai_to_responses", True):
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096}
+            model_info, model = responses_api_bridge_check(
+                model="gpt-4o",
+                custom_llm_provider="azure",
+            )
+
+    assert model_info.get("mode") != "responses"
+
+
+def test_responses_api_bridge_check_global_flag_default_false():
+    """By default, route_all_chat_openai_to_responses is False and doesn't affect routing."""
+    from litellm.main import responses_api_bridge_check
+
+    with patch.object(litellm, "route_all_chat_openai_to_responses", False):
+        with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+            mock_get_model_info.return_value = {"max_tokens": 4096}
+            model_info, model = responses_api_bridge_check(
+                model="gpt-4o",
+                custom_llm_provider="openai",
+            )
+
+    assert model_info.get("mode") != "responses"
+
+
 @pytest.mark.asyncio
 async def test_async_mock_delay():
     """Use asyncio await for mock delay on acompletion"""
