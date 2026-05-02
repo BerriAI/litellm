@@ -543,7 +543,7 @@ class TestAzureContainerKnownFailureRegressions:
         assert isinstance(c1, AzureContainerConfig)
 
     @pytest.mark.asyncio
-    async def test_proxy_process_request_preserves_managed_container_id(
+    async def test_proxy_process_request_forwards_decoded_container_id(
         self, monkeypatch
     ):
         from starlette.requests import Request
@@ -607,9 +607,9 @@ class TestAzureContainerKnownFailureRegressions:
         access_check.assert_awaited_once()
         assert access_check.await_args.kwargs["container_id"] == encoded_id
         assert captured["route_type"] == "alist_container_files"
-        assert captured["data"]["container_id"] == encoded_id
-        assert captured["data"]["custom_llm_provider"] == "openai"
-        assert "model_id" not in captured["data"]
+        assert captured["data"]["container_id"] == "cntr_123"
+        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["model_id"] == "model_abc123"
         assert "api_base" not in captured["data"]
 
     @pytest.mark.asyncio
@@ -679,9 +679,10 @@ class TestAzureContainerKnownFailureRegressions:
         access_check.assert_awaited_once()
         assert access_check.await_args.kwargs["container_id"] == encoded_id
         assert captured["route_type"] == "aretrieve_container_file_content"
-        assert captured["data"]["container_id"] == encoded_id
+        assert captured["data"]["container_id"] == "cntr_123"
         assert captured["data"]["file_id"] == "cfile_abc"
-        assert captured["data"]["custom_llm_provider"] == "openai"
+        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["model_id"] == "model_abc123"
         assert response.status_code == 200
         assert response.body == b"csv-bytes"
         assert response.headers["x-litellm-call-id"] == "call-123"
@@ -766,5 +767,6 @@ class TestAzureContainerKnownFailureRegressions:
         access_check.assert_awaited_once()
         assert access_check.await_args.kwargs["container_id"] == encoded_id
         assert captured["route_type"] == "aupload_container_file"
-        assert captured["data"]["container_id"] == encoded_id
-        assert captured["data"]["custom_llm_provider"] == "openai"
+        assert captured["data"]["container_id"] == "cntr_123"
+        assert captured["data"]["custom_llm_provider"] == "azure"
+        assert captured["data"]["model_id"] == "model_abc123"
