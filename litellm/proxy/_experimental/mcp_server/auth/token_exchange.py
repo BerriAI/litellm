@@ -11,7 +11,7 @@ See: https://datatracker.ietf.org/doc/html/rfc8693
 import asyncio
 import hashlib
 import weakref
-from typing import TYPE_CHECKING, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Tuple
 
 import httpx
 
