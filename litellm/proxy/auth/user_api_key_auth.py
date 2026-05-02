@@ -1931,8 +1931,11 @@ async def user_api_key_auth(
     # restrictions, and team access controls.
     #
     # Defence-in-depth: authorization-denial exceptions (ProxyException,
-    # HTTPException, BudgetExceededError) are re-raised so the caller
-    # gets a proper 4xx.  DB-connectivity exceptions are logged and the
+    # HTTPException, BudgetExceededError) are propagated as proper
+    # ProxyException/HTTPException so the caller gets a proper 4xx.
+    # BudgetExceededError is wrapped in ProxyException because only
+    # ProxyException and HTTPException have FastAPI exception handlers.
+    # DB-connectivity exceptions are logged and the
     # *original* authenticated token is preserved — the request proceeds
     # with whatever limits are already encoded on the token, rather than
     # being upgraded to an unrestricted fallback.
@@ -1943,8 +1946,18 @@ async def user_api_key_auth(
             request_data=request_data,
             route=route,
         )
-    except (HTTPException, ProxyException, litellm.BudgetExceededError):
-        # Authorization denial — propagate as-is so the caller gets 4xx.
+    except (HTTPException, ProxyException, litellm.BudgetExceededError) as e:
+        # Authorization denial — propagate as ProxyException so FastAPI's
+        # exception handler can render a proper 4xx response.
+        # BudgetExceededError must be wrapped because only ProxyException
+        # and HTTPException have registered FastAPI exception handlers.
+        if isinstance(e, litellm.BudgetExceededError):
+            raise ProxyException(
+                message=e.message,
+                type=ProxyErrorTypes.budget_exceeded,
+                param=None,
+                code=400,
+            )
         raise
     except Exception as e:
         # Transient / DB error during authorization checks.  Instead of
