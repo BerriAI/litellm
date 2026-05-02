@@ -27,6 +27,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
     _get_batch_job_input_file_usage,
     _get_file_content_as_dictionary,
+    _get_models_from_batch_input_file_content,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -246,6 +247,17 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
             file_content_as_dict = _get_file_content_as_dictionary(file_content.content)
 
+            # Validate every model named in the batch JSONL against the
+            # caller's per-key model allowlist. Without this, a caller
+            # could smuggle restricted/expensive models inside the file
+            # and the upstream provider would execute the batch under
+            # the proxy's shared API key.
+            if user_api_key_dict is not None:
+                await self._enforce_batch_file_model_access(
+                    user_api_key_dict=user_api_key_dict,
+                    file_content_as_dict=file_content_as_dict,
+                )
+
             input_file_usage = _get_batch_job_input_file_usage(
                 file_content_dictionary=file_content_as_dict,
                 custom_llm_provider=custom_llm_provider,
@@ -256,11 +268,68 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 request_count=request_count,
             )
 
+        except HTTPException as e:
+            # Distinguish intentional 403s from `_enforce_batch_file_model_access`
+            # from genuine I/O failures so security-relevant rejections show up
+            # in the access log instead of getting buried in error noise.
+            if e.status_code == 403:
+                verbose_proxy_logger.warning(
+                    f"Batch rejected: caller not authorized for a model named in {file_id}: {e.detail}"
+                )
+            else:
+                verbose_proxy_logger.error(
+                    f"Batch input file rejected for {file_id}: status={e.status_code} detail={e.detail}"
+                )
+            raise
         except Exception as e:
             verbose_proxy_logger.error(
                 f"Error counting input file usage for {file_id}: {str(e)}"
             )
             raise
+
+    async def _enforce_batch_file_model_access(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        file_content_as_dict: List[dict],
+    ) -> None:
+        """Reject the batch if the caller is not authorized for every
+        ``body.model`` named inside the JSONL.
+
+        Reuses ``can_key_call_model`` so the same allowlist semantics
+        (wildcards, access groups, ``all-proxy-models``, team aliases)
+        the proxy enforces on `/chat/completions` apply here.
+        """
+        from litellm.proxy.auth.auth_checks import can_key_call_model
+        from litellm.proxy.proxy_server import llm_router
+
+        models = _get_models_from_batch_input_file_content(file_content_as_dict)
+        if not models:
+            return
+
+        llm_model_list = llm_router.model_list if llm_router is not None else None
+        for model in models:
+            try:
+                await can_key_call_model(
+                    model=model,
+                    llm_model_list=llm_model_list,
+                    valid_token=user_api_key_dict,
+                    llm_router=llm_router,
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                # `can_key_call_model` raises ProxyException on denial;
+                # re-shape to a 403 so the batch endpoint returns a
+                # consistent rejection without leaking internal types.
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": (
+                            "Batch input file references a model the caller is "
+                            f"not authorized to use: model={model}, reason={str(e)}"
+                        )
+                    },
+                )
 
     async def _fetch_managed_file_content(
         self,
