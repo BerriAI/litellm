@@ -431,10 +431,12 @@ class TestVertexBatchOutputTransformation:
         )
         result = json.loads(transformed_content.decode("utf-8"))
 
-        # Verify error format
-        assert result["response"]["status_code"] == 400
+        # Per OpenAI Batch output spec, error entries set response to null
+        # and populate the top-level error object.
+        assert result["response"] is None
         assert result["error"] is not None
         assert "Invalid request" in result["error"]["message"]
+        assert result["error"]["code"] == "vertex_ai_error"
         assert result["custom_id"] == "request-error"
 
     def test_transform_vertex_batch_output_legacy_labels_only_sanitized(self, config):
