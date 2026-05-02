@@ -440,6 +440,51 @@ def test_output_config_removed_from_bedrock_chat_invoke_request():
     assert result["max_tokens"] == 100
 
 
+def test_output_config_preserved_for_adaptive_thinking_on_bedrock_invoke():
+    """
+    Bedrock Invoke (legacy /completion path) must forward ``output_config``
+    for Claude 4.6/4.7 adaptive-thinking models — the field reaches the wire
+    body. This mirrors the /v1/messages behavior for the same models.
+    """
+    config = AmazonAnthropicClaudeConfig()
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "max_tokens": 100,
+        "output_config": {"effort": "high"},
+    }
+
+    result = config.transform_request(
+        model="anthropic.claude-sonnet-4-6-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert result.get("output_config") == {"effort": "high"}
+
+
+def test_output_config_preserved_for_opus_4_5_on_bedrock_invoke():
+    """
+    Bedrock Invoke /completion forwards ``output_config`` on Claude Opus 4.5
+    (gated behind the ``effort-2025-11-24`` beta header on Bedrock).
+    """
+    config = AmazonAnthropicClaudeConfig()
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "max_tokens": 100,
+        "output_config": {"effort": "low"},
+    }
+
+    result = config.transform_request(
+        model="anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert result.get("output_config") == {"effort": "low"}
+
+
 def test_output_format_removed_from_bedrock_invoke_request():
     """
     Test that output_format parameter is removed from Bedrock Invoke requests.
