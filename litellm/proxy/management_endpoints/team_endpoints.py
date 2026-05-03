@@ -2669,6 +2669,151 @@ async def team_member_delete(
     return existing_team_row
 
 
+def _validate_team_member_update_request(
+    data: TeamMemberUpdateRequest, premium_user: bool
+) -> None:
+    if data.team_id is None:
+        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+
+    if data.role == "admin" and not premium_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Assigning team admins is a premium feature. You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. Pricing: https://www.litellm.ai/#pricing",
+        )
+    if data.user_id is None and data.user_email is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Either user_id or user_email needs to be passed in"},
+        )
+
+
+async def _team_member_update_fetch_team_or_raise(
+    prisma_client: PrismaClient, team_id: str
+) -> LiteLLM_TeamTable:
+    _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id}
+    )
+    if _existing_team_row is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Team id={} does not exist in db".format(team_id)},
+        )
+    return LiteLLM_TeamTable(**_existing_team_row.model_dump())
+
+
+async def _team_member_update_require_authorized(
+    user_api_key_dict: UserAPIKeyAuth, existing_team_row: LiteLLM_TeamTable
+) -> None:
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not _is_user_team_admin(
+            user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+        )
+        and not await _is_user_org_admin_for_team(
+            user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
+        )
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
+                    "/team/member_delete", existing_team_row.team_id
+                )
+            },
+        )
+
+
+def _resolve_team_member_user_id_from_request(
+    data: TeamMemberUpdateRequest, returned_team_info: TeamInfoResponseObject
+) -> str:
+    if data.user_id is not None:
+        return data.user_id
+    if data.user_email is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Either user_id or user_email needs to be passed in"},
+        )
+    for member in returned_team_info["team_info"].members_with_roles:
+        if member.user_email is not None and member.user_email == data.user_email:
+            if member.user_id is None:
+                break
+            return member.user_id
+    raise HTTPException(
+        status_code=400,
+        detail={"error": "User id doesn't exist in team table. Data={}".format(data)},
+    )
+
+
+def _identified_member_budget_id(
+    team_memberships: List[LiteLLM_TeamMembership], received_user_id: str
+) -> Optional[str]:
+    for tm in team_memberships:
+        if tm.user_id == received_user_id:
+            return tm.budget_id
+    return None
+
+
+def _team_default_member_budget_id(
+    team_table: TeamInfoResponseObjectTeamTable,
+) -> Optional[str]:
+    if team_table.metadata is None:
+        return None
+    raw_default_budget_id = team_table.metadata.get("team_member_budget_id")
+    if isinstance(raw_default_budget_id, str):
+        return raw_default_budget_id
+    return None
+
+
+async def _effective_member_budget_duration(
+    data: TeamMemberUpdateRequest,
+    prisma_client: PrismaClient,
+    team_default_budget_id: Optional[str],
+) -> Tuple[bool, Optional[str]]:
+    budget_duration_explicit = "budget_duration" in data.model_fields_set
+    if budget_duration_explicit:
+        return budget_duration_explicit, data.budget_duration
+    if team_default_budget_id:
+        _team_budget_row = await prisma_client.db.litellm_budgettable.find_unique(
+            where={"budget_id": team_default_budget_id}
+        )
+        return (
+            budget_duration_explicit,
+            _team_budget_row.budget_duration if _team_budget_row else None,
+        )
+    return budget_duration_explicit, None
+
+
+async def _team_member_update_apply_role_if_requested(
+    prisma_client: PrismaClient,
+    *,
+    data: TeamMemberUpdateRequest,
+    team_table: TeamInfoResponseObjectTeamTable,
+    received_user_id: str,
+) -> None:
+    if data.role is None:
+        return
+    team_members: List[Member] = []
+    for member in team_table.members_with_roles:
+        if member.user_id == received_user_id:
+            team_members.append(
+                Member(
+                    user_id=member.user_id,
+                    role=data.role,
+                    user_email=data.user_email or member.user_email,
+                )
+            )
+        else:
+            team_members.append(member)
+
+    team_table.members_with_roles = team_members
+
+    _db_team_members: List[dict] = [m.model_dump() for m in team_members]
+    await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": data.team_id},
+        data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
+    )
+
+
 @router.post(
     "/team/member_update",
     tags=["team management"],
@@ -2691,51 +2836,11 @@ async def team_member_update(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
-    if data.team_id is None:
-        raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
-
-    if data.role == "admin" and not premium_user:
-        # exactly the same text your proxy throws for add:
-        raise HTTPException(
-            status_code=400,
-            detail="Assigning team admins is a premium feature. You must be a LiteLLM Enterprise user to use this feature. If you have a license please set `LITELLM_LICENSE` in your env. Get a 7 day trial key here: https://www.litellm.ai/#trial. Pricing: https://www.litellm.ai/#pricing",
-        )
-    if data.user_id is None and data.user_email is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Either user_id or user_email needs to be passed in"},
-        )
-
-    _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-        where={"team_id": data.team_id}
+    _validate_team_member_update_request(data, premium_user)
+    existing_team_row = await _team_member_update_fetch_team_or_raise(
+        prisma_client, data.team_id
     )
-
-    if _existing_team_row is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "Team id={} does not exist in db".format(data.team_id)},
-        )
-    existing_team_row = LiteLLM_TeamTable(**_existing_team_row.model_dump())
-
-    ## CHECK IF USER IS PROXY ADMIN OR TEAM ADMIN OR ORG ADMIN
-
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(
-            user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
-        )
-        and not await _is_user_org_admin_for_team(
-            user_api_key_dict=user_api_key_dict, team_obj=existing_team_row
-        )
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "error": "Call not allowed. User not proxy admin OR team admin. route={}, team_id={}".format(
-                    "/team/member_delete", existing_team_row.team_id
-                )
-            },
-        )
+    await _team_member_update_require_authorized(user_api_key_dict, existing_team_row)
 
     returned_team_info: TeamInfoResponseObject = await team_info(
         http_request=http_request,
@@ -2744,41 +2849,19 @@ async def team_member_update(
     )
 
     team_table = returned_team_info["team_info"]
-
-    ## get user id
-    received_user_id: Optional[str] = None
-    if data.user_id is not None:
-        received_user_id = data.user_id
-    elif data.user_email is not None:
-        for member in returned_team_info["team_info"].members_with_roles:
-            if member.user_email is not None and member.user_email == data.user_email:
-                received_user_id = member.user_id
-                break
-
-    if received_user_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "User id doesn't exist in team table. Data={}".format(data)
-            },
+    received_user_id = _resolve_team_member_user_id_from_request(
+        data, returned_team_info
+    )
+    identified_budget_id = _identified_member_budget_id(
+        returned_team_info["team_memberships"], received_user_id
+    )
+    team_default_budget_id = _team_default_member_budget_id(team_table)
+    budget_duration_explicit, effective_budget_duration = (
+        await _effective_member_budget_duration(
+            data, prisma_client, team_default_budget_id
         )
-    ## find the relevant team membership
-    identified_budget_id: Optional[str] = None
-    for tm in returned_team_info["team_memberships"]:
-        if tm.user_id == received_user_id:
-            identified_budget_id = tm.budget_id
-            break
+    )
 
-    # If this membership still points at the team's shared default member
-    # budget, _upsert_budget_and_membership will clone-on-write so that the
-    # update only touches this user (not every member sharing the default).
-    team_default_budget_id: Optional[str] = None
-    if team_table.metadata is not None:
-        raw_default_budget_id = team_table.metadata.get("team_member_budget_id")
-        if isinstance(raw_default_budget_id, str):
-            team_default_budget_id = raw_default_budget_id
-
-    ### upsert new budget
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
             tx=tx,
@@ -2791,30 +2874,16 @@ async def team_member_update(
             rpm_limit=data.rpm_limit,
             allowed_models=data.allowed_models,
             team_default_budget_id=team_default_budget_id,
+            budget_duration=effective_budget_duration,
+            budget_duration_explicit=budget_duration_explicit,
         )
 
-    ### update team member role
-    if data.role is not None:
-        team_members: List[Member] = []
-        for member in team_table.members_with_roles:
-            if member.user_id == received_user_id:
-                team_members.append(
-                    Member(
-                        user_id=member.user_id,
-                        role=data.role,
-                        user_email=data.user_email or member.user_email,
-                    )
-                )
-            else:
-                team_members.append(member)
-
-        team_table.members_with_roles = team_members
-
-        _db_team_members: List[dict] = [m.model_dump() for m in team_members]
-        await prisma_client.db.litellm_teamtable.update(
-            where={"team_id": data.team_id},
-            data={"members_with_roles": json.dumps(_db_team_members)},  # type: ignore
-        )
+    await _team_member_update_apply_role_if_requested(
+        prisma_client,
+        data=data,
+        team_table=team_table,
+        received_user_id=received_user_id,
+    )
 
     return TeamMemberUpdateResponse(
         team_id=data.team_id,
@@ -2824,6 +2893,7 @@ async def team_member_update(
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
         allowed_models=data.allowed_models,
+        budget_duration=effective_budget_duration,
     )
 
 

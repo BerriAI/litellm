@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import DualCache
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy._types import (
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields,
@@ -374,113 +375,134 @@ def _set_object_metadata_field(
     object_data.metadata[field_name] = value
 
 
-async def _upsert_budget_and_membership(
-    tx,
-    *,
-    team_id: str,
-    user_id: str,
+def _budget_disconnect_all_unset(
     max_budget: Optional[float],
-    existing_budget_id: Optional[str],
-    user_api_key_dict: UserAPIKeyAuth,
-    tpm_limit: Optional[int] = None,
-    rpm_limit: Optional[int] = None,
-    allowed_models: Optional[List[str]] = None,
-    team_default_budget_id: Optional[str] = None,
-):
-    """
-    Helper function to Create/Update or Delete the budget within the team membership
-    Args:
-        tx: The transaction object
-        team_id: The ID of the team
-        user_id: The ID of the user
-        max_budget: The maximum budget for the team
-        existing_budget_id: The ID of the existing budget, if any
-        user_api_key_dict: User API Key dictionary containing user information
-        tpm_limit: Tokens per minute limit for the team member
-        rpm_limit: Requests per minute limit for the team member
-        allowed_models: Per-member model scope. None = don't change. [] = remove restrictions. Non-empty list = enforce.
-        team_default_budget_id: The team's shared default member budget id (from
-            team metadata.team_member_budget_id), if any. When the membership's
-            existing_budget_id matches this, we clone-on-write so editing one
-            member's budget does not mutate the shared default (and therefore
-            every other member who still points at it).
-
-    If max_budget, tpm_limit, rpm_limit, and allowed_models are all None, the user's budget is removed from the team membership.
-    If any of these values exist, a budget is updated or created and linked to the team membership.
-    """
-    if (
+    tpm_limit: Optional[int],
+    rpm_limit: Optional[int],
+    allowed_models: Optional[List[str]],
+    budget_duration: Optional[str],
+    budget_duration_explicit: bool,
+) -> bool:
+    return (
         max_budget is None
         and tpm_limit is None
         and rpm_limit is None
         and allowed_models is None
-    ):
-        # disconnect the budget since all limits are None
-        await tx.litellm_teammembership.update(
-            where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
-            data={"litellm_budget_table": {"disconnect": True}},
-        )
-        return
-
-    is_shared_default = (
-        existing_budget_id is not None
-        and team_default_budget_id is not None
-        and existing_budget_id == team_default_budget_id
+        and budget_duration is None
+        and not budget_duration_explicit
     )
 
-    if existing_budget_id is not None and not is_shared_default:
-        # Update the existing budget in-place to preserve fields not being changed.
-        # Only write fields that the caller explicitly provided (non-None).
-        update_data: Dict[str, Any] = {
-            "updated_by": user_api_key_dict.user_id or "",
-        }
-        if max_budget is not None:
-            update_data["max_budget"] = max_budget
-        if tpm_limit is not None:
-            update_data["tpm_limit"] = tpm_limit
-        if rpm_limit is not None:
-            update_data["rpm_limit"] = rpm_limit
-        if allowed_models is not None:
-            update_data["allowed_models"] = allowed_models
-        await tx.litellm_budgettable.update(
-            where={"budget_id": existing_budget_id},
-            data=update_data,
-        )
-        return
 
-    # Either there is no existing budget, OR the membership is still pointing
-    # at the team's shared default member budget. In both cases we create a
-    # NEW private budget for this user and (re)link the membership to it.
-    create_data: Dict[str, Any] = {
-        "created_by": user_api_key_dict.user_id or "",
+async def _disconnect_team_member_budget(tx, *, team_id: str, user_id: str) -> None:
+    await tx.litellm_teammembership.update(
+        where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
+        data={"litellm_budget_table": {"disconnect": True}},
+    )
+
+
+def _non_none_budget_limit_fields(
+    max_budget: Optional[float],
+    tpm_limit: Optional[int],
+    rpm_limit: Optional[int],
+    allowed_models: Optional[List[str]],
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if max_budget is not None:
+        out["max_budget"] = max_budget
+    if tpm_limit is not None:
+        out["tpm_limit"] = tpm_limit
+    if rpm_limit is not None:
+        out["rpm_limit"] = rpm_limit
+    if allowed_models is not None:
+        out["allowed_models"] = allowed_models
+    return out
+
+
+def _apply_explicit_budget_duration_to_update_dict(
+    update_data: Dict[str, Any],
+    budget_duration: Optional[str],
+) -> None:
+    """
+    Persist ``budget_duration`` / ``budget_reset_at`` only when the caller
+    explicitly included ``budget_duration`` in the request (see
+    ``budget_duration_explicit`` at the /team/member_update layer).
+
+    When duration is omitted, inherited team defaults are still passed into
+    ``_upsert_budget_and_membership`` for *create* / clone paths, but in-place
+    updates must not rewrite ``budget_reset_at`` or the member's cycle is reset
+    mid-period (Greptile / PR #26779).
+    """
+    if budget_duration is not None:
+        update_data["budget_duration"] = budget_duration
+        update_data["budget_reset_at"] = get_budget_reset_time(
+            budget_duration=budget_duration
+        )
+    else:
+        update_data["budget_duration"] = None
+        update_data["budget_reset_at"] = None
+
+
+async def _update_existing_member_budget_in_place(
+    tx,
+    *,
+    existing_budget_id: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    max_budget: Optional[float],
+    tpm_limit: Optional[int],
+    rpm_limit: Optional[int],
+    allowed_models: Optional[List[str]],
+    budget_duration: Optional[str],
+    budget_duration_explicit: bool,
+) -> None:
+    update_data: Dict[str, Any] = {
         "updated_by": user_api_key_dict.user_id or "",
+        **_non_none_budget_limit_fields(
+            max_budget, tpm_limit, rpm_limit, allowed_models
+        ),
     }
+    if budget_duration_explicit:
+        _apply_explicit_budget_duration_to_update_dict(update_data, budget_duration)
+    await tx.litellm_budgettable.update(
+        where={"budget_id": existing_budget_id},
+        data=update_data,
+    )
 
-    # If we're forking off the shared default, seed the new row with the
-    # default's values so fields the caller did not change carry over.
-    if is_shared_default:
-        default_budget_row = await tx.litellm_budgettable.find_unique(
-            where={"budget_id": existing_budget_id}
-        )
-        if default_budget_row is not None:
-            default_budget_dict = default_budget_row.model_dump()
-            for field in (
-                "max_budget",
-                "soft_budget",
-                "max_parallel_requests",
-                "tpm_limit",
-                "rpm_limit",
-                "model_max_budget",
-                "budget_duration",
-                "allowed_models",
-            ):
-                value = default_budget_dict.get(field)
-                if value is None:
-                    continue
-                if isinstance(value, list) and len(value) == 0:
-                    continue
-                create_data[field] = value
 
-    # Caller-provided values take precedence over the cloned defaults.
+async def _clone_shared_default_into_create_data(
+    tx, create_data: Dict[str, Any], *, existing_budget_id: str
+) -> None:
+    default_budget_row = await tx.litellm_budgettable.find_unique(
+        where={"budget_id": existing_budget_id}
+    )
+    if default_budget_row is None:
+        return
+    default_budget_dict = default_budget_row.model_dump()
+    for field in (
+        "max_budget",
+        "soft_budget",
+        "max_parallel_requests",
+        "tpm_limit",
+        "rpm_limit",
+        "model_max_budget",
+        "budget_duration",
+        "allowed_models",
+    ):
+        value = default_budget_dict.get(field)
+        if value is None:
+            continue
+        if isinstance(value, list) and len(value) == 0:
+            continue
+        create_data[field] = value
+
+
+def _merge_limit_overrides_into_create_data(
+    create_data: Dict[str, Any],
+    *,
+    max_budget: Optional[float],
+    tpm_limit: Optional[int],
+    rpm_limit: Optional[int],
+    allowed_models: Optional[List[str]],
+) -> None:
     if max_budget is not None:
         create_data["max_budget"] = max_budget
     if tpm_limit is not None:
@@ -490,6 +512,33 @@ async def _upsert_budget_and_membership(
     if allowed_models is not None:
         create_data["allowed_models"] = allowed_models
 
+
+def _merge_duration_into_create_data(
+    create_data: Dict[str, Any],
+    budget_duration: Optional[str],
+    budget_duration_explicit: bool,
+) -> None:
+    if budget_duration_explicit:
+        if budget_duration is not None:
+            create_data["budget_duration"] = budget_duration
+        else:
+            create_data.pop("budget_duration", None)
+            create_data.pop("budget_reset_at", None)
+    elif budget_duration is not None:
+        create_data["budget_duration"] = budget_duration
+
+
+def _set_create_data_budget_reset_from_duration(create_data: Dict[str, Any]) -> None:
+    bd = create_data.get("budget_duration")
+    if bd is not None:
+        create_data["budget_reset_at"] = get_budget_reset_time(budget_duration=bd)
+    else:
+        create_data.pop("budget_reset_at", None)
+
+
+async def _create_private_budget_and_link_membership(
+    tx, *, team_id: str, user_id: str, create_data: Dict[str, Any]
+) -> None:
     new_budget = await tx.litellm_budgettable.create(
         data=create_data,
         include={"team_membership": True},
@@ -515,6 +564,106 @@ async def _upsert_budget_and_membership(
                 },
             },
         },
+    )
+
+
+async def _upsert_budget_and_membership(
+    tx,
+    *,
+    team_id: str,
+    user_id: str,
+    max_budget: Optional[float],
+    existing_budget_id: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    tpm_limit: Optional[int] = None,
+    rpm_limit: Optional[int] = None,
+    allowed_models: Optional[List[str]] = None,
+    team_default_budget_id: Optional[str] = None,
+    budget_duration: Optional[str] = None,
+    budget_duration_explicit: bool = False,
+):
+    """
+    Helper function to Create/Update or Delete the budget within the team membership
+    Args:
+        tx: The transaction object
+        team_id: The ID of the team
+        user_id: The ID of the user
+        max_budget: The maximum budget for the team
+        existing_budget_id: The ID of the existing budget, if any
+        user_api_key_dict: User API Key dictionary containing user information
+        tpm_limit: Tokens per minute limit for the team member
+        rpm_limit: Requests per minute limit for the team member
+        allowed_models: Per-member model scope. None = don't change. [] = remove restrictions. Non-empty list = enforce.
+        team_default_budget_id: The team's shared default member budget id (from
+            team metadata.team_member_budget_id), if any. When the membership's
+            existing_budget_id matches this, we clone-on-write so editing one
+            member's budget does not mutate the shared default (and therefore
+            every other member who still points at it).
+        budget_duration: Budget reset period for the team member (e.g. '30d', '1mo')
+        budget_duration_explicit: True when the HTTP caller included ``budget_duration``
+            in the request body (so ``None`` means explicit lifetime). When False,
+            ``None`` means duration was not supplied for this write path.
+
+    If max_budget, tpm_limit, rpm_limit, and allowed_models are all None, and there
+    is no explicit ``budget_duration`` in the request (``budget_duration_explicit``
+    is False) with a resolved ``budget_duration`` of None, the user's budget is
+    removed from the team membership.
+
+    If any of these values exist, a budget is updated or created and linked to the team membership.
+    """
+    if _budget_disconnect_all_unset(
+        max_budget,
+        tpm_limit,
+        rpm_limit,
+        allowed_models,
+        budget_duration,
+        budget_duration_explicit,
+    ):
+        await _disconnect_team_member_budget(tx, team_id=team_id, user_id=user_id)
+        return
+
+    is_shared_default = (
+        existing_budget_id is not None
+        and team_default_budget_id is not None
+        and existing_budget_id == team_default_budget_id
+    )
+
+    if existing_budget_id is not None and not is_shared_default:
+        await _update_existing_member_budget_in_place(
+            tx,
+            existing_budget_id=existing_budget_id,
+            user_api_key_dict=user_api_key_dict,
+            max_budget=max_budget,
+            tpm_limit=tpm_limit,
+            rpm_limit=rpm_limit,
+            allowed_models=allowed_models,
+            budget_duration=budget_duration,
+            budget_duration_explicit=budget_duration_explicit,
+        )
+        return
+
+    create_data: Dict[str, Any] = {
+        "created_by": user_api_key_dict.user_id or "",
+        "updated_by": user_api_key_dict.user_id or "",
+    }
+    if is_shared_default:
+        assert existing_budget_id is not None
+        await _clone_shared_default_into_create_data(
+            tx, create_data, existing_budget_id=existing_budget_id
+        )
+    _merge_limit_overrides_into_create_data(
+        create_data,
+        max_budget=max_budget,
+        tpm_limit=tpm_limit,
+        rpm_limit=rpm_limit,
+        allowed_models=allowed_models,
+    )
+    _merge_duration_into_create_data(
+        create_data, budget_duration, budget_duration_explicit
+    )
+    _set_create_data_budget_reset_from_duration(create_data)
+    await _create_private_budget_and_link_membership(
+        tx, team_id=team_id, user_id=user_id, create_data=create_data
     )
 
 

@@ -95,6 +95,37 @@ async def test_upsert_with_existing_budget_id_creates_new(mock_tx, fake_user):
     mock_tx.litellm_teammembership.update.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_upsert_in_place_omitted_duration_does_not_touch_duration_fields(
+    mock_tx,
+    fake_user,
+):
+    """
+    When budget_duration was omitted from the API (explicit=False), an in-place
+    update must not write budget_duration / budget_reset_at even if the caller
+    passes a resolved team-default duration string (Greptile P1, PR #26779).
+    """
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-no-dur-touch",
+        user_id="user-no-dur-touch",
+        max_budget=10.0,
+        existing_budget_id="priv-budget-1",
+        user_api_key_dict=fake_user,
+        team_default_budget_id="team-default-xyz",
+        budget_duration="30d",
+        budget_duration_explicit=False,
+    )
+
+    mock_tx.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "priv-budget-1"},
+        data={
+            "max_budget": 10.0,
+            "updated_by": fake_user.user_id,
+        },
+    )
+
+
 # TEST: create new budget and link membership
 @pytest.mark.asyncio
 async def test_upsert_create_and_link(mock_tx, fake_user):
@@ -225,6 +256,80 @@ async def test_upsert_rpm_limit_update_creates_new_budget(mock_tx, fake_user):
     mock_tx.litellm_teammembership.upsert.assert_not_called()
 
 
+# TEST: budget_duration is threaded through to the new budget row
+@pytest.mark.asyncio
+async def test_upsert_with_budget_duration(mock_tx, fake_user):
+    """
+    When budget_duration is passed, it (and a derived budget_reset_at) should
+    appear in the create_data sent to Prisma.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/25509
+    """
+    from unittest.mock import patch
+    from datetime import datetime as dt
+
+    fake_reset_at = dt(2026, 1, 31, 0, 0, 0)
+
+    with patch(
+        "litellm.proxy.management_endpoints.common_utils.get_budget_reset_time",
+        return_value=fake_reset_at,
+    ):
+        await _upsert_budget_and_membership(
+            mock_tx,
+            team_id="team-dur",
+            user_id="user-dur",
+            max_budget=10.0,
+            existing_budget_id=None,
+            user_api_key_dict=fake_user,
+            budget_duration="30d",
+        )
+
+    call_data = mock_tx.litellm_budgettable.create.call_args.kwargs["data"]
+    assert call_data["budget_duration"] == "30d"
+    assert call_data["budget_reset_at"] == fake_reset_at
+
+    # membership upsert should still happen
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once()
+
+
+# TEST: budget_duration alone (no max_budget/limits) creates a budget rather than disconnecting
+@pytest.mark.asyncio
+async def test_upsert_budget_duration_only_creates_budget(mock_tx, fake_user):
+    """
+    When only budget_duration is provided (no max_budget, tpm_limit, rpm_limit),
+    a new budget should be created rather than disconnecting.
+    """
+    from unittest.mock import patch
+    from datetime import datetime as dt
+
+    fake_reset_at = dt(2026, 1, 8, 0, 0, 0)
+
+    with patch(
+        "litellm.proxy.management_endpoints.common_utils.get_budget_reset_time",
+        return_value=fake_reset_at,
+    ):
+        await _upsert_budget_and_membership(
+            mock_tx,
+            team_id="team-dur-only",
+            user_id="user-dur-only",
+            max_budget=None,
+            existing_budget_id=None,
+            user_api_key_dict=fake_user,
+            budget_duration="7d",
+        )
+
+    # Should NOT disconnect
+    mock_tx.litellm_teammembership.update.assert_not_called()
+
+    # Should create a budget with budget_duration set
+    call_data = mock_tx.litellm_budgettable.create.call_args.kwargs["data"]
+    assert call_data["budget_duration"] == "7d"
+    assert call_data["budget_reset_at"] == fake_reset_at
+
+    # Should upsert membership
+    mock_tx.litellm_teammembership.upsert.assert_awaited_once()
+
+
 # TEST: create new budget with only rpm_limit (no max_budget)
 @pytest.mark.asyncio
 async def test_upsert_rpm_only_creates_new_budget(mock_tx, fake_user):
@@ -279,6 +384,9 @@ async def test_upsert_clones_when_pointing_at_shared_default(mock_tx, fake_user)
     shared row. Instead we should create a new private budget for this member
     (seeded with the default's values) and re-link the membership to it.
     """
+    from unittest.mock import patch
+    from datetime import datetime as dt
+
     shared_default_id = "team-default-budget-1"
 
     # Default budget row in the DB: $200 cap, daily reset, 500 tpm.
@@ -296,16 +404,21 @@ async def test_upsert_clones_when_pointing_at_shared_default(mock_tx, fake_user)
     }
     mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=default_row)
 
-    # Caller is changing only this member's max_budget.
-    await _upsert_budget_and_membership(
-        mock_tx,
-        team_id="team-shared",
-        user_id="user-shared",
-        max_budget=50.0,
-        existing_budget_id=shared_default_id,
-        user_api_key_dict=fake_user,
-        team_default_budget_id=shared_default_id,
-    )
+    fake_reset_at = dt(2026, 2, 1, 12, 0, 0)
+    with patch(
+        "litellm.proxy.management_endpoints.common_utils.get_budget_reset_time",
+        return_value=fake_reset_at,
+    ):
+        # Caller is changing only this member's max_budget.
+        await _upsert_budget_and_membership(
+            mock_tx,
+            team_id="team-shared",
+            user_id="user-shared",
+            max_budget=50.0,
+            existing_budget_id=shared_default_id,
+            user_api_key_dict=fake_user,
+            team_default_budget_id=shared_default_id,
+        )
 
     # Must NOT touch the shared default row in place.
     mock_tx.litellm_budgettable.update.assert_not_called()
@@ -319,6 +432,7 @@ async def test_upsert_clones_when_pointing_at_shared_default(mock_tx, fake_user)
             "max_budget": 50.0,  # caller wins
             "tpm_limit": 500,  # cloned from default
             "budget_duration": "1d",  # cloned from default
+            "budget_reset_at": fake_reset_at,
         },
         include={"team_membership": True},
     )
@@ -338,6 +452,96 @@ async def test_upsert_clones_when_pointing_at_shared_default(mock_tx, fake_user)
             },
         },
     )
+
+
+@pytest.mark.asyncio
+async def test_upsert_explicit_lifetime_clears_duration_on_private_budget(
+    mock_tx, fake_user
+):
+    """Explicit ``budget_duration: null`` clears periodic duration on private row."""
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-lifetime",
+        user_id="user-lifetime",
+        max_budget=None,
+        existing_budget_id="private-budget-periodic",
+        user_api_key_dict=fake_user,
+        team_default_budget_id="team-default-budget-1",
+        budget_duration=None,
+        budget_duration_explicit=True,
+    )
+
+    mock_tx.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "private-budget-periodic"},
+        data={
+            "updated_by": fake_user.user_id,
+            "budget_duration": None,
+            "budget_reset_at": None,
+        },
+    )
+    mock_tx.litellm_budgettable.create.assert_not_called()
+    mock_tx.litellm_teammembership.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upsert_clone_explicit_lifetime_strips_cloned_duration(
+    mock_tx, fake_user
+):
+    """Clone-from-default: explicit null must not keep default's budget_duration."""
+    shared_default_id = "team-default-budget-1"
+    default_row = MagicMock()
+    default_row.model_dump.return_value = {
+        "budget_id": shared_default_id,
+        "max_budget": 200.0,
+        "soft_budget": None,
+        "max_parallel_requests": None,
+        "tpm_limit": 500,
+        "rpm_limit": None,
+        "model_max_budget": None,
+        "budget_duration": "1d",
+        "allowed_models": [],
+    }
+    mock_tx.litellm_budgettable.find_unique = AsyncMock(return_value=default_row)
+
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-shared-lt",
+        user_id="user-shared-lt",
+        max_budget=50.0,
+        existing_budget_id=shared_default_id,
+        user_api_key_dict=fake_user,
+        team_default_budget_id=shared_default_id,
+        budget_duration=None,
+        budget_duration_explicit=True,
+    )
+
+    mock_tx.litellm_budgettable.create.assert_awaited_once_with(
+        data={
+            "created_by": fake_user.user_id,
+            "updated_by": fake_user.user_id,
+            "max_budget": 50.0,
+            "tpm_limit": 500,
+        },
+        include={"team_membership": True},
+    )
+
+
+@pytest.mark.asyncio
+async def test_upsert_explicit_null_only_does_not_disconnect(mock_tx, fake_user):
+    """Explicit lifetime with no other fields must not disconnect membership budget."""
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-explicit-null",
+        user_id="user-explicit-null",
+        max_budget=None,
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        budget_duration=None,
+        budget_duration_explicit=True,
+    )
+
+    mock_tx.litellm_teammembership.update.assert_not_called()
+    mock_tx.litellm_budgettable.create.assert_awaited_once()
 
 
 # TEST: when team default exists but member already has their own budget, in-place update
