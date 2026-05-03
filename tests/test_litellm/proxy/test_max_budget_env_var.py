@@ -1,9 +1,10 @@
 """
 Test that max_budget from environment variable (string) is correctly
 converted to float.
-GitHub Issue: #23843
+GitHub Issues: #23843, #26696
 """
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -49,3 +50,130 @@ async def test_max_budget_float_stays_float():
             assert litellm.max_budget == 200.0
         finally:
             litellm.max_budget = original
+
+
+@pytest.mark.asyncio
+async def test_max_budget_from_config_yaml_env_var(tmp_path):
+    """
+    Regression test for GitHub issue #26696.
+
+    When `litellm_settings.max_budget` is set via `os.environ/MAX_BUDGET`
+    in config.yaml, ProxyConfig resolves the env var to a string, then
+    applies the litellm_settings dict. Without coercion, `litellm.max_budget`
+    becomes a str and `litellm.max_budget > 0` raises TypeError at startup
+    (proxy_server.py around the `prisma_client is not None and
+    litellm.max_budget > 0` check).
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "model_list: []\n"
+        "litellm_settings:\n"
+        "  max_budget: os.environ/TEST_MAX_BUDGET_REGRESSION\n"
+    )
+
+    original_budget = litellm.max_budget
+    original_env = os.environ.get("TEST_MAX_BUDGET_REGRESSION")
+    os.environ["TEST_MAX_BUDGET_REGRESSION"] = "10"
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(router=None, config_file_path=str(config_path))
+
+        assert isinstance(litellm.max_budget, float), (
+            f"max_budget should be float after config load, got "
+            f"{type(litellm.max_budget).__name__}"
+        )
+        assert litellm.max_budget == 10.0
+        # The original failure mode: this comparison must not raise.
+        assert litellm.max_budget > 0
+    finally:
+        litellm.max_budget = original_budget
+        if original_env is None:
+            os.environ.pop("TEST_MAX_BUDGET_REGRESSION", None)
+        else:
+            os.environ["TEST_MAX_BUDGET_REGRESSION"] = original_env
+
+
+@pytest.mark.parametrize(
+    "key,attr",
+    [
+        ("max_user_budget", "max_user_budget"),
+        ("max_end_user_budget", "max_end_user_budget"),
+        ("max_internal_user_budget", "max_internal_user_budget"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_user_budget_settings_from_config_yaml_env_var(tmp_path, key, attr):
+    """
+    Regression test for the symmetric defect to #26696: `max_user_budget`
+    and `max_end_user_budget` are also typed as Optional[float] and are
+    compared numerically downstream (e.g. budget enforcement in
+    litellm/proxy/utils.py), so they must be coerced from str when loaded
+    via os.environ in config.yaml.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    env_name = f"TEST_{key.upper()}_REGRESSION"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "model_list: []\n" "litellm_settings:\n" f"  {key}: os.environ/{env_name}\n"
+    )
+
+    original_value = getattr(litellm, attr)
+    original_env = os.environ.get(env_name)
+    os.environ[env_name] = "25"
+    try:
+        proxy_config = ProxyConfig()
+        await proxy_config.load_config(router=None, config_file_path=str(config_path))
+
+        actual = getattr(litellm, attr)
+        assert isinstance(actual, float), (
+            f"{attr} should be float after config load, got " f"{type(actual).__name__}"
+        )
+        assert actual == 25.0
+        assert actual > 0
+    finally:
+        setattr(litellm, attr, original_value)
+        if original_env is None:
+            os.environ.pop(env_name, None)
+        else:
+            os.environ[env_name] = original_env
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("10", 10.0),
+        ("  10  ", 10.0),
+        ("1.5", 1.5),
+        ("", None),
+        ("   ", None),
+        (None, None),
+        (5, 5.0),
+        (5.5, 5.5),
+    ],
+)
+def test_coerce_budget_setting_valid(raw, expected):
+    """The helper accepts numeric strings (with surrounding whitespace),
+    floats/ints, and None or empty strings (treated as unset).
+    """
+    from litellm.proxy.proxy_server import _coerce_budget_setting
+
+    assert _coerce_budget_setting(raw) == expected
+
+
+def test_coerce_budget_setting_default_for_max_budget():
+    """`max_budget` callers pass default=0.0 to preserve the legacy default."""
+    from litellm.proxy.proxy_server import _coerce_budget_setting
+
+    assert _coerce_budget_setting(None, default=0.0) == 0.0
+    assert _coerce_budget_setting("", default=0.0) == 0.0
+
+
+def test_coerce_budget_setting_invalid_raises_clear_error():
+    """Non-numeric strings raise ValueError pointing at the bad input."""
+    from litellm.proxy.proxy_server import _coerce_budget_setting
+
+    with pytest.raises(ValueError, match="unlimited"):
+        _coerce_budget_setting("unlimited")

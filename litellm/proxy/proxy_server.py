@@ -2714,6 +2714,31 @@ class StreamingCallbackError(Exception):
     pass
 
 
+def _coerce_budget_setting(value, default=None):
+    """Coerce a numeric budget setting from a config.yaml value to float.
+
+    Handles the case where `litellm_settings.<key>: os.environ/FOO` resolves
+    to a string. Empty/whitespace env vars are treated as unset (returns
+    `default`). Non-numeric values raise ValueError with a clear message.
+    See GitHub issue #26696.
+    """
+    if value is None:
+        return default
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return default
+        try:
+            return float(stripped)
+        except ValueError as e:
+            raise ValueError(
+                f"Cannot convert litellm_settings budget value {value!r} to "
+                f"float. Set the env var to a numeric value (e.g. '10') or "
+                f"omit it."
+            ) from e
+    return float(value)
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -3348,10 +3373,23 @@ class ProxyConfig:
                     verbose_proxy_logger.debug(
                         f"litellm.post_call_rules: {litellm.post_call_rules}"
                     )
+                elif key == "max_budget":
+                    # Numeric budget settings may arrive as strings when loaded
+                    # via `os.environ/...` in config.yaml. Coerce to float so
+                    # downstream comparisons (e.g. `litellm.max_budget > 0`)
+                    # don't raise TypeError. Empty/whitespace env vars resolve
+                    # to None (no budget). See GitHub issue #26696.
+                    litellm.max_budget = _coerce_budget_setting(value, default=0.0)
+                elif key == "max_user_budget":
+                    litellm.max_user_budget = _coerce_budget_setting(value)
+                elif key == "max_end_user_budget":
+                    litellm.max_end_user_budget = _coerce_budget_setting(value)
                 elif key == "max_internal_user_budget":
-                    litellm.max_internal_user_budget = float(value)  # type: ignore
+                    litellm.max_internal_user_budget = _coerce_budget_setting(value)  # type: ignore
                 elif key == "default_max_internal_user_budget":
-                    litellm.default_max_internal_user_budget = float(value)
+                    coerced_default = _coerce_budget_setting(value)
+                    if coerced_default is not None:
+                        litellm.default_max_internal_user_budget = coerced_default
                     if litellm.max_internal_user_budget is None:
                         litellm.max_internal_user_budget = (
                             litellm.default_max_internal_user_budget
