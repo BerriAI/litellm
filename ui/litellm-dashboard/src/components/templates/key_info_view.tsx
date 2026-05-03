@@ -49,6 +49,33 @@ const isEmptyValue = (v: unknown): boolean =>
   (Array.isArray(v) && v.length === 0) ||
   (typeof v === "string" && v.trim() === "");
 
+const normalizeStringList = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .filter((entry) => entry.length > 0);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+
+  return [];
+};
+
+const areStringListsEqual = (left: unknown, right: unknown): boolean => {
+  const normalizedLeft = normalizeStringList(left);
+  const normalizedRight = normalizeStringList(right);
+
+  return (
+    normalizedLeft.length === normalizedRight.length &&
+    normalizedLeft.every((entry, index) => entry === normalizedRight[index])
+  );
+};
+
 /**
  * ─────────────────────────────────────────────────────────────────────────
  * @deprecated
@@ -172,6 +199,13 @@ export default function KeyInfoView({
         if (isEmptyValue(formValues[field]) && isEmptyValue(previousValue)) {
           delete formValues[field];
         }
+      }
+
+      // The edit form always includes allowed_routes. If the user didn't change it,
+      // strip it from the payload so non-admin editors don't trip the backend
+      // "setting allowed_routes" permission check on a no-op save.
+      if (areStringListsEqual(formValues.allowed_routes, currentKeyData.allowed_routes)) {
+        delete formValues.allowed_routes;
       }
 
       // Handle max budget empty string
