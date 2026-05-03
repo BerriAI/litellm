@@ -479,6 +479,9 @@ from litellm.proxy.search_endpoints.endpoints import router as search_router
 from litellm.proxy.search_endpoints.search_tool_management import (
     router as search_tool_management_router,
 )
+from litellm.proxy.fetch_endpoints.fetch_tool_management import (
+    router as fetch_tool_management_router,
+)
 from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
@@ -14342,6 +14345,7 @@ app.include_router(usage_ai_router)
 app.include_router(policy_crud_router)
 app.include_router(policy_resolve_router)
 app.include_router(search_tool_management_router)
+app.include_router(fetch_tool_management_router)
 app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)
 app.include_router(debugging_endpoints_router)

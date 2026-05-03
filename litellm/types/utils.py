@@ -3374,6 +3374,19 @@ class SearchProviders(str, Enum):
 SearchProvidersSet = {provider.value for provider in SearchProviders}
 
 
+class FetchProviders(str, Enum):
+    """
+    Enum for fetch provider types.
+    Separate from SearchProviders for semantic clarity.
+    """
+
+    FIRECRAWL = "firecrawl"
+
+
+# Create a set of all fetch provider values for quick lookup
+FetchProvidersSet = {provider.value for provider in FetchProviders}
+
+
 class LiteLLMLoggingBaseClass:
     """
     Base class for logging pre and post call
