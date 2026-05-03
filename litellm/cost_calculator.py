@@ -1805,16 +1805,25 @@ def ocr_cost(
     if response.usage_info is None:
         raise ValueError("OCR response usage_info is None")
 
-    pages_processed = response.usage_info.pages_processed
-    if pages_processed is None:
-        raise ValueError("OCR response pages_processed is None")
-
     try:
         model_info: Optional[ModelInfo] = litellm.get_model_info(
             model=model, custom_llm_provider=custom_llm_provider
         )
     except Exception:
         model_info = None
+
+    credits = getattr(response.usage_info, "credits", None)
+    cost_per_credit = None
+    if model_info is not None:
+        cost_per_credit = model_info.get("ocr_cost_per_credit")
+    if credits is not None and cost_per_credit is not None:
+        return cost_per_credit * credits, 0.0
+
+    pages_processed = response.usage_info.pages_processed
+    if pages_processed is None:
+        if custom_llm_provider == "reducto" or model.startswith("reducto/"):
+            return 0.0, 0.0
+        raise ValueError("OCR response pages_processed is None")
 
     ocr_cost_per_page: float = 0.0
     if model_info is not None:

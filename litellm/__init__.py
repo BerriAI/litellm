@@ -624,6 +624,7 @@ minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
 
@@ -889,6 +890,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "reducto":
+            reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
 
@@ -999,6 +1002,7 @@ model_list = list(
     | ovhcloud_models
     | lemonade_models
     | docker_model_runner_models
+    | reducto_models
     | bedrock_mantle_models
     | set(clarifai_models)
 )
@@ -1104,6 +1108,7 @@ models_by_provider: dict = {
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
+    "reducto": reducto_models,
     "bedrock_mantle": bedrock_mantle_models,
 }
 

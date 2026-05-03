@@ -6798,6 +6798,18 @@ class Router:
             _shared_model_info = {
                 k: v for k, v in _model_info.items() if k not in _custom_pricing_fields
             }
+            _existing_shared_mode = (
+                cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}
+            ).get("mode")
+            if (
+                _existing_shared_mode is not None
+                and _shared_model_info.get("mode") != _existing_shared_mode
+            ):
+                # Keep the built-in bridge mode stable for shared backend keys.
+                # Multiple aliases can point at the same provider/model backend,
+                # but their deployment-level overrides should not downgrade the
+                # backend from responses -> chat via last-write-wins registration.
+                _shared_model_info.pop("mode", None)
             litellm.register_model(
                 model_cost={
                     _model_name: _shared_model_info,
