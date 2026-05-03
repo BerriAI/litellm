@@ -365,6 +365,8 @@ curl -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 | [xAI (`xai`)](https://docs.litellm.ai/docs/providers/xai) | ✅ | ✅ | ✅ |  |  |  |  |  |  |  |
 | [Xinference (`xinference`)](https://docs.litellm.ai/docs/providers/xinference) |  |  |  | ✅ |  |  |  |  |  |  |
 
+**Audio transcription:** OpenRouter does not support the `/audio/transcriptions` API. Use OpenAI directly with `model="whisper-1"` (see [OpenAI audio docs](https://platform.openai.com/docs/guides/speech-to-text)).
+
 [**Read the Docs**](https://docs.litellm.ai/docs/)
 
 ---

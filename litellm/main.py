@@ -212,6 +212,9 @@ from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
 from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+from .llms.openrouter.transcription_validation import (
+    ensure_audio_transcription_supported,
+)
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
@@ -6486,6 +6489,11 @@ def transcription(
 
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
+
+    ensure_audio_transcription_supported(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
 
     optional_params = get_optional_params_transcription(
         model=model,
