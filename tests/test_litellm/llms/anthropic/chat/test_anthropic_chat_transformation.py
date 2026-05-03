@@ -1826,7 +1826,8 @@ def test_anthropic_drop_params_false_forwards_to_unsupported_model():
         "claude-opus-4-6",
         "claude-opus-4-7",
         "claude-sonnet-4-6",
-        "claude-mythos-preview",
+        "anthropic.claude-mythos-preview",
+        "bedrock/anthropic.claude-mythos-preview",
     ],
 )
 def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
