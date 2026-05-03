@@ -7621,16 +7621,14 @@ def stream_chunk_builder(  # noqa: PLR0915
             for chunk in provider_specific_chunks:
                 fields = chunk["choices"][0]["delta"]["provider_specific_fields"]
                 if isinstance(fields, dict):
+                    from litellm.litellm_core_utils.streaming_provider_specific_fields import (
+                        merge_streaming_provider_specific_field,
+                    )
+
                     for key, value in fields.items():
-                        if key not in combined_provider_fields:
-                            combined_provider_fields[key] = value
-                        elif isinstance(value, list) and isinstance(
-                            combined_provider_fields[key], list
-                        ):
-                            # For lists like web_search_results, take the last (most complete) one
-                            combined_provider_fields[key] = value
-                        else:
-                            combined_provider_fields[key] = value
+                        merge_streaming_provider_specific_field(
+                            combined_provider_fields, key, value
+                        )
 
             if combined_provider_fields:
                 _choice = cast(Choices, response.choices[0])
