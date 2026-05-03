@@ -130,6 +130,41 @@ class TestStripClientPricingOverrides:
     def test_metadata_field_set_contains_model_info(self):
         assert "model_info" in _CLIENT_PRICING_METADATA_FIELDS
 
+    def test_strip_emits_debug_log_listing_dropped_fields(self, caplog):
+        # Operators need a paper trail so they can diagnose why a previously
+        # working override stopped applying after the strip landed.
+        import logging
+
+        from litellm._logging import verbose_proxy_logger
+
+        verbose_proxy_logger.setLevel(logging.DEBUG)
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+            _strip_client_pricing_overrides(
+                {
+                    "model": "gpt-4",
+                    "input_cost_per_token": 0.0,
+                    "metadata": {"model_info": {"output_cost_per_token": 0.0}},
+                }
+            )
+        log_text = " ".join(record.getMessage() for record in caplog.records)
+        assert "input_cost_per_token" in log_text
+        assert "metadata.model_info" in log_text
+        assert "allow_client_pricing_override" in log_text
+
+    def test_strip_does_not_log_when_no_fields_present(self, caplog):
+        # No-op strips must stay silent so the log isn't filled with noise on
+        # every legitimate request.
+        import logging
+
+        from litellm._logging import verbose_proxy_logger
+
+        verbose_proxy_logger.setLevel(logging.DEBUG)
+        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+            _strip_client_pricing_overrides({"model": "gpt-4", "temperature": 0.7})
+        assert not any(
+            "pricing" in record.getMessage().lower() for record in caplog.records
+        )
+
 
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_root_pricing_fields():
