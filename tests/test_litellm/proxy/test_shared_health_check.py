@@ -322,13 +322,13 @@ class TestSharedHealthCheckManager:
     async def test_perform_shared_health_check_lock_failed_then_cache(
         self, shared_health_manager, mock_redis_cache
     ):
-        """Test performing shared health check when lock fails but cache becomes available"""
+        """Test performing shared health check when lock fails but cache becomes available during polling"""
         # First call: no cache, lock fails
-        # Second call: cache available
+        # Polling finds cache on first iteration
         mock_redis_cache.async_get_cache.side_effect = [
-            None,  # No cache initially
+            None,  # No cache initially (get_cached_health_check_results)
             json.dumps(
-                {  # Cache available after waiting
+                {  # Cache available on first poll iteration
                     "healthy_endpoints": [{"model": "cached-model"}],
                     "unhealthy_endpoints": [],
                     "healthy_count": 1,
@@ -350,18 +350,68 @@ class TestSharedHealthCheckManager:
                 )
             )
 
-        # Should wait and then get cached results
-        mock_sleep.assert_called_once_with(2)
+        # Should poll once (5s interval) and find cached results
+        mock_sleep.assert_called_once_with(5)
         assert healthy == [{"model": "cached-model"}]
         assert unhealthy == []
 
     @pytest.mark.asyncio
-    async def test_perform_shared_health_check_fallback(
+    async def test_perform_shared_health_check_fallback(self, mock_redis_cache):
+        """Test performing shared health check with fallback to local health check"""
+        # Use short lock_ttl so the polling loop only runs 2 iterations
+        manager = SharedHealthCheckManager(
+            redis_cache=mock_redis_cache,
+            health_check_ttl=300,
+            lock_ttl=10,
+        )
+
+        # No cache ever, lock always held by another pod
+        mock_redis_cache.async_get_cache.side_effect = [
+            None,  # Initial cache check
+            None,  # Iteration 1: cache check
+            "other_pod",  # Iteration 1: lock check (still held)
+            None,  # Iteration 2: cache check
+            "other_pod",  # Iteration 2: lock check (still held)
+        ]
+        mock_redis_cache.async_set_cache.return_value = False  # Lock acquisition fails
+
+        model_list = [
+            {"model_name": "test-model", "litellm_params": {"model": "test-model"}}
+        ]
+        expected_healthy = [{"model": "test-model", "status": "healthy"}]
+        expected_unhealthy = []
+
+        with (
+            patch("asyncio.sleep") as mock_sleep,
+            patch(
+                "litellm.proxy.health_check_utils.shared_health_check_manager.perform_health_check"
+            ) as mock_perform,
+        ):
+            mock_perform.return_value = (expected_healthy, expected_unhealthy, {})
+
+            healthy, unhealthy, _ = await manager.perform_shared_health_check(
+                model_list, details=True
+            )
+
+        # Should poll twice (5s * 2 = 10s >= lock_ttl) then fall back
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_called_with(5)
+        mock_perform.assert_called_once_with(
+            model_list=model_list, details=True, max_concurrency=None
+        )
+        assert healthy == expected_healthy
+        assert unhealthy == expected_unhealthy
+
+    @pytest.mark.asyncio
+    async def test_perform_shared_health_check_early_exit_orphaned_lock(
         self, shared_health_manager, mock_redis_cache
     ):
-        """Test performing shared health check with fallback to local health check"""
-        # No cache, lock fails, no cache after waiting
-        mock_redis_cache.async_get_cache.return_value = None
+        """Test that polling exits early when the lock disappears without a cache write (crash recovery)"""
+        mock_redis_cache.async_get_cache.side_effect = [
+            None,  # Initial cache check
+            None,  # Iteration 1: cache check (still no cache)
+            None,  # Iteration 1: lock check -> lock gone (holder crashed)
+        ]
         mock_redis_cache.async_set_cache.return_value = False  # Lock acquisition fails
 
         model_list = [
@@ -384,8 +434,77 @@ class TestSharedHealthCheckManager:
                 )
             )
 
-        # Should fall back to local health check
-        mock_sleep.assert_called_once_with(2)
+        # Should detect orphaned lock after 1 iteration and fall back immediately
+        mock_sleep.assert_called_once_with(5)
+        mock_perform.assert_called_once_with(
+            model_list=model_list, details=True, max_concurrency=None
+        )
+        assert healthy == expected_healthy
+        assert unhealthy == expected_unhealthy
+
+    @pytest.mark.asyncio
+    async def test_perform_shared_health_check_redis_error_during_polling(
+        self, shared_health_manager, mock_redis_cache
+    ):
+        """Test that a transient Redis error during lock polling doesn't crash the loop"""
+        cached_data = json.dumps(
+            {
+                "healthy_endpoints": [{"model": "cached-model"}],
+                "unhealthy_endpoints": [],
+                "healthy_count": 1,
+                "unhealthy_count": 0,
+                "timestamp": time.time() - 100,
+            }
+        )
+        mock_redis_cache.async_get_cache.side_effect = [
+            None,  # Initial cache check
+            None,  # Iteration 1: cache check
+            Exception("Redis connection lost"),  # Iteration 1: lock check errors
+            cached_data,  # Iteration 2: cache check -> found!
+        ]
+        mock_redis_cache.async_set_cache.return_value = False  # Lock acquisition fails
+
+        model_list = [
+            {"model_name": "test-model", "litellm_params": {"model": "test-model"}}
+        ]
+
+        with patch("asyncio.sleep") as mock_sleep:
+            healthy, unhealthy, _ = (
+                await shared_health_manager.perform_shared_health_check(
+                    model_list, details=True
+                )
+            )
+
+        # Should survive the Redis error and find cache on iteration 2
+        assert mock_sleep.call_count == 2
+        assert healthy == [{"model": "cached-model"}]
+        assert unhealthy == []
+
+    @pytest.mark.asyncio
+    async def test_perform_shared_health_check_no_redis_skips_polling(self):
+        """Test that polling is skipped entirely when redis_cache is None"""
+        manager = SharedHealthCheckManager(redis_cache=None)
+
+        model_list = [
+            {"model_name": "test-model", "litellm_params": {"model": "test-model"}}
+        ]
+        expected_healthy = [{"model": "test-model", "status": "healthy"}]
+        expected_unhealthy = []
+
+        with (
+            patch("asyncio.sleep") as mock_sleep,
+            patch(
+                "litellm.proxy.health_check_utils.shared_health_check_manager.perform_health_check"
+            ) as mock_perform,
+        ):
+            mock_perform.return_value = (expected_healthy, expected_unhealthy, {})
+
+            healthy, unhealthy, _ = await manager.perform_shared_health_check(
+                model_list, details=True
+            )
+
+        # Should NOT sleep at all — falls back to local health check immediately
+        mock_sleep.assert_not_called()
         mock_perform.assert_called_once_with(
             model_list=model_list, details=True, max_concurrency=None
         )
