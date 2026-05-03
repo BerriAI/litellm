@@ -129,6 +129,7 @@ class TestPassthroughPostCallGuardrails:
         mock_proxy_logging.post_call_success_hook = AsyncMock(
             return_value=_GEMINI_RESPONSE
         )
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
 
         with _common_patches(mock_proxy_logging, mock_response):
             await pass_through_request(
@@ -154,6 +155,7 @@ class TestPassthroughPostCallGuardrails:
         mock_proxy_logging = MagicMock()
         mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
         mock_proxy_logging.post_call_success_hook = AsyncMock()
+        mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
 
         with _common_patches(mock_proxy_logging, mock_response):
             result = await pass_through_request(

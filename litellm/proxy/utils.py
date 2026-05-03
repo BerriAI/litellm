@@ -2173,7 +2173,8 @@ class ProxyLogging:
         )
 
         return {
-            "custom_llm_provider": hidden_params.get("custom_llm_provider"),
+            "custom_llm_provider": hidden_params.get("custom_llm_provider")
+            or getattr(response, "custom_llm_provider", None),
             "model_info": model_info,
             "api_base": hidden_params.get("api_base"),
             "model_id": hidden_params.get("model_id"),
