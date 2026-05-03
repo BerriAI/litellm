@@ -3434,6 +3434,59 @@ def test_transform_request_strips_anthropic_output_config():
     assert "output_config" not in additional_fields
 
 
+def test_converse_drop_params_strips_output_config_for_pre_4_5_anthropic():
+    """``drop_params=True`` strips ``output_config`` for pre-4.5 Anthropic
+    models on Bedrock Converse so a proxy fronting Claude Code at haiku doesn't
+    force a 400 on every request."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config._transform_request(
+            model="bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            optional_params={
+                "maxTokens": 256,
+                "output_config": {"effort": "low"},
+            },
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional
+
+
+def test_converse_drop_params_keeps_output_config_for_supporting_anthropic():
+    """``drop_params=True`` must not strip on supporting models."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config._transform_request(
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params={
+                "maxTokens": 256,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "high"},
+            },
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "high"}
+
+
 def test_transform_response_native_structured_output():
     """Test response handling when model returns JSON as text content (native structured output)."""
     response_json = {

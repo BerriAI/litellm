@@ -1389,10 +1389,26 @@ class AmazonConverseConfig(BaseConfig):
         ):
             base_model = BedrockModelInfo.get_base_model(model)
             if base_model.startswith("anthropic"):
-                effort = anthropic_output_config.get("effort")
-                if effort is not None:
-                    self._validate_anthropic_adaptive_effort(model=model, effort=effort)
-                additional_request_params["output_config"] = anthropic_output_config
+                # When ``drop_params`` is set, strip for models that don't
+                # accept effort (e.g. proxy routing Claude Code at haiku-3).
+                # Otherwise forward and let Bedrock surface the model's error.
+                if (
+                    litellm.drop_params is True
+                    and not AnthropicConfig._model_supports_effort_param(model)
+                ):
+                    litellm.verbose_logger.warning(
+                        "Dropping unsupported `output_config` for model=%s "
+                        "(drop_params=True). Effort is only supported on "
+                        "Opus 4.5+, Sonnet 4.6+, and Mythos Preview.",
+                        model,
+                    )
+                else:
+                    effort = anthropic_output_config.get("effort")
+                    if effort is not None:
+                        self._validate_anthropic_adaptive_effort(
+                            model=model, effort=effort
+                        )
+                    additional_request_params["output_config"] = anthropic_output_config
 
         return (
             inference_params,
