@@ -7,6 +7,7 @@ the optional ``natasha-ru-person`` extra installed.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, List, Optional, Tuple, Union
@@ -71,7 +72,6 @@ def iter_russian_person_spans(
     text: str,
     *,
     segmenter: Any,
-    _embedding: Any,
     ner_tagger: Any,
 ) -> List[Tuple[int, int, str]]:
     """
@@ -107,7 +107,7 @@ def redact_russian_person_names(
         return text
     try:
         spans = iter_russian_person_spans(
-            text, segmenter=segmenter, _embedding=embedding, ner_tagger=ner_tagger
+            text, segmenter=segmenter, ner_tagger=ner_tagger
         )
     except Exception as e:  # noqa: BLE001
         log.warning("natasha_ru_person: NER failed (%s); passing text through", e)
@@ -184,10 +184,14 @@ class NatashaRussianPersonGuardrail(CustomGuardrail):
         data: dict,
         call_type: str,
     ) -> Optional[Union[dict, str]]:
+        loop = asyncio.get_running_loop()
         for msg in data.get("messages") or []:
             if not isinstance(msg, dict):
                 continue
             if msg.get("role") not in ("user", "system"):
                 continue
-            msg["content"] = self._process_content(msg.get("content"))
+            content = msg.get("content")
+            msg["content"] = await loop.run_in_executor(
+                None, self._process_content, content
+            )
         return data
