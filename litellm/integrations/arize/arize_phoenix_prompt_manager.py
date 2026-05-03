@@ -5,7 +5,8 @@ Fetches prompt versions from Arize Phoenix and provides workspace-based access c
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import DictLoader, select_autoescape
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import (
@@ -74,7 +75,13 @@ class ArizePhoenixTemplateManager:
             api_key=self.api_key, api_base=self.api_base
         )
 
-        self.jinja_env = Environment(
+        # Templates fetched from Arize Phoenix come from external workspace
+        # users; in a plain `Environment()` a malicious template could reach
+        # `__class__.__init__.__globals__` and execute arbitrary code on the
+        # proxy host. The sandbox blocks that attribute traversal while
+        # leaving normal `{{ var }}` substitution intact. Matches the
+        # dotprompt manager's hardening.
+        self.jinja_env = ImmutableSandboxedEnvironment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
             # Use Mustache/Handlebars-style delimiters
