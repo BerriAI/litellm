@@ -40,6 +40,8 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
             return "mistralai"
         elif "llama" in model or "meta/" in model:
             return "meta"
+        elif "xai" in model:
+            return "xai"
         else:
             raise ValueError(f"Unknown partner model: {model}")
 

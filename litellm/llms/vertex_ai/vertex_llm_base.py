@@ -273,7 +273,10 @@ class VertexBase:
 
         if api_base is None:
             api_base = get_vertex_base_url(vertex_location)
-        if partner == VertexPartnerProvider.llama:
+        if (
+            partner == VertexPartnerProvider.llama
+            or partner == VertexPartnerProvider.xai
+        ):
             return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
         elif partner == VertexPartnerProvider.mistralai:
             if stream:

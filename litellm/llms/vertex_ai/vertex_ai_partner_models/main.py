@@ -41,6 +41,7 @@ class PartnerModelPrefixes(str, Enum):
     MINIMAX_PREFIX = "minimaxai/"
     MOONSHOT_PREFIX = "moonshotai/"
     ZAI_PREFIX = "zai-org/"
+    XAI_PREFIX = "xai/"
 
 
 class VertexAIPartnerModels(VertexBase):
@@ -68,6 +69,7 @@ class VertexAIPartnerModels(VertexBase):
             or model.startswith(PartnerModelPrefixes.MINIMAX_PREFIX)
             or model.startswith(PartnerModelPrefixes.MOONSHOT_PREFIX)
             or model.startswith(PartnerModelPrefixes.ZAI_PREFIX)
+            or model.startswith(PartnerModelPrefixes.XAI_PREFIX)
         ):
             return True
         return False
@@ -82,6 +84,7 @@ class VertexAIPartnerModels(VertexBase):
             PartnerModelPrefixes.MINIMAX_PREFIX,
             PartnerModelPrefixes.MOONSHOT_PREFIX,
             PartnerModelPrefixes.ZAI_PREFIX,
+            PartnerModelPrefixes.XAI_PREFIX,
         ]
         if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
             return True
@@ -151,7 +154,10 @@ class VertexAIPartnerModels(VertexBase):
             optional_params["stream"] = stream
 
             if self.should_use_openai_handler(model):
-                partner = VertexPartnerProvider.llama
+                if PartnerModelPrefixes.XAI_PREFIX in model:
+                    partner = VertexPartnerProvider.xai
+                else:
+                    partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai
             elif "jamba" in model:

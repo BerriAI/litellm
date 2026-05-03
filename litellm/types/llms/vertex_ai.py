@@ -741,3 +741,4 @@ class VertexPartnerProvider(str, Enum):
     llama = "llama"
     ai21 = "ai21"
     claude = "claude"
+    xai = "xai"
