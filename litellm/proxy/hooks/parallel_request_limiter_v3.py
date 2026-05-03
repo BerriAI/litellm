@@ -16,6 +16,8 @@ from typing import (
     List,
     Literal,
     Optional,
+    Set,
+    Tuple,
     TypedDict,
     Union,
     cast,
@@ -27,8 +29,12 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_str_from_messages,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
+from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 from litellm.types.utils import ModelResponse, Usage
 
@@ -196,6 +202,29 @@ return results
 REDIS_CLUSTER_SLOTS = 16384
 REDIS_NODE_HASHTAG_NAME = "all_keys"
 
+# TPM token reservation tuning constants.
+# When max_tokens is not specified in the request we still need to reserve
+# *some* output budget; these define that fallback estimate.
+DEFAULT_MAX_TOKENS_ESTIMATE = 4096
+DEFAULT_CHARS_PER_TOKEN = 4
+# Stash for the reserved-token count on the request data dict so success/
+# failure callbacks can reconcile against the upfront reservation.
+TPM_RESERVED_TOKENS_KEY = "_litellm_tpm_reserved_tokens"
+# Stash for the model identifier the reservation was charged against.
+# Reconciliation must target the same key that was incremented at reservation
+TPM_RESERVED_MODEL_KEY = "_litellm_tpm_reserved_model"
+# Stash for the (scope_key, scope_value) pairs whose :tokens counter the
+# upfront reservation incremented. Reconciliation applies the delta to these
+# scopes only; scopes without a configured TPM limit were never charged at
+# pre-call and must receive the full actual usage instead of the delta —
+# otherwise their counters drift negative whenever actual < reserved.
+TPM_RESERVED_SCOPES_KEY = "_litellm_tpm_reserved_scopes"
+# Idempotency marker for the reservation refund path. Set when any failure
+# callback releases the reservation so the next callback in the same flow
+# (e.g. async_log_failure_event firing after async_post_call_failure_hook)
+# does not double-refund.
+TPM_RESERVATION_RELEASED_KEY = "_litellm_tpm_reservation_released"
+
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
     requests_per_unit: Optional[int]
@@ -299,6 +328,76 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _get_current_time(self) -> datetime:
         """Return the current time for rate limiting calculations."""
         return self._time_provider()
+
+    def _estimate_tokens_for_request(
+        self,
+        data: dict,
+        model: Optional[str] = None,
+    ) -> int:
+        """
+        Estimate total tokens this request will consume so we can reserve them
+        upfront (input + output budget):
+        estimated = input_tokens + max_tokens.
+
+        Supports chat (messages), completions (prompt), and embeddings (input).
+        """
+        messages = data.get("messages")
+        prompt = data.get("prompt")
+        input_text = data.get("input")  # embeddings
+
+        match (messages, prompt, input_text):
+            case (messages, _, _) if messages:
+                total_chars = len(get_str_from_messages(messages))
+            case (_, str() as p, _):
+                total_chars = len(p)
+            case (_, list() as p, _):
+                total_chars = sum(len(str(item)) for item in p)
+            case (_, _, str() as t):
+                total_chars = len(t)
+            case (_, _, list() as t):
+                total_chars = sum(len(str(item)) for item in t)
+            case _:
+                total_chars = 0
+
+        estimated_input_tokens = (
+            max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
+        )
+
+        explicit_max_tokens = data.get("max_tokens") or data.get(
+            "max_completion_tokens"
+        )
+
+        match (explicit_max_tokens, input_text):
+            case (mt, _) if mt is not None:
+                max_tokens_estimate = int(mt)
+            case (_, t) if t:
+                # Embeddings have no output tokens
+                max_tokens_estimate = 0
+            case _ if total_chars == 0:
+                # Fully contentless request (no messages, prompt, or input).
+                # Don't apply the conservative output-budget floor here — it
+                # would over-reserve and could push small TPM limits into a
+                # false 429. The caller floors at 1 so backpressure still
+                # applies once the counter is at limit.
+                max_tokens_estimate = 0
+            case _:
+                # No max_tokens specified — reserve at least the input size with a
+                # conservative floor so a stream of small concurrent requests can't
+                # collectively bypass the limit.
+                max_tokens_estimate = max(
+                    estimated_input_tokens,
+                    DEFAULT_MAX_TOKENS_ESTIMATE // 4,
+                )
+
+        total_estimated = estimated_input_tokens + max_tokens_estimate
+
+        verbose_proxy_logger.debug(
+            f"TPM reservation estimate: input={estimated_input_tokens}, "
+            f"max_tokens={max_tokens_estimate} (explicit={explicit_max_tokens is not None}), "
+            f"total={total_estimated}"
+        )
+
+        return total_estimated
 
     def _is_redis_cluster(self) -> bool:
         """
@@ -557,6 +656,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         descriptors: List[RateLimitDescriptor],
         parent_otel_span: Optional[Span] = None,
         read_only: bool = False,
+        skip_tpm_check: bool = False,
     ) -> RateLimitResponse:
         """
         Check if any of the rate limit descriptors should be rate limited.
@@ -567,6 +667,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors: List of rate limit descriptors to check
             parent_otel_span: Optional OpenTelemetry span for tracing
             read_only: If True, only check limits without incrementing counters
+            skip_tpm_check: If True, ignore each descriptor's ``tokens_per_unit``
+                — the :tokens counter is neither read nor incremented by this
+                pass. Callers that handle TPM via the atomic
+                ``reserve_tpm_tokens`` reservation path should set this to
+                avoid the +1-per-key Lua / in-memory increment double-charging
+                the tokens counter.
         """
 
         current_time = self._get_current_time()
@@ -583,7 +689,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
             )
             requests_limit = rate_limit.get("requests_per_unit")
-            tokens_limit = rate_limit.get("tokens_per_unit")
+            tokens_limit = None if skip_tpm_check else rate_limit.get("tokens_per_unit")
             max_parallel_requests_limit = rate_limit.get("max_parallel_requests")
             window_size = rate_limit.get("window_size") or self.window_size
 
@@ -710,6 +816,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         read and increment in both single-process and multi-process (Redis)
         deployments.
 
+        Cluster-safety: each descriptor's keys all share a `{key:value}` hash
+        tag, so the Redis Lua path issues one Lua call per descriptor — every
+        call's keys co-locate on a single Redis Cluster slot, avoiding
+        CROSSSLOT errors. Cross-descriptor atomicity is preserved via
+        refund-on-rollback: if descriptor i is OVER_LIMIT, descriptors 0..i-1
+        get a direct INCRBY refund (refunds need no atomicity guarantee).
+
         Args:
             descriptors: rate-limit descriptors to check
             increments: per-descriptor increment amounts, indexed parallel to
@@ -726,104 +839,181 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 "must have the same length"
             )
 
-        keys: List[str] = []
-        per_counter_meta: List[Dict[str, Any]] = []
-        script_args: List[Any] = []
-
+        # Build per-descriptor (keys, args, meta) groups. All keys within a
+        # group share the descriptor's {key:value} hash tag, so a single Lua
+        # call per group never triggers CROSSSLOT on Redis Cluster.
+        descriptor_groups: List[Tuple[List[str], List[Any], List[Dict[str, Any]]]] = []
         for descriptor, increment_amounts in zip(descriptors, increments):
-            descriptor_key = descriptor["key"]
-            descriptor_value = descriptor["value"]
-            rate_limit: RateLimitDescriptorRateLimitObject = (
-                descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
+            keys, args, meta = self._build_descriptor_atomic_payload(
+                descriptor=descriptor,
+                increment_amounts=increment_amounts,
             )
-            window_size = rate_limit.get("window_size") or self.window_size
-            window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
+            if keys:
+                descriptor_groups.append((keys, args, meta))
 
-            for rate_limit_type in ("requests", "tokens"):
-                rlt: Literal["requests", "tokens"] = cast(
-                    Literal["requests", "tokens"], rate_limit_type
-                )
-                if rlt == "requests":
-                    limit_value = rate_limit.get("requests_per_unit")
-                    inc_amount = int(increment_amounts.get("requests", 0) or 0)
-                else:
-                    limit_value = rate_limit.get("tokens_per_unit")
-                    inc_amount = int(increment_amounts.get("tokens", 0) or 0)
-                if limit_value is None or inc_amount <= 0:
-                    continue
-                counter_key = self.create_rate_limit_keys(
-                    descriptor_key, descriptor_value, rlt
-                )
-                # Counter-key TTL and window_size are conceptually distinct
-                # ("how long the counter Redis key lives" vs "how long the
-                # sliding window is"). They happen to be equal today because
-                # we have no descriptor type that needs them apart, but they
-                # are kept as separate variables here so a future custom-TTL
-                # descriptor doesn't reintroduce a silent expiry bug. Both
-                # the Lua script and the in-memory fallback read these from
-                # their respective ARGV / meta slots.
-                ttl_seconds = int(window_size)
-                window_size_seconds = int(window_size)
-                keys.extend([window_key, counter_key])
-                # Per-counter 4-tuple matches the Lua ARGV layout exactly:
-                #   [limit, increment, ttl_seconds, window_size_seconds].
-                script_args.extend(
-                    [
-                        int(limit_value),
-                        inc_amount,
-                        ttl_seconds,
-                        window_size_seconds,
-                    ]
-                )
-                per_counter_meta.append(
-                    {
-                        "descriptor_key": descriptor_key,
-                        "current_limit": int(limit_value),
-                        "rate_limit_type": rlt,
-                        "window_key": window_key,
-                        "counter_key": counter_key,
-                        "increment": inc_amount,
-                        "ttl": ttl_seconds,
-                        "window_size": window_size_seconds,
-                    }
-                )
-
-        if not keys:
+        if not descriptor_groups:
             return RateLimitResponse(overall_code="OK", statuses=[])
 
-        # Multi-process atomicity via Redis Lua. Single-process atomicity
-        # falls back to the asyncio.Lock + in-memory sliding window below.
-        # Note: in-memory state diverges from Redis state — if Lua fails
-        # mid-write, retrying via in-memory may double-count. See fallback
-        # warning below.
+        # Multi-process atomicity via Redis Lua, per descriptor for slot
+        # co-location. Single-process atomicity falls back to the
+        # asyncio.Lock + in-memory sliding window below — there are no
+        # cluster slot concerns locally, so we keep the batched 2-phase
+        # critical section for true cross-descriptor atomicity.
         if self.check_and_increment_by_n_script is not None:
+            return await self._atomic_lua_per_descriptor(
+                descriptor_groups=descriptor_groups,
+                parent_otel_span=parent_otel_span,
+            )
+
+        flat_meta: List[Dict[str, Any]] = [
+            m for _keys, _args, group_meta in descriptor_groups for m in group_meta
+        ]
+        async with self._check_and_increment_lock:
+            return await self._atomic_check_and_increment_in_memory(
+                per_counter_meta=flat_meta,
+                parent_otel_span=parent_otel_span,
+            )
+
+    def _build_descriptor_atomic_payload(
+        self,
+        descriptor: RateLimitDescriptor,
+        increment_amounts: Dict[Literal["requests", "tokens"], int],
+    ) -> Tuple[List[str], List[Any], List[Dict[str, Any]]]:
+        """
+        Build (KEYS, ARGV, per-counter meta) for a single descriptor's Lua
+        call. All keys returned share the descriptor's {key:value} hash tag.
+        """
+        descriptor_key = descriptor["key"]
+        descriptor_value = descriptor["value"]
+        rate_limit: RateLimitDescriptorRateLimitObject = (
+            descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
+        )
+        window_size = rate_limit.get("window_size") or self.window_size
+        window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
+
+        keys: List[str] = []
+        args: List[Any] = []
+        meta: List[Dict[str, Any]] = []
+
+        for rate_limit_type in ("requests", "tokens"):
+            rlt: Literal["requests", "tokens"] = cast(
+                Literal["requests", "tokens"], rate_limit_type
+            )
+            if rlt == "requests":
+                limit_value = rate_limit.get("requests_per_unit")
+                inc_amount = int(increment_amounts.get("requests", 0) or 0)
+            else:
+                limit_value = rate_limit.get("tokens_per_unit")
+                inc_amount = int(increment_amounts.get("tokens", 0) or 0)
+            if limit_value is None or inc_amount <= 0:
+                continue
+            counter_key = self.create_rate_limit_keys(
+                descriptor_key, descriptor_value, rlt
+            )
+            # Counter-key TTL and window_size are conceptually distinct
+            # ("how long the counter Redis key lives" vs "how long the
+            # sliding window is"). Kept as separate values so a future
+            # custom-TTL descriptor doesn't reintroduce a silent expiry bug.
+            ttl_seconds = int(window_size)
+            window_size_seconds = int(window_size)
+            keys.extend([window_key, counter_key])
+            # 4-tuple matches the Lua ARGV layout:
+            #   [limit, increment, ttl_seconds, window_size_seconds].
+            args.extend(
+                [int(limit_value), inc_amount, ttl_seconds, window_size_seconds]
+            )
+            meta.append(
+                {
+                    "descriptor_key": descriptor_key,
+                    "current_limit": int(limit_value),
+                    "rate_limit_type": rlt,
+                    "window_key": window_key,
+                    "counter_key": counter_key,
+                    "increment": inc_amount,
+                    "ttl": ttl_seconds,
+                    "window_size": window_size_seconds,
+                }
+            )
+        return keys, args, meta
+
+    async def _atomic_lua_per_descriptor(
+        self,
+        descriptor_groups: List[Tuple[List[str], List[Any], List[Dict[str, Any]]]],
+        parent_otel_span: Optional[Span] = None,
+    ) -> RateLimitResponse:
+        """
+        Run Lua check-and-increment one descriptor at a time so each call's
+        keys co-locate on a single Redis Cluster slot. On OVER_LIMIT for
+        descriptor i, refund descriptors 0..i-1's increments. On Lua failure
+        mid-loop, refund applied increments and fall back to in-memory.
+        """
+        applied: List[List[Dict[str, Any]]] = []
+        statuses: List[RateLimitStatus] = []
+
+        for _idx, (keys, args, meta) in enumerate(descriptor_groups):
             try:
                 raw = await self.check_and_increment_by_n_script(
                     keys=keys,
-                    args=script_args,
+                    args=args,
                 )
-                return self._build_atomic_response(raw, per_counter_meta)
             except Exception as e:
-                # Escalated from warning to error: Lua failures (script timeout,
-                # Redis OOM, network partition) leave counter state ambiguous.
-                # The fallback path below uses LOCAL DualCache, which is a
-                # different store from Redis — counters here will diverge from
-                # Redis until that key's window expires (TTL bounds divergence).
-                # Operators should alert on this log line; sustained occurrences
-                # indicate Redis health degradation that may erode rate-limit
-                # accuracy.
+                # Lua failure (timeout, OOM, network partition) leaves Redis
+                # state ambiguous. Refund any prior groups so Redis returns
+                # to its pre-call state, then fall back to in-memory for the
+                # whole call (counters there are independent of Redis).
                 verbose_proxy_logger.error(
                     f"atomic_check_and_increment_by_n: Redis Lua execution "
-                    f"failed ({type(e).__name__}: {e}). Falling back to "
-                    f"in-memory enforcement — counters will diverge from Redis "
-                    f"state until window expires (window_size={self.window_size}s)."
+                    f"failed ({type(e).__name__}: {e}). Refunding "
+                    f"{len(applied)} prior descriptors and falling back to "
+                    f"in-memory enforcement — counters will diverge from "
+                    f"Redis until window expires (window_size="
+                    f"{self.window_size}s)."
                 )
+                await self._refund_applied_descriptor_groups(applied)
+                flat_meta: List[Dict[str, Any]] = [
+                    m for _k, _a, group_meta in descriptor_groups for m in group_meta
+                ]
+                async with self._check_and_increment_lock:
+                    return await self._atomic_check_and_increment_in_memory(
+                        per_counter_meta=flat_meta,
+                        parent_otel_span=parent_otel_span,
+                    )
 
-        async with self._check_and_increment_lock:
-            return await self._atomic_check_and_increment_in_memory(
-                per_counter_meta=per_counter_meta,
-                parent_otel_span=parent_otel_span,
-            )
+            response = self._build_atomic_response(raw, meta)
+            if response["overall_code"] == "OVER_LIMIT":
+                await self._refund_applied_descriptor_groups(applied)
+                return response
+            applied.append(meta)
+            statuses.extend(response["statuses"])
+
+        return RateLimitResponse(overall_code="OK", statuses=statuses)
+
+    async def _refund_applied_descriptor_groups(
+        self,
+        applied: List[List[Dict[str, Any]]],
+    ) -> None:
+        """
+        Decrement counters for descriptor groups already applied via Lua.
+        Best-effort: refund failures are logged but not raised — the original
+        OVER_LIMIT / fallback decision is what matters to the caller.
+        """
+        if not applied:
+            return
+        redis_cache = self.internal_usage_cache.dual_cache.redis_cache
+        if redis_cache is None:
+            return
+        for group_meta in applied:
+            for entry in group_meta:
+                try:
+                    await redis_cache.async_increment(
+                        key=entry["counter_key"],
+                        value=-entry["increment"],
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.warning(
+                        f"Failed to refund {entry['counter_key']} on "
+                        f"cross-descriptor rollback: {e}"
+                    )
 
     def _build_atomic_response(
         self,
@@ -969,6 +1159,39 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
             )
         return RateLimitResponse(overall_code="OK", statuses=statuses)
+
+    async def reserve_tpm_tokens(
+        self,
+        descriptors: List[RateLimitDescriptor],
+        estimated_tokens: int,
+        parent_otel_span: Optional[Span] = None,
+    ) -> RateLimitResponse:
+        """
+        Reserve ``estimated_tokens`` against every TPM-bearing descriptor
+        BEFORE the upstream call, so concurrent requests cannot all observe
+        "under limit" before any of them increments the counter.
+
+        Thin wrapper around ``atomic_check_and_increment_by_n``: builds a
+        TPM-only descriptor/increment list and delegates the all-or-nothing
+        atomicity (Lua on Redis, asyncio-locked DualCache otherwise) to the
+        shared primitive.
+        """
+        tpm_descriptors: List[RateLimitDescriptor] = [
+            d
+            for d in descriptors
+            if (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+        ]
+        if not tpm_descriptors:
+            return RateLimitResponse(overall_code="OK", statuses=[])
+
+        increments: List[Dict[Literal["requests", "tokens"], int]] = [
+            {"tokens": estimated_tokens} for _ in tpm_descriptors
+        ]
+        return await self.atomic_check_and_increment_by_n(
+            descriptors=tpm_descriptors,
+            increments=increments,
+            parent_otel_span=parent_otel_span,
+        )
 
     def create_organization_rate_limit_descriptor(
         self, user_api_key_dict: UserAPIKeyAuth, requested_model: Optional[str] = None
@@ -1736,9 +1959,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         )
         # Only check rate limits if we have descriptors with actual limits
         if descriptors:
+            # First pass: RPM and max_parallel_requests sliding-window check.
+            # `skip_tpm_check=True` tells should_rate_limit to ignore each
+            # descriptor's tokens_per_unit so its +1-per-key Lua / in-memory
+            # increment never touches the :tokens counters — those are owned
+            # exclusively by the atomic reserve_tpm_tokens path below. Without
+            # this, every concurrent in-flight request would pre-inflate the
+            # :tokens counter by 1, shrinking the effective TPM budget by N
+            # and causing false-positive 429s under bursts.
             response = await self.should_rate_limit(
                 descriptors=descriptors,
                 parent_otel_span=user_api_key_dict.parent_otel_span,
+                skip_tpm_check=True,
             )
 
             if response["overall_code"] == "OVER_LIMIT":
@@ -1750,6 +1982,83 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # add descriptors to request headers
                 data["litellm_proxy_rate_limit_response"] = response
 
+            # ----------------------------------------------------------------
+            # TPM token reservation
+            # Atomically reserve estimated tokens upfront so concurrent
+            # requests cannot all observe "under limit" before any of them
+            # has incremented the counter. atomic_check_and_increment_by_n
+            # uses Redis Lua when available and falls back to an asyncio-locked
+            # in-memory check otherwise — single-worker protection still holds
+            # even without Redis.
+            # ----------------------------------------------------------------
+            has_tpm_limits = any(
+                (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+                for d in descriptors
+            )
+
+            if has_tpm_limits:
+                # Floor at 1 token so contentless requests (/responses,
+                # tool-call continuations, empty messages) still flow
+                # through the atomic counter and get backpressure when at
+                # limit. Without this floor, N concurrent contentless
+                # requests would all pass pre-call with no enforcement.
+                # Post-call reconciliation refunds the over-reservation
+                # delta when actual usage comes in below the floor.
+                estimated_tokens = max(
+                    self._estimate_tokens_for_request(
+                        data=data,
+                        model=requested_model,
+                    ),
+                    1,
+                )
+
+                tpm_response = await self.reserve_tpm_tokens(
+                    descriptors=descriptors,
+                    estimated_tokens=estimated_tokens,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+
+                if tpm_response["overall_code"] == "OVER_LIMIT":
+                    self._handle_rate_limit_error(
+                        response=tpm_response,
+                        descriptors=descriptors,
+                    )
+                else:
+                    data["_litellm_rate_limit_descriptors"] = descriptors
+                    # Capture the exact (key, value) scopes the reservation
+                    # incremented so post-call reconciliation only applies
+                    # the (actual - reserved) delta to those — unreserved
+                    # scopes get charged the full actual usage instead.
+                    reserved_scopes: List[Tuple[str, str]] = [
+                        (d["key"], d["value"])
+                        for d in descriptors
+                        if (d.get("rate_limit") or {}).get("tokens_per_unit")
+                        is not None
+                    ]
+                    self._stash_reservation_in_data(
+                        data=data,
+                        estimated_tokens=estimated_tokens,
+                        reserved_model=requested_model,
+                        reserved_scopes=reserved_scopes,
+                    )
+
+                    # Merge TPM statuses into the stored rate-limit response
+                    # so x-ratelimit-{key}-remaining-tokens / -limit-tokens
+                    # headers reach the client. Without this, the RPM-only
+                    # response from should_rate_limit (skip_tpm_check=True)
+                    # silently drops all token headers.
+                    stored_response = data.get("litellm_proxy_rate_limit_response")
+                    if isinstance(stored_response, dict):
+                        stored_response.setdefault("statuses", []).extend(
+                            tpm_response["statuses"]
+                        )
+                    elif tpm_response["statuses"]:
+                        data["litellm_proxy_rate_limit_response"] = tpm_response
+
+                    verbose_proxy_logger.debug(
+                        f"TPM tokens reserved: {estimated_tokens} for model {requested_model}"
+                    )
+
     def _create_pipeline_operations(
         self,
         key: str,
@@ -1760,8 +2069,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         Create pipeline operations for TPM increments
         """
-        from litellm.types.caching import RedisPipelineIncrementOperation
-
         pipeline_operations: List[RedisPipelineIncrementOperation] = []
         counter_key = self.create_rate_limit_keys(
             key=key,
@@ -1925,24 +2232,193 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             return "total"  # default to total
         return specified_rate_limit_type
 
-    def _build_success_event_pipeline_operations(
-        self,
-        kwargs: Any,
-        response_obj: Any,
-        rate_limit_type: Literal["output", "input", "total"],
-    ) -> List["RedisPipelineIncrementOperation"]:
-        """Build Redis pipeline increment ops for TPM / parallel-request counters."""
-        from litellm.proxy.common_utils.callback_utils import (
-            get_model_group_from_litellm_kwargs,
+    @staticmethod
+    def _stash_reservation_in_data(
+        data: Dict[str, Any],
+        estimated_tokens: int,
+        reserved_model: Optional[str],
+        reserved_scopes: Optional[List[Tuple[str, str]]] = None,
+    ) -> None:
+        """
+        Persist the reservation amount, model, and reserved scopes into every
+        channel a callback might read from: top-level kwargs (via ``**data``),
+        request metadata, and litellm_metadata. Keeps reservation and
+        reconciliation in sync.
+
+        ``reserved_scopes`` is serialized as a list of [key, value] pairs so
+        it round-trips through JSON-based metadata transports.
+        """
+        scopes_payload: Optional[List[List[str]]] = (
+            [[k, v] for k, v in reserved_scopes] if reserved_scopes else None
         )
-        from litellm.types.caching import RedisPipelineIncrementOperation
 
-        # Get metadata from standard_logging_object - this correctly handles both
-        # 'metadata' and 'litellm_metadata' fields from litellm_params
-        standard_logging_object = kwargs.get("standard_logging_object") or {}
-        standard_logging_metadata = standard_logging_object.get("metadata") or {}
+        data[TPM_RESERVED_TOKENS_KEY] = estimated_tokens
+        if reserved_model:
+            data[TPM_RESERVED_MODEL_KEY] = reserved_model
+        if scopes_payload is not None:
+            data[TPM_RESERVED_SCOPES_KEY] = scopes_payload
 
-        # user_api_key_hash is the same as user_api_key (it's the hash)
+        for channel in ("metadata", "litellm_metadata"):
+            existing = data.get(channel)
+            if isinstance(existing, dict):
+                existing[TPM_RESERVED_TOKENS_KEY] = estimated_tokens
+                if reserved_model:
+                    existing[TPM_RESERVED_MODEL_KEY] = reserved_model
+                if scopes_payload is not None:
+                    existing[TPM_RESERVED_SCOPES_KEY] = scopes_payload
+            elif channel == "metadata":
+                # Only auto-create ``metadata`` (preserves prior behavior);
+                # ``litellm_metadata`` is set by the router and shouldn't be
+                # conjured here.
+                stash: Dict[str, Any] = {TPM_RESERVED_TOKENS_KEY: estimated_tokens}
+                if reserved_model:
+                    stash[TPM_RESERVED_MODEL_KEY] = reserved_model
+                if scopes_payload is not None:
+                    stash[TPM_RESERVED_SCOPES_KEY] = scopes_payload
+                data[channel] = stash
+
+    @staticmethod
+    def _lookup_stashed_value(
+        kwargs: Any,
+        standard_logging_metadata: Optional[Dict[str, Any]],
+        key: str,
+    ) -> Any:
+        """
+        Resolve a stashed value from any of the channels the request data can
+        flow through to a callback.
+
+        Checks (in priority order):
+          1. kwargs (top-level data fields propagate via **data)
+          2. kwargs["litellm_params"]["metadata"] (request metadata channel)
+          3. standard_logging_metadata (covers tests that mock the SLO directly)
+        """
+        candidate = kwargs.get(key) if isinstance(kwargs, dict) else None
+        if candidate is None:
+            litellm_params = (
+                kwargs.get("litellm_params") if isinstance(kwargs, dict) else None
+            )
+            if isinstance(litellm_params, dict):
+                lp_metadata = litellm_params.get("metadata")
+                if isinstance(lp_metadata, dict):
+                    candidate = lp_metadata.get(key)
+        if candidate is None and isinstance(standard_logging_metadata, dict):
+            candidate = standard_logging_metadata.get(key)
+        return candidate
+
+    @classmethod
+    def _get_reserved_tokens_from_kwargs(
+        cls,
+        kwargs: Any,
+        standard_logging_metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        candidate = cls._lookup_stashed_value(
+            kwargs, standard_logging_metadata, TPM_RESERVED_TOKENS_KEY
+        )
+        try:
+            return int(candidate or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _get_reserved_model_from_kwargs(
+        cls,
+        kwargs: Any,
+        standard_logging_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """
+        Resolve the model the upfront reservation was charged against. Used to
+        target reconciliation at the same key that was incremented, regardless
+        of whether the router later set a different ``model_group`` in
+        ``litellm_params.metadata``.
+        """
+        candidate = cls._lookup_stashed_value(
+            kwargs, standard_logging_metadata, TPM_RESERVED_MODEL_KEY
+        )
+        return candidate if isinstance(candidate, str) and candidate else None
+
+    @classmethod
+    def _get_reserved_scopes_from_kwargs(
+        cls,
+        kwargs: Any,
+        standard_logging_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Set[Tuple[str, str]]:
+        """
+        Resolve the (scope_key, scope_value) pairs the upfront reservation
+        actually charged. Reconciliation distinguishes these from
+        unreserved scopes — applying the delta to reserved scopes (which
+        already carry +reserved on the counter) and the full actual to
+        unreserved ones (which were never charged).
+        """
+        candidate = cls._lookup_stashed_value(
+            kwargs, standard_logging_metadata, TPM_RESERVED_SCOPES_KEY
+        )
+        if not isinstance(candidate, list):
+            return set()
+        scopes: Set[Tuple[str, str]] = set()
+        for entry in candidate:
+            if (
+                isinstance(entry, (list, tuple))
+                and len(entry) == 2
+                and isinstance(entry[0], str)
+                and isinstance(entry[1], str)
+            ):
+                scopes.add((entry[0], entry[1]))
+        return scopes
+
+    @classmethod
+    def _is_reservation_released(
+        cls,
+        kwargs: Any,
+        standard_logging_metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """True if a prior callback already refunded this request's reservation."""
+        return bool(
+            cls._lookup_stashed_value(
+                kwargs, standard_logging_metadata, TPM_RESERVATION_RELEASED_KEY
+            )
+        )
+
+    @staticmethod
+    def _mark_reservation_released(data: Any) -> None:
+        """
+        Stamp the released flag into every metadata channel a sibling
+        callback might read from. async_post_call_failure_hook receives the
+        request data dict; async_log_failure_event reads kwargs +
+        standard_logging_object.metadata. Same dict identity across
+        ``request_data["metadata"]`` and ``kwargs["litellm_params"]["metadata"]``
+        means writes here propagate to the other hook.
+        """
+        if not isinstance(data, dict):
+            return
+        data[TPM_RESERVATION_RELEASED_KEY] = True
+        for channel in ("metadata", "litellm_metadata"):
+            existing = data.get(channel)
+            if isinstance(existing, dict):
+                existing[TPM_RESERVATION_RELEASED_KEY] = True
+        litellm_params = data.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            lp_metadata = litellm_params.get("metadata")
+            if isinstance(lp_metadata, dict):
+                lp_metadata[TPM_RESERVATION_RELEASED_KEY] = True
+        slo = data.get("standard_logging_object")
+        if isinstance(slo, dict):
+            slo_meta = slo.get("metadata")
+            if isinstance(slo_meta, dict):
+                slo_meta[TPM_RESERVATION_RELEASED_KEY] = True
+
+    def _collect_tpm_scope_targets(
+        self,
+        standard_logging_metadata: Dict[str, Any],
+        kwargs: Any,
+        model_group: Optional[str],
+    ) -> List[Tuple[str, str]]:
+        """
+        Enumerate every (scope_key, scope_value) pair that *might* carry a
+        TPM counter for this request — independent of whether each scope had
+        a configured TPM limit at pre-call. Reservation awareness happens at
+        the emitter; this helper just lists the candidate scopes so callers
+        can split reserved-vs-unreserved.
+        """
         user_api_key = standard_logging_metadata.get("user_api_key_hash")
         user_api_key_user_id = standard_logging_metadata.get("user_api_key_user_id")
         user_api_key_team_id = standard_logging_metadata.get("user_api_key_team_id")
@@ -1952,9 +2428,109 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         user_api_key_project_id = standard_logging_metadata.get(
             "user_api_key_project_id"
         )
-        user_api_key_end_user_id = kwargs.get("user") or standard_logging_metadata.get(
-            "user_api_key_end_user_id"
+        user_api_key_end_user_id = (
+            kwargs.get("user") if isinstance(kwargs, dict) else None
+        ) or standard_logging_metadata.get("user_api_key_end_user_id")
+        agent_id = standard_logging_metadata.get("agent_id")
+        session_id = standard_logging_metadata.get(
+            "session_id"
+        ) or standard_logging_metadata.get("trace_id")
+
+        targets: List[Tuple[str, str]] = []
+        if user_api_key:
+            targets.append(("api_key", user_api_key))
+        if user_api_key_user_id:
+            targets.append(("user", user_api_key_user_id))
+        if user_api_key_team_id:
+            targets.append(("team", user_api_key_team_id))
+        if user_api_key_team_id and user_api_key_user_id:
+            targets.append(
+                ("team_member", f"{user_api_key_team_id}:{user_api_key_user_id}")
+            )
+        if user_api_key_end_user_id:
+            targets.append(("end_user", user_api_key_end_user_id))
+        if user_api_key_organization_id:
+            targets.append(("organization", user_api_key_organization_id))
+        if model_group:
+            if user_api_key:
+                targets.append(("model_per_key", f"{user_api_key}:{model_group}"))
+            if user_api_key_team_id:
+                targets.append(
+                    ("model_per_team", f"{user_api_key_team_id}:{model_group}")
+                )
+            if user_api_key_organization_id:
+                targets.append(
+                    (
+                        "model_per_organization",
+                        f"{user_api_key_organization_id}:{model_group}",
+                    )
+                )
+            if user_api_key_project_id:
+                targets.append(
+                    (
+                        "model_per_project",
+                        f"{user_api_key_project_id}:{model_group}",
+                    )
+                )
+        if agent_id:
+            targets.append(("agent", agent_id))
+            if session_id:
+                targets.append(("agent_session", f"{agent_id}:{session_id}"))
+        return targets
+
+    def _build_reservation_aware_tpm_ops(
+        self,
+        targets: List[Tuple[str, str]],
+        reserved_scopes: Set[Tuple[str, str]],
+        actual_tokens: int,
+        reserved_tokens: int,
+    ) -> List[RedisPipelineIncrementOperation]:
+        """
+        Emit per-scope TPM increment ops with reservation awareness.
+
+        - Reserved scope (counter already at +reserved from pre-call):
+          reconcile to actual via ``actual - reserved``.
+        - Unreserved scope (counter never touched at pre-call):
+          charge the full ``actual``.
+
+        Same primitive serves success reconciliation, over-reservation
+        release, and failure refund — pass ``actual_tokens=0`` for the pure
+        refund case (reserved scopes get -reserved, unreserved get 0/skip).
+        """
+        ops: List[RedisPipelineIncrementOperation] = []
+        for scope_key, scope_value in targets:
+            if (scope_key, scope_value) in reserved_scopes:
+                increment = actual_tokens - reserved_tokens
+            else:
+                increment = actual_tokens
+            if increment == 0:
+                continue
+            ops.append(
+                RedisPipelineIncrementOperation(
+                    key=self.create_rate_limit_keys(scope_key, scope_value, "tokens"),
+                    increment_value=increment,
+                    ttl=self.window_size,
+                )
+            )
+        return ops
+
+    def _build_success_event_pipeline_operations(
+        self,
+        kwargs: Any,
+        response_obj: Any,
+        rate_limit_type: Literal["output", "input", "total"],
+    ) -> List[RedisPipelineIncrementOperation]:
+        """Build Redis pipeline increment ops for TPM / parallel-request counters."""
+        from litellm.proxy.common_utils.callback_utils import (
+            get_model_group_from_litellm_kwargs,
         )
+
+        # Get metadata from standard_logging_object - this correctly handles both
+        # 'metadata' and 'litellm_metadata' fields from litellm_params
+        standard_logging_object = kwargs.get("standard_logging_object") or {}
+        standard_logging_metadata = standard_logging_object.get("metadata") or {}
+
+        user_api_key = standard_logging_metadata.get("user_api_key_hash")
         model_group = get_model_group_from_litellm_kwargs(kwargs)
 
         # Get total tokens from response
@@ -1968,140 +2544,70 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 usage=_usage, rate_limit_type=rate_limit_type
             )
 
+        reserved_tokens = self._get_reserved_tokens_from_kwargs(
+            kwargs=kwargs,
+            standard_logging_metadata=standard_logging_metadata,
+        )
+        reserved_model = self._get_reserved_model_from_kwargs(
+            kwargs=kwargs,
+            standard_logging_metadata=standard_logging_metadata,
+        )
+        reserved_scopes = self._get_reserved_scopes_from_kwargs(
+            kwargs=kwargs,
+            standard_logging_metadata=standard_logging_metadata,
+        )
+        # Reconciliation must target the same model-scoped counter that the
+        # pre-call reservation incremented. If a reservation was made,
+        # ``reserved_model`` is authoritative; otherwise fall back to the
+        # router's ``model_group`` (covers the no-reservation charge path).
+        reconcile_model = reserved_model or model_group
+
         pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
-        # API Key TPM
+        # max_parallel_requests is its own counter (api-key only) — always decrement.
         if user_api_key:
-            # MAX PARALLEL REQUESTS - only support for API Key, just decrement the counter
-            counter_key = self.create_rate_limit_keys(
-                key="api_key",
-                value=user_api_key,
-                rate_limit_type="max_parallel_requests",
-            )
             pipeline_operations.append(
                 RedisPipelineIncrementOperation(
-                    key=counter_key,
+                    key=self.create_rate_limit_keys(
+                        key="api_key",
+                        value=user_api_key,
+                        rate_limit_type="max_parallel_requests",
+                    ),
                     increment_value=-1,
                     ttl=self.window_size,
                 )
             )
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="api_key",
-                    value=user_api_key,
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
-            )
 
-        # User TPM
-        if user_api_key_user_id:
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="user",
-                    value=user_api_key_user_id,
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
+        # ----------------------------------------------------------------
+        # TPM reconciliation
+        # Per-scope behavior:
+        #   reserved scope    -> apply (actual - reserved) delta to settle
+        #                        the counter at +actual.
+        #   unreserved scope  -> charge the full actual usage (the
+        #                        reservation never incremented this scope).
+        # When no reservation was made, reserved_tokens=0 and reserved_scopes
+        # is empty, so every scope falls through the unreserved branch and
+        # gets the full actual charge — matching pre-PR behavior.
+        # ----------------------------------------------------------------
+        targets = self._collect_tpm_scope_targets(
+            standard_logging_metadata=standard_logging_metadata,
+            kwargs=kwargs,
+            model_group=reconcile_model,
+        )
+        if reserved_tokens > 0 and total_tokens < reserved_tokens:
+            verbose_proxy_logger.debug(
+                f"Releasing unused TPM budget on success: "
+                f"reserved={reserved_tokens}, actual={total_tokens}, "
+                f"release={reserved_tokens - total_tokens}"
             )
-
-        # Team TPM
-        if user_api_key_team_id:
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="team",
-                    value=user_api_key_team_id,
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
+        pipeline_operations.extend(
+            self._build_reservation_aware_tpm_ops(
+                targets=targets,
+                reserved_scopes=reserved_scopes,
+                actual_tokens=total_tokens,
+                reserved_tokens=reserved_tokens,
             )
-        # Team Member TPM
-        if user_api_key_team_id and user_api_key_user_id:
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="team_member",
-                    value=f"{user_api_key_team_id}:{user_api_key_user_id}",
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
-            )
-
-        # End User TPM
-        if user_api_key_end_user_id:
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="end_user",
-                    value=user_api_key_end_user_id,
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
-            )
-
-        # Model-specific TPM
-        if model_group and user_api_key:
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="model_per_key",
-                    value=f"{user_api_key}:{model_group}",
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
-            )
-        if model_group and user_api_key_team_id:
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="model_per_team",
-                    value=f"{user_api_key_team_id}:{model_group}",
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
-            )
-
-        if model_group and user_api_key_organization_id:
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="model_per_organization",
-                    value=f"{user_api_key_organization_id}:{model_group}",
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
-            )
-
-        if model_group and user_api_key_project_id:
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="model_per_project",
-                    value=f"{user_api_key_project_id}:{model_group}",
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
-            )
-
-        # Agent TPM
-        agent_id = standard_logging_metadata.get("agent_id")
-        if agent_id:
-            pipeline_operations.extend(
-                self._create_pipeline_operations(
-                    key="agent",
-                    value=agent_id,
-                    rate_limit_type="tokens",
-                    total_tokens=total_tokens,
-                )
-            )
-
-            # Agent Session TPM
-            session_id = standard_logging_metadata.get(
-                "session_id"
-            ) or standard_logging_metadata.get("trace_id")
-            if session_id:
-                pipeline_operations.extend(
-                    self._create_pipeline_operations(
-                        key="agent_session",
-                        value=f"{agent_id}:{session_id}",
-                        rate_limit_type="tokens",
-                        total_tokens=total_tokens,
-                    )
-                )
+        )
 
         return pipeline_operations
 
@@ -2142,19 +2648,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """
-        Decrement max parallel requests counter for the API Key
+        On failure: decrement max_parallel_requests and refund the upfront
+        TPM reservation only against the scopes the reservation actually
+        charged. Unreserved scopes were never incremented at pre-call, so
+        refunding them would drive their counter negative.
         """
         from litellm.litellm_core_utils.core_helpers import (
             _get_parent_otel_span_from_kwargs,
         )
-        from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
             litellm_parent_otel_span: Union[Span, None] = (
                 _get_parent_otel_span_from_kwargs(kwargs)
             )
-            # Get metadata from standard_logging_object - this correctly handles both
-            # 'metadata' and 'litellm_metadata' fields from litellm_params
             standard_logging_object = kwargs.get("standard_logging_object") or {}
             standard_logging_metadata = standard_logging_object.get("metadata") or {}
             user_api_key = standard_logging_metadata.get("user_api_key_hash")
@@ -2162,26 +2668,65 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             pipeline_operations: List[RedisPipelineIncrementOperation] = []
 
             if user_api_key:
-                # MAX PARALLEL REQUESTS - only support for API Key, just decrement the counter
-                counter_key = self.create_rate_limit_keys(
-                    key="api_key",
-                    value=user_api_key,
-                    rate_limit_type="max_parallel_requests",
-                )
                 pipeline_operations.append(
                     RedisPipelineIncrementOperation(
-                        key=counter_key,
+                        key=self.create_rate_limit_keys(
+                            key="api_key",
+                            value=user_api_key,
+                            rate_limit_type="max_parallel_requests",
+                        ),
                         increment_value=-1,
                         ttl=self.window_size,
                     )
                 )
 
-            # Execute all increments in a single pipeline
+            # Skip the reservation refund if async_post_call_failure_hook
+            # already released it (proxy-level rejection that also bubbles up
+            # here as an LLM-error callback). max_parallel_requests is its
+            # own counter and is always decremented per call.
+            already_released = self._is_reservation_released(
+                kwargs=kwargs,
+                standard_logging_metadata=standard_logging_metadata,
+            )
+            reserved_tokens = (
+                0
+                if already_released
+                else self._get_reserved_tokens_from_kwargs(
+                    kwargs=kwargs,
+                    standard_logging_metadata=standard_logging_metadata,
+                )
+            )
+            if reserved_tokens > 0:
+                verbose_proxy_logger.debug(
+                    f"Releasing reserved TPM tokens on failure: {reserved_tokens}"
+                )
+                # Refund only against the scopes the reservation actually
+                # charged. _build_reservation_aware_tpm_ops with
+                # actual_tokens=0 emits -reserved on reserved scopes and 0
+                # on unreserved (skipped), so unreserved scopes can't drift
+                # negative. Targets are derived purely from the reserved
+                # set so we don't even need to re-collect them from
+                # metadata.
+                reserved_scopes = self._get_reserved_scopes_from_kwargs(
+                    kwargs=kwargs,
+                    standard_logging_metadata=standard_logging_metadata,
+                )
+                pipeline_operations.extend(
+                    self._build_reservation_aware_tpm_ops(
+                        targets=list(reserved_scopes),
+                        reserved_scopes=reserved_scopes,
+                        actual_tokens=0,
+                        reserved_tokens=reserved_tokens,
+                    )
+                )
+
             if pipeline_operations:
                 await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                     increment_list=pipeline_operations,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 )
+            if reserved_tokens > 0:
+                self._mark_reservation_released(kwargs)
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error in rate limit failure event: {str(e)}"
@@ -2239,3 +2784,67 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             verbose_proxy_logger.exception(
                 f"Error in rate limit post-call hook: {str(e)}"
             )
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: Optional[str] = None,
+    ) -> None:
+        """
+        Release any TPM reservation when the request is rejected after the
+        pre-call hook reserved tokens but before the LLM call ran (e.g. a
+        downstream guardrail/auth hook raised). Without this, those
+        reservations are stranded — async_log_failure_event is a litellm
+        completion-level callback and never fires for proxy-side rejections.
+
+        Idempotent via TPM_RESERVATION_RELEASED_KEY: if both this hook and
+        async_log_failure_event end up running in the same flow, only the
+        first refund applies.
+        """
+        try:
+            if self._is_reservation_released(kwargs=request_data):
+                return
+            reserved_tokens = self._get_reserved_tokens_from_kwargs(kwargs=request_data)
+            if reserved_tokens <= 0:
+                return
+
+            # Refund directly against the descriptors we reserved against —
+            # the pre-call hook stashes them on the request data before
+            # success/failure callbacks run.
+            stashed = request_data.get("_litellm_rate_limit_descriptors")
+            descriptors: List[RateLimitDescriptor] = (
+                stashed if isinstance(stashed, list) else []
+            )
+            ops: List[RedisPipelineIncrementOperation] = []
+            for descriptor in descriptors:
+                rate_limit = descriptor.get("rate_limit") or {}
+                if rate_limit.get("tokens_per_unit") is None:
+                    continue
+                ops.append(
+                    RedisPipelineIncrementOperation(
+                        key=self.create_rate_limit_keys(
+                            descriptor["key"],
+                            descriptor["value"],
+                            "tokens",
+                        ),
+                        increment_value=-reserved_tokens,
+                        ttl=self.window_size,
+                    )
+                )
+            if ops:
+                verbose_proxy_logger.debug(
+                    f"Releasing reserved TPM tokens on proxy-level "
+                    f"rejection: {reserved_tokens}"
+                )
+                await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+                    increment_list=ops,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )
+            self._mark_reservation_released(request_data)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error releasing TPM reservation on post-call failure: {e}"
+            )
+        return None
