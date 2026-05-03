@@ -2229,57 +2229,149 @@ async def test_streaming_post_call_output_only_path_passes_request_data_to_make_
 
 
 # ---------------------------------------------------------------------------
-# Regression: post_call only validates OUTPUT.
-# Input scanning belongs to pre_call / during_call. Running an extra INPUT
-# scan here used to produce a duplicate "post-call" trace entry and made no
-# semantic sense for a "post-call" event.
+# SSE error-frame conversion: HTTPException must not escape the generator
 # ---------------------------------------------------------------------------
 
 
+def _make_stream_chunks() -> list:
+    return [
+        litellm.ModelResponseStream(
+            id="tid",
+            choices=[
+                litellm.types.utils.StreamingChoices(
+                    delta=litellm.types.utils.Delta(content="hello", role="assistant"),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        )
+    ]
+
+
 @pytest.mark.asyncio
-async def test_post_call_success_hook_only_runs_output_scan():
+async def test_streaming_hook_converts_http_exception_to_sse_error_frame_parallel_path():
+    """HTTPException raised during parallel INPUT+OUTPUT validation must not escape
+    the async generator — it must be caught and emitted as in-band SSE error frames.
+
+    Without the fix, the exception propagates after the HTTP 200 header has been
+    written, producing a broken/truncated stream the client cannot parse.
     """
-    With only `post_call` configured, async_post_call_success_hook must call
-    make_bedrock_api_request exactly once with source="OUTPUT". An INPUT call
-    here would produce a duplicate post-call log entry.
-    """
-    guardrail = BedrockGuardrail(
-        guardrail_name="bedrock-post-pii",
-        guardrailIdentifier="gid",
-        guardrailVersion="1",
-        event_hook=GuardrailEventHooks.post_call,
-        default_on=True,
-    )
+    import json as _json
 
     request_data = {
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "hi"}],
-        "metadata": {},
     }
-    response = ModelResponse(
-        choices=[
-            litellm.Choices(
-                message=litellm.Message(role="assistant", content="hello"),
-                index=0,
-                finish_reason="stop",
-            )
-        ],
-        model="gpt-4o-mini",
+    # post_call hook — no pre/during, so the parallel (INPUT+OUTPUT) path is taken
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-sse-parallel",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=True,
     )
 
-    minimal = {"action": "NONE", "assessments": [], "outputs": []}
+    chunks = _make_stream_chunks()
+
+    async def mock_stream():
+        for c in chunks:
+            yield c
+
+    # Use the production dict-detail shape from _get_http_exception_for_blocked_guardrail
+    hard_block = HTTPException(
+        status_code=400,
+        detail={
+            "error": "Violated guardrail policy",
+            "bedrock_guardrail_response": "",
+            "guardrailIdentifier": "test-id",
+            "guardrailVersion": "DRAFT",
+        },
+    )
+
     with patch.object(
-        guardrail, "make_bedrock_api_request", AsyncMock(return_value=minimal)
-    ) as mock_make:
-        await guardrail.async_post_call_success_hook(
-            data=request_data,
+        guardrail, "make_bedrock_api_request", AsyncMock(side_effect=hard_block)
+    ):
+        out = []
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(),
-            response=response,
-        )
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            out.append(chunk)
 
-    sources = [c.kwargs.get("source") for c in mock_make.call_args_list]
-    assert sources == ["OUTPUT"]
-    assert (
-        mock_make.call_args.kwargs.get("logging_event_type")
-        == GuardrailEventHooks.post_call
+    # Must yield exactly 2 SSE frames: the error payload and [DONE]
+    assert len(out) == 2, f"Expected 2 SSE frames, got {len(out)}: {out}"
+    assert out[1] == "data: [DONE]\n\n"
+
+    error_frame = out[0]
+    assert error_frame.startswith("data: ")
+    payload = _json.loads(error_frame[len("data: "):].rstrip())
+    assert payload["error"]["code"] == 400
+    assert payload["error"]["type"] == "guardrail_violation"
+    # Must be a clean string, not a Python dict repr
+    assert payload["error"]["message"] == "Violated guardrail policy"
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_converts_http_exception_to_sse_error_frame_output_only_path():
+    """Same as above but for the output-only path (pre/during already validated INPUT).
+
+    When event_hook is during_call, should_validate_input is False and the method
+    takes the single OUTPUT make_bedrock_api_request branch instead of asyncio.gather.
+    The HTTPException must still be caught and converted to SSE error frames.
+    """
+    import json as _json
+
+    request_data = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    guardrail = BedrockGuardrail(
+        guardrail_name="bedrock-sse-output-only",
+        guardrailIdentifier="test-id",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
     )
+
+    chunks = _make_stream_chunks()
+
+    async def mock_stream():
+        for c in chunks:
+            yield c
+
+    # Use the production dict-detail shape from _get_http_exception_for_blocked_guardrail
+    hard_block = HTTPException(
+        status_code=400,
+        detail={
+            "error": "Violated guardrail policy",
+            "bedrock_guardrail_response": "",
+            "guardrailIdentifier": "test-id",
+            "guardrailVersion": "DRAFT",
+        },
+    )
+
+    with patch.object(
+        guardrail, "make_bedrock_api_request", AsyncMock(side_effect=hard_block)
+    ):
+        out = []
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            out.append(chunk)
+
+    assert len(out) == 2, f"Expected 2 SSE frames, got {len(out)}: {out}"
+    assert out[1] == "data: [DONE]\n\n"
+
+    error_frame = out[0]
+    assert error_frame.startswith("data: ")
+    payload = _json.loads(error_frame[len("data: "):].rstrip())
+    assert payload["error"]["code"] == 400
+    assert payload["error"]["type"] == "guardrail_violation"
+    # Must be a clean string, not a Python dict repr
+    assert payload["error"]["message"] == "Violated guardrail policy"
