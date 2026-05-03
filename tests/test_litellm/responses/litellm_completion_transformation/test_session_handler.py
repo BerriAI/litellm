@@ -389,6 +389,131 @@ async def test_should_check_cold_storage_for_full_payload():
 
 
 @pytest.mark.asyncio
+async def test_get_chat_completion_message_history_with_list_style_input():
+    """
+    Regression test: when `proxy_server_request.input` is a list of input
+    items (the standard Responses API shape, e.g. system + user messages
+    expressed as ``[{"role": "system", "type": "message", "content": [...]},
+    {"role": "user", ...}]``), the full input must be replayed in the
+    reconstructed history.
+
+    Previously the handler only matched ``str`` and ``dict`` for ``input``,
+    so list-style inputs were silently dropped and only the assistant
+    output from ``response`` survived. That broke ``previous_response_id``
+    continuity for non-OpenAI providers (e.g. Vertex AI / Gemini): the
+    system prompt and the prior user turn never reached the model on
+    follow-up calls, so the model lost its persona and any context
+    introduced via the system message.
+    """
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-list-input-test",
+            "call_type": "aresponses",
+            "api_key": "sk-test-mock-api-key-123",
+            "spend": 0.001,
+            "total_tokens": 42,
+            "prompt_tokens": 20,
+            "completion_tokens": 22,
+            "startTime": "2025-05-30T03:17:06.703+00:00",
+            "endTime": "2025-05-30T03:17:11.894+00:00",
+            "model": "vertex_ai/gemini-2.5-pro",
+            "session_id": "list-input-session",
+            "proxy_server_request": {
+                "model": "gemini-2.5-pro",
+                "input": [
+                    {
+                        "role": "system",
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "You are a math tutor. The secret codename is ZEPHYR-7.",
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "type": "message",
+                        "content": [
+                            {"type": "input_text", "text": "What is 12 times 7?"}
+                        ],
+                    },
+                ],
+            },
+            "response": {
+                "id": "chatcmpl-list-input-test",
+                "model": "gemini-2.5-pro",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "12 times 7 is 84.",
+                            "tool_calls": None,
+                            "function_call": None,
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "created": 1748575031,
+                "usage": {
+                    "total_tokens": 42,
+                    "prompt_tokens": 20,
+                    "completion_tokens": 22,
+                },
+            },
+            "status": "success",
+        }
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-list-input-test"
+        )
+
+        messages = result["messages"]
+
+        assert (
+            len(messages) == 3
+        ), f"expected system + user + assistant, got {len(messages)}: {messages}"
+
+        roles = [m.get("role") for m in messages]
+        assert roles == ["system", "user", "assistant"], (
+            "list-style Responses API input was not preserved during history "
+            f"reconstruction; got roles={roles}"
+        )
+
+        system_content = messages[0].get("content", "")
+        if isinstance(system_content, list):
+            system_text = "".join(
+                part.get("text", "")
+                for part in system_content
+                if isinstance(part, dict)
+            )
+        else:
+            system_text = system_content
+        assert (
+            "ZEPHYR-7" in system_text
+        ), "system prompt content was lost during history reconstruction"
+
+        user_content = messages[1].get("content", "")
+        if isinstance(user_content, list):
+            user_text = "".join(
+                part.get("text", "") for part in user_content if isinstance(part, dict)
+            )
+        else:
+            user_text = user_content
+        assert "12 times 7" in user_text
+
+
+@pytest.mark.asyncio
 async def test_get_chat_completion_message_history_empty_response_dict():
     """
     Test that empty response dict is handled correctly without processing.
