@@ -28,6 +28,59 @@ from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_upd
 
 class UserManagementEventHooks:
     @staticmethod
+    def _is_email_sending_enabled() -> bool:
+        """
+        Check if email sending is enabled via v2 enterprise loggers or v0 alerting config.
+
+        Returns True only if email is actually configured, preventing any email
+        processing when the user has not opted in.
+        """
+        try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.base_email import (
+                BaseEmailLogger,
+            )
+
+            initialized_email_loggers = (
+                litellm.logging_callback_manager.get_custom_loggers_for_type(
+                    callback_type=BaseEmailLogger
+                )
+            )
+            if len(initialized_email_loggers) > 0:
+                return True
+        except ImportError:
+            pass
+
+        from litellm.proxy.proxy_server import general_settings
+
+        if "email" in general_settings.get("alerting", []):
+            return True
+
+        return False
+
+    @staticmethod
+    def _should_send_user_invitation_email(
+        data: NewUserRequest,
+        response: NewUserResponse,
+    ) -> bool:
+        """
+        Determine whether a user invitation email should be sent.
+
+        - send_invite_email=True  -> send if user has an email address
+        - send_invite_email=False -> never send
+        - send_invite_email=None  -> auto-detect: send if email infra is configured
+                                     AND the user has an email address
+        """
+        if data.send_invite_email is True:
+            return bool(response.user_email)
+        if data.send_invite_email is False:
+            return False
+        if not UserManagementEventHooks._is_email_sending_enabled():
+            return False
+        if not response.user_email:
+            return False
+        return True
+
+    @staticmethod
     async def async_user_created_hook(
         data: NewUserRequest,
         response: NewUserResponse,
@@ -105,6 +158,10 @@ class UserManagementEventHooks:
             key_alias=response.key_alias,
         )
 
+        should_send_email = UserManagementEventHooks._should_send_user_invitation_email(
+            data=data, response=response
+        )
+
         #########################################################
         ########## V2 USER INVITATION EMAIL ################
         #########################################################
@@ -121,7 +178,8 @@ class UserManagementEventHooks:
             )
             use_enterprise_email_hooks = False
 
-        if use_enterprise_email_hooks and (data.send_invite_email is True):
+        enterprise_email_sent = False
+        if use_enterprise_email_hooks and should_send_email:
             initialized_email_loggers = litellm.logging_callback_manager.get_custom_loggers_for_type(
                 callback_type=BaseEmailLogger  # type: ignore
             )
@@ -131,11 +189,12 @@ class UserManagementEventHooks:
                         await email_logger.send_user_invitation_email(  # type: ignore
                             event=event,
                         )
+                        enterprise_email_sent = True
 
         #########################################################
         ########## LEGACY V1 USER INVITATION EMAIL ################
         #########################################################
-        if data.send_invite_email is True:
+        if should_send_email and not enterprise_email_sent:
             await UserManagementEventHooks.send_legacy_v1_user_invitation_email(
                 data=data,
                 response=response,
