@@ -19,6 +19,7 @@ from litellm._uuid import uuid
 from litellm.proxy._types import (
     AddTeamCallback,
     LiteLLM_AuditLogs,
+    LiteLLM_TeamTable,
     LitellmTableNames,
     ProxyErrorTypes,
     ProxyException,
@@ -26,6 +27,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.team_endpoints import _verify_team_access
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 
 router = APIRouter()
@@ -207,6 +209,15 @@ async def add_team_callbacks(
                 },
             )
 
+        # IDOR guard: only proxy admins / org admins / team admins of THIS
+        # team may write callback credentials. Without this, any
+        # authenticated key holder could overwrite another team's logging
+        # config (and read back the credentials they wrote).
+        await _verify_team_access(
+            team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata
         team_callback_settings: List[dict] = team_metadata.get(
@@ -316,6 +327,14 @@ async def disable_team_logging(
                 detail={"error": f"Team id = {team_id} does not exist."},
             )
 
+        # IDOR guard: only proxy admins / org admins / team admins of THIS
+        # team may disable its logging — otherwise any authenticated key
+        # holder can silence audit logging for any team.
+        await _verify_team_access(
+            team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # Update team metadata to disable logging
         team_metadata = _existing_team.metadata
         before_metadata = copy.deepcopy(team_metadata)
@@ -364,20 +383,18 @@ async def disable_team_logging(
             },
         }
 
+    except HTTPException:
+        # Legitimate 4xx (e.g. 403 from the access guard, 404 for an
+        # unknown team). Re-raise without the error-level log noise that
+        # the catch-all branch below would produce.
+        raise
+    except ProxyException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(
             f"litellm.proxy.proxy_server.disable_team_logging(): Exception occurred - {str(e)}"
         )
         verbose_proxy_logger.debug(traceback.format_exc())
-        if isinstance(e, HTTPException):
-            raise ProxyException(
-                message=getattr(e, "detail", f"Internal Server Error({str(e)})"),
-                type=ProxyErrorTypes.internal_server_error.value,
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
-            )
-        elif isinstance(e, ProxyException):
-            raise e
         raise ProxyException(
             message="Internal Server Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error.value,
@@ -437,6 +454,14 @@ async def get_team_callbacks(
                 detail={"error": f"Team id = {team_id} does not exist."},
             )
 
+        # IDOR guard: callback metadata holds third-party API credentials
+        # (Langfuse / Langsmith / GCS). Only proxy admins / org admins /
+        # team admins of THIS team may read them.
+        await _verify_team_access(
+            team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
+            user_api_key_dict=user_api_key_dict,
+        )
+
         # Retrieve team callback settings from metadata
         team_metadata = _existing_team.metadata
         team_callback_settings = team_metadata.get("callback_settings", {})
@@ -454,6 +479,13 @@ async def get_team_callbacks(
             },
         }
 
+    except HTTPException:
+        # Legitimate 4xx (e.g. 403 from the access guard) — re-raise
+        # without the error-level log noise that the catch-all below
+        # would produce.
+        raise
+    except ProxyException:
+        raise
     except Exception as e:
         verbose_proxy_logger.error(
             "litellm.proxy.proxy_server.get_team_callbacks(): Exception occurred - {}".format(
