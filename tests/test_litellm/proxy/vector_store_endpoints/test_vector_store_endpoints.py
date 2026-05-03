@@ -170,6 +170,95 @@ async def test_update_request_data_with_litellm_managed_vector_store_registry():
         assert result == original_data
 
 
+@pytest.mark.asyncio
+async def test_update_request_data_resolves_embedding_config_at_use_time():
+    """When the persisted vector store row carries only a
+    ``litellm_embedding_model`` reference (the new behaviour after
+    moving the auto-resolve out of write time), the request-handling
+    layer must resolve the embedding config so the downstream embed
+    call still has ``api_key`` / ``api_base`` / ``api_version``. The
+    resolved config lives in this per-request data dict only — never
+    persisted."""
+    mock_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "test_store",
+        "custom_llm_provider": "azure_ai",
+        "litellm_params": {
+            "litellm_embedding_model": "azure/text-embedding-3-large",
+            # Note: no litellm_embedding_config persisted
+        },
+    }
+
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = (
+        mock_vector_store
+    )
+
+    resolved = {
+        "api_key": "use-time-resolved-key",
+        "api_base": "https://my-azure.example",
+        "api_version": "2024-09-01",
+    }
+
+    with (
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints._resolve_embedding_config",
+            new=AsyncMock(return_value=resolved),
+        ),
+    ):
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={}, vector_store_id="test_store"
+        )
+
+    assert result["litellm_embedding_model"] == "azure/text-embedding-3-large"
+    assert result["litellm_embedding_config"] == resolved
+
+
+@pytest.mark.asyncio
+async def test_update_request_data_passes_through_legacy_embedding_config():
+    """A vector store row created by an older proxy version may already
+    carry a fully-resolved ``litellm_embedding_config`` in its persisted
+    ``litellm_params`` (the very leak this PR closes). Those legacy rows
+    must still work — the use-time resolver skips re-resolution when
+    the config is already present so the embed call keeps succeeding."""
+    legacy_config = {
+        "api_key": "legacy-cleartext-key",
+        "api_base": "https://legacy-azure.example",
+        "api_version": "2024-01-01",
+    }
+    mock_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "legacy_store",
+        "custom_llm_provider": "azure_ai",
+        "litellm_params": {
+            "litellm_embedding_model": "azure/text-embedding-3-large",
+            "litellm_embedding_config": legacy_config,
+        },
+    }
+
+    mock_registry = MagicMock()
+    mock_registry.get_litellm_managed_vector_store_from_registry.return_value = (
+        mock_vector_store
+    )
+
+    resolve_mock = AsyncMock(
+        return_value={"api_key": "should-not-be-used", "api_base": "wrong"}
+    )
+
+    with (
+        patch.object(litellm, "vector_store_registry", mock_registry),
+        patch(
+            "litellm.proxy.vector_store_endpoints.management_endpoints._resolve_embedding_config",
+            new=resolve_mock,
+        ),
+    ):
+        result = await _update_request_data_with_litellm_managed_vector_store_registry(
+            data={}, vector_store_id="legacy_store"
+        )
+
+    assert result["litellm_embedding_config"] == legacy_config
+    resolve_mock.assert_not_awaited()
+
+
 class TestCheckVectorStorePermission:
     """Test suite for check_vector_store_permission function."""
 
@@ -1417,20 +1506,31 @@ async def test_new_vector_store_auto_resolves_embedding_config():
         )
 
     assert result["status"] == "success"
-    # Verify that embedding config was resolved and included in the create call
+    # Auto-resolve no longer happens at create time — the persisted row
+    # carries only the model reference, never the resolved cleartext
+    # credential. Resolution now happens at request-handling time inside
+    # ``_update_request_data_with_litellm_managed_vector_store_registry``,
+    # where the resolved config lives in per-request memory and is never
+    # written to the database.
     litellm_params_json = captured_create_data.get("litellm_params")
     assert litellm_params_json is not None
     litellm_params_dict = json.loads(litellm_params_json)
-    assert "litellm_embedding_config" in litellm_params_dict
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_key"] == "resolved-api-key"
-    )
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_base"]
-        == "https://api.openai.com"
-    )
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-01-01"
+    assert "litellm_embedding_config" not in litellm_params_dict
+    assert litellm_params_dict["litellm_embedding_model"] == "text-embedding-ada-002"
+
+    # The response must also not echo a cleartext credential — even on
+    # the create response, where redaction guards against caller-supplied
+    # cleartext or pre-existing rows that were created by an earlier
+    # proxy version.
+    response_vs = result["vector_store"]
+    response_params = response_vs.get("litellm_params")
+    # The redact helper preserves the persisted shape (string or dict);
+    # serialise to text either way and assert the cleartext credential
+    # never appears.
+    assert "resolved-api-key" not in (
+        response_params
+        if isinstance(response_params, str)
+        else json.dumps(response_params or {})
     )
 
 
@@ -1687,21 +1787,21 @@ async def test_new_vector_store_auto_resolves_from_router():
         )
 
     assert result["status"] == "success"
-    # Verify that embedding config was resolved from router and included in the create call
+    # Resolution against the router happens at request-handling time now,
+    # not at row creation. The persisted ``litellm_params`` carries only
+    # the model reference, never the cleartext credential.
     litellm_params_json = captured_create_data.get("litellm_params")
     assert litellm_params_json is not None
     litellm_params_dict = json.loads(litellm_params_json)
-    assert "litellm_embedding_config" in litellm_params_dict
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_key"]
-        == "router-resolved-api-key"
-    )
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_base"]
-        == "https://router-resolved-base.com"
-    )
-    assert (
-        litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-03-01"
+    assert "litellm_embedding_config" not in litellm_params_dict
+    assert litellm_params_dict["litellm_embedding_model"] == "config-embedding-model"
+
+    response_vs = result["vector_store"]
+    response_params = response_vs.get("litellm_params")
+    assert "router-resolved-api-key" not in (
+        response_params
+        if isinstance(response_params, str)
+        else json.dumps(response_params or {})
     )
 
 
