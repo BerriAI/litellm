@@ -438,11 +438,11 @@ class MaskedHTTPStatusError(httpx.HTTPStatusError):
         except Exception:
             response_content = b""
 
-        response_headers = {
-            k: v
-            for k, v in original_error.response.headers.items()
-            if k.lower() not in ("content-encoding", "content-length")
-        }
+        response_headers = [
+            (k, v)
+            for k, v in original_error.response.headers.raw
+            if k.lower() not in (b"content-encoding", b"content-length")
+        ]
 
         masked_request = httpx.Request(
             method=original_error.request.method,
