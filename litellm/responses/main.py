@@ -940,6 +940,17 @@ def responses(
     local_vars = locals()
 
     try:
+        # metadata is consumed by the function signature and is not in **kwargs.
+        # Merge it into litellm_metadata so downstream handlers and callbacks
+        # can access caller-provided fields (e.g. Langfuse tags, session IDs).
+        if metadata is not None:
+            existing = kwargs.get("litellm_metadata")
+            if existing is None:
+                kwargs["litellm_metadata"] = dict(metadata)
+            elif isinstance(existing, dict):
+                for k, v in metadata.items():
+                    existing.setdefault(k, v)
+
         litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
