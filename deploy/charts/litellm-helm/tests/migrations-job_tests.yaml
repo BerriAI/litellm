@@ -254,3 +254,35 @@ tests:
           content:
             name: sidecar-tpl
             image: "ghcr.io/berriai/litellm-database:test"
+  - it: should set annotations on migrations job properly
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        jobAnnotations:
+          test: test1
+        hooks:
+          argocd:
+            enabled: true
+            hook: test2
+            hookDeletePolicy: test3
+          helm:
+            enabled: true
+            hook: test4
+            hookDeletePolicy: test5
+    asserts:
+      - equal:
+          path: metadata.annotations['test']
+          value: test1
+      - equal:
+          path: metadata.annotations['argocd.argoproj.io/hook']
+          value: test2
+      - equal:
+          path: metadata.annotations['argocd.argoproj.io/hook-delete-policy']
+          value: test3
+      - equal:
+          path: metadata.annotations['helm.sh/hook']
+          value: test4
+      - equal:
+          path: metadata.annotations['helm.sh/hook-delete-policy']
+          value: test5
