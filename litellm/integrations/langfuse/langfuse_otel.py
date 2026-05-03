@@ -295,7 +295,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
             public_key=public_key, secret_key=secret_key
         )
-        otlp_auth_headers = f"Authorization={auth_header}"
+        otlp_auth_headers = LangfuseOtelLogger._format_otel_headers(
+            LangfuseOtelLogger._build_langfuse_otel_headers(auth_header)
+        )
 
         return OpenTelemetryConfig(
             exporter="otlp_http",
@@ -344,7 +346,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         auth_header = LangfuseOtelLogger._get_langfuse_authorization_header(
             public_key=public_key, secret_key=secret_key
         )
-        otlp_auth_headers = f"Authorization={auth_header}"
+        otlp_auth_headers = LangfuseOtelLogger._format_otel_headers(
+            LangfuseOtelLogger._build_langfuse_otel_headers(auth_header)
+        )
 
         # Prevent modification of global env vars which causes leakage
         # os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
@@ -364,6 +368,17 @@ class LangfuseOtelLogger(OpenTelemetry):
         auth_string = f"{public_key}:{secret_key}"
         auth_header = base64.b64encode(auth_string.encode()).decode()
         return f"Basic {auth_header}"
+
+    @staticmethod
+    def _build_langfuse_otel_headers(auth_header: str) -> dict[str, str]:
+        return {
+            "Authorization": auth_header,
+            "x-langfuse-ingestion-version": "4",
+        }
+
+    @staticmethod
+    def _format_otel_headers(headers: dict[str, str]) -> str:
+        return ",".join(f"{key}={value}" for key, value in headers.items())
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
@@ -389,7 +404,9 @@ class LangfuseOtelLogger(OpenTelemetry):
                 public_key=dynamic_langfuse_public_key,
                 secret_key=dynamic_langfuse_secret_key,
             )
-            dynamic_headers["Authorization"] = auth_header
+            dynamic_headers = LangfuseOtelLogger._build_langfuse_otel_headers(
+                auth_header
+            )
 
         return dynamic_headers
 
