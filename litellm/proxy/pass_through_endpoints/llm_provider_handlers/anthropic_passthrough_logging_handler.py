@@ -12,6 +12,9 @@ from litellm.llms.anthropic import get_anthropic_config
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
+from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    LiteLLMAnthropicMessagesAdapter,
+)
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -163,8 +166,10 @@ class AnthropicPassthroughLoggingHandler:
                 json.dumps(kwargs, indent=4, default=str),
             )
 
-            # set litellm_call_id to logging response object
-            litellm_model_response.id = logging_obj.litellm_call_id
+            # Preserve the original Anthropic response ID (msg_*) when
+            # available; fall back to litellm_call_id otherwise.
+            if not litellm_model_response.id.startswith("msg"):
+                litellm_model_response.id = logging_obj.litellm_call_id
             litellm_model_response.model = model
             logging_obj.model_call_details["model"] = model
             if not logging_obj.model_call_details.get("custom_llm_provider"):
@@ -221,6 +226,38 @@ class AnthropicPassthroughLoggingHandler:
                 "result": None,
                 "kwargs": {},
             }
+
+        # stream_chunk_builder doesn't preserve the response ID — extract
+        # it from the message_start SSE event so the spend log uses msg_*.
+        response_id = (
+            AnthropicPassthroughLoggingHandler._extract_response_id_from_chunks(
+                all_chunks
+            )
+        )
+        if response_id:
+            complete_streaming_response.id = response_id
+
+            # Reverse-adapt the aggregated chat.completion ModelResponse back
+            # to Anthropic messages shape so SLP["response"] mirrors the
+            # non-streaming path. Gated on response_id — its presence means
+            # _extract_response_id_from_chunks matched a `message_start` SSE
+            # event, confirming the upstream stream is Anthropic messages SSE.
+            try:
+                anthropic_shaped = dict(
+                    LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(
+                        complete_streaming_response
+                    )
+                )
+                if model:
+                    anthropic_shaped["model"] = model
+                litellm_logging_obj.model_call_details["anthropic_raw_response"] = (
+                    anthropic_shaped
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Failed to reverse-adapt streaming response to Anthropic shape: {e}"
+                )
+
         kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
             litellm_model_response=complete_streaming_response,
             model=model,
@@ -234,6 +271,29 @@ class AnthropicPassthroughLoggingHandler:
             "result": complete_streaming_response,
             "kwargs": kwargs,
         }
+
+    @staticmethod
+    def _extract_response_id_from_chunks(
+        all_chunks: Sequence[Union[str, bytes]],
+    ) -> Optional[str]:
+        """
+        Extract the Anthropic response ID (msg_*) from the message_start SSE event.
+
+        stream_chunk_builder does not preserve the original response ID, so we
+        scan the raw SSE lines for the first ``data:`` line containing
+        ``message_start`` and pull the ``message.id`` field from it.
+        """
+        for line in all_chunks:
+            if isinstance(line, bytes):
+                line = line.decode("utf-8")
+            if "message_start" not in line or "data:" not in line:
+                continue
+            try:
+                data_str = line[line.find("data:") + 5 :]
+                return json.loads(data_str).get("message", {}).get("id")
+            except (json.JSONDecodeError, AttributeError):
+                pass
+        return None
 
     @staticmethod
     def _split_sse_chunk_into_events(chunk: Union[str, bytes]) -> List[str]:
@@ -302,6 +362,9 @@ class AnthropicPassthroughLoggingHandler:
 
                 except (StopIteration, StopAsyncIteration):
                     break
+                except json.JSONDecodeError:
+                    # Skip non-JSON SSE lines (e.g. "data: [DONE]" from Copilot)
+                    continue
 
         complete_streaming_response = litellm.stream_chunk_builder(
             chunks=all_openai_chunks,

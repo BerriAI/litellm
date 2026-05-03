@@ -1273,11 +1273,17 @@ class LiteLLMAnthropicMessagesAdapter:
 
             # Handle text content
             if choice.message.content is not None:
-                new_content.append(
-                    AnthropicResponseContentBlockText(
-                        type="text", text=choice.message.content
-                    ).model_dump()
-                )
+                text_block = AnthropicResponseContentBlockText(
+                    type="text", text=choice.message.content
+                ).model_dump()
+                # Preserve citations accumulated by the streaming handler into
+                # provider_specific_fields["citations"] so the reverse-adapt
+                # does not silently drop them.
+                psf = getattr(choice.message, "provider_specific_fields", None) or {}
+                citations = psf.get("citations")
+                if citations:
+                    text_block["citations"] = citations
+                new_content.append(text_block)
             # Handle tool calls (in parallel to text content)
             if (
                 choice.message.tool_calls is not None
