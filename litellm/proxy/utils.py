@@ -2273,6 +2273,13 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+        from litellm.proxy.proxy_server import llm_router
+
+        # Merge model-level guardrails before checking which guardrails to run
+        request_data = _check_and_merge_model_level_guardrails(
+            data=request_data, llm_router=llm_router
+        )
+
         current_response = response
 
         for callback in litellm.callbacks:
