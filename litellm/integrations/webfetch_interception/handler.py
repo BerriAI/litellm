@@ -7,6 +7,7 @@ server-side using litellm router's fetch tools.
 """
 
 import asyncio
+import json
 import math
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
@@ -876,27 +877,40 @@ class WebFetchInterceptionLogger(CustomLogger):
     ) -> AgenticLoopRequestPatch:
         """Execute fetch and build chat-completion rerun patch."""
 
-        # Extract URLs from tool_calls
-        fetch_tasks = []
-        for tool_call in tool_calls:
-            # Handle both Anthropic-style input and OpenAI-style function.arguments
-            url = None
-            if "input" in tool_call and isinstance(tool_call["input"], dict):
-                url = tool_call["input"].get("url")
-            elif "function" in tool_call:
-                func = tool_call["function"]
-                if isinstance(func, dict):
-                    args = func.get("arguments", {})
-                    if isinstance(args, dict):
-                        url = args.get("url")
-                    elif isinstance(args, str):
-                        import json
-                        try:
-                            args_dict = json.loads(args)
-                            url = args_dict.get("url")
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+        fetch_results = await self._execute_tool_call_fetches(tool_calls)
 
+        # Build assistant and tool messages using transformation
+        (
+            assistant_message,
+            tool_messages_or_user,
+        ) = WebFetchTransformation.transform_response(
+            tool_calls=tool_calls,
+            fetch_results=fetch_results,
+            response_format=response_format,
+        )
+
+        follow_up_messages = self._build_follow_up_messages(
+            messages, assistant_message, tool_messages_or_user, response_format
+        )
+
+        kwargs_for_followup = self._build_kwargs_for_followup(kwargs)
+        full_model_name = self._resolve_full_model_name(model, kwargs)
+        optional_params_clean = self._clean_optional_params(optional_params)
+
+        return AgenticLoopRequestPatch(
+            model=full_model_name,
+            messages=follow_up_messages,
+            optional_params=optional_params_clean,
+            kwargs=kwargs_for_followup,
+        )
+
+    async def _execute_tool_call_fetches(
+        self, tool_calls: List[Dict]
+    ) -> List[str]:
+        """Execute fetches for tool calls in parallel and return results."""
+        fetch_tasks: List[Any] = []
+        for tool_call in tool_calls:
+            url = self._extract_url_from_tool_call(tool_call)
             if url:
                 verbose_logger.debug(
                     f"WebFetchInterception: Queuing fetch for url='{url}'"
@@ -906,16 +920,13 @@ class WebFetchInterceptionLogger(CustomLogger):
                 verbose_logger.debug(
                     f"WebFetchInterception: Tool call {tool_call.get('id')} has no URL"
                 )
-                # Add empty result for tools without URL
                 fetch_tasks.append(self._create_empty_fetch_result())
 
-        # Execute fetches in parallel
         verbose_logger.debug(
             f"WebFetchInterception: Executing {len(fetch_tasks)} fetch(es) in parallel"
         )
         fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
-        # Handle any exceptions in fetch results
         final_fetch_results: List[str] = []
         for i, result in enumerate(fetch_results):
             if isinstance(result, Exception):
@@ -924,42 +935,49 @@ class WebFetchInterceptionLogger(CustomLogger):
                 )
                 final_fetch_results.append(f"Fetch failed: {str(result)}")
             elif isinstance(result, str):
-                final_fetch_results.append(cast(str, result))
+                final_fetch_results.append(result)
             else:
                 verbose_logger.debug(
                     f"WebFetchInterception: Unexpected result type {type(result)} at index {i}"
                 )
                 final_fetch_results.append(str(result))
 
-        # Build assistant and tool messages using transformation
-        (
-            assistant_message,
-            tool_messages_or_user,
-        ) = WebFetchTransformation.transform_response(
-            tool_calls=tool_calls,
-            fetch_results=final_fetch_results,
-            response_format=response_format,
-        )
+        return final_fetch_results
 
-        # Make follow-up request with fetch results
+    def _extract_url_from_tool_call(self, tool_call: Dict) -> Optional[str]:
+        """Extract URL from tool call arguments."""
+        if "input" in tool_call and isinstance(tool_call["input"], dict):
+            return cast(Optional[str], tool_call["input"].get("url"))
+        if "function" in tool_call:
+            func = tool_call["function"]
+            if isinstance(func, dict):
+                args = func.get("arguments", {})
+                if isinstance(args, dict):
+                    return cast(Optional[str], args.get("url"))
+                elif isinstance(args, str):
+                    try:
+                        args_dict = json.loads(args)
+                        return cast(Optional[str], args_dict.get("url"))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+        return None
+
+    def _build_follow_up_messages(
+        self,
+        messages: List[Dict],
+        assistant_message: Dict,
+        tool_messages_or_user: Any,
+        response_format: str,
+    ) -> List[Dict]:
+        """Build follow-up messages with fetch results."""
         if response_format == "openai":
-            follow_up_messages = (
+            return (
                 messages + [assistant_message] + cast(List[Dict], tool_messages_or_user)
             )
-        else:
-            follow_up_messages = messages + [
-                assistant_message,
-                cast(Dict, tool_messages_or_user),
-            ]
+        return messages + [assistant_message, cast(Dict, tool_messages_or_user)]
 
-        verbose_logger.debug(
-            "WebFetchInterception: Making follow-up chat completion request with fetch results"
-        )
-        verbose_logger.debug(
-            f"WebFetchInterception: Follow-up messages count: {len(follow_up_messages)}"
-        )
-
-        # Remove internal parameters that shouldn't be passed to follow-up request
+    def _build_kwargs_for_followup(self, kwargs: Dict) -> Dict:
+        """Remove internal parameters from kwargs for follow-up request."""
         internal_params = {
             "_webfetch_interception",
             "acompletion",
@@ -969,24 +987,22 @@ class WebFetchInterceptionLogger(CustomLogger):
             "stream_response",
             "custom_prompt_dict",
         }
-        kwargs_for_followup = {
+        return {
             k: v
             for k, v in kwargs.items()
             if not k.startswith("_webfetch_interception") and k not in internal_params
         }
 
-        full_model_name = model
+    def _resolve_full_model_name(self, model: str, kwargs: Dict) -> str:
+        """Resolve full model name including provider prefix."""
         if "custom_llm_provider" in kwargs:
             custom_llm_provider = kwargs["custom_llm_provider"]
             if not model.startswith(custom_llm_provider) and "/" not in model:
-                full_model_name = f"{custom_llm_provider}/{model}"
+                return f"{custom_llm_provider}/{model}"
+        return model
 
-        verbose_logger.debug(
-            "WebFetchInterception: Built chat completion request patch model=%s messages=%d",
-            full_model_name,
-            len(follow_up_messages),
-        )
-
+    def _clean_optional_params(self, optional_params: Dict) -> Dict:
+        """Remove internal parameters from optional_params while preserving tools."""
         tools_param = optional_params.get("tools")
         optional_params_clean = {
             k: v
@@ -1002,13 +1018,7 @@ class WebFetchInterceptionLogger(CustomLogger):
         }
         if tools_param is not None:
             optional_params_clean["tools"] = tools_param
-
-        return AgenticLoopRequestPatch(
-            model=full_model_name,
-            messages=follow_up_messages,
-            optional_params=optional_params_clean,
-            kwargs=kwargs_for_followup,
-        )
+        return optional_params_clean
 
     async def _create_empty_fetch_result(self) -> str:
         """Create an empty fetch result for tool calls without URLs"""
