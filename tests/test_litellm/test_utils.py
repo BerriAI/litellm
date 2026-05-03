@@ -4034,4 +4034,3 @@ def test_deepseek_v4_models_in_cost_map():
         assert info["supports_function_calling"] is True
         assert info["supports_tool_choice"] is True
 
-    print("✅ deepseek-v4-flash and deepseek-v4-pro cost map entries verified")
