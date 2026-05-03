@@ -697,6 +697,70 @@ def test_bedrock_messages_forwards_output_config_for_non_adaptive_model():
     assert result.get("max_tokens") == 4096
 
 
+def test_bedrock_messages_drop_params_strips_output_config_for_pre_4_5():
+    """
+    ``drop_params=True`` is the operator opt-in for "silently fix up"
+    behavior. When a proxy fronts Claude Code at a pre-4.5 Anthropic model
+    (haiku-3, sonnet-3.5, ...) on the /v1/messages route, the client always
+    sends ``output_config.effort`` and the model rejects it. Stripping under
+    ``drop_params`` lets those requests succeed; otherwise we forward and
+    surface the model's 400 as designed.
+    """
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "low"},
+    }
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert "output_config" not in result
+
+
+def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
+    """``drop_params=True`` must not strip on supporting models — opus-4-7
+    accepts effort, so the client's tier knob has to land on the wire."""
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "high"},
+    }
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-opus-4-7",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("output_config") == {"effort": "high"}
+
+
 @pytest.mark.parametrize(
     "reasoning_effort,expected_effort",
     [

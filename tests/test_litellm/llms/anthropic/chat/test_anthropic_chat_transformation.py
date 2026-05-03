@@ -1748,6 +1748,104 @@ def test_effort_with_other_features():
     assert "thinking" in result
 
 
+def test_anthropic_drop_params_strips_output_config_for_pre_4_5_models():
+    """
+    Proxies fronting Claude Code at pre-4.5 Anthropic models receive
+    ``output_config`` injected by the client; without ``drop_params`` Bedrock /
+    Anthropic 400s. With ``drop_params=True`` we strip it (logged) so the
+    request can succeed.
+    """
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-3-haiku-20240307",
+            messages=messages,
+            optional_params={"output_config": {"effort": "low"}},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert "output_config" not in result
+
+
+def test_anthropic_drop_params_keeps_output_config_for_supporting_models():
+    """``drop_params=True`` must not strip on models that support effort."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-opus-4-7",
+            messages=messages,
+            optional_params={"output_config": {"effort": "high"}},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("output_config") == {"effort": "high"}
+
+
+def test_anthropic_drop_params_false_forwards_to_unsupported_model():
+    """
+    Default behavior: forward ``output_config`` and let the provider 400.
+    This is the contract for users who want strict, debuggable failures.
+    """
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = False
+    try:
+        result = config.transform_request(
+            model="claude-3-haiku-20240307",
+            messages=messages,
+            optional_params={"output_config": {"effort": "low"}},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("output_config") == {"effort": "low"}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "claude-mythos-preview",
+    ],
+)
+def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
+    assert AnthropicConfig._model_supports_effort_param(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-3-haiku-20240307",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-opus-20240229",
+        "claude-sonnet-4-20250514",
+    ],
+)
+def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
+    assert AnthropicConfig._model_supports_effort_param(model) is False
+
+
 def test_translate_system_message_skips_empty_string_content():
     """
     Test that translate_system_message skips system messages with empty string content.
