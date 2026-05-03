@@ -290,6 +290,17 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
             />
           </Form.Item>
         );
+      case "CatoNetworks":
+        return (
+            <Form.Item label="Cato Networks Configuration" name="config" tooltip="JSON configuration for Cato Networks">
+              <Input.TextArea
+                  rows={4}
+                  placeholder={`{
+  "api_key": "your_cato_api_key"
+}`}
+              />
+            </Form.Item>
+        );
       case "GuardrailsAI":
         return (
           <Form.Item label="Guardrails.ai Configuration" name="config" tooltip="JSON configuration for Guardrails.ai">
