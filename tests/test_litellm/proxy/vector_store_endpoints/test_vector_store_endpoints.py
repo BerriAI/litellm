@@ -50,6 +50,19 @@ def _serialize_litellm_params(litellm_params):
     return json.dumps(litellm_params or {})
 
 
+@pytest.fixture(autouse=True)
+def _reset_embedding_config_cache():
+    """The use-time embedding-config resolver caches results in process
+    memory across calls. Reset it before every test so the resolver
+    actually exercises the router/DB path under test instead of returning
+    a value cached by an earlier test."""
+    from litellm.proxy.vector_store_endpoints import management_endpoints
+
+    management_endpoints._embedding_config_cache = None
+    yield
+    management_endpoints._embedding_config_cache = None
+
+
 @pytest.mark.asyncio
 async def test_router_avector_store_search_passes_correct_args():
     """
@@ -1682,6 +1695,43 @@ async def test_resolve_embedding_config_tries_router_then_db():
 
     # DB should NOT have been called since router found the model
     mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_embedding_config_caches_result():
+    """The first lookup should hit the router/DB; subsequent lookups for
+    the same model name should return the cached value without touching
+    the router or the database."""
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    mock_prisma_client = MagicMock()
+    mock_router = MagicMock()
+
+    mock_litellm_params = MagicMock(spec=LiteLLM_Params)
+    mock_litellm_params.api_key = "router-api-key"
+    mock_litellm_params.api_base = "https://router-api-base.com"
+    mock_litellm_params.api_version = None
+
+    mock_deployment = MagicMock(spec=Deployment)
+    mock_deployment.litellm_params = mock_litellm_params
+    mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
+
+    first = await _resolve_embedding_config(
+        embedding_model="cached-model",
+        prisma_client=mock_prisma_client,
+        llm_router=mock_router,
+    )
+    assert first is not None
+    assert mock_router.get_deployment_by_model_group_name.call_count == 1
+
+    second = await _resolve_embedding_config(
+        embedding_model="cached-model",
+        prisma_client=mock_prisma_client,
+        llm_router=mock_router,
+    )
+    assert second == first
+    # Router (and by extension the DB) was not consulted again.
+    assert mock_router.get_deployment_by_model_group_name.call_count == 1
 
 
 @pytest.mark.asyncio

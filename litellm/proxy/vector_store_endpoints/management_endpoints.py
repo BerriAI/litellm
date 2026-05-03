@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -44,6 +45,28 @@ _LITELLM_PARAMS_MASKER = SensitiveDataMasker()
 
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH = 10
+
+# Use-time embedding-config resolution runs on every vector-store request
+# whose persisted row carries only a model reference (the post-fix shape).
+# Without a cache, that's one ``litellm_proxymodeltable.find_first`` per
+# request — the no-DB-in-critical-path rule. Hold the resolved config in
+# memory for a short TTL so a hot model name pays the DB lookup at most
+# once per ``_EMBEDDING_CONFIG_CACHE_TTL`` seconds. Cleartext credentials
+# only ever live in process memory (never persisted, never echoed in
+# management responses), so the cache doesn't widen the disclosure surface.
+_EMBEDDING_CONFIG_CACHE_TTL = 60
+_EMBEDDING_CONFIG_CACHE_MAX_SIZE = 256
+_embedding_config_cache: Optional[InMemoryCache] = None
+
+
+def _get_embedding_config_cache() -> InMemoryCache:
+    global _embedding_config_cache
+    if _embedding_config_cache is None:
+        _embedding_config_cache = InMemoryCache(
+            max_size_in_memory=_EMBEDDING_CONFIG_CACHE_MAX_SIZE,
+            default_ttl=_EMBEDDING_CONFIG_CACHE_TTL,
+        )
+    return _embedding_config_cache
 
 
 def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> Any:
@@ -303,6 +326,11 @@ async def _resolve_embedding_config(
     This function first checks the router for config-defined models, then falls back
     to the database. This allows users to use models defined in either location.
 
+    Results are cached in process memory for ``_EMBEDDING_CONFIG_CACHE_TTL``
+    seconds so the request-handling path doesn't hit the database on every
+    vector-store call. Negative results (model not found) are intentionally
+    not cached to avoid blocking a freshly-added model behind the TTL.
+
     Args:
         embedding_model: The embedding model string (e.g., "text-embedding-ada-002" or "azure/text-embedding-3-large")
         prisma_client: The Prisma client instance
@@ -313,6 +341,11 @@ async def _resolve_embedding_config(
     """
     if not embedding_model:
         return None
+
+    cache = _get_embedding_config_cache()
+    cached = cache.get_cache(embedding_model)
+    if cached is not None:
+        return cached
 
     # Import llm_router if not provided
     if llm_router is None:
@@ -330,6 +363,7 @@ async def _resolve_embedding_config(
             verbose_proxy_logger.debug(
                 f"Resolved embedding config from router for model {embedding_model}"
             )
+            cache.set_cache(embedding_model, router_config)
             return router_config
 
     # Fall back to database
@@ -341,6 +375,7 @@ async def _resolve_embedding_config(
             verbose_proxy_logger.debug(
                 f"Resolved embedding config from database for model {embedding_model}"
             )
+            cache.set_cache(embedding_model, db_config)
             return db_config
 
     verbose_proxy_logger.debug(
