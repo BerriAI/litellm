@@ -98,6 +98,7 @@ export interface KeyResponse {
   budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;
+  router_settings?: Record<string, unknown> | null;
   last_rotation_at?: string;
   key_rotation_at?: string;
   next_rotation_at?: string;
