@@ -91,6 +91,7 @@ from litellm.utils import (
     ModelResponse,
     is_base64_encoded,
     supports_reasoning,
+    supports_thinking_budget_zero,
 )
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
@@ -923,6 +924,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return thinking_budget is not None and thinking_budget == 0
 
     @staticmethod
+    def _model_supports_thinking_budget_zero(model: Optional[str]) -> bool:
+        """Returns True if the model accepts thinkingBudget=0 to disable thinking.
+        Reads from model_prices_and_context_window.json via supports_thinking_budget_zero;
+        falls back to False (safe default) when the model is unknown."""
+        if model is None:
+            return False
+        try:
+            return supports_thinking_budget_zero(model)
+        except Exception:
+            return False
+
+    @staticmethod
     def _validate_thinking_config_conflicts(
         optional_params: Dict,
         param_name: str,
@@ -998,7 +1011,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ):
                 params["includeThoughts"] = True
             if thinking_budget is not None and isinstance(thinking_budget, int):
-                params["thinkingBudget"] = thinking_budget
+                if (
+                    thinking_budget > 0
+                    or VertexGeminiConfig._model_supports_thinking_budget_zero(model)
+                ):
+                    params["thinkingBudget"] = thinking_budget
 
         return params
 

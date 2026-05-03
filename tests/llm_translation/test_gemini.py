@@ -454,9 +454,13 @@ def test_gemini_thinking():
 
 def test_gemini_thinking_budget_0():
     litellm._turn_on_debug()
-    from litellm.types.utils import Message, CallTypes
+    import os
+    from litellm.types.utils import CallTypes
     from litellm.utils import return_raw_request
     import json
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
 
     raw_request = return_raw_request(
         endpoint=CallTypes.completion,
@@ -1638,3 +1642,103 @@ async def test_gemini_openai_web_search_tool_to_google_search():
     print("response: ", response.model_dump_json(indent=4))
     assert hasattr(response, "vertex_ai_grounding_metadata")
     assert getattr(response, "vertex_ai_grounding_metadata") is not None
+
+
+@pytest.mark.asyncio
+async def test_gemini_flash_to_pro_fallback_thinking_budget_zero():
+    """
+    Regression test: when gemini-2.5-flash is rate-limited and falls back to
+    gemini-2.5-pro, thinking={"type": "enabled", "budget_tokens": 0} must NOT
+    produce thinkingBudget=0 in the Pro request body. Pro rejects that with a
+    400 INVALID_ARGUMENT ("The model does not support setting thinking_budget to 0").
+
+    Fix: _map_thinking_param skips thinkingBudget=0 for non-Flash models.
+    Flash-family models support disabling thinking via thinkingBudget=0; Pro does not.
+    """
+    import os
+    from unittest.mock import patch
+    from litellm import Router
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Translation-layer check: Pro must not receive thinkingBudget=0
+    pro_config = VertexGeminiConfig._map_thinking_param(
+        thinking_param={"type": "enabled", "budget_tokens": 0},
+        model="gemini-2.5-pro",
+    )
+    assert (
+        "thinkingBudget" not in pro_config
+    ), "thinkingBudget=0 must not be sent to Pro — it causes a 400 INVALID_ARGUMENT"
+
+    # Flash must still receive thinkingBudget=0 (it supports disabling thinking)
+    flash_config = VertexGeminiConfig._map_thinking_param(
+        thinking_param={"type": "enabled", "budget_tokens": 0},
+        model="gemini-2.5-flash",
+    )
+    assert flash_config.get("thinkingBudget") == 0
+
+    # Router-layer check: fallback from flash (429) to pro succeeds without 400
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.5-flash",
+                    "api_key": "fake-key",
+                },
+            },
+            {
+                "model_name": "gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "gemini/gemini-2.5-pro",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+        fallbacks=[{"gemini-2.5-flash": ["gemini-2.5-pro"]}],
+        num_retries=0,
+    )
+
+    call_count = 0
+    pro_call_kwargs: dict = {}
+
+    async def mock_acompletion(**kwargs):
+        nonlocal call_count, pro_call_kwargs
+        call_count += 1
+        model = kwargs.get("model", "")
+        if "flash" in model:
+            raise litellm.RateLimitError(
+                message='vertex_aiException - {"error": {"code": 429, "message": "Resource exhausted.", "status": "RESOURCE_EXHAUSTED"}}',
+                llm_provider="vertex_ai",
+                model="gemini/gemini-2.5-flash",
+            )
+        pro_call_kwargs = kwargs.copy()
+        return litellm.ModelResponse(
+            id="chatcmpl-pro-mock",
+            choices=[
+                litellm.Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=litellm.Message(role="assistant", content="Hello!"),
+                )
+            ],
+            model="gemini-2.5-pro",
+        )
+
+    with patch("litellm.acompletion", side_effect=mock_acompletion):
+        response = await router.acompletion(
+            model="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            thinking={"type": "enabled", "budget_tokens": 0},
+        )
+
+    assert (
+        call_count == 2
+    ), f"Expected 2 calls (flash then pro fallback), got {call_count}"
+    assert response.choices[0].message.content == "Hello!"
+    # The thinking param reaches pro but thinkingBudget=0 is not in the translated body
+    assert pro_call_kwargs.get("thinking") == {"type": "enabled", "budget_tokens": 0}
