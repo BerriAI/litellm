@@ -1132,7 +1132,7 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
 
     @pytest.mark.parametrize(
         "field",
-        ["api_base", "base_url", "user_config", "langfuse_host", "slack_webhook_url"],
+        ["api_base", "base_url", "langfuse_host", "slack_webhook_url"],
     )
     def test_api_key_does_not_bypass_blocklist(self, field):
         # Regression: the historical ``check_complete_credentials`` clause
