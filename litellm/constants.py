@@ -402,13 +402,12 @@ BEDROCK_MIN_THINKING_BUDGET_TOKENS = int(
 # Anthropic's Messages API rejects ``thinking.budget_tokens < 1024`` with a
 # 400. ``reasoning_effort='minimal'`` historically mapped to 128 (the global
 # default) which always 400'd against direct Anthropic, Azure AI Anthropic,
-# Vertex AI Anthropic, and Bedrock Invoke. Use the provider minimum so
-# ``minimal`` is a usable tier on all Anthropic-backed routes; Bedrock
-# Converse already clamped to 1024 server-side, so this just unifies the
-# behavior.
-ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = int(
-    os.getenv("ANTHROPIC_MIN_THINKING_BUDGET_TOKENS", 1024)
-)
+# Vertex AI Anthropic, and Bedrock Invoke. Floor at the provider minimum so
+# ``minimal`` is a usable tier on every Anthropic-backed route; Bedrock
+# Converse already clamps server-side, this just unifies the behavior.
+# Constant — not env-overridable — because it tracks Anthropic's published
+# wire-protocol minimum, not a tunable.
+ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024
 REPLICATE_POLLING_DELAY_SECONDS = float(
     os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5)
 )
