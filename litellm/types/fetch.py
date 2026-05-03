@@ -47,8 +47,8 @@ class FetchTool(TypedDict, total=False):
     """
 
     fetch_tool_id: Optional[str]
-    fetch_tool_name: Required[str]
-    litellm_params: Required[FetchToolLiteLLMParams]
+    fetch_tool_name: Optional[str]
+    litellm_params: Optional[FetchToolLiteLLMParams]
     fetch_tool_info: Optional[dict]
     created_at: Optional[str]
     updated_at: Optional[str]
