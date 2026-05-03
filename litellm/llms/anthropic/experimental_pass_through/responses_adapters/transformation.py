@@ -165,12 +165,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     "arguments": json.dumps(block.get("input", {})),
                                 }
                             )
-                        elif btype == "thinking":
-                            thinking_text = block.get("thinking", "")
-                            if thinking_text:
-                                asst_parts.append(
-                                    {"type": "output_text", "text": thinking_text}
-                                )
+                        elif btype in ("thinking", "redacted_thinking"):
+                            # Anthropic thinking blocks are hidden reasoning state,
+                            # not assistant-visible output for OpenAI Responses.
+                            continue
                     if asst_parts:
                         input_items.append(
                             {
