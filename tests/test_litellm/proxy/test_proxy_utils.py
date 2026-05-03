@@ -264,3 +264,92 @@ def test_enrich_http_exception_callback_without_guardrail_name_noop():
     exc = HTTPException(status_code=400, detail={"error": "x"})
     _enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert exc.detail == {"error": "x"}
+
+
+def _router_with_group_info(group_info):
+    router = MagicMock()
+    router.get_model_group_info.return_value = group_info
+    return router
+
+
+def test_create_model_info_response_include_model_info():
+    """`include_model_info=True` merges router group info under `model_info`.
+
+    When false (default), the key must be absent — preserving the OpenAI
+    /v1/models response shape.
+    """
+    from litellm.proxy.utils import create_model_info_response
+    from litellm.types.router import ModelGroupInfo
+
+    # Default: no model_info key, no router lookup.
+    router = _router_with_group_info(None)
+    response = create_model_info_response(
+        model_id="gpt-4o", provider="openai", llm_router=router
+    )
+    assert "model_info" not in response
+    assert response["id"] == "gpt-4o"
+    assert response["owned_by"] == "openai"
+    router.get_model_group_info.assert_not_called()
+
+    # Flag on: pricing/tokens/mode/supports_* flow through.
+    group_info = ModelGroupInfo(
+        model_group="gpt-4o",
+        providers=["openai"],
+        max_input_tokens=128000,
+        max_output_tokens=16384,
+        input_cost_per_token=0.0000025,
+        output_cost_per_token=0.00001,
+        mode="chat",
+        tpm=30000,
+        rpm=500,
+        supports_function_calling=True,
+        supports_vision=True,
+    )
+    router = _router_with_group_info(group_info)
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        include_model_info=True,
+        llm_router=router,
+    )
+    router.get_model_group_info.assert_called_once_with(model_group="gpt-4o")
+    info = response["model_info"]
+    assert info["mode"] == "chat"
+    assert info["max_input_tokens"] == 128000
+    assert info["max_output_tokens"] == 16384
+    assert info["input_cost_per_token"] == 0.0000025
+    assert info["output_cost_per_token"] == 0.00001
+    assert info["tpm"] == 30000
+    assert info["rpm"] == 500
+    assert info["supports_function_calling"] is True
+    assert info["supports_vision"] is True
+
+    # Unknown / wildcard model: empty dict, not missing key.
+    response = create_model_info_response(
+        model_id="openai/*",
+        provider="openai",
+        include_model_info=True,
+        llm_router=_router_with_group_info(None),
+    )
+    assert response["model_info"] == {}
+
+    # Router error must not bubble — endpoint should still return a 200.
+    failing = MagicMock()
+    failing.get_model_group_info.side_effect = RuntimeError("boom")
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        include_model_info=True,
+        llm_router=failing,
+    )
+    assert response["model_info"] == {}
+
+    # No router available: still emit `model_info: {}` so callers get a
+    # consistent response shape regardless of proxy state.
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        include_model_info=True,
+        llm_router=None,
+    )
+    assert response["model_info"] == {}
