@@ -581,6 +581,26 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             reasoning_content = None
             pending_reasoning_item = None
 
+        # If no choices were created but we have pending reasoning content
+        # (e.g. incomplete response where all tokens went to reasoning),
+        # create a choice with empty text so the reasoning is not lost.
+        if len(choices) == 0 and (
+            reasoning_content is not None or pending_reasoning_item is not None
+        ):
+            msg = Message(
+                content="",
+                reasoning_content=reasoning_content,
+                reasoning_items=cast(
+                    Optional[List[ChatCompletionReasoningItem]],
+                    [pending_reasoning_item]
+                    if pending_reasoning_item is not None
+                    else None,
+                ),
+            )
+            choices.append(
+                Choices(message=msg, finish_reason="length", index=index)
+            )
+
         return choices
 
     def transform_response(  # noqa: PLR0915
