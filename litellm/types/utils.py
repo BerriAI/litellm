@@ -1515,6 +1515,13 @@ class Usage(SafeAttributeModel, CompletionUsage):
     _cache_read_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
+    _prompt_cache_hit_tokens: int = PrivateAttr(
+        0
+    )  # hidden param for DeepSeek prompt caching.
+    _iterations: Optional[List[Any]] = PrivateAttr(
+        None
+    )  # hidden param for Anthropic-specific iterations.
+
 
     server_tool_use: Optional[ServerToolUse] = None
     cost: Optional[float] = None
@@ -1525,8 +1532,6 @@ class Usage(SafeAttributeModel, CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
-    iterations: Optional[List[Any]] = None
-    """Anthropic-specific field: per-iteration token usage for compaction events."""
 
     def __init__(  # noqa: PLR0915
         self,
@@ -1668,9 +1673,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
             params["prompt_cache_hit_tokens"], int
         ):
             self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
+            self._prompt_cache_hit_tokens = params["prompt_cache_hit_tokens"]
 
         if iterations is not None:
-            self.iterations = iterations
+            self._iterations = iterations
 
         for k, v in params.items():
             setattr(self, k, v)
