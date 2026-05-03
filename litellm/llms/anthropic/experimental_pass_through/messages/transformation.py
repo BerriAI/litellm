@@ -222,6 +222,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=anthropic_messages_optional_request_params,
         )
 
+        # Break metadata shared reference with litellm_params so that
+        # pre_call's raw_request injection doesn't leak into the API request.
+        metadata = anthropic_messages_optional_request_params.get("metadata")
+        if isinstance(metadata, dict):
+            anthropic_messages_optional_request_params["metadata"] = dict(metadata)
+
         # Filter out x-anthropic-billing-header from system messages
         system_param = anthropic_messages_optional_request_params.get("system")
         if system_param is not None:
