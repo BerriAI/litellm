@@ -1508,3 +1508,70 @@ async def test_commit_spend_updates_uses_pipeline():
     mock_redis_update_buffer.get_all_daily_end_user_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_agent_spend_update_transactions_from_redis_buffer.assert_not_called()
     mock_redis_update_buffer.get_all_daily_tag_spend_update_transactions_from_redis_buffer.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_user_db_skips_for_team_key_calls():
+    """
+    Test that _update_user_db does NOT enqueue a spend update when team_id is set.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/26239
+    Bug: team key calls were incrementing LiteLLM_UserTable.spend, causing
+    false BudgetExceededError on personal key calls after a Redis flush.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer.spend_update_queue = AsyncMock()
+
+    mock_prisma_client = MagicMock()
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    # Call with team_id set — should NOT enqueue any update
+    await db_writer._update_user_db(
+        response_cost=0.05,
+        user_id="user-123",
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+        litellm_proxy_budget_name="litellm-proxy-budget",
+        end_user_id=None,
+        team_id="team-abc",
+    )
+
+    db_writer.spend_update_queue.add_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_user_db_runs_for_personal_key_calls():
+    """
+    Test that _update_user_db DOES enqueue a spend update when team_id is None.
+
+    Companion to test_update_user_db_skips_for_team_key_calls — ensures the
+    guard doesn't accidentally suppress personal key spend tracking.
+    """
+    db_writer = DBSpendUpdateWriter()
+    db_writer.spend_update_queue = AsyncMock()
+
+    mock_prisma_client = MagicMock()
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    import litellm
+
+    original_max_budget = litellm.max_budget
+    litellm.max_budget = 0  # disable global proxy budget tracking
+
+    try:
+        # Call with team_id=None — should enqueue the user spend update
+        await db_writer._update_user_db(
+            response_cost=0.05,
+            user_id="user-123",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            litellm_proxy_budget_name="litellm-proxy-budget",
+            end_user_id=None,
+            team_id=None,
+        )
+    finally:
+        litellm.max_budget = original_max_budget
+
+    db_writer.spend_update_queue.add_update.assert_called_once()

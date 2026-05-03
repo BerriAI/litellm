@@ -337,6 +337,7 @@ class DBSpendUpdateWriter:
                 user_api_key_cache=user_api_key_cache,
                 litellm_proxy_budget_name=litellm_proxy_budget_name,
                 end_user_id=end_user_id,
+                team_id=team_id,
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -504,11 +505,19 @@ class DBSpendUpdateWriter:
         user_api_key_cache: DualCache,
         litellm_proxy_budget_name: Optional[str],
         end_user_id: Optional[str] = None,
+        team_id: Optional[str] = None,
     ):
         """
         - Update that user's row
         - Update litellm-proxy-budget row (global proxy spend)
         """
+        # Skip personal spend tracking for team key calls.
+        # Team spend is tracked separately via _update_team_db.
+        # Without this guard, LiteLLM_UserTable.spend accumulates team key
+        # costs and causes false BudgetExceededError on personal key calls
+        # when the Redis counter is absent (e.g. after a restart).
+        if team_id is not None:
+            return
         ## if an end-user is passed in, do an upsert - we can't guarantee they already exist in db
         existing_user_obj = await user_api_key_cache.async_get_cache(key=user_id)
         if existing_user_obj is not None and isinstance(existing_user_obj, dict):
