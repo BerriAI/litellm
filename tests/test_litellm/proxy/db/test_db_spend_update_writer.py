@@ -1133,8 +1133,10 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
     mock_proxy_logging = MagicMock()
     mock_proxy_logging.failure_handler = AsyncMock()
 
-    # Mock the logger to capture exception calls
-    with patch.object(verbose_proxy_logger, "exception") as mock_exception_logger:
+    # Capture the ERROR-level log emitted by the spend_log_error helper.
+    # We assert against the formatted message instead of patching a specific
+    # logger method so the test stays valid as the helper evolves.
+    with patch.object(verbose_proxy_logger, "error") as mock_error_logger:
         # Call the method and expect it to raise the exception
         with pytest.raises(Exception, match="Unique constraint violation"):
             await DBSpendUpdateWriter._update_daily_spend(
@@ -1148,17 +1150,20 @@ async def test_update_daily_spend_logs_detailed_error_on_batch_upsert_failure():
                 unique_constraint_name="user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
             )
 
-        # Verify that exception was logged with detailed information
-        assert mock_exception_logger.called
-        call_args = mock_exception_logger.call_args[0][0]
-        assert "Daily user spend batch upsert failed" in call_args
-        assert "Table: litellm_dailyuserspend" in call_args
+        # Verify that the error was logged with detailed information.
+        # spend_log_error formats the message via ``%`` interpolation, so
+        # render the call args before asserting on substrings.
+        assert mock_error_logger.called
+        call = mock_error_logger.call_args
+        formatted = call.args[0] % call.args[1:]
+        assert "Daily user spend batch upsert failed" in formatted
+        assert "Table: litellm_dailyuserspend" in formatted
         assert (
             "Constraint: user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
-            in call_args
+            in formatted
         )
-        assert "Batch size: 1" in call_args
-        assert "Unique constraint violation" in call_args
+        assert "Batch size: 1" in formatted
+        assert "Unique constraint violation" in formatted
 
 
 @pytest.mark.asyncio
