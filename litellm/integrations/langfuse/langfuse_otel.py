@@ -243,14 +243,6 @@ class LangfuseOtelLogger(OpenTelemetry):
         metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
 
-        messages = kwargs.get("messages")
-        if messages:
-            safe_set_attribute(
-                span,
-                LangfuseSpanAttributes.OBSERVATION_INPUT.value,
-                safe_dumps(messages),
-            )
-
         LangfuseOtelLogger._set_observation_output(span=span, response_obj=response_obj)
 
     @staticmethod
