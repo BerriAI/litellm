@@ -216,6 +216,60 @@ class TestGetModelCostMapFallback:
         assert len(result) > 0
 
 
+class TestExternalModelCostMapPath:
+    """LITELLM_MODEL_COST_MAP_PATH loads JSON from disk for local backup."""
+
+    def test_should_load_from_file_when_path_set(self, tmp_path):
+        payload = {"external-only-model": {"litellm_provider": "openai"}}
+        path = tmp_path / "model_cost_map.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        GetModelCostMap._backup_model_count = -1
+        with patch.dict(os.environ, {"LITELLM_MODEL_COST_MAP_PATH": str(path)}):
+            loaded = GetModelCostMap.load_local_model_cost_map()
+        assert loaded == payload
+
+    def test_should_raise_when_file_missing(self):
+        GetModelCostMap._backup_model_count = -1
+        with patch.dict(
+            os.environ, {"LITELLM_MODEL_COST_MAP_PATH": "/nonexistent/cost_map.json"}
+        ):
+            with pytest.raises(FileNotFoundError):
+                GetModelCostMap.load_local_model_cost_map()
+
+    def test_should_raise_when_json_not_object(self, tmp_path):
+        path = tmp_path / "bad.json"
+        path.write_text("[1, 2]", encoding="utf-8")
+        GetModelCostMap._backup_model_count = -1
+        with patch.dict(os.environ, {"LITELLM_MODEL_COST_MAP_PATH": str(path)}):
+            with pytest.raises(TypeError, match="LITELLM_MODEL_COST_MAP_PATH"):
+                GetModelCostMap.load_local_model_cost_map()
+
+    def test_should_raise_when_json_object_empty(self, tmp_path):
+        path = tmp_path / "empty.json"
+        path.write_text("{}", encoding="utf-8")
+        GetModelCostMap._backup_model_count = -1
+        with patch.dict(os.environ, {"LITELLM_MODEL_COST_MAP_PATH": str(path)}):
+            with pytest.raises(ValueError, match="non-empty"):
+                GetModelCostMap.load_local_model_cost_map()
+
+    def test_should_use_file_with_local_only_mode(self, tmp_path):
+        payload = {"external-only-model": {"litellm_provider": "openai"}}
+        path = tmp_path / "model_cost_map.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        GetModelCostMap._backup_model_count = -1
+        with patch.dict(
+            os.environ,
+            {
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+                "LITELLM_MODEL_COST_MAP_PATH": str(path),
+            },
+        ):
+            with patch("httpx.get") as mock_get:
+                result = get_model_cost_map("https://example.com/map.json")
+                mock_get.assert_not_called()
+        assert result == payload
+
+
 class TestBackupModelCostMapExists:
     """Validates the local backup file is always present and valid."""
 
