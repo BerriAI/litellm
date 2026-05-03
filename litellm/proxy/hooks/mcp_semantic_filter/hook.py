@@ -67,10 +67,11 @@ class SemanticToolFilterHook(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
     ) -> List[Dict[str, Any]]:
         """
-        Expand MCP references to actual tool definitions.
+        Expand MCP references to actual tool definitions in responses (flat) format.
 
-        Reuses LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format
-        which internally does: parse -> fetch -> filter -> deduplicate -> transform
+        Always uses responses format so tool names are at the top level, which is
+        required for semantic filtering to extract and match names correctly.
+        Format conversion to chat happens after filtering in async_pre_call_hook.
         """
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
@@ -88,7 +89,9 @@ class SemanticToolFilterHook(CustomLogger):
             openai_tools,
             _,
         ) = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_to_openai_format(
-            user_api_key_auth=user_api_key_dict, mcp_tools_with_litellm_proxy=mcp_tools
+            user_api_key_auth=user_api_key_dict,
+            target_format="responses",
+            mcp_tools_with_litellm_proxy=mcp_tools,
         )
 
         # Convert Pydantic models to dicts for compatibility
@@ -122,6 +125,27 @@ class SemanticToolFilterHook(CustomLogger):
         )
 
         return openai_tools_as_dicts
+
+    @staticmethod
+    def _convert_to_chat_format(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Convert tools from responses (flat) format to chat completions format.
+
+        Responses: {"type": "function", "name": ..., "description": ..., "parameters": ...}
+        Chat:      {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
+        """
+        result = []
+        for tool in tools:
+            if (
+                isinstance(tool, dict)
+                and tool.get("type") == "function"
+                and "name" in tool
+            ):
+                function_body = {k: v for k, v in tool.items() if k != "type"}
+                result.append({"type": "function", "function": function_body})
+            else:
+                result.append(tool)
+        return result
 
     def _get_metadata_variable_name(self, data: dict) -> str:
         if "litellm_metadata" in data:
@@ -223,11 +247,15 @@ class SemanticToolFilterHook(CustomLogger):
                 f"with query: '{user_query[:50]}...'"
             )
 
-            # Filter tools semantically
+            # Filter tools semantically (tools are in responses/flat format here)
             filtered_tools = await self.filter.filter_tools(
                 query=user_query,
                 available_tools=tools,  # type: ignore
             )
+
+            # Convert to chat format after filtering if needed
+            if call_type in ("completion", "acompletion"):
+                filtered_tools = self._convert_to_chat_format(filtered_tools)
 
             # Always update tools and emit header (even if count unchanged)
             data["tools"] = filtered_tools

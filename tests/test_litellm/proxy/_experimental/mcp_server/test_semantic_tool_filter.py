@@ -640,3 +640,106 @@ class TestGetToolsByNames:
         )
 
         assert matched == []
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_converts_to_chat_format_for_completion():
+    """
+    Test that the hook converts tools to chat format after filtering for completion
+    call types, and leaves tools in responses (flat) format for the responses API.
+
+    _expand_mcp_tools always expands in responses format (flat, names at top level)
+    so that semantic filtering can extract names correctly. _convert_to_chat_format
+    is then applied post-filter only for completion/acompletion call types.
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    mcp_ref_tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/myserver"}]
+
+    # _expand_mcp_tools always returns responses (flat) format
+    flat_tools = [
+        {"type": "function", "name": f"tool_{i}", "description": f"Tool {i}"}
+        for i in range(3)
+    ]
+
+    mock_user_api_key_dict = Mock()
+    mock_cache = Mock()
+
+    async def fake_expand(tools, user_api_key_dict):
+        return flat_tools
+
+    async def fake_filter_tools(query, available_tools):
+        return available_tools
+
+    with (
+        patch.object(hook, "_expand_mcp_tools", side_effect=fake_expand),
+        patch.object(hook.filter, "filter_tools", side_effect=fake_filter_tools),
+        patch.object(hook.filter, "extract_user_query", return_value="use a tool"),
+    ):
+        # aresponses: tools should remain in flat format
+        data_responses = {
+            "model": "gpt-4o",
+            "input": [{"role": "user", "content": "Use a tool"}],
+            "tools": mcp_ref_tools,
+            "metadata": {},
+        }
+        await hook.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            cache=mock_cache,
+            data=data_responses,
+            call_type="aresponses",
+        )
+        assert all("function" not in t for t in data_responses["tools"]), (
+            "aresponses: tools should remain in flat responses format"
+        )
+
+        # acompletion: tools should be converted to chat format
+        data_completion = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Use a tool"}],
+            "tools": mcp_ref_tools,
+            "metadata": {},
+        }
+        await hook.async_pre_call_hook(
+            user_api_key_dict=mock_user_api_key_dict,
+            cache=mock_cache,
+            data=data_completion,
+            call_type="acompletion",
+        )
+        assert all(
+            isinstance(t.get("function"), dict) for t in data_completion["tools"]
+        ), "acompletion: tools should be converted to chat format with 'function' key"
+
+    print("✅ Hook correctly converts to chat format for completion, leaves flat for responses")

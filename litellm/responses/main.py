@@ -214,7 +214,7 @@ async def aresponses_api_with_mcp(
         mcp_server_auth_headers=mcp_server_auth_headers,
     )
     openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
-        original_mcp_tools
+        original_mcp_tools, target_format="responses"
     )
 
     # Combine with other tools

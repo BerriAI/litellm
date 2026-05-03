@@ -391,6 +391,7 @@ class LiteLLM_Proxy_MCP_Handler:
     async def _process_mcp_tools_to_openai_format(
         user_api_key_auth: Any,
         mcp_tools_with_litellm_proxy: List[ToolParam],
+        target_format: Literal["responses", "chat"],
         litellm_trace_id: Optional[str] = None,
     ) -> tuple[List[Any], dict[str, str]]:
         """
@@ -400,6 +401,7 @@ class LiteLLM_Proxy_MCP_Handler:
             user_api_key_auth: User authentication info for access control
             mcp_tools_with_litellm_proxy: ToolParam objects with server_url starting with "litellm_proxy"
             litellm_trace_id: Optional trace ID for linking list_mcp_tools spend logs to parent request
+            target_format: "chat" for Chat Completions format, "responses" for Responses API format
 
         Returns:
             List of tools in OpenAI format ready to be sent to the LLM
@@ -415,7 +417,7 @@ class LiteLLM_Proxy_MCP_Handler:
         )
 
         openai_tools = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(
-            deduplicated_mcp_tools
+            deduplicated_mcp_tools, target_format=target_format
         )
 
         return openai_tools, tool_server_map
@@ -477,7 +479,7 @@ class LiteLLM_Proxy_MCP_Handler:
     @staticmethod
     def _transform_mcp_tools_to_openai(
         mcp_tools: List[Any],
-        target_format: Literal["responses", "chat"] = "responses",
+        target_format: Literal["responses", "chat"],
     ) -> List[Any]:
         """Transform MCP tools to OpenAI-compatible format."""
         from litellm.experimental_mcp_client.tools import (
