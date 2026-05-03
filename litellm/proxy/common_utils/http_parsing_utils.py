@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Collection, Dict, List, Optional
+from typing import Any, Collection, Dict, List, Optional, Tuple
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -20,13 +20,12 @@ from litellm.types.router import Deployment
 # enforcement. There is no internal proxy code path that sets
 # ``user_config`` — it was always client-supplied — so the entire
 # capability comes off at the parser boundary.
-_ROOT_KEYS_TO_STRIP_FROM_REQUEST_BODY: tuple = ("user_config",)
+_ROOT_KEYS_TO_STRIP_FROM_REQUEST_BODY: Tuple[str, ...] = ("user_config",)
 
 
-def _strip_disallowed_root_keys(parsed_body: Dict) -> Dict:
+def _strip_disallowed_root_keys(parsed_body: Dict) -> None:
     for key in _ROOT_KEYS_TO_STRIP_FROM_REQUEST_BODY:
         parsed_body.pop(key, None)
-    return parsed_body
 
 
 async def _read_request_body(request: Optional[Request]) -> Dict:

@@ -856,14 +856,8 @@ class TestGetTagsFromRequestBodyStringCoerce:
 
 
 class TestStripDisallowedRootKeys:
-    """The parser drops keys the proxy never accepts from a client body.
-
-    ``user_config`` is the headline case: it used to let a caller hand
-    the proxy a full ``litellm.Router`` config, which the proxy would
-    instantiate as a fresh router for that single request, bypassing
-    the central ``llm_router``'s RBAC, budget, and model-access
-    enforcement.
-    """
+    """``user_config`` is stripped at parse time — see the constant in
+    ``http_parsing_utils.py`` for the threat-model rationale."""
 
     @pytest.mark.asyncio
     async def test_user_config_is_stripped_from_json_body(self):
@@ -914,13 +908,11 @@ class TestStripDisallowedRootKeys:
         assert "user_config" not in parsed
         assert parsed["model"] == "whisper-1"
 
-    def test_strip_helper_is_idempotent_on_clean_body(self):
+    def test_strip_helper_leaves_clean_body_unchanged(self):
         from litellm.proxy.common_utils.http_parsing_utils import (
             _strip_disallowed_root_keys,
         )
 
         body = {"model": "gpt-4", "messages": []}
-        result = _strip_disallowed_root_keys(body)
-        # Same dict object is returned (in-place); unrelated keys preserved.
-        assert result is body
-        assert result == {"model": "gpt-4", "messages": []}
+        _strip_disallowed_root_keys(body)
+        assert body == {"model": "gpt-4", "messages": []}
