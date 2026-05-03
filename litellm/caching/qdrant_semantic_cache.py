@@ -17,6 +17,9 @@ import litellm
 from litellm._logging import print_verbose
 from litellm.constants import QDRANT_SCALAR_QUANTILE, QDRANT_VECTOR_SIZE
 from litellm.types.utils import EmbeddingResponse
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_str_from_messages,
+)
 
 from .base_cache import BaseCache
 
@@ -175,10 +178,13 @@ class QdrantSemanticCache(BaseCache):
         from litellm._uuid import uuid
 
         # get the prompt
-        messages = kwargs["messages"]
-        prompt = ""
-        for message in messages:
-            prompt += message["content"]
+        messages = (
+            kwargs.get("messages") if "messages" in kwargs else kwargs.get("message")
+        )
+        if messages is None:
+            print_verbose("No messages provided for semantic caching")
+            return
+        prompt = get_str_from_messages(messages)
 
         # create an embedding for prompt
         embedding_response = cast(
@@ -193,7 +199,7 @@ class QdrantSemanticCache(BaseCache):
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]
 
-        value = str(value)
+        value = json.dumps(value, default=str)
         assert isinstance(value, str)
 
         data = {
@@ -219,10 +225,13 @@ class QdrantSemanticCache(BaseCache):
         print_verbose(f"sync qdrant semantic-cache get_cache, kwargs: {kwargs}")
 
         # get the messages
-        messages = kwargs["messages"]
-        prompt = ""
-        for message in messages:
-            prompt += message["content"]
+        messages = (
+            kwargs.get("messages") if "messages" in kwargs else kwargs.get("message")
+        )
+        if messages is None:
+            print_verbose("No messages provided for semantic lookup")
+            return
+        prompt = get_str_from_messages(messages)
 
         # convert to embedding
         embedding_response = cast(
@@ -290,10 +299,13 @@ class QdrantSemanticCache(BaseCache):
         print_verbose(f"async qdrant semantic-cache set_cache, kwargs: {kwargs}")
 
         # get the prompt
-        messages = kwargs["messages"]
-        prompt = ""
-        for message in messages:
-            prompt += message["content"]
+        messages = (
+            kwargs.get("messages") if "messages" in kwargs else kwargs.get("message")
+        )
+        if messages is None:
+            print_verbose("No messages provided for semantic caching")
+            return
+        prompt = get_str_from_messages(messages)
         # create an embedding for prompt
         router_model_names = (
             [m["model_name"] for m in llm_model_list]
@@ -323,7 +335,7 @@ class QdrantSemanticCache(BaseCache):
         # get the embedding
         embedding = embedding_response["data"][0]["embedding"]
 
-        value = str(value)
+        value = json.dumps(value, default=str)
         assert isinstance(value, str)
 
         data = {
@@ -351,10 +363,13 @@ class QdrantSemanticCache(BaseCache):
         from litellm.proxy.proxy_server import llm_model_list, llm_router
 
         # get the messages
-        messages = kwargs["messages"]
-        prompt = ""
-        for message in messages:
-            prompt += message["content"]
+        messages = (
+            kwargs.get("messages") if "messages" in kwargs else kwargs.get("message")
+        )
+        if messages is None:
+            print_verbose("No messages provided for semantic lookup")
+            return
+        prompt = get_str_from_messages(messages)
 
         router_model_names = (
             [m["model_name"] for m in llm_model_list]

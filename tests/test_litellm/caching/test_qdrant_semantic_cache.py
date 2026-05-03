@@ -382,8 +382,100 @@ def test_qdrant_semantic_cache_set_cache():
                 messages=[{"content": "What is the capital of Italy?"}],
             )
 
+        # Verify upsert was called
+        qdrant_cache.sync_client.put.assert_called()
+
+
+def test_qdrant_semantic_cache_set_list_response():
+    """
+    Test QDRANT semantic cache set method with a list response.
+    """
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
+        ) as mock_sync_client,
+    ):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"result": {"exists": True}}
+        mock_sync_client_instance = MagicMock()
+        mock_sync_client_instance.get.return_value = mock_response
+        mock_sync_client.return_value = mock_sync_client_instance
+
+        from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+        qdrant_cache = QdrantSemanticCache(
+            collection_name="test_collection",
+            qdrant_api_base="http://test.qdrant.local",
+            qdrant_api_key="test_key",
+            similarity_threshold=0.8,
+        )
+
+        mock_upsert_response = MagicMock()
+        mock_upsert_response.status_code = 200
+        qdrant_cache.sync_client.put = MagicMock(return_value=mock_upsert_response)
+
+        response_to_cache = ["item1", "item2"]
+
+        with patch(
+            "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.1, 0.1]}]}
+        ):
+            qdrant_cache.set_cache(
+                key="test_key",
+                value=response_to_cache,
+                messages=[{"content": "What is the list?"}],
+            )
             # Verify upsert was called
             qdrant_cache.sync_client.put.assert_called()
+
+
+def test_qdrant_semantic_cache_get_list_response_hit():
+    """
+    Test QDRANT semantic cache get method when cached response is a list.
+    """
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
+        ) as mock_sync_client,
+    ):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"result": {"exists": True}}
+        mock_sync_client_instance = MagicMock()
+        mock_sync_client_instance.get.return_value = mock_response
+        mock_sync_client.return_value = mock_sync_client_instance
+
+        from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+        qdrant_cache = QdrantSemanticCache(
+            collection_name="test_collection",
+            qdrant_api_base="http://test.qdrant.local",
+            qdrant_api_key="test_key",
+            similarity_threshold=0.8,
+        )
+
+        mock_search_response = MagicMock()
+        mock_search_response.status_code = 200
+        mock_search_response.json.return_value = {
+            "result": [
+                {
+                    "payload": {
+                        "text": "What is the list?",
+                        "response": '["item1", "item2"]',
+                    },
+                    "score": 0.9,
+                }
+            ]
+        }
+        qdrant_cache.sync_client.post = MagicMock(return_value=mock_search_response)
+
+        with patch(
+            "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+        ):
+            result = qdrant_cache.get_cache(
+                key="test_key", messages=[{"content": "What is the list?"}]
+            )
+            assert result == ["item1", "item2"]
 
 
 @pytest.mark.asyncio
