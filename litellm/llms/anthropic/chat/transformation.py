@@ -1,7 +1,17 @@
 import json
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 
@@ -226,6 +236,52 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         except Exception:
             return False
+
+    # Per https://platform.claude.com/docs/en/build-with-claude/effort the
+    # ``output_config.effort`` parameter is supported on Opus 4.5+, Sonnet 4.6+
+    # and Mythos Preview. Older Claude models (haiku-3, sonnet-3.5, opus-3,
+    # sonnet-4, ...) reject it with a 400. The patterns below let us recognize
+    # the supporting families regardless of route prefix (``anthropic.``,
+    # ``us.anthropic.``, ``vertex_ai/``, ``azure_ai/``, ...).
+    _EFFORT_SUPPORTING_MODEL_PATTERNS: ClassVar[Tuple[str, ...]] = (
+        "opus-4-5",
+        "opus_4_5",
+        "opus-4.5",
+        "opus_4.5",
+        "opus-4-6",
+        "opus_4_6",
+        "opus-4.6",
+        "opus_4.6",
+        "opus-4-7",
+        "opus_4_7",
+        "opus-4.7",
+        "opus_4.7",
+        "sonnet-4-6",
+        "sonnet_4_6",
+        "sonnet-4.6",
+        "sonnet_4.6",
+        "mythos",
+    )
+
+    @staticmethod
+    def _model_supports_effort_param(model: str) -> bool:
+        """Whether the model accepts ``output_config.effort`` at all.
+
+        Used to decide whether to strip ``output_config`` for known-incompatible
+        models when ``drop_params`` is set. New models that land in
+        ``model_prices_and_context_window.json`` with a ``supports_*_reasoning_effort``
+        flag are auto-recognized; otherwise we fall back to the documented
+        family patterns above.
+        """
+        model_lower = model.lower()
+        if any(
+            p in model_lower for p in AnthropicConfig._EFFORT_SUPPORTING_MODEL_PATTERNS
+        ):
+            return True
+        for level in ("low", "minimal", "medium", "high", "xhigh", "max"):
+            if AnthropicConfig._supports_effort_level(model, level):
+                return True
+        return False
 
     def get_supported_openai_params(self, model: str):
         params = [
@@ -1562,6 +1618,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return
         output_config = optional_params.get("output_config")
         if not output_config or not isinstance(output_config, dict):
+            return
+        # When ``drop_params`` is set, strip ``output_config`` for models that
+        # cannot accept it (e.g. proxy fronting Claude Code at haiku-3, where
+        # the client always sends effort but the model rejects it). The user
+        # opted into silent fixup via the global flag — log a warning so the
+        # strip is still visible in logs.
+        if litellm.drop_params is True and not self._model_supports_effort_param(model):
+            litellm.verbose_logger.warning(
+                "Dropping unsupported `output_config` for model=%s "
+                "(drop_params=True). Effort is only supported on Opus 4.5+, "
+                "Sonnet 4.6+, and Mythos Preview.",
+                model,
+            )
+            optional_params.pop("output_config", None)
+            data.pop("output_config", None)
             return
         effort = output_config.get("effort")
         # ``effort=""`` (empty string) and unmapped strings should be treated
