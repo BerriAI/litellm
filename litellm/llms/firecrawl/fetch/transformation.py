@@ -8,7 +8,10 @@ Supports both Firecrawl Cloud and self-hosted instances.
 from typing import Any, Dict, Optional
 
 from litellm.llms.base_llm.fetch.transformation import BaseFetchConfig, WebFetchResponse
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.secret_managers.main import get_secret_str
 
 
@@ -94,7 +97,7 @@ class FirecrawlFetchConfig(BaseFetchConfig):
         # Allow passing api_base via optional_params for dynamic override
         api_base = optional_params.get("api_base")
 
-        client = get_async_httpx_client()
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Fetch)
         response = await client.post(
             self.get_complete_url(api_base=api_base),
             headers=headers,
