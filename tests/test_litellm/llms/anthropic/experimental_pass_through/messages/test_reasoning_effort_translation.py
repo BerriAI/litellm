@@ -129,6 +129,37 @@ def test_invalid_reasoning_effort_raises_400(bad_effort):
     assert exc_info.value.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "model,bad_effort",
+    [
+        ("claude-opus-4-6", "xhigh"),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh"),
+        ("claude-sonnet-4-6", "xhigh"),
+        ("claude-sonnet-4-6", "max"),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "max"),
+    ],
+)
+def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort):
+    """``xhigh`` and ``max`` are gated per-model. The /v1/messages route must
+    surface a clean 400 client-side instead of forwarding the unsupported
+    tier and letting the provider 500/400 it.
+    """
+    config = AnthropicMessagesConfig()
+    optional_params = {"max_tokens": 1024, "reasoning_effort": bad_effort}
+
+    with pytest.raises(AnthropicError) as exc_info:
+        config.transform_anthropic_messages_request(
+            model=model,
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "not supported by this model" in str(exc_info.value)
+
+
 def test_explicit_output_config_wins_over_reasoning_effort():
     """
     Explicit native ``output_config.effort`` is never overridden by the
