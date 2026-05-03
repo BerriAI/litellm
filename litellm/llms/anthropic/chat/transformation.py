@@ -1133,9 +1133,28 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     if AnthropicConfig._is_claude_4_6_model(
                         model
                     ) or AnthropicConfig._is_claude_4_7_model(model):
+                        # ``_map_reasoning_effort`` returns ``type=adaptive``
+                        # for any string on adaptive models without checking
+                        # the value, so reject unmapped efforts here (matching
+                        # the /v1/messages path) instead of relying on the
+                        # downstream ``_apply_output_config`` check. Co-locating
+                        # validation with the mapping prevents garbage from
+                        # leaking into ``optional_params`` if ``map_openai_params``
+                        # is ever called without a subsequent ``transform_request``.
                         mapped_effort = AnthropicConfig.REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
-                            value, value
+                            value
                         )
+                        if mapped_effort is None:
+                            raise litellm.exceptions.BadRequestError(
+                                message=(
+                                    f"Invalid reasoning_effort: {value!r}. "
+                                    f"Must be one of: 'minimal', 'low', "
+                                    f"'medium', 'high', 'xhigh', 'max', 'none'"
+                                ),
+                                model=model,
+                                llm_provider=self.custom_llm_provider
+                                or "anthropic",
+                            )
                         optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(

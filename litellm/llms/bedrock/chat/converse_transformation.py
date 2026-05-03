@@ -485,11 +485,28 @@ class AmazonConverseConfig(BaseConfig):
                 if AnthropicConfig._is_claude_4_6_model(
                     model
                 ) or AnthropicConfig._is_claude_4_7_model(model):
+                    # Use ``.get()`` without a fallback so unmapped efforts
+                    # (e.g. ``"disabled"``) surface as a clean 400 here
+                    # rather than leaking the raw garbage string through to
+                    # ``_validate_anthropic_adaptive_effort`` (which does
+                    # catch it, but only because validation happens to run).
+                    # Matches the /v1/messages pattern where validation is
+                    # co-located with the mapping.
                     mapped_effort = (
                         AnthropicConfig.REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
-                            reasoning_effort, reasoning_effort
+                            reasoning_effort
                         )
                     )
+                    if mapped_effort is None:
+                        raise litellm.exceptions.BadRequestError(
+                            message=(
+                                f"Invalid reasoning_effort: {reasoning_effort!r}. "
+                                f"Must be one of: 'minimal', 'low', 'medium', "
+                                f"'high', 'xhigh', 'max', 'none'"
+                            ),
+                            model=model,
+                            llm_provider="bedrock_converse",
+                        )
                     self._validate_anthropic_adaptive_effort(
                         model=model, effort=mapped_effort
                     )
