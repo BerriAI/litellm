@@ -846,6 +846,14 @@ class WebSearchInterceptionLogger(CustomLogger):
         }
         kwargs_for_followup = self._prepare_followup_kwargs(kwargs)
 
+        # Remove keys from kwargs that are already in optional_params
+        # to avoid "got multiple values for keyword argument" errors
+        kwargs_for_followup = {
+            k: v
+            for k, v in kwargs_for_followup.items()
+            if k not in optional_params_without_max_tokens
+        }
+
         if logging_obj is not None:
             agentic_params = logging_obj.model_call_details.get(
                 "agentic_loop_params", {}
@@ -1104,6 +1112,14 @@ class WebSearchInterceptionLogger(CustomLogger):
         }
         if tools_param is not None:
             optional_params_clean["tools"] = tools_param
+
+        # Remove keys from kwargs that are already in optional_params
+        # to avoid "got multiple values for keyword argument" errors
+        kwargs_for_followup = {
+            k: v
+            for k, v in kwargs_for_followup.items()
+            if k not in optional_params_clean
+        }
 
         return AgenticLoopRequestPatch(
             model=full_model_name,
