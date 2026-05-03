@@ -516,6 +516,10 @@ const Teams: React.FC<TeamProps> = ({
           Array.isArray(formValues.object_permission_search_tools) &&
           formValues.object_permission_search_tools.length > 0;
 
+        const hasFetchTools =
+          Array.isArray(formValues.object_permission_fetch_tools) &&
+          formValues.object_permission_fetch_tools.length > 0;
+
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
           (formValues.allowed_mcp_servers_and_groups &&
@@ -577,6 +581,14 @@ const Teams: React.FC<TeamProps> = ({
           }
           formValues.object_permission.search_tools = formValues.object_permission_search_tools;
           delete formValues.object_permission_search_tools;
+        }
+
+        if (hasFetchTools) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.fetch_tools = formValues.object_permission_fetch_tools;
+          delete formValues.object_permission_fetch_tools;
         }
 
         // Add model_aliases if any are defined

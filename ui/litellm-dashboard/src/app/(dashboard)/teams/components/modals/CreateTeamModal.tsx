@@ -27,6 +27,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
 import SearchToolSelector from "@/components/SearchTools/SearchToolSelector";
+import FetchToolSelector from "@/components/FetchTools/FetchToolSelector";
 
 interface ModelAliases {
   [key: string]: string;
@@ -229,6 +230,10 @@ const CreateTeamModal = ({
           Array.isArray(formValues.object_permission_search_tools) &&
           formValues.object_permission_search_tools.length > 0;
 
+        const hasFetchTools =
+          Array.isArray(formValues.object_permission_fetch_tools) &&
+          formValues.object_permission_fetch_tools.length > 0;
+
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
           (formValues.allowed_mcp_servers_and_groups &&
@@ -236,7 +241,8 @@ const CreateTeamModal = ({
               formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
               formValues.allowed_mcp_servers_and_groups.toolPermissions)) ||
           hasAgents ||
-          hasSearchTools
+          hasSearchTools ||
+          hasFetchTools
         ) {
           if (!formValues.object_permission) {
             formValues.object_permission = {};
@@ -277,6 +283,11 @@ const CreateTeamModal = ({
           if (hasSearchTools) {
             formValues.object_permission.search_tools = formValues.object_permission_search_tools;
             delete formValues.object_permission_search_tools;
+          }
+
+          if (hasFetchTools) {
+            formValues.object_permission.fetch_tools = formValues.object_permission_fetch_tools;
+            delete formValues.object_permission_fetch_tools;
           }
         }
 
@@ -771,6 +782,34 @@ const CreateTeamModal = ({
                   value={form.getFieldValue("object_permission_search_tools")}
                   accessToken={accessToken || ""}
                   placeholder="Select search tools (optional, empty = all allowed)"
+                />
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
+
+          <Accordion className="mt-4 mb-4">
+            <AccordionHeader>
+              <b>Fetch Tool Settings</b>
+            </AccordionHeader>
+            <AccordionBody>
+              <Form.Item
+                label={
+                  <span>
+                    Allowed Fetch Tools{" "}
+                    <Tooltip title="Select which fetch tools this team can access. Leave empty to allow all fetch tools.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="object_permission_fetch_tools"
+                className="mt-4"
+                help="Restrict which configured fetch tools keys on this team may call."
+              >
+                <FetchToolSelector
+                  onChange={(vals: string[]) => form.setFieldValue("object_permission_fetch_tools", vals)}
+                  value={form.getFieldValue("object_permission_fetch_tools")}
+                  accessToken={accessToken || ""}
+                  placeholder="Select fetch tools (optional, empty = all allowed)"
                 />
               </Form.Item>
             </AccordionBody>
