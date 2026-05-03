@@ -35,6 +35,7 @@ Example: block when response rejects the user (input_type response only):
 """
 
 import asyncio
+import os
 import threading
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 
@@ -143,8 +144,17 @@ class CustomCodeGuardrail(CustomGuardrail):
         """Returns the config model for the UI."""
         return CustomCodeGuardrailConfigModel
 
+    @staticmethod
+    def _require_custom_code_enabled() -> None:
+        if os.getenv("LITELLM_ENABLE_CUSTOM_CODE_GUARDRAILS", "").lower() != "true":
+            raise CustomCodeCompilationError(
+                "Custom code guardrails are disabled by default. "
+                "Set LITELLM_ENABLE_CUSTOM_CODE_GUARDRAILS=true to enable."
+            )
+
     def _do_compile(self) -> None:
         """Internal compilation method without lock. Expected to run inside _compile_lock."""
+        self._require_custom_code_enabled()
         exec_globals = build_sandbox_globals()
         compiled = compile_sandboxed(self.custom_code)
         exec(compiled, exec_globals)  # noqa: S102

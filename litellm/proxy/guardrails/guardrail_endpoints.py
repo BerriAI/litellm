@@ -2075,6 +2075,14 @@ async def test_custom_code_guardrail(
             detail="Admin access required to test custom code guardrails",
         )
 
+    if os.getenv("LITELLM_ENABLE_CUSTOM_CODE_GUARDRAILS", "").lower() != "true":
+        return TestCustomCodeGuardrailResponse(
+            success=False,
+            error="Custom code guardrails are disabled by default. "
+            "Set LITELLM_ENABLE_CUSTOM_CODE_GUARDRAILS=true to enable.",
+            error_type="compilation",
+        )
+
     EXECUTION_TIMEOUT_SECONDS = 5
 
     try:
