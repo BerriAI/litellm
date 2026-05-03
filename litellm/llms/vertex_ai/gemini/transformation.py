@@ -323,6 +323,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
     contents: List[ContentType] = []
 
     last_message_with_tool_calls = None
+    message_by_tool_call_id: Dict[str, ChatCompletionAssistantMessage] = {}
 
     msg_i = 0
     tool_call_responses = []
@@ -543,9 +544,10 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     assistant_content.append(_part)
 
                 ## HANDLE ASSISTANT FUNCTION CALL
+                tool_calls = assistant_msg.get("tool_calls")
+                function_call = assistant_msg.get("function_call")
                 if (
-                    assistant_msg.get("tool_calls", []) is not None
-                    or assistant_msg.get("function_call") is not None
+                    tool_calls or function_call is not None
                 ):  # support assistant tool invoke conversion
                     gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
                         assistant_msg, model=model
@@ -558,6 +560,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             excluded_keys=["thoughtSignature"],
                         ):
                             assistant_content.append(gemini_tool_call_part)
+                    if tool_calls:
+                        for tool_call in tool_calls:
+                            tool_call_id = tool_call.get("id")
+                            if tool_call_id:
+                                message_by_tool_call_id[tool_call_id] = assistant_msg
                     last_message_with_tool_calls = assistant_msg
 
                 ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
@@ -606,8 +613,20 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 msg_i < len(messages)
                 and messages[msg_i]["role"] in tool_call_message_roles
             ):
+                tool_result_message = messages[msg_i]
+                tool_call_id_value = tool_result_message.get("tool_call_id")
+                tool_call_id = (
+                    tool_call_id_value if isinstance(tool_call_id_value, str) else None
+                )
+                message_with_tool_call = (
+                    message_by_tool_call_id.get(
+                        tool_call_id, last_message_with_tool_calls
+                    )
+                    if tool_call_id is not None
+                    else last_message_with_tool_calls
+                )
                 _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls  # type: ignore
+                    tool_result_message, message_with_tool_call  # type: ignore
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
