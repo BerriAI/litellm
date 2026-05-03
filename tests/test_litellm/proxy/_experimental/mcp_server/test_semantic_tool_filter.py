@@ -363,10 +363,16 @@ async def test_semantic_filter_hook_triggers_on_completion():
         enabled=True,
     )
 
-    # Prepare data - completion request with tools
+    # Prepare data — completion request with MCP gateway tools.
+    # Note: tools served via the LiteLLM MCP gateway are name-prefixed
+    # with `mcp__`. Only tools with that prefix are semantically filtered;
+    # non-MCP tools (user-defined function tools, model-specific schemas)
+    # are passed through untouched. See SemanticToolFilterHook.
     tools = [
         MCPTool(
-            name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"}
+            name=f"mcp__tool_{i}",
+            description=f"Tool {i}",
+            inputSchema={"type": "object"},
         )
         for i in range(10)
     ]
@@ -489,9 +495,7 @@ class TestGetToolsByNames:
             {"name": "send_email", "description": "send mail"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            ["send_email"], available_tools
-        )
+        matched = filter_instance._get_tools_by_names(["send_email"], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "send_email"
@@ -503,9 +507,7 @@ class TestGetToolsByNames:
         client_name = "litellm_" + canonical
         available_tools = [{"name": client_name, "description": "scrape"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         # Must return the incoming tool unchanged so the client-facing
@@ -516,13 +518,9 @@ class TestGetToolsByNames:
         """Some clients use dash as alias separator; accept that too."""
         filter_instance = self._make_filter()
         canonical = "weather_svc-get_weather"
-        available_tools = [
-            {"name": "mcp-" + canonical, "description": "weather"}
-        ]
+        available_tools = [{"name": "mcp-" + canonical, "description": "weather"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "mcp-" + canonical
@@ -552,9 +550,7 @@ class TestGetToolsByNames:
             {"name": "litellm_" + canonical, "description": "wrapped"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == canonical
@@ -567,9 +563,7 @@ class TestGetToolsByNames:
         separator-anchored suffixes of ``litellm_api-fs-read_file``.
         """
         filter_instance = self._make_filter()
-        available_tools = [
-            {"name": "litellm_api-fs-read_file", "description": "read"}
-        ]
+        available_tools = [{"name": "litellm_api-fs-read_file", "description": "read"}]
 
         matched = filter_instance._get_tools_by_names(
             ["fs-read_file", "api-fs-read_file"], available_tools
@@ -590,9 +584,7 @@ class TestGetToolsByNames:
             {"name": "my_" + canonical, "description": "plain search"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "my_" + canonical
@@ -640,3 +632,171 @@ class TestGetToolsByNames:
         )
 
         assert matched == []
+
+
+# ---------------------------------------------------------------------------
+# SemanticToolFilterHook — MCP/non-MCP split + ordering preservation
+# ---------------------------------------------------------------------------
+class _MockSemanticFilter:
+    """
+    Lightweight stub of SemanticMCPToolFilter for hook tests.
+
+    Avoids the embedding-model setup needed by the real filter and lets tests
+    assert directly on the inputs received by ``filter_tools``.
+    """
+
+    def __init__(self, top_k: int = 2):
+        self.enabled = True
+        self.top_k = top_k
+        self.received_tools = None
+        self.received_query = None
+
+    def extract_user_query(self, messages):
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            return block.get("text", "")
+                    return ""
+                return content
+        return ""
+
+    async def filter_tools(self, query, available_tools):
+        self.received_tools = available_tools
+        self.received_query = query
+        return list(available_tools)[: self.top_k]
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_filters_only_mcp_tools():
+    """
+    Only tools whose name starts with ``mcp__`` are semantically filtered.
+    Non-MCP tools (user-defined function tools, model-specific schemas)
+    are passed through untouched and must still be present in the output.
+    """
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    mock_filter = _MockSemanticFilter(top_k=1)
+    hook = SemanticToolFilterHook(mock_filter)
+
+    user_tool = {"type": "function", "function": {"name": "user_lookup"}}
+    mcp_tool_1 = {"type": "function", "function": {"name": "mcp__email_send"}}
+    mcp_tool_2 = {"type": "function", "function": {"name": "mcp__calendar_create"}}
+    builtin_tool = {"type": "function", "function": {"name": "submit_form"}}
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "send email"}],
+        "tools": [user_tool, mcp_tool_1, mcp_tool_2, builtin_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None
+    out_names = [t["function"]["name"] for t in result["tools"]]
+
+    # filter_tools was called with only MCP tools
+    received_names = [
+        t["function"]["name"] for t in mock_filter.received_tools  # type: ignore
+    ]
+    assert received_names == ["mcp__email_send", "mcp__calendar_create"]
+
+    # Non-MCP tools survive the filter pass
+    assert "user_lookup" in out_names
+    assert "submit_form" in out_names
+
+    # Filtered MCP tool count is bounded by top_k
+    mcp_in_output = [n for n in out_names if n.startswith("mcp__")]
+    assert len(mcp_in_output) == 1
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_original_tool_order():
+    """
+    The recombined tool list must preserve the caller's relative ordering of
+    non-MCP tools and place the filtered MCP block where the first MCP tool
+    originally sat. This guards against the naive
+    ``filtered_tools + passthrough_tools`` recombination that re-orders the
+    list and may break order-sensitive clients.
+    """
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    mock_filter = _MockSemanticFilter(top_k=2)
+    hook = SemanticToolFilterHook(mock_filter)
+
+    # Original layout: user, mcp_a, user2, mcp_b, builtin, mcp_c
+    # Expected: user, [filtered MCP block], user2, builtin
+    tools = [
+        {"type": "function", "function": {"name": "user_lookup"}},
+        {"type": "function", "function": {"name": "mcp__email_send"}},
+        {"type": "function", "function": {"name": "user_audit"}},
+        {"type": "function", "function": {"name": "mcp__calendar_create"}},
+        {"type": "function", "function": {"name": "submit_form"}},
+        {"type": "function", "function": {"name": "mcp__calendar_update"}},
+    ]
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "send email"}],
+        "tools": tools,
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None
+    out_names = [t["function"]["name"] for t in result["tools"]]
+
+    # Non-MCP tools must appear in the same relative order as the input
+    non_mcp_positions = [
+        out_names.index(n) for n in ("user_lookup", "user_audit", "submit_form")
+    ]
+    assert non_mcp_positions == sorted(
+        non_mcp_positions
+    ), f"non-MCP tool order must be preserved, got {out_names}"
+
+    # The filtered MCP block must appear at position 1 (after user_lookup,
+    # before user_audit), matching the position of the first MCP tool in
+    # the original list.
+    assert out_names[0] == "user_lookup"
+    assert out_names[1].startswith("mcp__")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_skips_when_no_mcp_tools():
+    """
+    If the request only contains non-MCP tools, the hook must return None
+    rather than mutate the tool list. Non-MCP tools are out of scope for
+    semantic filtering.
+    """
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    hook = SemanticToolFilterHook(_MockSemanticFilter())
+
+    data = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [
+            {"type": "function", "function": {"name": "user_lookup"}},
+            {"type": "function", "function": {"name": "submit_form"}},
+        ],
+        "metadata": {},
+    }
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+    assert result is None
