@@ -341,7 +341,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
 
         return httpx.Response(
             status_code=response.status,
-            headers=response.headers,
+            headers=getattr(response, "raw_headers", response.headers),
             stream=AiohttpResponseStream(response),
             request=request,
         )
