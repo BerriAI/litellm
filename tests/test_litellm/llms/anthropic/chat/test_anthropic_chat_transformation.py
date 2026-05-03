@@ -2078,13 +2078,17 @@ def test_get_config_does_not_leak_module_constants():
         ("claude-opus-4-7", "xhigh", True),
         ("claude-opus-4-6", "max", True),
         ("claude-opus-4-6", "xhigh", False),
-        ("claude-sonnet-4-6", "max", False),
+        # ``max`` is documented as supported on Sonnet 4.6 (Claude 4.6 family).
+        # The model-map JSON now carries ``supports_max_reasoning_effort: true``
+        # for every Sonnet 4.6 entry; ``_supports_effort_level`` should report
+        # ``True`` on every route prefix (anthropic, bedrock, vertex, azure).
+        ("claude-sonnet-4-6", "max", True),
         ("claude-sonnet-4-6", "xhigh", False),
         ("bedrock/invoke/us.anthropic.claude-opus-4-7", "max", True),
         ("bedrock/invoke/us.anthropic.claude-opus-4-7", "xhigh", True),
         ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "max", True),
         ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh", False),
-        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "max", False),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "max", True),
         ("vertex_ai/claude-opus-4-7", "xhigh", True),
         ("azure_ai/claude-opus-4-7", "xhigh", True),
     ],
@@ -2393,25 +2397,40 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
         ), f"output_config should not be set for {model}"
 
 
-def test_max_effort_rejected_for_sonnet_46():
-    """Test that effort='max' is rejected for Sonnet 4.6 (Opus-only effort level).
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6-20260219",
+        "us.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        "vertex_ai/claude-sonnet-4-6",
+        "openrouter/anthropic/claude-sonnet-4.6",
+    ],
+)
+def test_max_effort_accepted_for_sonnet_46_variants(model):
+    """``effort='max'`` is documented as supported on Claude 4.6 (Opus + Sonnet)
+    and Claude 4.7 (https://platform.claude.com/docs/en/build-with-claude/effort).
 
-    Surfaces as a clean 400 BadRequestError, not a 500 ValueError.
+    Earlier versions of this test asserted a 400 for Sonnet 4.6, mirroring an
+    Opus-only allow-list in ``_apply_output_config``. That gate has since been
+    widened to ``_is_claude_4_6_model`` (Opus + Sonnet) and the
+    ``supports_max_reasoning_effort`` JSON flag, matching Anthropic's published
+    matrix. Verify the param actually flows through every Sonnet 4.6 id
+    variant our routing layer might see.
     """
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(
-        litellm.exceptions.BadRequestError,
-        match="effort='max' is not supported by this model",
-    ):
-        config.transform_request(
-            model="claude-sonnet-4-6-20260219",
-            messages=messages,
-            optional_params={"output_config": {"effort": "max"}},
-            litellm_params={},
-            headers={},
-        )
+    result = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
 
 
 def test_max_effort_accepted_for_opus_46():
@@ -2510,24 +2529,37 @@ def test_reasoning_effort_garbage_raises_bad_request(effort):
 
 
 @pytest.mark.parametrize(
-    "effort",
-    ["xhigh", "max"],
+    "effort,expected_budget",
+    [("xhigh", 8192), ("max", 16384)],
 )
-def test_reasoning_effort_unsupported_tier_on_budget_model_raises_bad_request(
-    effort,
+def test_reasoning_effort_xhigh_max_maps_to_budget_on_budget_model(
+    effort, expected_budget
 ):
-    """``xhigh`` / ``max`` aren't defined for budget-mode (4.5) Claude models;
-    surface as a clean 400 instead of 500.
+    """``xhigh`` / ``max`` extend the legacy ``thinking.budget_tokens``
+    progression (low=1024 / medium=2048 / high=4096 → xhigh=8192 / max=16384)
+    on budget-mode Claude models (haiku / 4.5 series).
+
+    Adopted from #27051. Keeps the OpenAI-format ``reasoning_effort`` knob
+    usable across the full Claude lineup — adaptive models (4.6/4.7) route
+    these tiers via ``output_config.effort``; budget-mode models use the
+    extended budget. Anthropic's "max only on Mythos / Opus 4.7 / Opus 4.6 /
+    Sonnet 4.6" gating applies to the *adaptive enum*, not to the legacy
+    ``budget_tokens`` knob, which accepts any integer up to ``max_tokens``.
     """
     config = AnthropicConfig()
 
-    with pytest.raises(litellm.exceptions.BadRequestError):
-        config.map_openai_params(
-            non_default_params={"reasoning_effort": effort},
-            optional_params={},
-            model="claude-sonnet-4-5-20250929",
-            drop_params=False,
-        )
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == expected_budget
+    # Budget-mode models must NOT carry an ``output_config`` payload — that
+    # path is exclusively for adaptive (4.6+) models.
+    assert "output_config" not in result
 
 
 def test_output_config_effort_empty_string_raises_bad_request():

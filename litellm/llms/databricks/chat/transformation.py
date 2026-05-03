@@ -330,8 +330,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             )  # unsupported for claude models - if json_schema -> convert to tool call
 
         if "reasoning_effort" in non_default_params and "claude" in model:
+            # ``_map_reasoning_effort`` raises ``BadRequestError`` (400)
+            # directly on unmapped efforts; pass ``llm_provider="databricks"``
+            # so the surfaced error carries the correct provider name (the
+            # default is ``"anthropic"``, which would mislead users routing
+            # via Databricks Foundation Model APIs).
             optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort=non_default_params.get("reasoning_effort"), model=model
+                reasoning_effort=non_default_params.get("reasoning_effort"),
+                model=model,
+                llm_provider="databricks",
             )
             optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens
