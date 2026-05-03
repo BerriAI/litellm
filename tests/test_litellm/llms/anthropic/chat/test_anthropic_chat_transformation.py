@@ -2159,6 +2159,8 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
         ("medium", 2048),  # DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
         ("high", 4096),  # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
         ("minimal", 128),  # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+        ("xhigh", 8192),  # DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET
+        ("max", 16384),  # DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET
     ]
 
     for effort, expected_budget in test_cases:
