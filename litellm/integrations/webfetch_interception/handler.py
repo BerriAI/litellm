@@ -8,7 +8,6 @@ server-side using litellm router's fetch tools.
 
 import asyncio
 import math
-import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
@@ -25,12 +24,11 @@ from litellm.integrations.webfetch_interception.tools import (
 from litellm.integrations.webfetch_interception.transformation import (
     WebFetchTransformation,
 )
-from litellm.llms.base_llm.fetch.transformation import BaseFetchConfig, WebFetchResponse
+from litellm.llms.base_llm.fetch.transformation import BaseFetchConfig
 from litellm.types.integrations.custom_logger import (
     AgenticLoopPlan,
     AgenticLoopRequestPatch,
 )
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -893,7 +891,6 @@ class WebFetchInterceptionLogger(CustomLogger):
                         url = args.get("url")
                     elif isinstance(args, str):
                         import json
-
                         try:
                             args_dict = json.loads(args)
                             url = args_dict.get("url")
