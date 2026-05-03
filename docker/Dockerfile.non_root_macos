@@ -1,0 +1,261 @@
+# ---- shared versions ----
+ARG PYJWT_VERSION=2.12.0
+ARG PRISMA_PY_VERSION=0.13.1
+ARG NODEJS_WHEEL_BINARIES_VERSION=24.13.1
+ARG SEMANTIC_ROUTER_VERSION=0.1.11
+ARG AURELIO_SDK_VERSION=0.0.19
+
+# ---- builder ----
+FROM python:3.13-slim AS builder
+ARG PROXY_EXTRAS_SOURCE=published
+ARG PYJWT_VERSION
+ARG PRISMA_PY_VERSION
+ARG NODEJS_WHEEL_BINARIES_VERSION
+ARG SEMANTIC_ROUTER_VERSION
+ARG AURELIO_SDK_VERSION
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc g++ \
+    curl ca-certificates \
+    nodejs npm \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip build
+
+COPY requirements.txt .
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt \
+  && pip wheel --no-cache-dir --wheel-dir=/wheels/ \
+    "semantic_router==${SEMANTIC_ROUTER_VERSION}" \
+    "aurelio-sdk==${AURELIO_SDK_VERSION}" \
+    "PyJWT==${PYJWT_VERSION}"
+
+COPY . .
+ENV LITELLM_NON_ROOT=true
+
+RUN mkdir -p /var/lib/litellm/ui && \
+  npm install -g npm@latest && npm cache clean --force && \
+  cd /app/ui/litellm-dashboard && \
+  if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
+    cp /app/enterprise/enterprise_ui/enterprise_colors.json ./ui_colors.json; \
+  fi && \
+  npm install --legacy-peer-deps && \
+  npm run build && \
+  cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \
+  mkdir -p /var/lib/litellm/assets && \
+  cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
+  ( cd /var/lib/litellm/ui && \
+    for html_file in *.html; do \
+      if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
+        folder_name="${html_file%.html}" && \
+        mkdir -p "$folder_name" && \
+        mv "$html_file" "$folder_name/index.html"; \
+      fi; \
+    done && \
+    touch .litellm_ui_ready ) && \
+  cd /app/ui/litellm-dashboard && rm -rf ./out
+
+RUN rm -rf dist/* && python -m build && \
+  rm -f /wheels/litellm-*.whl && \
+  cp dist/*.whl /wheels/
+
+RUN if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
+  cd /app/litellm-proxy-extras && rm -rf dist && python -m build && \
+  cp dist/*.whl /wheels/; \
+  fi
+
+ENV HOME=/app \
+  XDG_CACHE_HOME=/app/.cache \
+  PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+  NPM_CONFIG_CACHE=/app/.cache/npm
+
+RUN pip install --no-cache-dir \
+    "prisma==${PRISMA_PY_VERSION}" \
+    "nodejs-wheel-binaries==${NODEJS_WHEEL_BINARIES_VERSION}" \
+  && mkdir -p /app/.cache/npm
+
+RUN python3 - <<'PY'
+import re
+p="/app/schema.prisma"
+s=open(p,"r",encoding="utf-8").read()
+
+def strip_binary_targets(block: str) -> str:
+    return re.sub(r'^\s*binaryTargets\s*=\s*\[[^\]]*\]\s*\n', '', block, flags=re.M)
+
+pattern = r'(generator\s+\w+\s*\{[^}]*provider\s*=\s*"prisma-client-py"[^}]*\})'
+s2 = re.sub(pattern, lambda m: strip_binary_targets(m.group(1)), s, flags=re.S)
+open(p,"w",encoding="utf-8").write(s2)
+PY
+
+RUN python3 -m prisma generate && \
+  python3 -m prisma --version && \
+  python3 -m prisma migrate diff --from-empty --to-schema-datamodel ./schema.prisma --script > /dev/null
+
+
+# ---- runtime ----
+FROM python:3.13-slim AS runtime
+ARG PROXY_EXTRAS_SOURCE=published
+ARG PYJWT_VERSION
+ARG PRISMA_PY_VERSION
+ARG NODEJS_WHEEL_BINARIES_VERSION
+ARG SEMANTIC_ROUTER_VERSION
+ARG AURELIO_SDK_VERSION
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates bash openssl \
+    supervisor \
+    libatomic1 \
+    nodejs npm \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/requirements.txt /app/requirements.txt
+COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
+COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
+COPY --from=builder /app/schema.prisma /app/schema.prisma
+COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
+COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
+COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
+COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
+COPY --from=builder /wheels /wheels
+COPY --from=builder /app/.cache/prisma-python /app/.cache/prisma-python
+
+ENV LITELLM_NON_ROOT=true \
+  HOME=/app \
+  XDG_CACHE_HOME=/app/.cache \
+  PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
+  PRISMA_CLI_BINARY_TARGETS=debian-openssl-3.0.x \
+  PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
+  PRISMA_HIDE_UPDATE_MESSAGE=1 \
+  PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
+  NPM_CONFIG_PREFER_OFFLINE=true \
+  PRISMA_OFFLINE_MODE=true \
+  NPM_CONFIG_CACHE=/app/.cache/npm \
+  LITELLM_MIGRATION_DIR=/app/.litellm_migrations
+
+RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
+  pip install --no-index --find-links=/wheels/ /wheels/litellm-*-py3-none-any.whl && \
+  pip install --no-index --find-links=/wheels/ --no-deps "semantic_router==${SEMANTIC_ROUTER_VERSION}" && \
+  pip install --no-index --find-links=/wheels/ "aurelio-sdk==${AURELIO_SDK_VERSION}" && \
+  pip install --no-cache-dir \
+    "prisma==${PRISMA_PY_VERSION}" \
+    "nodejs-wheel-binaries==${NODEJS_WHEEL_BINARIES_VERSION}" && \
+  if [ "$PROXY_EXTRAS_SOURCE" = "local" ]; then \
+    if ls /wheels/litellm_proxy_extras-*.whl >/dev/null 2>&1; then \
+      pip install --no-index --find-links=/wheels/ /wheels/litellm_proxy_extras-*.whl; \
+    fi; \
+  fi && \
+  pip install --no-index --find-links=/wheels/ "PyJWT==${PYJWT_VERSION}" && \
+  rm -rf /wheels
+
+RUN python3 -m prisma generate
+
+RUN python3 - <<'PY'
+import site, pathlib, subprocess, tarfile, tempfile, shutil, sys, inspect
+
+SAFE = {
+    "tar": ("tar", "7.5.11"),
+    "glob": ("glob", "11.1.0"),
+    "brace-expansion": ("@isaacs/brace-expansion", "5.0.1"),
+    "minimatch": ("minimatch", "10.2.4"),
+    "diff": ("diff", "8.0.3"),
+}
+
+def warn(msg: str) -> None:
+    print(msg, file=sys.stderr)
+
+roots = [pathlib.Path(p) for p in site.getsitepackages() if p]
+try:
+    roots.append(pathlib.Path(site.getusersitepackages()))
+except Exception:
+    pass
+
+def safe_extract(tf: tarfile.TarFile, path: pathlib.Path) -> None:
+    sig = inspect.signature(tf.extractall)
+    if "filter" in sig.parameters:
+        tf.extractall(path, filter="data")
+        return
+    for m in tf.getmembers():
+        n = m.name
+        if n.startswith("/") or ".." in pathlib.PurePosixPath(n).parts:
+            raise RuntimeError(f"Unsafe path in tar: {n}")
+    tf.extractall(path)
+
+def is_node_modules_pkg_dir(d: pathlib.Path) -> bool:
+    if d.parent.name == "node_modules":
+        return True
+    if d.parent.parent and d.parent.parent.name == "node_modules" and d.parent.name.startswith("@"):
+        return True
+    return False
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    tmpdir = pathlib.Path(tmpdir)
+    packed_sources: dict[str, pathlib.Path] = {}
+
+    for folder_name, (npm_name, ver) in SAFE.items():
+        try:
+            cmd = f"cd '{tmpdir}' && npm pack --silent {npm_name}@{ver}"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if result.returncode != 0:
+                warn(f"Warning: failed to pack {npm_name}@{ver} (exit {result.returncode}); skipping")
+                continue
+
+            tgz = result.stdout.strip().splitlines()[-1]
+            tgz_path = tmpdir / tgz
+            if not tgz_path.exists():
+                warn(f"Warning: npm pack did not produce expected file {tgz_path}; skipping {npm_name}@{ver}")
+                continue
+
+            extract_dir = tmpdir / f"extract-{folder_name}"
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+
+            with tarfile.open(tgz_path, "r:gz") as tf:
+                safe_extract(tf, extract_dir)
+
+            pkg_dir = extract_dir / "package"
+            if not pkg_dir.exists():
+                warn(f"Warning: unexpected npm pack layout for {npm_name}@{ver}; skipping")
+                continue
+
+            packed_sources[folder_name] = pkg_dir
+        except Exception as e:
+            warn(f"Warning: exception while packing/extracting {npm_name}@{ver}: {e}; skipping")
+
+    total_replaced = 0
+    for folder_name, src_pkg_dir in packed_sources.items():
+        for root in roots:
+            if not root.exists():
+                continue
+            try:
+                for d in root.rglob(folder_name):
+                    if d.is_dir() and is_node_modules_pkg_dir(d):
+                        try:
+                            shutil.rmtree(d)
+                            shutil.copytree(src_pkg_dir, d, symlinks=True)
+                            total_replaced += 1
+                        except Exception as e:
+                            warn(f"Warning: failed to replace {folder_name} at {d}: {e}")
+            except Exception as e:
+                warn(f"Warning: error scanning {root} for {folder_name}: {e}")
+
+    warn(f"Soft-mode npm patch complete. Total directories replaced: {total_replaced}")
+PY
+
+RUN sed -i 's/\r$//' /app/docker/entrypoint.sh && \
+  sed -i 's/\r$//' /app/docker/prod_entrypoint.sh && \
+  chmod +x /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh && \
+  mkdir -p /app/.litellm_migrations /app/.cache/npm && \
+  chown -R 65534:65534 /app /var/lib/litellm/ui /var/lib/litellm/assets /app/.cache/prisma-python
+
+RUN apt-get purge -y --auto-remove npm && \
+  rm -rf /var/lib/apt/lists/* /app/.cache/npm
+
+USER 65534:65534
+
+EXPOSE 4000
+ENTRYPOINT ["/app/docker/prod_entrypoint.sh"]
+CMD ["--port", "4000"]
