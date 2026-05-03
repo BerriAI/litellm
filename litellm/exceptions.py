@@ -955,7 +955,12 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         is_pre_first_chunk: bool = False,
     ):
         original_status = getattr(original_exception, "status_code", None)
-        self.status_code = int(original_status) if original_status is not None else 503
+        try:
+            self.status_code = (
+                int(original_status) if original_status is not None else 503
+            )
+        except (ValueError, TypeError):
+            self.status_code = 503
         self.message = f"litellm.MidStreamFallbackError: {message}"
         self.model = model
         self.llm_provider = llm_provider
@@ -997,7 +1002,12 @@ class MidStreamFallbackError(ServiceUnavailableError):  # type: ignore
         )
 
         # Restore the propagated status and original response/request objects
-        self.status_code = int(original_status) if original_status is not None else 503
+        try:
+            self.status_code = (
+                int(original_status) if original_status is not None else 503
+            )
+        except (ValueError, TypeError):
+            self.status_code = 503
         self.response = _saved_response
         self.request = _saved_request
         self.message = _saved_message
