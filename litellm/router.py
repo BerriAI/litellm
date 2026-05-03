@@ -90,6 +90,7 @@ from litellm.router_utils.batch_utils import (
 )
 from litellm.router_utils.client_initalization_utils import InitalizeCachedClient
 from litellm.router_utils.clientside_credential_handler import (
+    clientside_credential_keys,
     get_dynamic_litellm_params,
     is_clientside_credential,
 )
@@ -2365,6 +2366,26 @@ class Router:
         if "tool_choice" not in kwargs and dep_params.get("tool_choice") is not None:
             kwargs["tool_choice"] = dep_params["tool_choice"]
 
+    @staticmethod
+    def _drop_none_clientside_credentials_from_kwargs(
+        deployment: dict, kwargs: dict
+    ) -> None:
+        """
+        Preserve deployment credentials when wrappers pass explicit None values.
+
+        Some SDK wrappers include fields like api_base=None in every call. Treat
+        those as absent, otherwise the request-level merge would erase a
+        configured deployment endpoint/key.
+        """
+        dep_params = deployment.get("litellm_params", {}) or {}
+        for key in clientside_credential_keys:
+            if (
+                key in kwargs
+                and kwargs.get(key) is None
+                and dep_params.get(key) is not None
+            ):
+                kwargs.pop(key, None)
+
     def _update_kwargs_with_deployment(
         self,
         deployment: dict,
@@ -2378,6 +2399,9 @@ class Router:
         - Merges tools from deployment with request (proxy-configured tools + request tools).
         """
         self._merge_tools_from_deployment(deployment=deployment, kwargs=kwargs)
+        self._drop_none_clientside_credentials_from_kwargs(
+            deployment=deployment, kwargs=kwargs
+        )
 
         model_info = deployment.get("model_info", {}).copy()
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
