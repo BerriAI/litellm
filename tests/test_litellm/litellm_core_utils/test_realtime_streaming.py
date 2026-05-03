@@ -254,6 +254,50 @@ async def test_transcription_captured_in_backend_to_client():
     assert logging_obj.model_call_details["messages"] == streaming.input_messages
 
 
+@pytest.mark.asyncio
+async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup():
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+
+    # Two session.update messages arrive before setupComplete round-trip.
+    websocket.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps({"type": "session.update", "session": {"tools": []}}),
+            json.dumps({"type": "session.update", "session": {"tools": []}}),
+            Exception("client done"),
+        ]
+    )
+
+    provider_config = MagicMock()
+
+    def _transform(message: str, model: str, session_configuration_request=None):
+        if session_configuration_request is None:
+            return [json.dumps({"setup": {"model": "models/gemini-2.5-flash"}})]
+        return []
+
+    provider_config.transform_realtime_request = MagicMock(side_effect=_transform)
+
+    backend_ws.send = AsyncMock()
+
+    streaming = RealTimeStreaming(
+        websocket=websocket,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+
+    await streaming.client_ack_messages()
+
+    # Setup should be forwarded exactly once even with repeated session.update.
+    assert backend_ws.send.await_count == 1
+    assert streaming.session_configuration_request is not None
+    sent_payload = json.loads(backend_ws.send.await_args_list[0].args[0])
+    assert "setup" in sent_payload
+
+
 def test_collect_session_tools_from_session_update():
     """
     Test that tools from session.update events are collected.
@@ -924,3 +968,205 @@ async def test_on_violation_end_session_closes_on_first_fail():
     assert streaming._violation_count == 1
 
     litellm.callbacks = []  # cleanup
+
+
+@pytest.mark.asyncio
+async def test_provider_path_suppresses_duplicate_session_created_after_synthetic():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[b'{"setupComplete": {}}', ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [
+                {
+                    "type": "session.created",
+                    "event_id": "event_1",
+                    "session": {"id": "sess_1", "modalities": ["audio"]},
+                }
+            ],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    # Simulate synthetic session.created already sent by llm_http_handler.
+    streaming._session_created_sent_to_client = True
+
+    await streaming.backend_to_client_send_messages()
+
+    sent_payloads = [json.loads(c.args[0]) for c in client_ws.send_text.call_args_list]
+    assert not any(
+        payload.get("type") == "session.created" for payload in sent_payloads
+    ), f"Expected duplicate session.created to be suppressed, got: {sent_payloads}"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_session_created_still_triggers_guardrail_turn_detection_update():
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+
+    backend_ws = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[b'{"setupComplete": {}}', ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [
+                {
+                    "type": "session.created",
+                    "event_id": "event_1",
+                    "session": {"id": "sess_1", "modalities": ["audio"]},
+                }
+            ],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    # Synthetic session.created already sent by llm_http_handler.
+    streaming._session_created_sent_to_client = True
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+    streaming._send_to_backend = AsyncMock()  # type: ignore[method-assign]
+
+    await streaming.backend_to_client_send_messages()
+
+    # Duplicate session.created should still cause the one-time guardrail
+    # turn_detection update to be sent to backend.
+    assert streaming._send_to_backend.await_count == 1
+    sent_update = json.loads(streaming._send_to_backend.await_args_list[0].args[0])
+    assert sent_update["type"] == "session.update"
+    assert sent_update["session"]["turn_detection"]["create_response"] is False
+
+
+@pytest.mark.asyncio
+async def test_guardrail_update_respects_idempotency_flag():
+    """Verify guardrail turn-detection update uses idempotency flag correctly."""
+    client_ws = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_request = MagicMock(
+        side_effect=lambda msg, model, session_config: [msg]
+    )
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+    
+    # First call should send the update
+    assert streaming._guardrail_turn_detection_update_sent is False
+    await streaming._maybe_send_guardrail_turn_detection_update()
+    assert streaming._guardrail_turn_detection_update_sent is True
+    assert backend_ws.send.await_count == 1
+    
+    # Second call should be a no-op (idempotent)
+    await streaming._maybe_send_guardrail_turn_detection_update()
+    assert backend_ws.send.await_count == 1  # Still 1, not 2
+
+
+@pytest.mark.asyncio
+async def test_guardrail_turn_detection_injected_into_first_session_update_deferred_mode():
+    """Verify turn_detection is injected into first session.update in deferred mode."""
+    client_ws = AsyncMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            json.dumps({
+                "type": "session.update",
+                "session": {
+                    "modalities": ["text", "audio"],
+                    "tools": [{"type": "function", "name": "get_weather"}],
+                }
+            }),
+            ConnectionClosed(None, None),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+
+    provider_config = MagicMock()
+    transformed_messages = []
+    def mock_transform(msg, model, session_config):
+        transformed_messages.append((msg, session_config))
+        return [msg]  # Pass through for simplicity
+    provider_config.transform_realtime_request = MagicMock(side_effect=mock_transform)
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+    streaming._has_audio_transcription_guardrails = MagicMock(return_value=True)  # type: ignore[method-assign]
+    
+    # Simulate first session.update in deferred mode
+    await streaming.client_ack_messages()
+    
+    # Verify turn_detection was injected into the session.update
+    assert len(transformed_messages) == 1
+    transformed_msg, session_config = transformed_messages[0]
+    msg_obj = json.loads(transformed_msg)
+    assert msg_obj["type"] == "session.update"
+    assert "turn_detection" in msg_obj["session"]
+    assert msg_obj["session"]["turn_detection"]["create_response"] is False
+    assert streaming._guardrail_turn_detection_update_sent is True

@@ -14,6 +14,7 @@ Auth: OAuth2 Bearer token (not an API key).
 import json
 from typing import List, Optional
 
+from litellm import verbose_logger
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
 
@@ -138,6 +139,36 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     # Request translation
     # ------------------------------------------------------------------
 
+    def _build_vertex_ai_setup_config(self, model: str, session_params: dict) -> dict:
+        """Build Vertex AI setup configuration with proper model path and defaults."""
+        setup_config = self.map_openai_params(
+            optional_params={}, non_default_params=session_params
+        )
+        
+        # Use full Vertex AI model path
+        setup_config["model"] = (
+            f"projects/{self._project}"
+            f"/locations/{self._location}"
+            f"/publishers/google/models/{model}"
+        )
+        
+        # Add Vertex AI specific defaults if not provided
+        generation_config = setup_config.setdefault("generationConfig", {})
+        generation_config.setdefault("responseModalities", ["AUDIO"])
+        setup_config.setdefault(
+            "realtimeInputConfig",
+            {
+                "automaticActivityDetection": {
+                    "disabled": False,
+                    "silenceDurationMs": 800,
+                }
+            },
+        )
+        setup_config.setdefault("inputAudioTranscription", {})
+        setup_config.setdefault("outputAudioTranscription", {})
+        
+        return setup_config
+
     def transform_realtime_request(
         self,
         message: str,
@@ -146,19 +177,33 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     ) -> List[str]:
         """
         Translate OpenAI realtime client messages to Vertex AI format.
-
-        ``session.update`` is intentionally ignored (returns []) because
-        Vertex AI only accepts a single ``setup`` message at the start of
-        the connection — sending a second one causes a 1007 close error.
-        The initial setup (sent automatically before bidirectional_forward)
-        already includes AUDIO modality and server VAD, so there is nothing
-        more to configure.
+        
+        Handles session.update by sending setup with proper Vertex AI model path.
         """
         json_message = json.loads(message)
-        if json_message.get("type") == "session.update":
-            # Do not forward as a second setup — Vertex AI rejects it.
-            return []
-
+        msg_type = json_message.get("type")
+        
+        # Handle session.update with Vertex AI specific model path
+        if msg_type == "session.update":
+            if session_configuration_request is None:
+                # First session.update - send the setup with Vertex AI configuration
+                setup_config = self._build_vertex_ai_setup_config(
+                    model, json_message["session"]
+                )
+                gemini_setup_msg = json.dumps({"setup": setup_config})
+                
+                verbose_logger.debug(
+                    "Vertex AI Realtime: Sending initial setup with tools to backend"
+                )
+                return [gemini_setup_msg]
+            else:
+                # Subsequent session.update - ignore
+                verbose_logger.debug(
+                    "Vertex AI Realtime: Ignoring session.update (setup already sent)"
+                )
+                return []
+        
+        # For other message types, use parent's logic
         return super().transform_realtime_request(
             message, model, session_configuration_request
         )

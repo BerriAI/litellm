@@ -5194,6 +5194,22 @@ class BaseLLMHTTPHandler:
                 )
                 if _session_config:
                     realtime_streaming.session_configuration_request = _session_config
+                
+                # For providers that defer setup until client session.update, optionally
+                # send synthetic session.created to unblock clients waiting on connect.
+                if not provider_config.requires_session_configuration():
+                    synthetic_session = provider_config.transform_session_created_event(
+                        model=model,
+                        logging_session_id=logging_obj.litellm_trace_id,
+                        session_configuration_request=None,
+                    )
+                    if synthetic_session is not None:
+                        await websocket.send_text(json.dumps(synthetic_session))
+                        realtime_streaming._session_created_sent_to_client = True
+                        verbose_logger.debug(
+                            "Sent synthetic session.created to client to unblock connection"
+                        )
+                
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore

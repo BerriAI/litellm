@@ -69,6 +69,20 @@ class BaseRealtimeConfig(ABC):
     ) -> Optional[str]:  # message sent to setup the realtime session
         return None
 
+    def transform_session_created_event(
+        self,
+        model: str,
+        logging_session_id: str,
+        session_configuration_request: Optional[str] = None,
+    ) -> Optional[dict]:
+        """
+        Optional hook for providers that defer session setup until client `session.update`.
+
+        Return an OpenAI-compatible `session.created` payload when the proxy should
+        emit a synthetic event immediately after backend websocket connection.
+        """
+        return None
+
     @abstractmethod
     def transform_realtime_response(
         self,
