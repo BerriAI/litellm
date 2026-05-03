@@ -7487,6 +7487,7 @@ class ProxyStartupEvent:
         Requires: pip install pyroscope-io (optional dependency).
         When enabled, PYROSCOPE_SERVER_ADDRESS and PYROSCOPE_APP_NAME are required (no defaults).
         Optional: PYROSCOPE_SAMPLE_RATE (parsed as integer) to set the sample rate.
+        Optional: PYROSCOPE_GRAFANA_USER and PYROSCOPE_GRAFANA_API_TOKEN for Grafana Cloud basic auth.
         """
         if not get_secret_bool("LITELLM_ENABLE_PYROSCOPE", False):
             verbose_proxy_logger.debug(
@@ -7515,11 +7516,30 @@ class ProxyStartupEvent:
             if env_name:
                 tags["environment"] = env_name
             sample_rate_env = os.getenv("PYROSCOPE_SAMPLE_RATE")
+            grafana_pyroscope_user = get_secret_str(
+                "PYROSCOPE_GRAFANA_USER", default_value=None
+            )
+            grafana_api_token = get_secret_str(
+                "PYROSCOPE_GRAFANA_API_TOKEN", default_value=None
+            )
+            if grafana_api_token and not grafana_pyroscope_user:
+                raise ValueError(
+                    "PYROSCOPE_GRAFANA_API_TOKEN is set but PYROSCOPE_GRAFANA_USER is not set. "
+                    "Set PYROSCOPE_GRAFANA_USER to the Grafana Cloud Pyroscope user/tenant id."
+                )
+            if grafana_pyroscope_user and not grafana_api_token:
+                raise ValueError(
+                    "PYROSCOPE_GRAFANA_USER is set but PYROSCOPE_GRAFANA_API_TOKEN is not set. "
+                    "Set PYROSCOPE_GRAFANA_API_TOKEN to the Grafana Cloud API/access policy token."
+                )
             configure_kwargs = {
-                "app_name": app_name,
+                "application_name": app_name,
                 "server_address": server_address,
                 "tags": tags if tags else None,
             }
+            if grafana_api_token and grafana_pyroscope_user:
+                configure_kwargs["basic_auth_username"] = grafana_pyroscope_user
+                configure_kwargs["basic_auth_password"] = grafana_api_token
             if sample_rate_env is not None:
                 try:
                     # pyroscope-io expects sample_rate as an integer
