@@ -586,6 +586,36 @@ class SearchToolTypedDict(TypedDict, total=False):
     search_tool_info: SearchToolInfoTypedDict
 
 
+class FetchToolLiteLLMParams(TypedDict, total=False):
+    """
+    LiteLLM params for fetch tools.
+    """
+
+    fetch_provider: Required[str]
+    api_key: Optional[str]
+    api_base: Optional[str]
+    timeout: Optional[Union[float, str, httpx.Timeout]]
+    max_retries: Optional[int]
+
+
+class FetchToolTypedDict(TypedDict, total=False):
+    """
+    Configuration for a fetch tool in the router.
+
+    Example:
+        {
+            "fetch_tool_name": "litellm-fetch",
+            "litellm_params": {
+                "fetch_provider": "firecrawl",
+                "api_key": "os.environ/FIRECRAWL_API_KEY"
+            }
+        }
+    """
+
+    fetch_tool_name: Required[str]
+    litellm_params: Required[FetchToolLiteLLMParams]
+
+
 class GuardrailLiteLLMParams(TypedDict, total=False):
     """
     LiteLLM params for guardrails.

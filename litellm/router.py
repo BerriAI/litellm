@@ -148,6 +148,7 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    FetchToolTypedDict,
     GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
@@ -239,6 +240,8 @@ class Router:
         assistants_config: Optional[AssistantsTypedDict] = None,
         ## SEARCH API ##
         search_tools: Optional[List[SearchToolTypedDict]] = None,
+        ## FETCH API ##
+        fetch_tools: Optional[List[FetchToolTypedDict]] = None,
         ## GUARDRAIL API ##
         guardrail_list: Optional[List[GuardrailTypedDict]] = None,
         ## CACHING ##
@@ -411,6 +414,7 @@ class Router:
 
         self.assistants_config = assistants_config
         self.search_tools = search_tools or []
+        self.fetch_tools = fetch_tools or []
         self.guardrail_list = guardrail_list or []
         self.deployment_names: List = (
             []
