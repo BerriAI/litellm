@@ -61,8 +61,19 @@ jobs:
         run: |
           diff -q /tmp/snapshot.fresh.json litellm/proxy/_lazy_openapi_snapshot.json
 
+      # Fork PRs use a read-only GITHUB_TOKEN; posting check runs fails with
+      # "Resource not accessible by integration". Same-repo PRs can mark neutral.
+      - name: Note snapshot drift (fork PRs)
+        if: >-
+          steps.diff.outcome == 'failure' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::notice::Lazy OpenAPI snapshot differs from committed file. Fork PRs cannot post a neutral check. To refresh: uv run python -m litellm.proxy._lazy_openapi_snapshot && commit litellm/proxy/_lazy_openapi_snapshot.json"
+
       - name: Mark neutral if drift
-        if: steps.diff.outcome == 'failure'
+        if: >-
+          steps.diff.outcome == 'failure' &&
+          github.event.pull_request.head.repo.full_name == github.repository
         uses: LouisBrunner/checks-action@6b626ffbad7cc56fd58627f774b9067e6118af23 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
