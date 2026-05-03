@@ -2,7 +2,7 @@ import os
 import re
 import sys
 from functools import lru_cache
-from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple, Union
 
 from fastapi import HTTPException, Request, status
 
@@ -173,9 +173,67 @@ def _allow_model_level_clientside_configurable_parameters(
 # threat shape should be added here.
 _NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config",)
 
-# Banned root-level params. Same list applies to every entry in
-# ``_NESTED_CONFIG_KEYS`` because those dicts get spread as ``**kwargs``
-# into the same outbound calls.
+# Metadata containers that carry per-request configuration consumed by the
+# observability callbacks. The same banned-param list applies — a value
+# under ``metadata.langfuse_host`` redirects the same Langfuse client and
+# leaks the same credentials as the root-level ``langfuse_host``, but the
+# original check only walked the request-body root, so the metadata path
+# was an unintentional bypass.
+_NESTED_METADATA_KEYS: Tuple[str, ...] = ("metadata", "litellm_metadata")
+
+# Banned request-body params. The same list applies to every entry in
+# ``_NESTED_CONFIG_KEYS`` (dicts spread as ``**kwargs`` into outbound
+# calls) and ``_NESTED_METADATA_KEYS`` (dicts read directly by integration
+# callbacks), so a single banned name is enforced wherever the field can
+# reach the call path from.
+# Per-request observability params that are SAFE to accept from clients.
+# These describe the request being logged (prompt version, sampling rate)
+# without choosing the destination or the credentials, so they don't
+# contribute to the data-exfil primitive that the rest of
+# ``_supported_callback_params`` does.
+_SAFE_CLIENT_CALLBACK_PARAMS: FrozenSet[str] = frozenset(
+    {
+        "langfuse_prompt_version",
+        "langsmith_sampling_rate",
+    }
+)
+
+# Observability fields that integrations read from the request body or
+# metadata but that are not (yet) listed in ``_supported_callback_params``.
+# Listed here so the proxy bans them today; the long-term cleanup is to
+# fold these into the canonical allowlist so they share one source of
+# truth with the rest.
+_EXTRA_BANNED_OBSERVABILITY_PARAMS: FrozenSet[str] = frozenset(
+    {
+        "posthog_api_url",
+        "phoenix_project_name",
+        "wandb_api_key",
+        "weave_project_id",
+    }
+)
+
+
+def _build_banned_observability_params() -> FrozenSet[str]:
+    """Derive the observability ban list from the canonical allowlist.
+
+    ``_supported_callback_params`` in
+    ``litellm/litellm_core_utils/initialize_dynamic_callback_params.py`` is
+    the single place that enumerates every observability field
+    integrations resolve from kwargs/metadata. Subtract the small set of
+    informational fields (``_SAFE_CLIENT_CALLBACK_PARAMS``) and union with
+    the extras the canonical allowlist hasn't caught up to yet. New
+    integrations added to the canonical allowlist are banned by default,
+    which is the safe failure mode.
+    """
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        _supported_callback_params,
+    )
+
+    return (
+        frozenset(_supported_callback_params) - _SAFE_CLIENT_CALLBACK_PARAMS
+    ) | _EXTRA_BANNED_OBSERVABILITY_PARAMS
+
+
 _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "api_base",
     "base_url",
@@ -190,11 +248,6 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     # tokens) to the attacker's host, or coerces the proxy into
     # authenticating against the attacker's host with admin secrets.
     "aws_bedrock_runtime_endpoint",
-    "langsmith_base_url",
-    "langfuse_host",
-    "posthog_host",
-    "braintrust_host",
-    "slack_webhook_url",
     # Provider-specific endpoint overrides that flow into the outbound
     # request via ``optional_params``. Same threat as ``api_base``:
     # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
@@ -203,6 +256,11 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "s3_endpoint_url",
     "sagemaker_base_url",
     "deployment_url",
+    # Observability credentials, hosts, and project identifiers: derived
+    # from the canonical ``_supported_callback_params`` allowlist so new
+    # integrations are covered automatically. Sorted for stable iteration
+    # order and reviewable diffs.
+    *sorted(_build_banned_observability_params()),
 )
 
 
@@ -275,7 +333,31 @@ def is_request_body_safe(
         nested = request_body.get(nested_key)
         if isinstance(nested, dict):
             _check_banned_params(nested, general_settings, llm_router, model)
+    for metadata_key in _NESTED_METADATA_KEYS:
+        metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
+        if metadata is not None:
+            _check_banned_params(metadata, general_settings, llm_router, model)
     return True
+
+
+def _coerce_metadata_to_dict(value: Any) -> Optional[Dict[str, Any]]:
+    """Return ``value`` as a dict, parsing it from JSON if delivered as a string.
+
+    Multipart/form-data and ``extra_body`` callers send ``litellm_metadata``
+    as a JSON-encoded string; the proxy parses it into a dict later in
+    ``add_litellm_data_to_request``, but the auth-time bouncer runs first
+    and would otherwise miss the banned-param check on a still-stringified
+    metadata blob.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
+        parsed = safe_json_loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 async def pre_db_read_auth_checks(
