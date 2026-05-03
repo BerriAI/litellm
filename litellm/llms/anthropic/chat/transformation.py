@@ -1152,8 +1152,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                                     f"'medium', 'high', 'xhigh', 'max', 'none'"
                                 ),
                                 model=model,
-                                llm_provider=self.custom_llm_provider
-                                or "anthropic",
+                                llm_provider=self.custom_llm_provider or "anthropic",
                             )
                         optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
