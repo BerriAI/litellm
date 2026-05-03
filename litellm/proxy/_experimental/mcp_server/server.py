@@ -6,6 +6,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import json
 import time
 import types
 import traceback
@@ -236,12 +237,22 @@ if MCP_AVAILABLE:
     sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
 
     # Create session managers
-    session_manager = StreamableHTTPSessionManager(
+    session_manager_stateless = StreamableHTTPSessionManager(
         app=server,
         event_store=None,
         json_response=False,  # enables SSE streaming
         stateless=True,
     )
+
+    session_manager_stateful = StreamableHTTPSessionManager(
+        app=server,
+        event_store=None,  # TODO: Add EventStore for reconnection/event replay if needed
+        json_response=False,  # enables SSE streaming
+        stateless=False,
+    )
+
+    # Keep this alias so existing references to session_manager still work
+    session_manager = session_manager_stateless
 
     # Create SSE session manager
     sse_session_manager = StreamableHTTPSessionManager(
@@ -253,11 +264,12 @@ if MCP_AVAILABLE:
 
     # Context managers for proper lifecycle management
     _session_manager_cm = None
+    _session_manager_stateful_cm = None
     _sse_session_manager_cm = None
 
     async def initialize_session_managers():
         """Initialize the session managers. Can be called from main app lifespan."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm
 
         # Use async lock to prevent concurrent initialization
         async with _INITIALIZATION_LOCK:
@@ -267,11 +279,13 @@ if MCP_AVAILABLE:
             verbose_logger.info("Initializing MCP session managers...")
 
             # Start the session managers with context managers
-            _session_manager_cm = session_manager.run()
+            _session_manager_cm = session_manager_stateless.run()
+            _session_manager_stateful_cm = session_manager_stateful.run()
             _sse_session_manager_cm = sse_session_manager.run()
 
             # Enter the context managers
             await _session_manager_cm.__aenter__()
+            await _session_manager_stateful_cm.__aenter__()
             await _sse_session_manager_cm.__aenter__()
 
             _SESSION_MANAGERS_INITIALIZED = True
@@ -281,7 +295,7 @@ if MCP_AVAILABLE:
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _sse_session_manager_cm
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm
 
         if _SESSION_MANAGERS_INITIALIZED:
             verbose_logger.info("Shutting down MCP session managers...")
@@ -289,12 +303,15 @@ if MCP_AVAILABLE:
             try:
                 if _session_manager_cm:
                     await _session_manager_cm.__aexit__(None, None, None)
+                if _session_manager_stateful_cm:
+                    await _session_manager_stateful_cm.__aexit__(None, None, None)
                 if _sse_session_manager_cm:
                     await _sse_session_manager_cm.__aexit__(None, None, None)
             except Exception as e:
                 verbose_logger.exception(f"Error during session manager shutdown: {e}")
 
             _session_manager_cm = None
+            _session_manager_stateful_cm = None
             _sse_session_manager_cm = None
             _SESSION_MANAGERS_INITIALIZED = False
 
@@ -360,7 +377,7 @@ if MCP_AVAILABLE:
 
     @server.call_tool()
     async def mcp_server_tool_call(
-        name: str, arguments: Dict[str, Any] | None
+        name: str, arguments: Optional[Dict[str, Any]]
     ) -> CallToolResult:
         """
         Call a specific tool with the provided arguments
@@ -403,7 +420,7 @@ if MCP_AVAILABLE:
                 if host_token and hasattr(host_ctx, "session") and host_ctx.session:
                     host_session = host_ctx.session
 
-                    async def forward_progress(progress: float, total: float | None):
+                    async def forward_progress(progress: float, total: Optional[float]):
                         """Forward progress notifications from external MCP to Host"""
                         try:
                             await host_session.send_progress_notification(
@@ -545,7 +562,7 @@ if MCP_AVAILABLE:
 
     @server.get_prompt()
     async def get_prompt(
-        name: str, arguments: dict[str, str] | None
+        name: str, arguments: Optional[Dict[str, str]]
     ) -> GetPromptResult:
         """
         Get a specific prompt with the provided arguments
@@ -2579,6 +2596,39 @@ if MCP_AVAILABLE:
             raw_headers,
         )
 
+    def _get_session_id_from_scope(scope: Scope) -> Optional[str]:
+        """
+        Extract mcp-session-id from ASGI scope headers.
+        Returns None if not present.
+        """
+        for header_name, header_value in scope.get("headers", []):
+            name = (
+                header_name if isinstance(header_name, bytes) else header_name.encode()
+            )
+            if name.lower() == b"mcp-session-id":
+                return (
+                    header_value.decode()
+                    if isinstance(header_value, bytes)
+                    else str(header_value)
+                )
+        return None
+
+    def _is_initialize_request(body: bytes) -> bool:
+        """
+        Check if the request body is a JSON-RPC initialize method.
+        Returns True if method is "initialize", False otherwise or on parse error.
+
+        Note: Assumes the body fits in a single ASGI receive() chunk. MCP initialize
+        requests are typically small; large chunked bodies may not be fully parsed.
+        """
+        if not body:
+            return False
+        try:
+            data = json.loads(body)
+            return isinstance(data, dict) and data.get("method") == "initialize"
+        except (json.JSONDecodeError, TypeError):
+            return False
+
     async def _handle_stale_mcp_session(
         scope: Scope,
         receive: Receive,
@@ -2724,7 +2774,7 @@ if MCP_AVAILABLE:
             )
         return user_api_key_auth.model_copy(update={"object_permission": updated_op})
 
-    async def handle_streamable_http_mcp(
+    async def handle_streamable_http_mcp(  # noqa: PLR0915
         scope: Scope, receive: Receive, send: Send
     ) -> None:
         """Handle MCP requests through StreamableHTTP."""
@@ -2827,10 +2877,48 @@ if MCP_AVAILABLE:
                 # Give it a moment to start up
                 await asyncio.sleep(0.1)
 
+            # Route based on mcp-session-id and request method:
+            # - Has session ID → stateful (Claude Code, Cursor, VSCode)
+            # - No session ID + initialize → stateful (so client gets mcp-session-id)
+            # - No session ID + other → stateless (curl, Inspector, Notion)
+            session_id = _get_session_id_from_scope(scope)
+            is_initialize = False
+            first_msg = None
+
+            if scope.get("method") == "POST" and not session_id:
+                # Peek at first chunk to detect initialize (assumes body fits in one chunk)
+                first_msg = await receive()
+                body = first_msg.get("body", b"") or b""
+                is_initialize = _is_initialize_request(body)
+
+            use_stateful = bool(session_id or is_initialize)
+            target_manager = (
+                session_manager_stateful if use_stateful else session_manager_stateless
+            )
+
+            verbose_logger.debug(
+                f"MCP routing to {'stateful' if use_stateful else 'stateless'} manager"
+                + (f" (session={session_id[:8]}...)" if session_id else "")
+                + (" (initialize)" if is_initialize else "")
+            )
+
+            # Replay first message if we consumed it for peeking
+            original_receive = receive
+            if first_msg is not None:
+
+                async def wrapped_receive():
+                    nonlocal first_msg
+                    if first_msg is not None:
+                        msg, first_msg = first_msg, None
+                        return msg
+                    return await original_receive()
+
+                receive = wrapped_receive
+
             # Handle stale session IDs - either strip them for reconnection
             # or return success for idempotent DELETE operations
             handled = await _handle_stale_mcp_session(
-                scope, receive, send, session_manager
+                scope, receive, send, target_manager
             )
             if handled:
                 # Request was fully handled (e.g., DELETE on non-existent session)
@@ -2841,7 +2929,7 @@ if MCP_AVAILABLE:
                 mcp_servers,
                 _client_ip,
             ):
-                await session_manager.handle_request(scope, receive, send)
+                await target_manager.handle_request(scope, receive, send)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
