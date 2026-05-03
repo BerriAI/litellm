@@ -184,6 +184,7 @@ jobs:
               tests/proxy_unit_tests/test_update_daily_tag_spend.py
               tests/proxy_unit_tests/test_update_spend.py
               tests/proxy_unit_tests/test_proxy_encrypt_decrypt.py
+              tests/proxy_unit_tests/test_disable_end_user_cost_tracking_proxy.py
             workers: 4
             dist: loadscope
             timeout: 15
