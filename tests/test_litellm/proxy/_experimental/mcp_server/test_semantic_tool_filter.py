@@ -5,10 +5,9 @@ Tests the core filtering logic that takes a long list of tools and returns
 an ordered set of top K tools based on semantic similarity.
 """
 
-import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -137,12 +136,6 @@ async def test_semantic_filter_basic_filtering():
             tool, "description"
         ), "Filtered result should be MCPTool with description"
 
-    filtered_names = [t.name for t in filtered]
-    print(
-        f"✅ Successfully filtered {len(tools)} tools down to top {len(filtered)}: {filtered_names}"
-    )
-    print(f"   Filter respects top_k parameter correctly")
-
 
 @pytest.mark.asyncio
 async def test_semantic_filter_top_k_limiting():
@@ -206,7 +199,6 @@ async def test_semantic_filter_top_k_limiting():
 
     # Should return at most 5 tools
     assert len(filtered) <= 5, f"Expected at most 5 tools, got {len(filtered)}"
-    print(f"Returned {len(filtered)} tools out of {len(tools)} (top_k=5)")
 
 
 @pytest.mark.asyncio
@@ -403,8 +395,6 @@ async def test_semantic_filter_hook_triggers_on_completion():
         tools
     ), f"Hook should filter tools, got {len(result['tools'])}/{len(tools)}"
 
-    print(f"✅ Hook triggered correctly: {len(tools)} -> {len(result['tools'])} tools")
-
 
 @pytest.mark.asyncio
 async def test_semantic_filter_hook_skips_no_tools():
@@ -449,7 +439,314 @@ async def test_semantic_filter_hook_skips_no_tools():
 
     # Should return None (no modification)
     assert result is None, "Hook should skip requests without tools"
-    print("✅ Hook correctly skips requests without tools")
+
+
+@pytest.mark.asyncio
+async def test_expand_mcp_tools_preserves_native_tools(monkeypatch):
+    """
+    MCP-reference expansion should not discard native tools that arrived in
+    the same request.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+        LiteLLM_Proxy_MCP_Handler,
+    )
+
+    async def fake_process_mcp_tools_to_openai_format(*args, **kwargs):
+        return ([{"name": "github-search", "description": "Search GitHub"}], None)
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_to_openai_format",
+        fake_process_mcp_tools_to_openai_format,
+    )
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    hook = SemanticToolFilterHook(filter_instance)
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather for a city",
+            "parameters": {"type": "object"},
+        },
+    }
+    mcp_reference = {"type": "mcp", "server_url": "litellm_proxy/mcp/github"}
+
+    expanded = await hook._expand_mcp_tools(
+        [mcp_reference, native_tool],
+        user_api_key_dict=Mock(),
+    )
+
+    assert expanded == [
+        native_tool,
+        {"name": "github-search", "description": "Search GitHub"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_native_openai_tools():
+    """
+    The MCP semantic filter must not drop native tools owned by the caller.
+
+    Native tools are not present in the MCP router map, so they should bypass
+    MCP semantic filtering and be merged back into the request unchanged.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    mcp_tool = {"name": "github-search", "description": "Search GitHub"}
+    filter_instance._tool_map = {mcp_tool["name"]: mcp_tool}
+    filter_instance.filter_tools = AsyncMock(return_value=[mcp_tool])  # type: ignore[method-assign]
+
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather for a city",
+            "parameters": {"type": "object"},
+        },
+    }
+    responses_native_tool = {
+        "type": "function",
+        "name": "calculator",
+        "description": "Evaluate an expression",
+        "parameters": {"type": "object"},
+    }
+    hook = SemanticToolFilterHook(filter_instance)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Check weather and search GitHub"}],
+        "tools": [native_tool, responses_native_tool, mcp_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is data
+    filter_instance.filter_tools.assert_awaited_once_with(
+        query="Check weather and search GitHub",
+        available_tools=[mcp_tool],
+    )
+    assert result["tools"] == [native_tool, responses_native_tool, mcp_tool]
+    assert result["metadata"]["litellm_semantic_filter_stats"] == "3->3"
+    assert (
+        result["metadata"]["litellm_semantic_filter_tools"]
+        == "weather_lookup,calculator,github-search"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_keeps_native_tool_name_collisions_native():
+    """
+    Responses API native tools can carry a top-level name. If that name happens
+    to equal an MCP canonical name, the native tool must not be filtered as MCP.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    mcp_tool = {"name": "github-search", "description": "Search GitHub"}
+    filter_instance._tool_map = {mcp_tool["name"]: mcp_tool}
+    filter_instance.filter_tools = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+    native_tool = {
+        "type": "function",
+        "name": "github-search",
+        "description": "Caller-owned search tool",
+        "parameters": {"type": "object"},
+    }
+    hook = SemanticToolFilterHook(filter_instance)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Search GitHub"}],
+        "tools": [native_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is None
+    filter_instance.filter_tools.assert_not_awaited()
+    assert data["tools"] == [native_tool]
+
+
+def test_semantic_filter_hook_prefixed_match_does_not_scan_whole_tool_map():
+    """
+    Matching a client-prefixed MCP tool should check candidate suffixes from the
+    incoming name instead of scanning every registered canonical tool.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    filter_instance._tool_map = {
+        **{f"server-{index}": {"name": f"server-{index}"} for index in range(1000)},
+        "github-search": {"name": "github-search"},
+    }
+    filter_instance._name_matches_canonical = Mock(  # type: ignore[method-assign]
+        wraps=filter_instance._name_matches_canonical
+    )
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    assert hook._is_mcp_router_tool({"name": "client_github-search"})
+    filter_instance._name_matches_canonical.assert_called_once_with(
+        "client_github-search", "github-search"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_remaining_tool_order():
+    """
+    Filtering MCP router tools should not reorder caller-owned native tools
+    around the MCP tools that survive semantic filtering.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    mcp_search_tool = {"name": "github-search", "description": "Search GitHub"}
+    mcp_issue_tool = {"name": "github-issue", "description": "Create GitHub issue"}
+    filter_instance._tool_map = {
+        mcp_search_tool["name"]: mcp_search_tool,
+        mcp_issue_tool["name"]: mcp_issue_tool,
+    }
+    filter_instance.filter_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=[mcp_issue_tool, mcp_search_tool]
+    )
+
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather for a city",
+            "parameters": {"type": "object"},
+        },
+    }
+    hook = SemanticToolFilterHook(filter_instance)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Search GitHub"}],
+        "tools": [mcp_search_tool, native_tool, mcp_issue_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is data
+    assert result["tools"] == [mcp_search_tool, native_tool, mcp_issue_tool]
+    assert (
+        result["metadata"]["litellm_semantic_filter_tools"]
+        == "github-search,weather_lookup,github-issue"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_skips_all_native_openai_tools():
+    """
+    If a request contains only caller-owned native tools, the MCP semantic
+    filter should leave the request untouched and avoid emitting filter stats.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=Mock(),
+        top_k=3,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+    filter_instance._tool_map = {"github-search": {"name": "github-search"}}
+    filter_instance.filter_tools = AsyncMock(return_value=[])  # type: ignore[method-assign]
+
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather for a city",
+            "parameters": {"type": "object"},
+        },
+    }
+    hook = SemanticToolFilterHook(filter_instance)
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Check weather"}],
+        "tools": [native_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is None
+    filter_instance.filter_tools.assert_not_awaited()
+    assert data["tools"] == [native_tool]
+    assert "litellm_semantic_filter_stats" not in data["metadata"]
 
 
 class TestGetToolsByNames:
@@ -489,9 +786,7 @@ class TestGetToolsByNames:
             {"name": "send_email", "description": "send mail"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            ["send_email"], available_tools
-        )
+        matched = filter_instance._get_tools_by_names(["send_email"], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "send_email"
@@ -503,9 +798,7 @@ class TestGetToolsByNames:
         client_name = "litellm_" + canonical
         available_tools = [{"name": client_name, "description": "scrape"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         # Must return the incoming tool unchanged so the client-facing
@@ -516,13 +809,9 @@ class TestGetToolsByNames:
         """Some clients use dash as alias separator; accept that too."""
         filter_instance = self._make_filter()
         canonical = "weather_svc-get_weather"
-        available_tools = [
-            {"name": "mcp-" + canonical, "description": "weather"}
-        ]
+        available_tools = [{"name": "mcp-" + canonical, "description": "weather"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "mcp-" + canonical
@@ -552,9 +841,7 @@ class TestGetToolsByNames:
             {"name": "litellm_" + canonical, "description": "wrapped"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == canonical
@@ -567,9 +854,7 @@ class TestGetToolsByNames:
         separator-anchored suffixes of ``litellm_api-fs-read_file``.
         """
         filter_instance = self._make_filter()
-        available_tools = [
-            {"name": "litellm_api-fs-read_file", "description": "read"}
-        ]
+        available_tools = [{"name": "litellm_api-fs-read_file", "description": "read"}]
 
         matched = filter_instance._get_tools_by_names(
             ["fs-read_file", "api-fs-read_file"], available_tools
@@ -590,9 +875,7 @@ class TestGetToolsByNames:
             {"name": "my_" + canonical, "description": "plain search"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "my_" + canonical
