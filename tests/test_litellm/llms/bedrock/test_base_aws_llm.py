@@ -1464,6 +1464,147 @@ def test_converse_handler_external_id_extraction():
                             )
 
 
+def test_converse_handler_reads_aws_credentials_from_litellm_params():
+    """Regression test for https://github.com/BerriAI/litellm/issues/25884.
+
+    AWS credential params declared under ``litellm_params`` in the proxy
+    config YAML (e.g. ``aws_role_name`` for cross-account Bedrock) are
+    filtered out of ``optional_params`` by
+    ``base_pre_process_non_default_params`` before they reach the handler,
+    because they are not registered in
+    ``DEFAULT_CHAT_COMPLETION_PARAM_VALUES``. The handler must fall back to
+    ``litellm_params`` so STS AssumeRole still fires.
+    """
+    from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
+
+    converse_llm = BedrockConverseLLM()
+
+    def mock_get_credentials(**kwargs):
+        mock_get_credentials.called_kwargs = kwargs
+        mock_credentials = MagicMock()
+        mock_credentials.access_key = "test-access-key"
+        mock_credentials.secret_key = "test-secret-key"
+        mock_credentials.token = "test-session-token"
+        return mock_credentials
+
+    with patch.object(converse_llm, 'get_credentials', side_effect=mock_get_credentials), \
+         patch.object(converse_llm, '_get_aws_region_name', return_value="us-west-2"), \
+         patch.object(converse_llm, 'get_runtime_endpoint', return_value=("https://test", "https://test")), \
+         patch('litellm.AmazonConverseConfig') as mock_config, \
+         patch.object(converse_llm, 'get_request_headers') as mock_headers, \
+         patch('litellm.llms.custom_httpx.http_handler._get_httpx_client') as mock_client:
+        mock_config.return_value._transform_request.return_value = {"test": "data"}
+        mock_config.return_value._transform_response.return_value = MagicMock()
+        mock_headers.return_value = MagicMock()
+        mock_headers.return_value.headers = {"Authorization": "test"}
+        mock_http_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_http_client.post.return_value = mock_response
+        mock_client.return_value = mock_http_client
+
+        # Simulate the proxy path: aws_* fields survive in litellm_params
+        # but get filtered out of optional_params.
+        litellm_params = {
+            "aws_role_name": "arn:aws:iam::123456789012:role/LiteLLMBedrockAccess",
+            "aws_session_name": "litellm-dept-a",
+            "aws_external_id": "ExternalID456",
+            "aws_profile_name": "my-profile",
+            "aws_web_identity_token": "token-xyz",
+            "aws_sts_endpoint": "https://sts.us-west-2.amazonaws.com",
+            "aws_access_key_id": "AKIAFROMPARAMS",
+            "aws_secret_access_key": "SECRETFROMPARAMS",
+            "aws_session_token": "SESSIONFROMPARAMS",
+        }
+        try:
+            converse_llm.completion(
+                model="anthropic.claude-3-sonnet-20240229-v1:0",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_base=None,
+                custom_prompt_dict={},
+                model_response=MagicMock(),
+                encoding="utf-8",
+                logging_obj=MagicMock(),
+                optional_params={},  # no aws_* keys — simulates post-filter state
+                acompletion=False,
+                timeout=None,
+                litellm_params=litellm_params,
+            )
+        except Exception:
+            pass
+
+        assert hasattr(mock_get_credentials, 'called_kwargs')
+        kwargs = mock_get_credentials.called_kwargs
+        assert kwargs["aws_role_name"] == "arn:aws:iam::123456789012:role/LiteLLMBedrockAccess"
+        assert kwargs["aws_session_name"] == "litellm-dept-a"
+        assert kwargs["aws_external_id"] == "ExternalID456"
+        assert kwargs["aws_profile_name"] == "my-profile"
+        assert kwargs["aws_web_identity_token"] == "token-xyz"
+        assert kwargs["aws_sts_endpoint"] == "https://sts.us-west-2.amazonaws.com"
+        assert kwargs["aws_access_key_id"] == "AKIAFROMPARAMS"
+        assert kwargs["aws_secret_access_key"] == "SECRETFROMPARAMS"
+        assert kwargs["aws_session_token"] == "SESSIONFROMPARAMS"
+
+
+def test_converse_handler_optional_params_win_over_litellm_params():
+    """When both are set, values in optional_params (request-level) take
+    precedence over litellm_params (deployment-level)."""
+    from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
+
+    converse_llm = BedrockConverseLLM()
+
+    def mock_get_credentials(**kwargs):
+        mock_get_credentials.called_kwargs = kwargs
+        mock_credentials = MagicMock()
+        mock_credentials.access_key = "test-access-key"
+        mock_credentials.secret_key = "test-secret-key"
+        mock_credentials.token = "test-session-token"
+        return mock_credentials
+
+    with patch.object(converse_llm, 'get_credentials', side_effect=mock_get_credentials), \
+         patch.object(converse_llm, '_get_aws_region_name', return_value="us-west-2"), \
+         patch.object(converse_llm, 'get_runtime_endpoint', return_value=("https://test", "https://test")), \
+         patch('litellm.AmazonConverseConfig') as mock_config, \
+         patch.object(converse_llm, 'get_request_headers') as mock_headers, \
+         patch('litellm.llms.custom_httpx.http_handler._get_httpx_client') as mock_client:
+        mock_config.return_value._transform_request.return_value = {"test": "data"}
+        mock_config.return_value._transform_response.return_value = MagicMock()
+        mock_headers.return_value = MagicMock()
+        mock_headers.return_value.headers = {"Authorization": "test"}
+        mock_http_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_http_client.post.return_value = mock_response
+        mock_client.return_value = mock_http_client
+
+        optional_params = {
+            "aws_role_name": "arn:aws:iam::111:role/PerRequest",
+        }
+        litellm_params = {
+            "aws_role_name": "arn:aws:iam::222:role/Deployment",
+        }
+        try:
+            converse_llm.completion(
+                model="anthropic.claude-3-sonnet-20240229-v1:0",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_base=None,
+                custom_prompt_dict={},
+                model_response=MagicMock(),
+                encoding="utf-8",
+                logging_obj=MagicMock(),
+                optional_params=optional_params,
+                acompletion=False,
+                timeout=None,
+                litellm_params=litellm_params,
+            )
+        except Exception:
+            pass
+
+        assert mock_get_credentials.called_kwargs["aws_role_name"] == (
+            "arn:aws:iam::111:role/PerRequest"
+        )
+
+
 def test_is_already_running_as_role_irsa_same_role():
     """Test IRSA fast path: when AWS_ROLE_ARN matches target role."""
     base_aws_llm = BaseAWSLLM()
