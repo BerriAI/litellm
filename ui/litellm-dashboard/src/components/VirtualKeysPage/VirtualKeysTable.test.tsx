@@ -206,8 +206,6 @@ beforeEach(() => {
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [mockKey],
-    filteredTotalCount: null,
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -306,6 +304,18 @@ it("should show loading message only on initial load (isPending)", () => {
 
 it("should show 'No keys found' message when filteredKeys is empty", () => {
   // Mock empty filteredKeys
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [],
+      total_count: 0,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+
   mockUseFilterLogic.mockReturnValue({
     filters: {
       "Team ID": "",
@@ -315,7 +325,6 @@ it("should show 'No keys found' message when filteredKeys is empty", () => {
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -343,6 +352,18 @@ it("should handle models with more than 3 entries to trigger expansion UI", () =
     models: ["gpt-3.5-turbo", "gpt-4", "gpt-4-turbo", "claude-3", "claude-3-5-sonnet"],
   };
 
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [keyWithManyModels],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+
   mockUseFilterLogic.mockReturnValue({
     filters: {
       "Team ID": "",
@@ -352,7 +373,6 @@ it("should handle models with more than 3 entries to trigger expansion UI", () =
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [keyWithManyModels],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -480,6 +500,18 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
     user: { user_id: "default_user_id", user_email: "", user_alias: null },
   };
 
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [keyWithDefaultUserId],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+
   mockUseFilterLogic.mockReturnValue({
     filters: {
       "Team ID": "",
@@ -489,7 +521,6 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [keyWithDefaultUserId],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -519,6 +550,18 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
     created_by: "default_user_id",
   };
 
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [keyWithDefaultCreatedBy],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+
   mockUseFilterLogic.mockReturnValue({
     filters: {
       "Team ID": "",
@@ -528,7 +571,6 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [keyWithDefaultCreatedBy],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -566,6 +608,18 @@ it("should display created_by_user email in 'Created By' column when available",
     },
   };
 
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [keyWithCreatedByUser],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+
   mockUseFilterLogic.mockReturnValue({
     filters: {
       "Team ID": "",
@@ -575,7 +629,6 @@ it("should display created_by_user email in 'Created By' column when available",
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [keyWithCreatedByUser],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -610,6 +663,18 @@ it("should display created_by_user alias over email when both available", async 
     },
   };
 
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [keyWithCreatedByUser],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+
   mockUseFilterLogic.mockReturnValue({
     filters: {
       "Team ID": "",
@@ -619,7 +684,6 @@ it("should display created_by_user alias over email when both available", async 
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [keyWithCreatedByUser],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -649,6 +713,18 @@ it("should render table without crashing when models is null", async () => {
     models: null as unknown as string[],
   };
 
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [keyWithNullModels],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+
   mockUseFilterLogic.mockReturnValue({
     filters: {
       "Team ID": "",
@@ -658,7 +734,6 @@ it("should render table without crashing when models is null", async () => {
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [keyWithNullModels],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -689,6 +764,18 @@ it("should render table without crashing when models is undefined", async () => 
     models: undefined as unknown as string[],
   };
 
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [keyWithUndefinedModels],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+
   mockUseFilterLogic.mockReturnValue({
     filters: {
       "Team ID": "",
@@ -698,7 +785,6 @@ it("should render table without crashing when models is undefined", async () => 
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [keyWithUndefinedModels],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -764,6 +850,18 @@ it("should display 'Unknown' for last_active when value is null", async () => {
     last_active: null,
   };
 
+  mockUseKeys.mockReturnValue({
+    data: {
+      keys: [keyWithNullLastActive],
+      total_count: 1,
+      current_page: 1,
+      total_pages: 1,
+    } as KeysResponse,
+    isPending: false,
+    isFetching: false,
+    refetch: vi.fn(),
+  } as any);
+
   mockUseFilterLogic.mockReturnValue({
     filters: {
       "Team ID": "",
@@ -773,7 +871,6 @@ it("should display 'Unknown' for last_active when value is null", async () => {
       "Sort By": "created_at",
       "Sort Order": "desc",
     },
-    filteredKeys: [keyWithNullLastActive],
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
     handleFilterChange: vi.fn(),
@@ -820,8 +917,6 @@ describe("pagination display – total count and page count", () => {
 
     mockUseFilterLogic.mockReturnValue({
       filters: { "Team ID": "", "Organization ID": "", "Key Alias": "", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
-      filteredKeys: [mockKey],
-      filteredTotalCount: null,
       allTeams: [mockTeam],
       allOrganizations: [mockOrganization],
       handleFilterChange: vi.fn(),
@@ -836,13 +931,15 @@ describe("pagination display – total count and page count", () => {
     });
   });
 
-  it("should show filteredTotalCount in pagination text when a filter search returns results", async () => {
+  it("should show the server-returned filtered total when a filter is active", async () => {
+    // With the filter wired into useKeys, the server returns the filtered
+    // total_count directly — the component has no separate client-side total.
     mockUseKeys.mockReturnValue({
       data: {
         keys: [mockKey],
-        total_count: 509,
+        total_count: 1,
         current_page: 1,
-        total_pages: 11,
+        total_pages: 1,
       } as KeysResponse,
       isPending: false,
       isFetching: false,
@@ -851,8 +948,6 @@ describe("pagination display – total count and page count", () => {
 
     mockUseFilterLogic.mockReturnValue({
       filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
-      filteredKeys: [mockKey],
-      filteredTotalCount: 1,
       allTeams: [mockTeam],
       allOrganizations: [mockOrganization],
       handleFilterChange: vi.fn(),
@@ -867,23 +962,9 @@ describe("pagination display – total count and page count", () => {
     });
   });
 
-  it("should not show stale unfiltered totals when filteredTotalCount is set", async () => {
-    mockUseKeys.mockReturnValue({
-      data: {
-        keys: [mockKey],
-        total_count: 509,
-        current_page: 1,
-        total_pages: 11,
-      } as KeysResponse,
-      isPending: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    } as any);
-
+  it("should pass current filter values into useKeys so remount/refetch keeps the filter applied", async () => {
     mockUseFilterLogic.mockReturnValue({
       filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
-      filteredKeys: [mockKey],
-      filteredTotalCount: 1,
       allTeams: [mockTeam],
       allOrganizations: [mockOrganization],
       handleFilterChange: vi.fn(),
@@ -892,9 +973,14 @@ describe("pagination display – total count and page count", () => {
 
     renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
 
+    // useKeys must be invoked with the selected alias so that a later refetch
+    // (e.g. after navigating away and back) still fetches the filtered set.
     await waitFor(() => {
-      expect(screen.queryByText(/509 results/)).not.toBeInTheDocument();
-      expect(screen.queryByText(/of 11/)).not.toBeInTheDocument();
+      expect(mockUseKeys).toHaveBeenCalledWith(
+        expect.any(Number),
+        expect.any(Number),
+        expect.objectContaining({ selectedKeyAlias: "aaaaa" }),
+      );
     });
   });
 });
