@@ -3363,9 +3363,11 @@ class ProxyConfig:
                 elif key == "max_end_user_budget":
                     litellm.max_end_user_budget = _coerce_budget_setting(value)
                 elif key == "max_internal_user_budget":
-                    litellm.max_internal_user_budget = float(value)  # type: ignore
+                    litellm.max_internal_user_budget = _coerce_budget_setting(value)  # type: ignore
                 elif key == "default_max_internal_user_budget":
-                    litellm.default_max_internal_user_budget = float(value)
+                    coerced_default = _coerce_budget_setting(value)
+                    if coerced_default is not None:
+                        litellm.default_max_internal_user_budget = coerced_default
                     if litellm.max_internal_user_budget is None:
                         litellm.max_internal_user_budget = (
                             litellm.default_max_internal_user_budget

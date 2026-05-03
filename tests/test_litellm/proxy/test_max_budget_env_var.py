@@ -100,6 +100,7 @@ async def test_max_budget_from_config_yaml_env_var(tmp_path):
     [
         ("max_user_budget", "max_user_budget"),
         ("max_end_user_budget", "max_end_user_budget"),
+        ("max_internal_user_budget", "max_internal_user_budget"),
     ],
 )
 @pytest.mark.asyncio
@@ -116,9 +117,7 @@ async def test_user_budget_settings_from_config_yaml_env_var(tmp_path, key, attr
     env_name = f"TEST_{key.upper()}_REGRESSION"
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
-        "model_list: []\n"
-        "litellm_settings:\n"
-        f"  {key}: os.environ/{env_name}\n"
+        "model_list: []\n" "litellm_settings:\n" f"  {key}: os.environ/{env_name}\n"
     )
 
     original_value = getattr(litellm, attr)
@@ -130,8 +129,7 @@ async def test_user_budget_settings_from_config_yaml_env_var(tmp_path, key, attr
 
         actual = getattr(litellm, attr)
         assert isinstance(actual, float), (
-            f"{attr} should be float after config load, got "
-            f"{type(actual).__name__}"
+            f"{attr} should be float after config load, got " f"{type(actual).__name__}"
         )
         assert actual == 25.0
         assert actual > 0
