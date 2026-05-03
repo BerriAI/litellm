@@ -310,6 +310,111 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
     assert "thinking" not in optional_params
 
 
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "low", "low"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "medium", "medium"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "high", "high"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "xhigh", "xhigh"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "high", "high"),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "minimal", "low"),
+    ],
+)
+def test_reasoning_effort_sets_output_config_for_adaptive_models_converse(
+    model, effort, expected_effort
+):
+    """Adaptive-thinking Claude 4.6 / 4.7 on Bedrock Converse must carry the
+    requested tier via ``output_config.effort``. The prior strip silently
+    flattened every adaptive tier on the wire (verified in the PR #27039
+    QA sweep)."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"]["type"] == "adaptive"
+    assert optional_params["output_config"] == {"effort": expected_effort}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        "bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_output_config_effort_forwarded_into_additional_request_fields(model):
+    """``output_config`` must ride along inside ``additionalModelRequestFields``
+    so the Anthropic-on-Bedrock wire request actually carries the effort
+    tier. The prior ``inference_params.pop("output_config")`` dropped it
+    on the floor for every adaptive tier."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = config._transform_request(
+        model=model,
+        messages=messages,
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "high"}
+
+
+@pytest.mark.parametrize(
+    "effort",
+    ["disabled", "invalid", ""],
+)
+def test_reasoning_effort_garbage_raises_bad_request_converse(effort):
+    """Garbage / empty-string reasoning_effort on Bedrock Converse Anthropic
+    must surface as a clean 400 ``BadRequestError`` instead of 500. The
+    earlier ``ValueError`` from ``_map_reasoning_effort`` propagated up as
+    a generic 500 in the proxy and ate the request."""
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            drop_params=False,
+        )
+
+
+def test_output_config_effort_unsupported_max_on_sonnet_46_raises_bad_request():
+    """``effort='max'`` is Opus-only. On Sonnet 4.6 the explicit-output_config
+    path must surface a 400 (matching the chat-completion validation), not
+    silently forward an unsupported tier to Bedrock."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config._transform_request(
+            model="bedrock/converse/us.anthropic.claude-sonnet-4-6",
+            messages=messages,
+            optional_params={
+                "maxTokens": 256,
+                "output_config": {"effort": "max"},
+            },
+            litellm_params={},
+            headers={},
+        )
+
+
 def test_get_supported_openai_params():
     config = AmazonConverseConfig()
     supported_params = config.get_supported_openai_params(
