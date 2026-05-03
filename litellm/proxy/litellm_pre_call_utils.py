@@ -1164,8 +1164,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
             continue
         data.pop(_internal_key, None)
-    if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-        _strip_client_pricing_overrides(data)
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")
     if isinstance(_user_metadata, dict):
@@ -1366,6 +1364,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
                 or k in _UNTRUSTED_METADATA_CONTROL_FIELDS
             ]:
                 _user_meta.pop(_k, None)
+
+    # Strip pricing overrides AFTER the litellm_metadata string-to-dict parse
+    # above, for the same reason as the user_api_key_* strip — JSON-string
+    # metadata (sent via multipart/form-data or extra_body) wouldn't be a
+    # dict yet at the earlier strip point and the isinstance(dict) guard
+    # would silently skip the field.
+    if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
+        _strip_client_pricing_overrides(data)
 
     # Strip caller-supplied routing/budget tags unless the admin has opted
     # this key or team in via metadata.allow_client_tags=True. Tags drive
