@@ -322,6 +322,16 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
     user_message_types = {"user", "system"}
     contents: List[ContentType] = []
 
+    # Pre-build tool_call_id → assistant message so we can recover
+    # last_message_with_tool_calls at the tool-response side when a provider
+    # (e.g. Codex CLI) sends assistant messages with an empty tool_calls list.
+    tool_call_map: dict = {}
+    for msg in messages:
+        if msg["role"] == "assistant":
+            for tc in msg.get("tool_calls") or []:
+                if "id" in tc:
+                    tool_call_map[tc["id"]] = msg
+
     last_message_with_tool_calls = None
 
     msg_i = 0
@@ -544,7 +554,10 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
-                    assistant_msg.get("tool_calls", []) is not None
+                    (
+                        assistant_msg.get("tool_calls", []) is not None
+                        and len(assistant_msg.get("tool_calls", [])) > 0
+                    )
                     or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
                     gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
@@ -606,6 +619,10 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 msg_i < len(messages)
                 and messages[msg_i]["role"] in tool_call_message_roles
             ):
+                _tid = messages[msg_i].get("tool_call_id")
+                if _tid and _tid in tool_call_map:
+                    last_message_with_tool_calls = tool_call_map[_tid]
+
                 _part = convert_to_gemini_tool_call_result(
                     messages[msg_i], last_message_with_tool_calls  # type: ignore
                 )

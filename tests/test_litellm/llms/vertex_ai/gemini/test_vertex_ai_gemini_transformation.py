@@ -2030,3 +2030,61 @@ def test_multi_turn_function_calling_roles():
                 assert (
                     content["role"] == "user"
                 ), f"Content block {i} with function_response has role='{content['role']}', expected 'user'"
+
+
+def test_tool_call_history_repair_empty_tool_calls():
+    """
+    Regression test for: Codex CLI sends assistant messages with empty tool_calls
+    list, causing 'Missing corresponding tool call for tool response message'.
+
+    Codex CLI sometimes emits:
+        {"role": "assistant", "content": "...", "tool_calls": []}
+    followed by a separate assistant message that has the actual tool_calls,
+    then a tool response referencing one of those calls.
+
+    Before fix: last_message_with_tool_calls pointed to the empty-tool_calls
+    message, name recovery failed, Vertex AI returned 400.
+
+    After fix: a pre-pass builds tool_call_id → assistant message so the
+    correct originating message is always found.
+    """
+    messages = [
+        {"role": "user", "content": "Run a shell command"},
+        {
+            "role": "assistant",
+            "content": "I'll run that for you.",
+            "tool_calls": [],  # empty — Codex CLI quirk
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "arguments": '{"cmd": "echo hello"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_abc123",
+            "content": "hello",
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    # The function_response part must have the correct function name
+    found = False
+    for content in contents:
+        for part in content.get("parts", []):
+            if "function_response" in part:
+                assert part["function_response"]["name"] == "shell", (
+                    f"Expected function name 'shell', got {part['function_response']['name']}"
+                )
+                found = True
+    assert found, "No function_response part found in converted history"
