@@ -69,10 +69,8 @@ import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./SearchTools/SearchToolSelector";
 
 interface TeamProps {
-  teams: Team[] | null;
   searchParams: any;
   accessToken: string | null;
-  setTeams: React.Dispatch<React.SetStateAction<Team[] | null>>;
   userID: string | null;
   userRole: string | null;
   organizations: Organization[] | null;
@@ -181,10 +179,8 @@ const getOrganizationAlias = (
 
 // @deprecated
 const Teams: React.FC<TeamProps> = ({
-  teams,
   searchParams,
   accessToken,
-  setTeams,
   userID,
   userRole,
   organizations,
@@ -192,6 +188,7 @@ const Teams: React.FC<TeamProps> = ({
 }) => {
   console.log(`organizations: ${JSON.stringify(organizations)}`);
   const { data: organizationsData } = useOrganizations();
+  const [teams, setTeams] = useState<Team[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);

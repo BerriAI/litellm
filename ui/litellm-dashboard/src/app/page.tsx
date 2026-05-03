@@ -531,8 +531,6 @@ function CreateKeyPageContent() {
                     />
                   ) : page == "teams" ? (
                     <OldTeams
-                      teams={teams}
-                      setTeams={setTeams}
                       accessToken={accessToken}
                       userID={userID}
                       userRole={userRole}
