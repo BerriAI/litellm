@@ -16,6 +16,15 @@ def get_datadog_service() -> str:
     return os.getenv("DD_SERVICE", "litellm-server")
 
 
+def get_datadog_ml_app() -> str:
+    """Return the ml_app name for Datadog LLM Observability.
+
+    Falls back to DD_SERVICE for backwards compatibility.
+    DD_LLMOBS_ML_APP is the official env var used by the ddtrace SDK.
+    """
+    return os.getenv("DD_LLMOBS_ML_APP", get_datadog_service())
+
+
 def get_datadog_hostname() -> str:
     return os.getenv("HOSTNAME", "")
 

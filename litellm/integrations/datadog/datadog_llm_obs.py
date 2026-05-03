@@ -23,7 +23,6 @@ from litellm.integrations.datadog.datadog_mock_client import (
     create_mock_datadog_client,
 )
 from litellm.integrations.datadog.datadog_handler import (
-    get_datadog_service,
     get_datadog_tags,
     get_datadog_base_url_from_env,
 )
@@ -197,44 +196,61 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     "[DATADOG MOCK] Mock mode enabled - API calls will be intercepted"
                 )
 
-            # Prepare the payload
-            payload = {
-                "data": DDIntakePayload(
-                    type="span",
-                    attributes=DDSpanAttributes(
-                        ml_app=get_datadog_service(),
-                        tags=get_datadog_tags(),
-                        spans=self.log_queue,
-                    ),
-                ),
-            }
+            # Group spans by ml_app so each caller service gets its own batch.
+            # Spans without a per-request override use the default DD_SERVICE.
+            from litellm.integrations.datadog.datadog_handler import get_datadog_ml_app
 
-            # serialize datetime objects - for budget reset time in spend metrics
+            default_ml_app = get_datadog_ml_app()
+            groups: Dict[str, List[LLMObsPayload]] = {}
+            for span in self.log_queue:
+                ml_app = span.get("_dd_ml_app") or default_ml_app
+                groups.setdefault(ml_app, []).append(span)
+
             from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
-            try:
-                verbose_logger.debug("payload %s", safe_dumps(payload))
-            except Exception as debug_error:
-                verbose_logger.debug(
-                    "payload serialization failed: %s", str(debug_error)
-                )
-
-            json_payload = safe_dumps(payload)
 
             headers = {"Content-Type": "application/json"}
             if self.DD_API_KEY:
                 headers["DD-API-KEY"] = self.DD_API_KEY
 
-            response = await self.async_client.post(
-                url=self.intake_url,
-                content=json_payload,
-                headers=headers,
-            )
+            for ml_app, spans in groups.items():
+                # Build clean copies without the internal _dd_ml_app field.
+                # Never mutate items in self.log_queue until the entire flush
+                # succeeds (clear() handles cleanup below).
+                clean_spans = [
+                    {k: v for k, v in span.items() if k != "_dd_ml_app"}
+                    for span in spans
+                ]
 
-            if response.status_code != 202:
-                raise Exception(
-                    f"DataDogLLMObs: Unexpected response - status_code: {response.status_code}, text: {response.text}"
+                payload = {
+                    "data": DDIntakePayload(
+                        type="span",
+                        attributes=DDSpanAttributes(
+                            ml_app=ml_app,
+                            tags=get_datadog_tags(),
+                            spans=clean_spans,
+                        ),
+                    ),
+                }
+
+                try:
+                    verbose_logger.debug("payload %s", safe_dumps(payload))
+                except Exception as debug_error:
+                    verbose_logger.debug(
+                        "payload serialization failed: %s", str(debug_error)
+                    )
+
+                json_payload = safe_dumps(payload)
+
+                response = await self.async_client.post(
+                    url=self.intake_url,
+                    content=json_payload,
+                    headers=headers,
                 )
+
+                if response.status_code != 202:
+                    raise Exception(
+                        f"DataDogLLMObs: Unexpected response - status_code: {response.status_code}, text: {response.text}"
+                    )
 
             if self.is_mock_mode:
                 verbose_logger.debug(
@@ -242,7 +258,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 )
             else:
                 verbose_logger.debug(
-                    f"DataDogLLMObs: Successfully sent batch - status_code: {response.status_code}"
+                    f"DataDogLLMObs: Successfully sent batch of {len(self.log_queue)} events"
                 )
             self.log_queue.clear()
         except httpx.HTTPStatusError as e:
@@ -305,6 +321,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             ),
         )
 
+        # Allow callers to override ml_app per-request via metadata.
+        # This lets multiple services sharing a single LiteLLM proxy appear as
+        # distinct applications in Datadog LLM Observability.
+        caller_ml_app: Optional[str] = None
+        if isinstance(metadata, dict):
+            caller_ml_app = metadata.get("ml_app")
+
         payload: LLMObsPayload = LLMObsPayload(
             parent_id=metadata_parent_id if metadata_parent_id else "undefined",
             trace_id=standard_logging_payload.get("trace_id", str(uuid.uuid4())),
@@ -317,6 +340,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             status="error" if error_info else "ok",
             tags=get_datadog_tags(standard_logging_object=standard_logging_payload),
         )
+
+        if caller_ml_app:
+            payload["_dd_ml_app"] = caller_ml_app
 
         apm_trace_id = self._get_apm_trace_id()
         if apm_trace_id is not None:
