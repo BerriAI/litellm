@@ -4014,3 +4014,5 @@ def test_azure_ai_gpt_image_models_in_cost_map():
         assert info["output_cost_per_image_token"] == 3e-05
         assert info["cache_read_input_image_token_cost"] == 2e-06
         assert info["supports_vision"] is True
+        assert info.get("output_cost_per_token") is None, f"Spurious output_cost_per_token found for {key}"
+        assert info.get("supports_pdf_input") is None, f"Unexpected supports_pdf_input found for {key}"
