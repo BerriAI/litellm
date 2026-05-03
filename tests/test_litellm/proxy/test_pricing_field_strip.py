@@ -232,6 +232,35 @@ async def test_add_litellm_data_to_request_skips_strip_with_key_opt_in():
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_json_string_litellm_metadata():
+    """``litellm_metadata`` may arrive as a JSON-encoded string (multipart/
+    form-data or ``extra_body``). The strip has to run after the proxy parses
+    it into a dict; otherwise the ``isinstance(dict)`` guard skips the field
+    and ``model_info`` survives the strip via the string path.
+    """
+    import json
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_metadata": json.dumps({"model_info": {"input_cost_per_token": 0.0}}),
+    }
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock(),
+        user_api_key_dict=_user_api_key_auth(),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    parsed_metadata = updated.get("litellm_metadata")
+    assert isinstance(parsed_metadata, dict)
+    assert "model_info" not in parsed_metadata
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_skips_strip_with_team_opt_in():
     data = {
         "model": "gpt-4",
