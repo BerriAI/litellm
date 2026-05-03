@@ -536,6 +536,62 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
+    @staticmethod
+    def _has_function_declarations_tool(tools: Optional[List[dict]]) -> bool:
+        if not tools:
+            return False
+
+        return any(
+            bool(tool.get("function_declarations") or tool.get("functionDeclarations"))
+            for tool in tools
+        )
+
+    @staticmethod
+    def _is_search_tool(tool: dict) -> bool:
+        search_tool_keys = {
+            VertexToolName.GOOGLE_SEARCH.value,
+            VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value,
+            VertexToolName.ENTERPRISE_WEB_SEARCH.value,
+            VertexToolName.URL_CONTEXT.value,
+            "google_search",
+            "google_search_retrieval",
+            "enterprise_web_search",
+            "urlContext",
+        }
+        return any(key in tool for key in search_tool_keys)
+
+    def _drop_search_tools_if_mixed_with_functions(self, optional_params: dict) -> None:
+        tools = optional_params.get("tools")
+        if not isinstance(tools, list) or not self._has_function_declarations_tool(
+            tools
+        ):
+            return
+
+        server_side_tool_invocations = optional_params.get(
+            "include_server_side_tool_invocations", False
+        )
+        if server_side_tool_invocations:
+            return
+
+        filtered_tools = [tool for tool in tools if not self._is_search_tool(tool=tool)]
+        if len(filtered_tools) == len(tools):
+            return
+
+        verbose_logger.warning(
+            "Vertex AI does not support mixing function declarations with "
+            "search tools in the same request. Dropping search tools and "
+            "keeping function declarations. To use search tools, send a "
+            "request without function calling tools."
+        )
+        optional_params["tools"] = filtered_tools
+
+    def _add_tools_to_optional_params(self, optional_params: dict, tools: List) -> dict:
+        optional_params = super()._add_tools_to_optional_params(
+            optional_params=optional_params, tools=tools
+        )
+        self._drop_search_tools_if_mixed_with_functions(optional_params=optional_params)
+        return optional_params
+
     def _map_function(  # noqa: PLR0915
         self, value: List[dict], optional_params: dict
     ) -> List[Tools]:
