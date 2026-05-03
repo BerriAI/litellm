@@ -1303,53 +1303,37 @@ class Delta(SafeAttributeModel, OpenAIObject):
         self.images: Optional[List[ImageURLListItem]] = None
         self.annotations: Optional[List[ChatCompletionAnnotation]] = None
 
-        if reasoning_content is not None:
-            self.reasoning_content = reasoning_content
-        else:
-            # ensure default response matches OpenAI spec
-            del self.reasoning_content
+        # ensure default response matches OpenAI spec
+        for attr, val in [
+            ("reasoning_content", reasoning_content),
+            ("thinking_blocks", thinking_blocks),
+            ("reasoning_items", reasoning_items),
+            ("annotations", annotations),
+        ]:
+            if val is not None:
+                setattr(self, attr, val)
+            elif hasattr(self, attr):
+                delattr(self, attr)
 
-        if thinking_blocks is not None:
-            self.thinking_blocks = thinking_blocks
-        else:
-            # ensure default response matches OpenAI spec
-            del self.thinking_blocks
-
-        if reasoning_items is not None:
-            self.reasoning_items = reasoning_items
-        else:
-            # ensure default response matches OpenAI spec
-            if hasattr(self, "reasoning_items"):
-                del self.reasoning_items
-
-        # Add annotations to the delta, ensure they are only on Delta if they exist (Match OpenAI spec)
-        if annotations is not None:
-            self.annotations = annotations
-        else:
-            del self.annotations
-
-        if images is not None and len(images) > 0:
+        if images:
             self.images = images
-        else:
+        elif hasattr(self, "images"):
             del self.images
 
-        if function_call is not None and isinstance(function_call, dict):
+        if isinstance(function_call, dict):
             self.function_call = FunctionCall(**function_call)
         else:
             self.function_call = function_call
-        if tool_calls is not None and isinstance(tool_calls, list):
+
+        if isinstance(tool_calls, list):
             self.tool_calls = []
-            current_index = 0
-            for tool_call in tool_calls:
-                if isinstance(tool_call, dict):
-                    if tool_call.get("index", None) is None:
-                        tool_call["index"] = current_index
-                        current_index += 1
-                    if tool_call.get("type", None) is None:
-                        tool_call["type"] = "function"
-                    self.tool_calls.append(ChatCompletionDeltaToolCall(**tool_call))
-                elif isinstance(tool_call, ChatCompletionDeltaToolCall):
-                    self.tool_calls.append(tool_call)
+            for i, tc in enumerate(tool_calls):
+                if isinstance(tc, dict):
+                    tc.setdefault("index", i)
+                    tc.setdefault("type", "function")
+                    self.tool_calls.append(ChatCompletionDeltaToolCall(**tc))
+                else:
+                    self.tool_calls.append(tc)
         else:
             self.tool_calls = tool_calls
 
@@ -1683,7 +1667,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         if "prompt_cache_hit_tokens" in params and isinstance(
             params["prompt_cache_hit_tokens"], int
         ):
-            self._prompt_cache_hit_tokens = params["prompt_cache_hit_tokens"]
+            self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
 
         if iterations is not None:
             self.iterations = iterations

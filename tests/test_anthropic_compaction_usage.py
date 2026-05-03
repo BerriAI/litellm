@@ -1,5 +1,3 @@
-import sys, os
-import litellm
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
 def test_anthropic_compaction_usage_calculation():
@@ -98,4 +96,3 @@ def test_anthropic_compaction_usage_with_cache():
 if __name__ == "__main__":
     test_anthropic_compaction_usage_calculation()
     test_anthropic_compaction_usage_with_cache()
-    print("Tests passed!")
