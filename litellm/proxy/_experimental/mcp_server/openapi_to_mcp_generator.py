@@ -30,6 +30,9 @@ HEADERS: Dict[str, str] = {}
 _request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "_request_auth_header", default=None
 )
+_request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = (
+    contextvars.ContextVar("_request_extra_headers", default=None)
+)
 
 
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
@@ -273,6 +276,20 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _get_effective_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    effective_headers = dict(headers)
+
+    request_extra_headers = _request_extra_headers.get()
+    if request_extra_headers:
+        effective_headers.update(request_extra_headers)
+
+    override_auth = _request_auth_header.get()
+    if override_auth:
+        effective_headers["Authorization"] = override_auth
+
+    return effective_headers
+
+
 def create_tool_function(
     path: str,
     method: str,
@@ -314,10 +331,7 @@ def create_tool_function(
         # The ContextVar holds the full Authorization header value, including the
         # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
         # server.py based on the server's configured auth_type.
-        effective_headers = dict(headers)
-        override_auth = _request_auth_header.get()
-        if override_auth:
-            effective_headers["Authorization"] = override_auth
+        effective_headers = _get_effective_headers(headers)
 
         # Build URL from base_url and path
         url = base_url + path

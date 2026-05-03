@@ -6,19 +6,27 @@ Validates that:
 2. pre_call_tool_check returns hook-provided extra_headers AND modified arguments
 3. call_tool flows hook headers and modified arguments downstream
 4. Hook-provided headers take highest priority (merge after static_headers)
-5. OpenAPI-backed servers log a warning and continue (skip injection) when hook headers are present
+5. OpenAPI-backed servers merge hook headers into request-scoped generated-tool headers
 6. JWT claims are propagated in both standard and virtual-key fast paths
 7. Backward compatibility: hooks without extra_headers continue to work
 """
 
 import asyncio
+from datetime import datetime
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 
+from litellm.proxy._experimental.mcp_server import server as mcp_server_module
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    _request_auth_header,
+    _request_extra_headers,
+)
+from litellm.proxy._experimental.mcp_server.tool_registry import (
+    global_mcp_tool_registry,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.mcp import MCPAuth, MCPTransport
@@ -422,8 +430,8 @@ class TestCallToolFlowsHookHeaders:
                         assert call_kwargs.kwargs.get("arguments") == modified_args
 
     @pytest.mark.asyncio
-    async def test_openapi_server_warns_and_continues_on_hook_headers(self):
-        """OpenAPI-backed servers log a warning and continue when hook injects headers."""
+    async def test_openapi_server_forwards_hook_headers(self):
+        """OpenAPI-backed servers forward hook headers through request context."""
         manager = MCPServerManager()
         server = MCPServer(
             server_id="test-id",
@@ -454,24 +462,20 @@ class TestCallToolFlowsHookHeaders:
                         "_call_openapi_tool_handler",
                         new_callable=AsyncMock,
                         return_value=MagicMock(),
-                    ):
-                        import litellm.proxy._experimental.mcp_server.mcp_server_manager as mgr_mod
-
+                    ) as mock_call:
                         proxy_logging = MagicMock(spec=ProxyLogging)
 
-                        with patch.object(mgr_mod, "verbose_logger") as mock_logger:
-                            # Should NOT raise — just warn and proceed
-                            await manager.call_tool(
-                                server_name="openapi_server",
-                                name="test_tool",
-                                arguments={},
-                                proxy_logging_obj=proxy_logging,
-                            )
-                            mock_logger.warning.assert_called_once()
-                            assert (
-                                "header injection is not supported"
-                                in mock_logger.warning.call_args[0][0]
-                            )
+                        await manager.call_tool(
+                            server_name="openapi_server",
+                            name="test_tool",
+                            arguments={},
+                            proxy_logging_obj=proxy_logging,
+                        )
+
+                        mock_call.assert_called_once()
+                        assert mock_call.call_args.kwargs["request_extra_headers"] == {
+                            "Authorization": "Bearer jwt"
+                        }
 
     @pytest.mark.asyncio
     async def test_openapi_server_no_error_without_hook_headers(self):
@@ -772,6 +776,188 @@ class TestHookHeaderMergePriority:
         headers = captured_extra_headers.get("value") or {}
         assert "Authorization" not in headers
         assert headers.get("X-Custom") == "from-client"
+
+    def test_openapi_request_headers_merge_oauth_raw_and_hook_headers(self):
+        """OpenAPI tools receive the same runtime header sources as MCP transports."""
+        manager = MCPServerManager()
+        server = self._make_server(extra_headers_config=["X-TOKEN", "X-Trace"])
+
+        headers = manager._build_openapi_request_extra_headers(
+            mcp_server=server,
+            oauth2_headers={"Authorization": "Bearer oauth-token"},
+            raw_headers={
+                "x-token": "request-token",
+                "x-trace": "trace-from-request",
+                "x-ignored": "not-forwarded",
+            },
+            hook_extra_headers={"Authorization": "Bearer hook-token"},
+        )
+
+        assert headers == {
+            "Authorization": "Bearer hook-token",
+            "X-TOKEN": "request-token",
+            "X-Trace": "trace-from-request",
+        }
+
+    def test_openapi_request_headers_forwards_raw_headers_without_oauth(self):
+        """Configured OpenAPI extra_headers are copied from raw request headers."""
+        manager = MCPServerManager()
+        server = self._make_server(extra_headers_config=["X-TOKEN", "X-Missing"])
+        server.__dict__["extra_headers"] = ["X-TOKEN", 123, "X-Missing"]
+
+        headers = manager._build_openapi_request_extra_headers(
+            mcp_server=server,
+            oauth2_headers=None,
+            raw_headers={"x-token": "request-token", 42: "ignored"},
+            hook_extra_headers=None,
+        )
+
+        assert headers == {"X-TOKEN": "request-token"}
+
+    def test_gateway_openapi_request_headers_match_manager_builder(self):
+        """Gateway OpenAPI execution uses the shared runtime header builder."""
+        manager = MCPServerManager()
+        server = self._make_server(extra_headers_config=["X-TOKEN", "X-Trace"])
+
+        manager_headers = manager._build_openapi_request_extra_headers(
+            mcp_server=server,
+            oauth2_headers={"Authorization": "Bearer oauth-token"},
+            raw_headers={"x-token": "request-token", "x-trace": "trace-from-request"},
+            hook_extra_headers=None,
+        )
+        gateway_headers = mcp_server_module._get_request_extra_headers_for_openapi_tool(
+            server=server,
+            oauth2_headers={"Authorization": "Bearer oauth-token"},
+            raw_headers={
+                "x-token": "request-token",
+                "x-trace": "trace-from-request",
+            },
+        )
+
+        assert gateway_headers == manager_headers
+
+
+class TestOpenAPIRequestContext:
+    """Tests for request-scoped headers on OpenAPI-generated MCP tools."""
+
+    def _make_openapi_server(self, auth_type: MCPAuth = MCPAuth.bearer_token):
+        return MCPServer(
+            server_id="test-id",
+            name="openapi_server",
+            server_name="openapi_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=auth_type,
+            spec_path="/path/to/spec.yaml",
+        )
+
+    @pytest.mark.parametrize(
+        ("auth_type", "expected_auth_header"),
+        [
+            (MCPAuth.api_key, "ApiKey secret"),
+            (MCPAuth.basic, "Basic secret"),
+            (MCPAuth.bearer_token, "Bearer secret"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_direct_openapi_handler_sets_and_resets_request_context(
+        self, auth_type: MCPAuth, expected_auth_header: str
+    ):
+        manager = MCPServerManager()
+        server = self._make_openapi_server(auth_type=auth_type)
+        tool_name = f"{server.name}-test_tool"
+        observed_context: Dict[str, Any] = {}
+
+        async def handler(**kwargs):
+            observed_context["arguments"] = kwargs
+            observed_context["auth"] = _request_auth_header.get()
+            observed_context["extra"] = _request_extra_headers.get()
+            return "ok"
+
+        previous_tool = global_mcp_tool_registry.tools.get(tool_name)
+        global_mcp_tool_registry.register_tool(
+            name=tool_name,
+            description="test tool",
+            input_schema={},
+            handler=handler,
+        )
+        try:
+            result = await manager._call_openapi_tool_handler(
+                server=server,
+                tool_name="test_tool",
+                arguments={"item": "1"},
+                mcp_auth_header="secret",
+                request_extra_headers={"X-TOKEN": "request-token"},
+            )
+        finally:
+            if previous_tool is None:
+                global_mcp_tool_registry.tools.pop(tool_name, None)
+            else:
+                global_mcp_tool_registry.tools[tool_name] = previous_tool
+
+        assert result.isError is False
+        assert result.content[0].text == "ok"
+        assert observed_context == {
+            "arguments": {"item": "1"},
+            "auth": expected_auth_header,
+            "extra": {"X-TOKEN": "request-token"},
+        }
+        assert _request_auth_header.get() is None
+        assert _request_extra_headers.get() is None
+
+    @pytest.mark.asyncio
+    async def test_local_openapi_tool_execution_sets_request_headers(self):
+        server = self._make_openapi_server(auth_type=MCPAuth.basic)
+        server.__dict__["extra_headers"] = ["X-TOKEN", "X-Missing", 123]
+        tool_name = f"{server.name}-test_tool"
+        observed_context: Dict[str, Any] = {}
+
+        async def handler(**kwargs):
+            observed_context["arguments"] = kwargs
+            observed_context["auth"] = _request_auth_header.get()
+            observed_context["extra"] = _request_extra_headers.get()
+            return "ok"
+
+        previous_tool = global_mcp_tool_registry.tools.get(tool_name)
+        global_mcp_tool_registry.register_tool(
+            name=tool_name,
+            description="test tool",
+            input_schema={},
+            handler=handler,
+        )
+        try:
+            with patch.object(
+                mcp_server_module.global_mcp_server_manager,
+                "_get_mcp_server_from_tool_name",
+                return_value=server,
+            ):
+                result = await mcp_server_module.execute_mcp_tool(
+                    name=tool_name,
+                    arguments={"item": "1"},
+                    allowed_mcp_servers=[server],
+                    start_time=datetime.now(),
+                    mcp_auth_header="secret",
+                    oauth2_headers={"Authorization": "Bearer oauth-token"},
+                    raw_headers={"x-token": "request-token"},
+                )
+        finally:
+            if previous_tool is None:
+                global_mcp_tool_registry.tools.pop(tool_name, None)
+            else:
+                global_mcp_tool_registry.tools[tool_name] = previous_tool
+
+        assert result.isError is False
+        assert result.content[0].text == "ok"
+        assert observed_context == {
+            "arguments": {"item": "1"},
+            "auth": "Basic secret",
+            "extra": {
+                "Authorization": "Bearer oauth-token",
+                "X-TOKEN": "request-token",
+            },
+        }
+        assert _request_auth_header.get() is None
+        assert _request_extra_headers.get() is None
 
 
 class TestUserAPIKeyAuthJwtClaims:

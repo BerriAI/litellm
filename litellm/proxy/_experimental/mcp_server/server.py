@@ -48,6 +48,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
     add_server_prefix_to_name,
+    build_mcp_runtime_extra_headers,
     get_server_prefix,
     iter_known_server_prefixes,
 )
@@ -158,6 +159,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
+        _request_extra_headers,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -1149,6 +1151,22 @@ if MCP_AVAILABLE:
             server_auth_header = mcp_auth_header
 
         return server_auth_header, extra_headers
+
+    def _get_request_extra_headers_for_openapi_tool(
+        server: Optional[MCPServer],
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+    ) -> Optional[Dict[str, str]]:
+        """Build per-request headers for a local OpenAPI-generated MCP tool."""
+        if server is None:
+            return oauth2_headers.copy() if oauth2_headers else None
+
+        return build_mcp_runtime_extra_headers(
+            server=server,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            include_static_headers=False,
+        )
 
     def _merge_gateway_initialize_instructions(
         allowed_mcp_servers: List[MCPServer],
@@ -2195,10 +2213,17 @@ if MCP_AVAILABLE:
                     auth_header_value = f"Basic {mcp_auth_header}"
                 else:
                     auth_header_value = f"Bearer {mcp_auth_header}"
+            request_extra_headers = _get_request_extra_headers_for_openapi_tool(
+                server=mcp_server,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
             _auth_token = _request_auth_header.set(auth_header_value)
+            _extra_headers_token = _request_extra_headers.set(request_extra_headers)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)
             finally:
+                _request_extra_headers.reset(_extra_headers_token)
                 _request_auth_header.reset(_auth_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
