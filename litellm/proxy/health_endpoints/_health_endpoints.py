@@ -126,6 +126,7 @@ services = Union[
         "datadog_llm_observability",
         "generic_api",
         "arize",
+        "s3",
         "sqs",
     ],
     str,
@@ -200,6 +201,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog_llm_observability",
             "generic_api",
             "arize",
+            "s3",
             "sqs",
         ]:
             raise HTTPException(
@@ -238,6 +240,13 @@ async def health_services_endpoint(  # noqa: PLR0915
                 "status": "success",
                 "message": "Mock LLM request made - check {}.".format(service),
             }
+        elif service == "s3":
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": '"s3" not in proxy config: litellm_settings.success_callback. Unable to test this.'
+                },
+            )
         elif service == "datadog":
             from litellm.integrations.datadog.datadog import DataDogLogger
 
