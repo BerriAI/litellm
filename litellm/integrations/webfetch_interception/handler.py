@@ -904,9 +904,7 @@ class WebFetchInterceptionLogger(CustomLogger):
             kwargs=kwargs_for_followup,
         )
 
-    async def _execute_tool_call_fetches(
-        self, tool_calls: List[Dict]
-    ) -> List[str]:
+    async def _execute_tool_call_fetches(self, tool_calls: List[Dict]) -> List[str]:
         """Execute fetches for tool calls in parallel and return results."""
         fetch_tasks: List[Any] = []
         for tool_call in tool_calls:

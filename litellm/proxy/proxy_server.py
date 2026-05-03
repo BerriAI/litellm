@@ -3827,9 +3827,7 @@ class ProxyConfig:
         )
 
         ## FETCH TOOLS SETTINGS
-        fetch_tools: Optional[List[FetchToolTypedDict]] = self.parse_fetch_tools(
-            config
-        )
+        fetch_tools: Optional[List[FetchToolTypedDict]] = self.parse_fetch_tools(config)
 
         ## /fine_tuning/jobs endpoints config
         finetuning_config = config.get("finetune_settings", None)
