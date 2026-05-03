@@ -1721,7 +1721,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         iterations: Optional[List[Any]] = usage_object.get("iterations")
         if iterations:
             prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
-            completion_tokens = sum(it.get("output_tokens", 0) or 0 for it in iterations)
+            completion_tokens = sum(
+                it.get("output_tokens", 0) or 0 for it in iterations
+            )
 
         if "inference_geo" in _usage and _usage["inference_geo"] is not None:
             inference_geo = _usage["inference_geo"]
@@ -1776,7 +1778,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
 
-        raw_input_tokens = prompt_tokens - cache_creation_input_tokens - cache_read_input_tokens
+        raw_input_tokens = (
+            prompt_tokens - cache_creation_input_tokens - cache_read_input_tokens
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
