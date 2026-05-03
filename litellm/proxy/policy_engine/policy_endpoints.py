@@ -4,7 +4,7 @@ CRUD ENDPOINTS FOR POLICIES
 Provides REST API endpoints for managing policies and policy attachments.
 """
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -16,6 +16,7 @@ from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.types.proxy.policy_engine import (
     GuardrailPipeline,
+    PipelineExecutionResult,
     PipelineTestRequest,
     PolicyAttachmentCreateRequest,
     PolicyAttachmentDBResponse,
@@ -31,6 +32,89 @@ from litellm.types.proxy.policy_engine import (
 )
 
 router = APIRouter()
+
+_PIPELINE_RESPONSE_INTERNAL_KEYS = {
+    "litellm_parent_otel_span",
+    "parent_otel_span",
+    "user_api_key_auth",
+}
+_JSON_SCALAR_TYPES = (str, int, float, bool)
+
+
+def _prepare_pipeline_response_item(value: Any) -> Any:
+    if value is None or isinstance(value, _JSON_SCALAR_TYPES):
+        return value
+
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump(mode="json", fallback=str)
+        except Exception:
+            return str(value)
+
+    return value
+
+
+def _store_pipeline_response_item(
+    target: Any,
+    key: Optional[str],
+    item: Any,
+    stack: list[tuple[Any, Any]],
+) -> None:
+    item = _prepare_pipeline_response_item(item)
+
+    if isinstance(item, dict):
+        child: Any = {}
+        stack.append((item, child))
+    elif isinstance(item, (list, tuple, set)):
+        child = []
+        stack.append((item, child))
+    elif item is None or isinstance(item, _JSON_SCALAR_TYPES):
+        child = item
+    else:
+        child = str(item)
+
+    if key is None:
+        target.append(child)
+    else:
+        target[key] = child
+
+
+def _sanitize_pipeline_response_value(value: Any) -> Any:
+    value = _prepare_pipeline_response_item(value)
+
+    if value is None or isinstance(value, _JSON_SCALAR_TYPES):
+        return value
+
+    if isinstance(value, dict):
+        root: Any = {}
+    elif isinstance(value, (list, tuple, set)):
+        root = []
+    else:
+        return str(value)
+
+    stack: list[tuple[Any, Any]] = [(value, root)]
+
+    while stack:
+        source, target = stack.pop()
+
+        if isinstance(source, dict):
+            for key, raw_item in source.items():
+                key_str = str(key)
+                if key_str in _PIPELINE_RESPONSE_INTERNAL_KEYS:
+                    continue
+
+                _store_pipeline_response_item(target, key_str, raw_item, stack)
+        else:
+            for raw_item in source:
+                _store_pipeline_response_item(target, None, raw_item, stack)
+
+    return root
+
+
+def _dump_pipeline_result_for_response(
+    result: PipelineExecutionResult,
+) -> Dict[str, Any]:
+    return _sanitize_pipeline_response_value(result.model_dump())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -601,7 +685,7 @@ async def test_pipeline(
             call_type="completion",
             policy_name="test-pipeline",
         )
-        return result.model_dump()
+        return _dump_pipeline_result_for_response(result)
     except Exception as e:
         verbose_proxy_logger.exception(f"Error testing pipeline: {e}")
         raise HTTPException(status_code=500, detail=str(e))
