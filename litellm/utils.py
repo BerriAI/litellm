@@ -3312,9 +3312,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             # Honor drop_params (per-call) and litellm.drop_params (global) the same
             # way `_check_valid_arg` does above. The raised error message itself
             # tells users to set `drop_params=True`, so respect it here.
-            if litellm.drop_params is True or (
-                drop_params is not None and drop_params is True
-            ):
+            if litellm.drop_params is True or drop_params is True:
                 non_default_params.pop("dimensions", None)
             else:
                 raise UnsupportedParamsError(
