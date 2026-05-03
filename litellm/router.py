@@ -5631,6 +5631,13 @@ class Router:
 
         mock_timeout = kwargs.pop("mock_timeout", None)
 
+        # Only the outermost call opens the parent span — recursive fallback
+        # calls (fallback_depth > 0) attach under the same parent.
+        is_outer_call = kwargs.get("fallback_depth", 0) == 0
+        if is_outer_call:
+            self._start_router_parent_spans(kwargs)
+
+        final_exception: Optional[BaseException] = None
         try:
             self._handle_mock_testing_fallbacks(
                 kwargs=kwargs,
@@ -5654,16 +5661,57 @@ class Router:
             )
             return response
         except Exception as e:
-            return await self.async_function_with_fallbacks_common_utils(
-                e,
-                disable_fallbacks,
-                fallbacks,
-                context_window_fallbacks,
-                content_policy_fallbacks,
-                model_group,
-                args,
-                kwargs,
-            )
+            try:
+                return await self.async_function_with_fallbacks_common_utils(
+                    e,
+                    disable_fallbacks,
+                    fallbacks,
+                    context_window_fallbacks,
+                    content_policy_fallbacks,
+                    model_group,
+                    args,
+                    kwargs,
+                )
+            except BaseException as fe:
+                final_exception = fe
+                raise
+        finally:
+            if is_outer_call:
+                self._end_router_parent_spans(kwargs, exception=final_exception)
+
+    @staticmethod
+    def _start_router_parent_spans(kwargs: dict) -> None:
+        from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
+
+        for logger in _in_memory_loggers:
+            fn = getattr(logger, "start_router_parent_span", None)
+            if callable(fn):
+                try:
+                    fn(kwargs)
+                except Exception as e:
+                    verbose_router_logger.debug(
+                        "start_router_parent_span failed on %s: %s",
+                        type(logger).__name__,
+                        e,
+                    )
+
+    @staticmethod
+    def _end_router_parent_spans(
+        kwargs: dict, exception: Optional[BaseException] = None
+    ) -> None:
+        from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
+
+        for logger in _in_memory_loggers:
+            fn = getattr(logger, "end_router_parent_span", None)
+            if callable(fn):
+                try:
+                    fn(kwargs, exception=exception)
+                except Exception as e:
+                    verbose_router_logger.debug(
+                        "end_router_parent_span failed on %s: %s",
+                        type(logger).__name__,
+                        e,
+                    )
 
     def _handle_mock_testing_fallbacks(
         self,
