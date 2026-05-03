@@ -592,12 +592,16 @@ def test_remove_scope_from_cache_control():
     assert request["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
 
 
-def test_bedrock_messages_strips_output_config():
+def test_bedrock_messages_forwards_output_config():
     """
-    Ensure output_config is stripped from the request before sending to
-    Bedrock Invoke, which doesn't support this Anthropic-specific parameter.
+    ``output_config`` is the adaptive-thinking effort payload for Claude
+    4.6 / 4.7 (e.g. ``{"effort": "max"}``). Bedrock Invoke accepts it for
+    those models — the prior behavior of stripping it silently flattened
+    every adaptive tier on /v1/messages so ``low`` / ``medium`` / ``high`` /
+    ``xhigh`` / ``max`` all collapsed to identical thinking with no tier
+    differentiation.
 
-    Regression test for: https://github.com/BerriAI/litellm/issues/22797
+    Regression coverage for the QA bug listed on PR #27039.
     """
     from litellm.types.router import GenericLiteLLMParams
 
@@ -611,25 +615,24 @@ def test_bedrock_messages_strips_output_config():
     }
 
     result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-3-haiku-20240307-v1:0",
+        model="anthropic.claude-opus-4-7",
         messages=messages,
         anthropic_messages_optional_request_params=optional_params,
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )
 
-    assert (
-        "output_config" not in result
-    ), "output_config should be stripped — Bedrock Invoke rejects it"
+    assert result.get("output_config") == {"effort": "high"}
     # Other params should be preserved
     assert result.get("max_tokens") == 4096
 
 
-def test_bedrock_messages_strips_output_config_with_output_format():
+def test_bedrock_messages_forwards_output_config_with_output_format():
     """
-    When both output_config and output_format are present, both should be
-    stripped (output_format is converted to inline schema, output_config
-    is simply dropped).
+    When both output_config and output_format are present, output_format is
+    converted to inline schema (Bedrock Invoke doesn't accept output_format
+    natively), and output_config is forwarded for Claude 4.6/4.7 adaptive
+    thinking.
     """
     from litellm.types.router import GenericLiteLLMParams
 
@@ -648,14 +651,14 @@ def test_bedrock_messages_strips_output_config_with_output_format():
     }
 
     result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-3-haiku-20240307-v1:0",
+        model="anthropic.claude-opus-4-7",
         messages=messages,
         anthropic_messages_optional_request_params=optional_params,
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )
 
-    assert "output_config" not in result
+    assert result.get("output_config") == {"effort": "low"}
     assert "output_format" not in result
 
 
@@ -728,13 +731,18 @@ def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
         "mcp_servers",
         "container",
         "inference_geo",
-        "output_config",
         "context_management",
         "model",
         "stream",
     ):
         assert bad not in result, f"{bad} should be stripped by the allowlist"
 
+    # ``output_config`` rides along — Bedrock Invoke accepts it for Claude
+    # 4.6/4.7 adaptive thinking and stripping it silently flattens every
+    # adaptive tier. (Bedrock will reject it for non-adaptive models, which
+    # is the correct behavior — surface the model error rather than swallow
+    # the knob.)
+    assert result.get("output_config") == {"effort": "low"}
     # Supported fields pass through.
     assert result["max_tokens"] == 4096
     assert result["temperature"] == 0.5
@@ -882,7 +890,10 @@ async def test_promote_message_start_cache_when_message_stop_omits_cache_fields(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"input_tokens": 10, "output_tokens": 181},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     merged: list[dict] = []
     async for chunk in cfg._promote_message_stop_usage(_stream()):
@@ -936,7 +947,11 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
                 },
             },
         }
-        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }
         yield {
             "type": "content_block_delta",
             "index": 0,
@@ -948,7 +963,10 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"output_tokens": 181, "input_tokens": 10},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     logging_obj = LiteLLMLoggingObj(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",

@@ -8,6 +8,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -1631,8 +1632,10 @@ def test_effort_validation():
         )
         assert result["output_config"]["effort"] == effort
 
-    # Invalid value should raise error
-    with pytest.raises(ValueError, match="Invalid effort value"):
+    # Invalid value should raise BadRequestError (clean 400, not a 500).
+    with pytest.raises(
+        litellm.exceptions.BadRequestError, match="Invalid effort value"
+    ):
         optional_params = {"output_config": {"effort": "invalid"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1682,12 +1685,18 @@ def test_effort_validation_with_opus_46():
 
 
 def test_max_effort_rejected_for_opus_45():
-    """Test that effort='max' is rejected when using Claude Opus 4.5."""
+    """Test that effort='max' is rejected when using Claude Opus 4.5.
+
+    Surfaces as a clean 400 BadRequestError, not a 500 ValueError.
+    """
     config = AnthropicConfig()
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
+    with pytest.raises(
+        litellm.exceptions.BadRequestError,
+        match="effort='max' is not supported by this model",
+    ):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -2153,12 +2162,14 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
     """
     config = AnthropicConfig()
 
-    # Test with Claude Sonnet 4.5 (non-Opus 4.6 model)
+    # Test with Claude Sonnet 4.5 (non-Opus 4.6 model).
+    # ``minimal`` floors at the Anthropic provider minimum (1024) because
+    # Anthropic / Azure / Vertex / Bedrock Invoke 400 below that.
     test_cases = [
         ("low", 1024),  # DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
         ("medium", 2048),  # DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
         ("high", 4096),  # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
-        ("minimal", 128),  # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+        ("minimal", 1024),  # ANTHROPIC_MIN_THINKING_BUDGET_TOKENS (provider floor)
     ]
 
     for effort, expected_budget in test_cases:
@@ -2245,11 +2256,17 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
 
 
 def test_max_effort_rejected_for_sonnet_46():
-    """Test that effort='max' is rejected for Sonnet 4.6 (Opus-only effort level)."""
+    """Test that effort='max' is rejected for Sonnet 4.6 (Opus-only effort level).
+
+    Surfaces as a clean 400 BadRequestError, not a 500 ValueError.
+    """
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
+    with pytest.raises(
+        litellm.exceptions.BadRequestError,
+        match="effort='max' is not supported by this model",
+    ):
         config.transform_request(
             model="claude-sonnet-4-6-20260219",
             messages=messages,
@@ -2333,6 +2350,81 @@ def test_reasoning_effort_none_omits_thinking_and_output_config(model):
 
     assert "thinking" not in result
     assert "output_config" not in result
+
+
+@pytest.mark.parametrize(
+    "effort",
+    ["disabled", "invalid", ""],
+)
+def test_reasoning_effort_garbage_raises_bad_request(effort):
+    """Unmapped / garbage / empty-string reasoning_effort surfaces as a clean
+    400 ``BadRequestError`` instead of letting ``ValueError`` propagate as 500.
+    """
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="claude-sonnet-4-5-20250929",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "effort",
+    ["xhigh", "max"],
+)
+def test_reasoning_effort_unsupported_tier_on_budget_model_raises_bad_request(
+    effort,
+):
+    """``xhigh`` / ``max`` aren't defined for budget-mode (4.5) Claude models;
+    surface as a clean 400 instead of 500.
+    """
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="claude-sonnet-4-5-20250929",
+            drop_params=False,
+        )
+
+
+def test_output_config_effort_empty_string_raises_bad_request():
+    """``output_config={"effort": ""}`` must be rejected with a 400 — the
+    legacy ``if effort and ...`` short-circuit silently let it pass
+    through (verified end-to-end on the QA sweep for PR #27039).
+    """
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError, match="Invalid effort"):
+        config.transform_request(
+            model="claude-opus-4-7",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"output_config": {"effort": ""}, "max_tokens": 32},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_reasoning_effort_minimal_floors_at_anthropic_provider_minimum():
+    """Anthropic Messages API rejects ``budget_tokens < 1024``. ``minimal``
+    must floor at the provider minimum so it's a usable tier on direct
+    Anthropic / Azure AI Anthropic / Vertex AI Anthropic / Bedrock Invoke.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] >= 1024
 
 
 def test_effort_beta_header_still_injected_for_older_models():

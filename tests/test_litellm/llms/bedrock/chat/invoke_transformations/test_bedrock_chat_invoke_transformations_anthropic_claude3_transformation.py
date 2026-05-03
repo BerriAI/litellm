@@ -406,36 +406,37 @@ def test_opus_4_5_model_detection():
 #         f"computer-use beta should be kept, got: {anthropic_beta}"
 
 
-def test_output_config_removed_from_bedrock_chat_invoke_request():
+def test_output_config_forwarded_for_bedrock_chat_invoke_request():
     """
-    Test that output_config parameter is stripped from Bedrock Chat Invoke requests.
+    Bedrock Invoke (chat/completions route) must forward
+    ``output_config`` for Anthropic adaptive-thinking models. The earlier
+    behavior stripped it unconditionally, which silently flattened every
+    adaptive tier (``low``/``medium``/``high``/``xhigh``/``max``) to identical
+    behavior on the wire.
 
-    Bedrock Invoke API doesn't support the output_config parameter (Anthropic-only).
-    Ensures the chat/invoke path mirrors the messages/invoke path fix.
-
-    Fixes: https://github.com/BerriAI/litellm/issues/22797
+    The wire QA at https://github.com/BerriAI/litellm/pull/27039 showed
+    ``thinking.type: adaptive`` was forwarded but ``output_config.effort``
+    was always missing, even though direct curls to Anthropic's Bedrock
+    Invoke endpoint accept it.
     """
     config = AmazonAnthropicClaudeConfig()
 
     messages = [{"role": "user", "content": "test"}]
 
-    # Inject output_config into optional_params (simulates Anthropic SDK forwarding it)
     optional_params = {
         "max_tokens": 100,
         "output_config": {"effort": "high"},
     }
 
     result = config.transform_request(
-        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        model="anthropic.claude-opus-4-7",
         messages=messages,
         optional_params=optional_params,
         litellm_params={},
         headers={},
     )
 
-    assert (
-        "output_config" not in result
-    ), f"output_config should be stripped for Bedrock Chat Invoke, got keys: {list(result.keys())}"
+    assert result.get("output_config") == {"effort": "high"}
     # Verify normal params survive
     assert result["max_tokens"] == 100
 
