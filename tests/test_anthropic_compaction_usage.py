@@ -43,34 +43,35 @@ def test_anthropic_compaction_usage_calculation():
     # Assert details
     assert usage.prompt_tokens_details.text_tokens == 1100
     
-    # Assert iterations passthrough
-    assert usage.iterations is not None
-    assert len(usage.iterations) == 2
-    assert usage.iterations[0]["type"] == "compaction"
+    # Assert iterations passthrough (using private attr)
+    assert usage._iterations is not None
+    assert len(usage._iterations) == 2
+    assert usage._iterations[0]["type"] == "compaction"
 
-def test_anthropic_compaction_usage_with_cache():
+def test_anthropic_compaction_usage_with_iteration_cache():
     """
-    Test that calculate_usage correctly handles iterations + prompt caching.
+    Test that calculate_usage correctly sums caching tokens FROM iterations.
+    This covers the specific case mentioned by JasonPan.
     """
     anthropic_config = AnthropicConfig()
     
     usage_object = {
         "input_tokens": 100,
         "output_tokens": 50,
-        "cache_creation_input_tokens": 10,
-        "cache_read_input_tokens": 20,
         "iterations": [
             {
-                "iteration": 1,
                 "type": "compaction",
-                "input_tokens": 500,
-                "output_tokens": 200
+                "input_tokens": 500, 
+                "output_tokens": 200,
+                "cache_creation_input_tokens": 50,
+                "cache_read_input_tokens": 17000
             },
             {
-                "iteration": 2,
                 "type": "message",
-                "input_tokens": 100,
-                "output_tokens": 50
+                "input_tokens": 100, 
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 10,
+                "cache_read_input_tokens": 20
             }
         ]
     }
@@ -80,19 +81,15 @@ def test_anthropic_compaction_usage_with_cache():
         reasoning_content=None
     )
     
-    # Input tokens sum: 500 + 100 = 600
-    # Plus cache creation (10) and cache read (20)
-    # Total prompt tokens = 600 + 10 + 20 = 630
-    assert usage.prompt_tokens == 630
-    
-    # Details
-    assert usage.prompt_tokens_details.text_tokens == 600
-    assert usage.prompt_tokens_details.cache_creation_tokens == 10
-    assert usage.prompt_tokens_details.cached_tokens == 20
-    
-    # Output tokens sum: 200 + 50 = 250
+    # input_tokens sum = 500 + 100 = 600
+    # cache_creation sum = 50 + 10 = 60
+    # cache_read sum = 17000 + 20 = 17020
+    # Total prompt tokens = 600 + 60 + 17020 = 17680
+    assert usage.prompt_tokens == 17680
     assert usage.completion_tokens == 250
+    assert usage.prompt_tokens_details.cache_creation_tokens == 60
+    assert usage.prompt_tokens_details.cached_tokens == 17020
 
 if __name__ == "__main__":
     test_anthropic_compaction_usage_calculation()
-    test_anthropic_compaction_usage_with_cache()
+    test_anthropic_compaction_usage_with_iteration_cache()
