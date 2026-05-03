@@ -94,11 +94,14 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   });
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
-  // Use the filter logic hook
+  // Stable reference: `|| []` creates a new array literal on every render, which
+  // causes the useEffect in useFilterLogic to fire on every render → infinite loop.
+  const keysList = useMemo(() => keys?.keys ?? [], [keys?.keys]);
 
+  // Use the filter logic hook
   const { filters, filteredKeys, filteredTotalCount, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
     useFilterLogic({
-      keys: keys?.keys || [],
+      keys: keysList,
       teams,
       organizations,
     });

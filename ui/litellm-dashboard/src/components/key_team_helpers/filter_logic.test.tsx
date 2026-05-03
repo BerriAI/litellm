@@ -32,6 +32,52 @@ const makeApiResponse = (overrides: { keys?: any[]; total_count?: number; total_
   total_pages: overrides.total_pages ?? 1,
 });
 
+describe("useFilterLogic – stability", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(keyListCall).mockResolvedValue(makeApiResponse());
+  });
+
+  it("should not enter an infinite render loop when keys prop is re-rendered with a new empty-array reference", async () => {
+    // Regression: callers that write `keys?.keys || []` produce a fresh `[]`
+    // on every render (when keys is undefined/null).  The useEffect([keys, filters])
+    // must not treat every new-reference empty array as a change that requires
+    // another setFilteredKeys call, which would re-render the consumer, which
+    // would produce yet another new `[]`, ad infinitum.
+    const { result, rerender } = renderHook(
+      ({ keys }) => useFilterLogic({ keys, teams: [], organizations: [] }),
+      { initialProps: { keys: [] as any[] } },
+    );
+
+    // Simulate the || [] pattern: each rerender gets a brand-new [] literal
+    act(() => {
+      rerender({ keys: [] });
+      rerender({ keys: [] });
+      rerender({ keys: [] });
+    });
+
+    // If we reach here the hook did not loop.
+    // filteredKeys should reflect the empty input.
+    expect(result.current.filteredKeys).toEqual([]);
+  });
+
+  it("should update filteredKeys when keys prop changes from empty to populated", async () => {
+    const { result, rerender } = renderHook(
+      ({ keys }) => useFilterLogic({ keys, teams: [], organizations: [] }),
+      { initialProps: { keys: [] as any[] } },
+    );
+
+    expect(result.current.filteredKeys).toEqual([]);
+
+    act(() => {
+      rerender({ keys: [mockKey as any] });
+    });
+
+    expect(result.current.filteredKeys).toHaveLength(1);
+    expect(result.current.filteredKeys[0]).toBe(mockKey);
+  });
+});
+
 describe("useFilterLogic – filteredTotalCount", () => {
   beforeEach(() => {
     vi.clearAllMocks();
