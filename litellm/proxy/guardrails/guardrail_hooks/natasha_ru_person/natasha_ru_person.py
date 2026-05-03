@@ -134,7 +134,7 @@ class NatashaRussianPersonGuardrail(CustomGuardrail):
     ) -> None:
         ph = (
             redaction_placeholder
-            or os.getenv("NATASHA_RU_PERSON_PLACEHOLDER")
+            or os.environ.get("NATASHA_RU_PERSON_PLACEHOLDER")
             or "<PER_REDACTED>"
         )
         self._placeholder = ph
