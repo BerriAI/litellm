@@ -8,6 +8,9 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    _resolve_embedding_config,
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
@@ -66,14 +69,16 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
             embedding_model = litellm_params.get("litellm_embedding_model")
             if embedding_model and not litellm_params.get("litellm_embedding_config"):
                 from litellm.proxy.proxy_server import prisma_client
-                from litellm.proxy.vector_store_endpoints.management_endpoints import (
-                    _resolve_embedding_config,
-                )
 
                 resolved_config = await _resolve_embedding_config(
                     embedding_model=embedding_model, prisma_client=prisma_client
                 )
                 if resolved_config:
+                    # Build a fresh dict via spread instead of mutating
+                    # ``litellm_params`` in place — the registry hands back
+                    # a reference to its cached object, so an in-place
+                    # update would persist the resolved cleartext into the
+                    # in-memory cache for the lifetime of the process.
                     litellm_params = {
                         **litellm_params,
                         "litellm_embedding_config": resolved_config,

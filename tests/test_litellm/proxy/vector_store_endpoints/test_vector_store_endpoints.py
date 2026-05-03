@@ -36,6 +36,20 @@ from litellm.proxy.vector_store_endpoints.utils import (
 from litellm.types.utils import LlmProviders
 
 
+def _serialize_litellm_params(litellm_params):
+    """Serialize ``litellm_params`` to a string for substring assertions.
+
+    The redact helper preserves the persisted shape — string in, string
+    out; dict in, dict out — so callers that just want to assert "this
+    secret never appears" need a single text representation either way.
+    """
+    import json
+
+    if isinstance(litellm_params, str):
+        return litellm_params
+    return json.dumps(litellm_params or {})
+
+
 @pytest.mark.asyncio
 async def test_router_avector_store_search_passes_correct_args():
     """
@@ -202,7 +216,7 @@ async def test_update_request_data_resolves_embedding_config_at_use_time():
     with (
         patch.object(litellm, "vector_store_registry", mock_registry),
         patch(
-            "litellm.proxy.vector_store_endpoints.management_endpoints._resolve_embedding_config",
+            "litellm.proxy.vector_store_endpoints.endpoints._resolve_embedding_config",
             new=AsyncMock(return_value=resolved),
         ),
     ):
@@ -240,14 +254,12 @@ async def test_update_request_data_passes_through_legacy_embedding_config():
         mock_vector_store
     )
 
-    resolve_mock = AsyncMock(
-        return_value={"api_key": "should-not-be-used", "api_base": "wrong"}
-    )
+    resolve_mock = AsyncMock()
 
     with (
         patch.object(litellm, "vector_store_registry", mock_registry),
         patch(
-            "litellm.proxy.vector_store_endpoints.management_endpoints._resolve_embedding_config",
+            "litellm.proxy.vector_store_endpoints.endpoints._resolve_embedding_config",
             new=resolve_mock,
         ),
     ):
@@ -1523,14 +1535,8 @@ async def test_new_vector_store_auto_resolves_embedding_config():
     # cleartext or pre-existing rows that were created by an earlier
     # proxy version.
     response_vs = result["vector_store"]
-    response_params = response_vs.get("litellm_params")
-    # The redact helper preserves the persisted shape (string or dict);
-    # serialise to text either way and assert the cleartext credential
-    # never appears.
-    assert "resolved-api-key" not in (
-        response_params
-        if isinstance(response_params, str)
-        else json.dumps(response_params or {})
+    assert "resolved-api-key" not in _serialize_litellm_params(
+        response_vs.get("litellm_params")
     )
 
 
@@ -1797,11 +1803,8 @@ async def test_new_vector_store_auto_resolves_from_router():
     assert litellm_params_dict["litellm_embedding_model"] == "config-embedding-model"
 
     response_vs = result["vector_store"]
-    response_params = response_vs.get("litellm_params")
-    assert "router-resolved-api-key" not in (
-        response_params
-        if isinstance(response_params, str)
-        else json.dumps(response_params or {})
+    assert "router-resolved-api-key" not in _serialize_litellm_params(
+        response_vs.get("litellm_params")
     )
 
 
