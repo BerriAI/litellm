@@ -2306,3 +2306,274 @@ def test_get_router_model_info_with_deployment_object():
     # Verify we got valid model info back
     assert model_info is not None
     assert isinstance(model_info, dict)
+
+
+class TestEnsureRoutingStrategyLogger:
+    """Test the _ensure_routing_strategy_logger method for lazy initialization."""
+
+    def test_lazy_initialization_latency_logger(self):
+        """Test that latency logger is created on-demand when it doesn't exist."""
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "fake-key-1",
+                    "rpm": 100,
+                    "tpm": 10000,
+                },
+                "model_info": {"id": "deployment-1"},
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+            routing_strategy="simple-shuffle",  # Don't initialize latency logger
+        )
+
+        # Verify logger doesn't exist initially
+        assert (
+            not hasattr(router, "lowestlatency_logger")
+            or router.lowestlatency_logger is None
+        )
+
+        # Call _ensure_routing_strategy_logger for latency-based-routing
+        router._ensure_routing_strategy_logger("latency-based-routing", {"ttl": 1})
+
+        # Verify logger was created
+        assert (
+            hasattr(router, "lowestlatency_logger")
+            and router.lowestlatency_logger is not None
+        )
+
+    def test_lazy_initialization_cost_logger(self):
+        """Test that cost logger is created on-demand when it doesn't exist."""
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "fake-key-1",
+                    "rpm": 100,
+                    "tpm": 10000,
+                },
+                "model_info": {"id": "deployment-1"},
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+            routing_strategy="simple-shuffle",  # Don't initialize cost logger
+        )
+
+        # Verify logger doesn't exist initially
+        assert (
+            not hasattr(router, "lowestcost_logger") or router.lowestcost_logger is None
+        )
+
+        # Call _ensure_routing_strategy_logger for cost-based-routing
+        router._ensure_routing_strategy_logger("cost-based-routing")
+
+        # Verify logger was created
+        assert (
+            hasattr(router, "lowestcost_logger")
+            and router.lowestcost_logger is not None
+        )
+
+    def test_lazy_initialization_tpm_logger_v2(self):
+        """Test that TPM logger v2 is created on-demand when it doesn't exist."""
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "fake-key-1",
+                    "rpm": 100,
+                    "tpm": 10000,
+                },
+                "model_info": {"id": "deployment-1"},
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+            routing_strategy="simple-shuffle",  # Don't initialize TPM logger
+        )
+
+        # Verify logger doesn't exist initially
+        assert (
+            not hasattr(router, "lowesttpm_logger_v2")
+            or router.lowesttpm_logger_v2 is None
+        )
+
+        # Call _ensure_routing_strategy_logger for usage-based-routing-v2
+        router._ensure_routing_strategy_logger("usage-based-routing-v2")
+
+        # Verify logger was created
+        assert (
+            hasattr(router, "lowesttpm_logger_v2")
+            and router.lowesttpm_logger_v2 is not None
+        )
+
+    def test_lazy_initialization_least_busy_logger(self):
+        """Test that least-busy logger is created on-demand when it doesn't exist."""
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "fake-key-1",
+                    "rpm": 100,
+                    "tpm": 10000,
+                },
+                "model_info": {"id": "deployment-1"},
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+            routing_strategy="simple-shuffle",  # Don't initialize least-busy logger
+        )
+
+        # Verify logger doesn't exist initially
+        assert (
+            not hasattr(router, "leastbusy_logger") or router.leastbusy_logger is None
+        )
+
+        # Call _ensure_routing_strategy_logger for least-busy
+        router._ensure_routing_strategy_logger("least-busy")
+
+        # Verify logger was created
+        assert (
+            hasattr(router, "leastbusy_logger") and router.leastbusy_logger is not None
+        )
+
+    def test_no_reinitialize_existing_logger(self):
+        """Test that existing loggers are not re-initialized."""
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "fake-key-1",
+                    "rpm": 100,
+                    "tpm": 10000,
+                },
+                "model_info": {"id": "deployment-1"},
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+            routing_strategy="latency-based-routing",  # Initialize latency logger
+            routing_strategy_args={"ttl": 1},
+        )
+
+        # Get reference to the existing logger
+        original_logger = router.lowestlatency_logger
+        assert original_logger is not None
+
+        # Call _ensure_routing_strategy_logger again
+        router._ensure_routing_strategy_logger("latency-based-routing", {"ttl": 1})
+
+        # Verify the same logger instance is still being used (not re-initialized)
+        assert router.lowestlatency_logger is original_logger
+
+    def test_no_reinitialize_cost_logger(self):
+        """Test that existing cost logger is not re-initialized."""
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "fake-key-1",
+                    "rpm": 100,
+                    "tpm": 10000,
+                },
+                "model_info": {"id": "deployment-1"},
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+            routing_strategy="cost-based-routing",  # Initialize cost logger
+        )
+
+        # Get reference to the existing logger
+        original_logger = router.lowestcost_logger
+        assert original_logger is not None
+
+        # Call _ensure_routing_strategy_logger again
+        router._ensure_routing_strategy_logger("cost-based-routing")
+
+        # Verify the same logger instance is still being used (not re-initialized)
+        assert router.lowestcost_logger is original_logger
+
+    def test_simple_shuffle_no_logger(self):
+        """Test that simple-shuffle doesn't create any logger."""
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "fake-key-1",
+                    "rpm": 100,
+                    "tpm": 10000,
+                },
+                "model_info": {"id": "deployment-1"},
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+            routing_strategy="simple-shuffle",
+        )
+
+        # Call _ensure_routing_strategy_logger for simple-shuffle
+        router._ensure_routing_strategy_logger("simple-shuffle")
+
+        # Verify no routing strategy loggers were created
+        assert (
+            not hasattr(router, "lowestlatency_logger")
+            or router.lowestlatency_logger is None
+        )
+        assert (
+            not hasattr(router, "lowestcost_logger") or router.lowestcost_logger is None
+        )
+        assert (
+            not hasattr(router, "lowesttpm_logger_v2")
+            or router.lowesttpm_logger_v2 is None
+        )
+        assert (
+            not hasattr(router, "leastbusy_logger") or router.leastbusy_logger is None
+        )
+
+    def test_multiple_loggers_initialization(self):
+        """Test that multiple different loggers can be initialized."""
+        model_list = [
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "fake-key-1",
+                    "rpm": 100,
+                    "tpm": 10000,
+                },
+                "model_info": {"id": "deployment-1"},
+            },
+        ]
+        router = Router(
+            model_list=model_list,
+            routing_strategy="simple-shuffle",
+        )
+
+        # Initialize multiple loggers
+        router._ensure_routing_strategy_logger("latency-based-routing", {"ttl": 1})
+        router._ensure_routing_strategy_logger("cost-based-routing")
+        router._ensure_routing_strategy_logger("least-busy")
+
+        # Verify all loggers were created
+        assert (
+            hasattr(router, "lowestlatency_logger")
+            and router.lowestlatency_logger is not None
+        )
+        assert (
+            hasattr(router, "lowestcost_logger")
+            and router.lowestcost_logger is not None
+        )
+        assert (
+            hasattr(router, "leastbusy_logger") and router.leastbusy_logger is not None
+        )

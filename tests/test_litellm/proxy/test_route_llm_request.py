@@ -151,8 +151,8 @@ async def test_route_request_with_router_settings_override():
             "num_retries": 5,
             "timeout": 30,
             "model_group_retry_policy": {"gpt-3.5-turbo": {"RateLimitErrorRetries": 3}},
-            # These settings should be ignored (not in per_request_settings list)
             "routing_strategy": "least-busy",
+            # This setting should be ignored (not in per_request_settings list)
             "model_group_alias": {"alias": "real_model"},
         },
     }
@@ -171,8 +171,9 @@ async def test_route_request_with_router_settings_override():
     assert call_kwargs["model_group_retry_policy"] == {
         "gpt-3.5-turbo": {"RateLimitErrorRetries": 3}
     }
+    # Verify routing_strategy was merged (now supported per-request)
+    assert call_kwargs["routing_strategy"] == "least-busy"
     # Verify unsupported settings were NOT merged
-    assert "routing_strategy" not in call_kwargs
     assert "model_group_alias" not in call_kwargs
     # Verify router_settings_override was removed from data
     assert "router_settings_override" not in call_kwargs

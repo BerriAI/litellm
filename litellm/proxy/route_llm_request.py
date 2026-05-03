@@ -387,6 +387,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
             "num_retries",
             "timeout",
             "model_group_retry_policy",
+            "routing_strategy",
         ]
 
         # Merge override settings into data (only if not already set in request)
