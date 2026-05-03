@@ -3977,8 +3977,8 @@ def completion(  # type: ignore # noqa: PLR0915
             response = model_response
         elif custom_llm_provider == "ollama":
             api_base = (
-                litellm.api_base
-                or api_base
+                api_base
+                or litellm.api_base
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
@@ -4006,8 +4006,8 @@ def completion(  # type: ignore # noqa: PLR0915
 
         elif custom_llm_provider == "ollama_chat":
             api_base = (
-                litellm.api_base
-                or api_base
+                api_base
+                or litellm.api_base
                 or get_secret("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )
@@ -5335,8 +5335,8 @@ def embedding(  # noqa: PLR0915
             )
         elif custom_llm_provider == "ollama":
             api_base = (
-                litellm.api_base
-                or api_base
+                api_base
+                or litellm.api_base
                 or get_secret_str("OLLAMA_API_BASE")
                 or "http://localhost:11434"
             )  # type: ignore
