@@ -64,6 +64,40 @@ def _get_models_from_access_groups(
     return all_models
 
 
+def _is_unresolvable_model_identifier(
+    model: str,
+    proxy_model_list: List[str],
+    model_access_groups: Dict[str, List[str]],
+) -> bool:
+    """
+    A string from a key/team `models` list resolves to a real model id when
+    any of these are true:
+      - it is in proxy_model_list (a configured proxy model name, including
+        custom enterprise aliases not present in litellm.model_list_set)
+      - it is in model_access_groups (an active access group; expanded above)
+      - it is in litellm.model_list_set (a known base model id)
+      - it contains "/" (provider-qualified route, e.g. `openai/gpt-4o`)
+      - it contains "*" (wildcard route, expanded by `_get_wildcard_models`)
+      - it starts with "ft:" (OpenAI fine-tune id)
+
+    Anything else is unresolvable and would otherwise leak into /v1/models as
+    if it were a real model. The most common case (issue #25550) is a stale
+    access-group label whose group was removed; identifiers for proxy models
+    that have since been removed from config are filtered for the same reason.
+    """
+    if model in proxy_model_list:
+        return False
+    if model in model_access_groups:
+        return False
+    if model in litellm.model_list_set:
+        return False
+    if "/" in model or "*" in model:
+        return False
+    if model.startswith("ft:"):
+        return False
+    return True
+
+
 async def get_mcp_server_ids(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> List[str]:
@@ -210,6 +244,22 @@ def get_complete_model_list(
         if infer_model_from_keys:
             valid_models = get_valid_models()
             append_unique(valid_models)
+
+    # Drop unresolvable identifiers carried in key/team `models` — most
+    # commonly stale access-group labels (issue #25550), but also names of
+    # proxy models that have since been removed from config. Only filter the
+    # key/team paths; the proxy-admin path above is sourced from authoritative
+    # state (proxy_model_list, model_access_groups keys).
+    if key_models or team_models:
+        unique_models = [
+            m
+            for m in unique_models
+            if not _is_unresolvable_model_identifier(
+                model=m,
+                proxy_model_list=proxy_model_list,
+                model_access_groups=model_access_groups,
+            )
+        ]
 
     if only_model_access_groups:
         model_access_groups_to_return: List[str] = []
