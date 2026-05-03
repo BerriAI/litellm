@@ -283,6 +283,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.common_utils.admin_ui_utils import admin_ui_disabled
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -1498,7 +1499,19 @@ try:
     )
     # print(f"mounted _next at {server_root_path}/ui/_next")
 
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
+    _disable_admin_ui = str_to_bool(os.getenv("DISABLE_ADMIN_UI", "false")) is True
+    if _disable_admin_ui:
+
+        @app.get("/ui/{path:path}")
+        async def ui_disabled_path(path: str):
+            return admin_ui_disabled()
+
+        @app.get("/ui")
+        async def ui_disabled_root():
+            return admin_ui_disabled()
+
+    else:
+        app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
     def _restructure_ui_html_files(ui_root: str) -> None:
         """Ensure each exported HTML route is available as <route>/index.html."""
