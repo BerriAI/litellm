@@ -87,6 +87,23 @@ except ImportError as e:
 
 user_api_key_service_logger_obj = ServiceLogging()  # used for tracking latency on OTEL
 
+
+def _normalize_public_auth_route(route: str) -> str:
+    if route != "/" and route.endswith("/"):
+        return route.rstrip("/")
+    return route
+
+
+def _route_requires_auth_despite_public(
+    route: str, general_settings: Optional[dict]
+) -> bool:
+    normalized_route = _normalize_public_auth_route(route)
+    if normalized_route == "/metrics":
+        return litellm.require_auth_for_metrics_endpoint is not False
+
+    return False
+
+
 custom_litellm_key_header = APIKeyHeader(
     name=SpecialHeaders.custom_litellm_api_key.value,
     auto_error=False,
@@ -714,7 +731,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         """
 
         ######## Route Checks Before Reading DB / Cache for "token" ################
-        if (
+        if not _route_requires_auth_despite_public(
+            route=route, general_settings=general_settings
+        ) and (
             route in LiteLLMRoutes.public_routes.value  # type: ignore
             or route_in_additonal_public_routes(current_route=route)
         ):
@@ -1698,7 +1717,7 @@ async def _run_centralized_common_checks(
         user_custom_auth,
     )
 
-    # Public routes (e.g. /health/readiness, /metrics) are exempt from
+    # Public routes (e.g. /health/liveness) are exempt from
     # auth in the builder — the wrapper must not retroactively apply
     # authz on top, or k8s readiness probes and other unauthenticated
     # callers get 401.

@@ -1447,14 +1447,11 @@ def callback_name(callback):
             return str(callback)
 
 
-@router.get(
-    "/health/readiness",
-    tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
-)
-async def health_readiness(response: Response):
+async def _get_health_readiness_details(
+    response: Optional[Response] = None,
+) -> Dict[str, Any]:
     """
-    Unprotected endpoint for checking if worker can receive requests
+    Detailed health payload for authenticated diagnostics.
     """
     from litellm.proxy.proxy_server import prisma_client, version
 
@@ -1473,7 +1470,7 @@ async def health_readiness(response: Response):
             success_callback_names = litellm.success_callback
 
         # check Cache
-        cache_type = None
+        cache_type: Any = None
         if litellm.cache is not None:
             from litellm.caching.caching import RedisSemanticCache
 
@@ -1482,6 +1479,7 @@ async def health_readiness(response: Response):
             if isinstance(litellm.cache.cache, RedisSemanticCache):
                 # ping the cache
                 # TODO: @ishaan-jaff - we should probably not ping the cache on every /health/readiness check
+                index_info: Any
                 try:
                     index_info = await litellm.cache.cache._index_info()
                 except Exception as e:
@@ -1499,7 +1497,7 @@ async def health_readiness(response: Response):
             # serve requests that depend on persisted state (keys, budgets,
             # spend logs). Return 503 so orchestrators take this pod out of
             # rotation; "Not connected" (no DB configured at all) stays 200.
-            if db_health_status["status"] != "connected":
+            if response is not None and db_health_status["status"] != "connected":
                 response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
             return {
                 "status": "healthy",
@@ -1524,6 +1522,52 @@ async def health_readiness(response: Response):
             }
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Service Unhealthy ({str(e)})")
+
+
+def _allow_public_health_readiness_details() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("allow_public_health_readiness_details") is True
+
+
+async def _set_public_readiness_status(response: Response) -> None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return
+
+    db_health_status = await _db_health_readiness_check()
+    if db_health_status["status"] != "connected":
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@router.get(
+    "/health/readiness",
+    tags=["health"],
+)
+async def health_readiness(response: Response):
+    """
+    Public readiness probe. Keep this low-detail for unauthenticated load
+    balancers by default. Admins can opt into the legacy detailed public
+    payload with general_settings.allow_public_health_readiness_details.
+    """
+    if _allow_public_health_readiness_details():
+        return await _get_health_readiness_details(response=response)
+
+    await _set_public_readiness_status(response=response)
+    return {"status": "healthy"}
+
+
+@router.get(
+    "/health/readiness/details",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def health_readiness_details(response: Response):
+    """
+    Authenticated readiness diagnostics with DB/cache/callback metadata.
+    """
+    return await _get_health_readiness_details(response=response)
 
 
 @router.get(
@@ -1561,7 +1605,6 @@ async def health_liveliness():
 @router.options(
     "/health/readiness",
     tags=["health"],
-    dependencies=[Depends(user_api_key_auth)],
 )
 async def health_readiness_options():
     """
