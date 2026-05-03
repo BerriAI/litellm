@@ -84,6 +84,34 @@ vi.mock("../common_components/AccessGroupSelector", () => ({
   ),
 }));
 
+// Test stand-in for RouterSettingsAccordion: exposes the initial value and lets
+// tests trigger an onChange without rendering its full tabbed UI / network deps.
+vi.mock("../common_components/RouterSettingsAccordion", () => ({
+  __esModule: true,
+  default: ({
+    value,
+    onChange,
+  }: {
+    value?: { router_settings: Record<string, unknown> };
+    onChange?: (v: { router_settings: Record<string, unknown> }) => void;
+  }) => (
+    <div data-testid="router-settings-accordion">
+      <pre data-testid="router-settings-value">{JSON.stringify(value ?? null)}</pre>
+      <button
+        type="button"
+        data-testid="router-settings-set-fallbacks"
+        onClick={() =>
+          onChange?.({
+            router_settings: { fallbacks: [{ "gpt-4": ["gpt-3.5-turbo"] }] },
+          })
+        }
+      >
+        set fallbacks
+      </button>
+    </div>
+  ),
+}));
+
 describe("KeyEditView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
     token: "test-token-123",
@@ -98,6 +126,8 @@ describe("KeyEditView", () => {
     config: {},
     user_id: "default_user_id",
     team_id: null,
+    project_id: null,
+    last_active: null,
     max_parallel_requests: 10,
     metadata: {
       logging: [],
@@ -585,6 +615,132 @@ describe("KeyEditView", () => {
     if (resolveSubmit) {
       resolveSubmit();
     }
+  });
+
+  describe("router settings", () => {
+    it("should render the router settings section when accessToken is provided", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Router Settings")).toBeInTheDocument();
+      });
+      expect(screen.getByTestId("router-settings-accordion")).toBeInTheDocument();
+    });
+
+    it("should not render the router settings section when accessToken is missing", async () => {
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken=""
+          userID=""
+          userRole=""
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText("Save Changes")).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId("router-settings-accordion")).not.toBeInTheDocument();
+    });
+
+    it("should initialize the accordion from keyData.router_settings", async () => {
+      const keyDataWithRouterSettings = {
+        ...MOCK_KEY_DATA,
+        router_settings: { fallbacks: [{ "gpt-4": ["gpt-3.5-turbo"] }] },
+      };
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyDataWithRouterSettings}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("router-settings-value")).toBeInTheDocument();
+      });
+      const value = JSON.parse(screen.getByTestId("router-settings-value").textContent || "null");
+      expect(value).toEqual({
+        router_settings: { fallbacks: [{ "gpt-4": ["gpt-3.5-turbo"] }] },
+      });
+    });
+
+    it("should pass router_settings through to onSubmit when the user sets them", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("router-settings-set-fallbacks")).toBeInTheDocument();
+      });
+
+      await userEvent.click(screen.getByTestId("router-settings-set-fallbacks"));
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect(callArgs.router_settings).toEqual({
+        fallbacks: [{ "gpt-4": ["gpt-3.5-turbo"] }],
+      });
+    });
+
+    it("should omit router_settings from onSubmit when the user does not touch them", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={onSubmitMock}
+          accessToken="test-token"
+          userID="test-user"
+          userRole="admin"
+          premiumUser={false}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect("router_settings" in callArgs).toBe(false);
+    });
   });
 
   describe("organization dropdown", () => {

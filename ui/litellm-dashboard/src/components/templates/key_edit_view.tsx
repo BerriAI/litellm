@@ -750,6 +750,7 @@ export function KeyEditView({
             {
               key: "router-settings",
               label: <b>Router Settings</b>,
+              forceRender: true,
               children: (
                 <RouterSettingsAccordion
                   accessToken={accessToken}
