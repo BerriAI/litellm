@@ -55,6 +55,20 @@ else:
     Span = Any
 
 
+def _json_default(obj: Any) -> Any:
+    """`json.dumps(default=)` callback used by Redis writers.
+
+    Maps `timedelta -> total_seconds()` (not `str(timedelta)`) so latency values
+    written by `LowestLatencyLoggingHandler` round-trip as `float` and survive
+    `_get_available_deployments`' `isinstance(_, float)` filter. Falls back to
+    `str(obj)` for any other non-JSON-native type, matching the `default=str`
+    pattern used elsewhere in litellm.
+    """
+    if isinstance(obj, timedelta):
+        return obj.total_seconds()
+    return str(obj)
+
+
 def _get_call_stack_info(num_frames: int = 2) -> str:
     """
     Get the function names from the previous 1-2 functions in the call stack.
@@ -593,7 +607,7 @@ class RedisCache(BaseCache):
                 raise Exception("Redis client cannot set cache. Attribute not found.")
             result = await _redis_client.set(
                 name=key,
-                value=json.dumps(value),
+                value=json.dumps(value, default=_json_default),
                 nx=nx,
                 ex=ttl,
             )
@@ -651,7 +665,7 @@ class RedisCache(BaseCache):
             print_verbose(
                 f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}"
             )
-            json_cache_value = json.dumps(cache_value)
+            json_cache_value = json.dumps(cache_value, default=_json_default)
             # Set the value with a TTL if it's provided.
             _td: Optional[timedelta] = None
             if ttl is not None:
