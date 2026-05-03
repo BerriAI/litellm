@@ -8,6 +8,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -1631,8 +1632,10 @@ def test_effort_validation():
         )
         assert result["output_config"]["effort"] == effort
 
-    # Invalid value should raise error
-    with pytest.raises(ValueError, match="Invalid effort value"):
+    # Invalid value should raise BadRequestError (clean 400, not a 500).
+    with pytest.raises(
+        litellm.exceptions.BadRequestError, match="Invalid effort value"
+    ):
         optional_params = {"output_config": {"effort": "invalid"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1682,12 +1685,18 @@ def test_effort_validation_with_opus_46():
 
 
 def test_max_effort_rejected_for_opus_45():
-    """Test that effort='max' is rejected when using Claude Opus 4.5."""
+    """Test that effort='max' is rejected when using Claude Opus 4.5.
+
+    Surfaces as a clean 400 BadRequestError, not a 500 ValueError.
+    """
     config = AnthropicConfig()
 
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
+    with pytest.raises(
+        litellm.exceptions.BadRequestError,
+        match="effort='max' is not supported by this model",
+    ):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1737,6 +1746,105 @@ def test_effort_with_other_features():
     assert "tools" in result
     assert len(result["tools"]) > 0
     assert "thinking" in result
+
+
+def test_anthropic_drop_params_strips_output_config_for_pre_4_5_models():
+    """
+    Proxies fronting Claude Code at pre-4.5 Anthropic models receive
+    ``output_config`` injected by the client; without ``drop_params`` Bedrock /
+    Anthropic 400s. With ``drop_params=True`` we strip it (logged) so the
+    request can succeed.
+    """
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-3-haiku-20240307",
+            messages=messages,
+            optional_params={"output_config": {"effort": "low"}},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert "output_config" not in result
+
+
+def test_anthropic_drop_params_keeps_output_config_for_supporting_models():
+    """``drop_params=True`` must not strip on models that support effort."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-opus-4-7",
+            messages=messages,
+            optional_params={"output_config": {"effort": "high"}},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("output_config") == {"effort": "high"}
+
+
+def test_anthropic_drop_params_false_forwards_to_unsupported_model():
+    """
+    Default behavior: forward ``output_config`` and let the provider 400.
+    This is the contract for users who want strict, debuggable failures.
+    """
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = False
+    try:
+        result = config.transform_request(
+            model="claude-3-haiku-20240307",
+            messages=messages,
+            optional_params={"output_config": {"effort": "low"}},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("output_config") == {"effort": "low"}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "anthropic.claude-mythos-preview",
+        "bedrock/anthropic.claude-mythos-preview",
+    ],
+)
+def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
+    assert AnthropicConfig._model_supports_effort_param(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-3-haiku-20240307",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-opus-20240229",
+        "claude-sonnet-4-20250514",
+    ],
+)
+def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
+    assert AnthropicConfig._model_supports_effort_param(model) is False
 
 
 def test_translate_system_message_skips_empty_string_content():
@@ -1950,6 +2058,49 @@ def test_get_config_without_model_uses_fallback():
     assert config["max_tokens"] == 4096
 
 
+def test_get_config_does_not_leak_module_constants():
+    """``BaseConfig.get_config`` returns class attributes; the
+    reasoning-effort mapping must not be one of them or it ends up
+    serialised onto the wire as an extra request key.
+    """
+    cfg = AnthropicConfig.get_config(model="claude-opus-4-7")
+    for forbidden in (
+        "REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT",
+        "_REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT",
+    ):
+        assert forbidden not in cfg
+
+
+@pytest.mark.parametrize(
+    "model,level,expected",
+    [
+        ("claude-opus-4-7", "max", True),
+        ("claude-opus-4-7", "xhigh", True),
+        ("claude-opus-4-6", "max", True),
+        ("claude-opus-4-6", "xhigh", False),
+        # ``max`` is documented as supported on Sonnet 4.6 (Claude 4.6 family).
+        # The model-map JSON now carries ``supports_max_reasoning_effort: true``
+        # for every Sonnet 4.6 entry; ``_supports_effort_level`` should report
+        # ``True`` on every route prefix (anthropic, bedrock, vertex, azure).
+        ("claude-sonnet-4-6", "max", True),
+        ("claude-sonnet-4-6", "xhigh", False),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-7", "max", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-7", "xhigh", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "max", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh", False),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "max", True),
+        ("vertex_ai/claude-opus-4-7", "xhigh", True),
+        ("azure_ai/claude-opus-4-7", "xhigh", True),
+    ],
+)
+def test_supports_effort_level_handles_provider_prefixes(model, level, expected):
+    """``_supports_effort_level`` must handle bedrock/ vertex_ai/ azure_ai/
+    prefixed model ids so per-model gating works on every route, not just
+    the bare-Anthropic chat completion path.
+    """
+    assert AnthropicConfig._supports_effort_level(model, level) is expected
+
+
 def test_transform_request_uses_dynamic_max_tokens():
     """
     Test that transform_request uses dynamic max_tokens based on model
@@ -2153,12 +2304,14 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
     """
     config = AnthropicConfig()
 
-    # Test with Claude Sonnet 4.5 (non-Opus 4.6 model)
+    # Test with Claude Sonnet 4.5 (non-Opus 4.6 model).
+    # ``minimal`` floors at the Anthropic provider minimum (1024) because
+    # Anthropic / Azure / Vertex / Bedrock Invoke 400 below that.
     test_cases = [
         ("low", 1024),  # DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
         ("medium", 2048),  # DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
         ("high", 4096),  # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
-        ("minimal", 128),  # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+        ("minimal", 1024),  # ANTHROPIC_MIN_THINKING_BUDGET_TOKENS (provider floor)
     ]
 
     for effort, expected_budget in test_cases:
@@ -2244,19 +2397,40 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
         ), f"output_config should not be set for {model}"
 
 
-def test_max_effort_rejected_for_sonnet_46():
-    """Test that effort='max' is rejected for Sonnet 4.6 (Opus-only effort level)."""
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6-20260219",
+        "us.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        "vertex_ai/claude-sonnet-4-6",
+        "openrouter/anthropic/claude-sonnet-4.6",
+    ],
+)
+def test_max_effort_accepted_for_sonnet_46_variants(model):
+    """``effort='max'`` is documented as supported on Claude 4.6 (Opus + Sonnet)
+    and Claude 4.7 (https://platform.claude.com/docs/en/build-with-claude/effort).
+
+    Earlier versions of this test asserted a 400 for Sonnet 4.6, mirroring an
+    Opus-only allow-list in ``_apply_output_config``. That gate has since been
+    widened to ``_is_claude_4_6_model`` (Opus + Sonnet) and the
+    ``supports_max_reasoning_effort`` JSON flag, matching Anthropic's published
+    matrix. Verify the param actually flows through every Sonnet 4.6 id
+    variant our routing layer might see.
+    """
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(ValueError, match="effort='max' is not supported by this model"):
-        config.transform_request(
-            model="claude-sonnet-4-6-20260219",
-            messages=messages,
-            optional_params={"output_config": {"effort": "max"}},
-            litellm_params={},
-            headers={},
-        )
+    result = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
 
 
 def test_max_effort_accepted_for_opus_46():
@@ -2333,6 +2507,94 @@ def test_reasoning_effort_none_omits_thinking_and_output_config(model):
 
     assert "thinking" not in result
     assert "output_config" not in result
+
+
+@pytest.mark.parametrize(
+    "effort",
+    ["disabled", "invalid", ""],
+)
+def test_reasoning_effort_garbage_raises_bad_request(effort):
+    """Unmapped / garbage / empty-string reasoning_effort surfaces as a clean
+    400 ``BadRequestError`` instead of letting ``ValueError`` propagate as 500.
+    """
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="claude-sonnet-4-5-20250929",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "effort,expected_budget",
+    [("xhigh", 8192), ("max", 16384)],
+)
+def test_reasoning_effort_xhigh_max_maps_to_budget_on_budget_model(
+    effort, expected_budget
+):
+    """``xhigh`` / ``max`` extend the legacy ``thinking.budget_tokens``
+    progression (low=1024 / medium=2048 / high=4096 → xhigh=8192 / max=16384)
+    on budget-mode Claude models (haiku / 4.5 series).
+
+    Adopted from #27051. Keeps the OpenAI-format ``reasoning_effort`` knob
+    usable across the full Claude lineup — adaptive models (4.6/4.7) route
+    these tiers via ``output_config.effort``; budget-mode models use the
+    extended budget. Anthropic's "max only on Mythos / Opus 4.7 / Opus 4.6 /
+    Sonnet 4.6" gating applies to the *adaptive enum*, not to the legacy
+    ``budget_tokens`` knob, which accepts any integer up to ``max_tokens``.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == expected_budget
+    # Budget-mode models must NOT carry an ``output_config`` payload — that
+    # path is exclusively for adaptive (4.6+) models.
+    assert "output_config" not in result
+
+
+def test_output_config_effort_empty_string_raises_bad_request():
+    """``output_config={"effort": ""}`` must be rejected with a 400 — the
+    legacy ``if effort and ...`` short-circuit silently let it pass
+    through (verified end-to-end on the QA sweep for PR #27039).
+    """
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError, match="Invalid effort"):
+        config.transform_request(
+            model="claude-opus-4-7",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"output_config": {"effort": ""}, "max_tokens": 32},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_reasoning_effort_minimal_floors_at_anthropic_provider_minimum():
+    """Anthropic Messages API rejects ``budget_tokens < 1024``. ``minimal``
+    must floor at the provider minimum so it's a usable tier on direct
+    Anthropic / Azure AI Anthropic / Vertex AI Anthropic / Bedrock Invoke.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] >= 1024
 
 
 def test_effort_beta_header_still_injected_for_older_models():

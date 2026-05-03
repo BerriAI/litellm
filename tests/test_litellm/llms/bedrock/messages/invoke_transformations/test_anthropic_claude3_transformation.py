@@ -592,12 +592,16 @@ def test_remove_scope_from_cache_control():
     assert request["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
 
 
-def test_bedrock_messages_strips_output_config():
+def test_bedrock_messages_forwards_output_config():
     """
-    Ensure output_config is stripped from the request before sending to
-    Bedrock Invoke, which doesn't support this Anthropic-specific parameter.
+    ``output_config`` is the adaptive-thinking effort payload for Claude
+    4.6 / 4.7 (e.g. ``{"effort": "max"}``). Bedrock Invoke accepts it for
+    those models — the prior behavior of stripping it silently flattened
+    every adaptive tier on /v1/messages so ``low`` / ``medium`` / ``high`` /
+    ``xhigh`` / ``max`` all collapsed to identical thinking with no tier
+    differentiation.
 
-    Regression test for: https://github.com/BerriAI/litellm/issues/22797
+    Regression coverage for the QA bug listed on PR #27039.
     """
     from litellm.types.router import GenericLiteLLMParams
 
@@ -611,25 +615,24 @@ def test_bedrock_messages_strips_output_config():
     }
 
     result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-3-haiku-20240307-v1:0",
+        model="anthropic.claude-opus-4-7",
         messages=messages,
         anthropic_messages_optional_request_params=optional_params,
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )
 
-    assert (
-        "output_config" not in result
-    ), "output_config should be stripped — Bedrock Invoke rejects it"
+    assert result.get("output_config") == {"effort": "high"}
     # Other params should be preserved
     assert result.get("max_tokens") == 4096
 
 
-def test_bedrock_messages_strips_output_config_with_output_format():
+def test_bedrock_messages_forwards_output_config_with_output_format():
     """
-    When both output_config and output_format are present, both should be
-    stripped (output_format is converted to inline schema, output_config
-    is simply dropped).
+    When both output_config and output_format are present, output_format is
+    converted to inline schema (Bedrock Invoke doesn't accept output_format
+    natively), and output_config is forwarded for Claude 4.6/4.7 adaptive
+    thinking.
     """
     from litellm.types.router import GenericLiteLLMParams
 
@@ -648,6 +651,41 @@ def test_bedrock_messages_strips_output_config_with_output_format():
     }
 
     result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "low"}
+    assert "output_format" not in result
+
+
+def test_bedrock_messages_forwards_output_config_for_non_adaptive_model():
+    """
+    ``output_config`` is forwarded for non-adaptive models too (e.g. haiku).
+    Bedrock will reject the unsupported key for those models — surfacing the
+    provider error is the correct behavior, since silently swallowing the
+    knob would hide caller bugs.
+
+    Restores coverage previously asserted by
+    ``test_bedrock_messages_strips_output_config`` (renamed to the
+    ``forwards`` variant on Opus 4.7); the strip path no longer exists,
+    but the non-adaptive pass-through path needs its own explicit test
+    so a future regression that silently re-adds the strip can't sneak
+    through.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "high"},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
         model="anthropic.claude-3-haiku-20240307-v1:0",
         messages=messages,
         anthropic_messages_optional_request_params=optional_params,
@@ -655,8 +693,242 @@ def test_bedrock_messages_strips_output_config_with_output_format():
         headers={},
     )
 
+    assert result.get("output_config") == {"effort": "high"}
+    assert result.get("max_tokens") == 4096
+
+
+def test_bedrock_messages_drop_params_strips_output_config_for_pre_4_5():
+    """
+    ``drop_params=True`` is the operator opt-in for "silently fix up"
+    behavior. When a proxy fronts Claude Code at a pre-4.5 Anthropic model
+    (haiku-3, sonnet-3.5, ...) on the /v1/messages route, the client always
+    sends ``output_config.effort`` and the model rejects it. Stripping under
+    ``drop_params`` lets those requests succeed; otherwise we forward and
+    surface the model's 400 as designed.
+    """
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "low"},
+    }
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
     assert "output_config" not in result
-    assert "output_format" not in result
+
+
+def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
+    """``drop_params=True`` must not strip on supporting models — opus-4-7
+    accepts effort, so the client's tier knob has to land on the wire."""
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "high"},
+    }
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-opus-4-7",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("output_config") == {"effort": "high"}
+
+
+@pytest.mark.parametrize(
+    "reasoning_effort,expected_effort",
+    [
+        ("minimal", "low"),
+        ("low", "low"),
+        ("medium", "medium"),
+        ("high", "high"),
+        ("xhigh", "xhigh"),
+        ("max", "max"),
+    ],
+)
+def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
+    reasoning_effort, expected_effort
+):
+    """
+    OpenAI-style ``reasoning_effort`` is mapped to native Anthropic
+    ``thinking`` + ``output_config.effort`` on the /v1/messages route so
+    callers can drive adaptive thinking with the same tier vocabulary as
+    the chat completion path. ``reasoning_effort`` itself is popped — the
+    /v1/messages spec doesn't define it and Bedrock rejects unknown
+    top-level fields.
+
+    Closes the QA-sweep gap on PR #27074 where Bedrock Invoke /v1/messages
+    silently dropped ``reasoning_effort`` and every effort tier collapsed
+    to the same behavior.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "reasoning_effort": reasoning_effort,
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "reasoning_effort" not in result
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": expected_effort}
+
+
+def test_bedrock_messages_reasoning_effort_on_non_adaptive_uses_thinking_budget():
+    """
+    For non-adaptive thinking models (e.g. Opus 4.5), ``reasoning_effort``
+    is mapped to ``thinking.type=enabled`` with a budget_tokens value
+    instead of ``output_config.effort``. ``output_config`` is not set on
+    these models because they don't accept it.
+
+    Mirrors ``AnthropicConfig._map_reasoning_effort`` behavior for the
+    non-adaptive branch on Opus 4.5 / earlier Claude 4 models, applied to
+    the /v1/messages route.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "reasoning_effort": "medium",
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "reasoning_effort" not in result
+    assert "output_config" not in result
+    thinking = result.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert thinking["budget_tokens"] >= 1024
+
+
+def test_bedrock_messages_reasoning_effort_none_clears_thinking():
+    """
+    ``reasoning_effort='none'`` opts out — both ``thinking`` and
+    ``output_config`` are cleared so the request goes out without
+    extended thinking. Mirrors the chat completion path's behavior.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "reasoning_effort": "none",
+        "output_config": {"effort": "high"},
+        "thinking": {"type": "adaptive"},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "reasoning_effort" not in result
+    assert "thinking" not in result
+    assert "output_config" not in result
+
+
+def test_bedrock_messages_invalid_reasoning_effort_raises_400():
+    """
+    Garbage ``reasoning_effort`` values (``invalid`` / ``disabled`` / ``""``)
+    surface as a clean 400 ``AnthropicError`` instead of silently passing
+    an invalid string through to Bedrock as ``output_config.effort``.
+    """
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+
+    for bad_effort in ("invalid", "disabled", ""):
+        with pytest.raises(AnthropicError):
+            cfg.transform_anthropic_messages_request(
+                model="anthropic.claude-opus-4-7",
+                messages=messages,
+                anthropic_messages_optional_request_params={
+                    "max_tokens": 4096,
+                    "reasoning_effort": bad_effort,
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+
+def test_bedrock_messages_explicit_output_config_wins_over_reasoning_effort():
+    """
+    Caller-supplied native ``output_config.effort`` wins over the OpenAI
+    ``reasoning_effort`` knob. Same precedence as
+    ``_translate_legacy_thinking_for_adaptive_model``: explicit native
+    Anthropic params are never overridden by the alias.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "reasoning_effort": "low",
+        "output_config": {"effort": "max"},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "reasoning_effort" not in result
+    assert result.get("output_config") == {"effort": "max"}
 
 
 def test_bedrock_messages_strips_context_management():
@@ -728,13 +1000,18 @@ def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
         "mcp_servers",
         "container",
         "inference_geo",
-        "output_config",
         "context_management",
         "model",
         "stream",
     ):
         assert bad not in result, f"{bad} should be stripped by the allowlist"
 
+    # ``output_config`` rides along — Bedrock Invoke accepts it for Claude
+    # 4.6/4.7 adaptive thinking and stripping it silently flattens every
+    # adaptive tier. (Bedrock will reject it for non-adaptive models, which
+    # is the correct behavior — surface the model error rather than swallow
+    # the knob.)
+    assert result.get("output_config") == {"effort": "low"}
     # Supported fields pass through.
     assert result["max_tokens"] == 4096
     assert result["temperature"] == 0.5
@@ -882,7 +1159,10 @@ async def test_promote_message_start_cache_when_message_stop_omits_cache_fields(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"input_tokens": 10, "output_tokens": 181},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     merged: list[dict] = []
     async for chunk in cfg._promote_message_stop_usage(_stream()):
@@ -936,7 +1216,11 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
                 },
             },
         }
-        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }
         yield {
             "type": "content_block_delta",
             "index": 0,
@@ -948,7 +1232,10 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"output_tokens": 181, "input_tokens": 10},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     logging_obj = LiteLLMLoggingObj(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",

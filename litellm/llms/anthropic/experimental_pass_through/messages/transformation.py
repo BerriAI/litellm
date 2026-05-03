@@ -47,6 +47,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "inference_geo",
             "speed",
             "output_config",
+            # OpenAI-style tier knob — translated to native ``thinking`` +
+            # ``output_config`` in ``transform_anthropic_messages_request``
+            # and popped before the request is forwarded.
+            "reasoning_effort",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
@@ -167,6 +171,114 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
+    def _translate_reasoning_effort_to_anthropic(
+        model: str, optional_params: Dict
+    ) -> None:
+        """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
+
+        The /v1/messages spec doesn't include ``reasoning_effort`` — without
+        this translation it gets silently dropped, leaving every adaptive
+        tier collapsed to the same behavior on Bedrock Invoke /v1/messages
+        (and on Anthropic / Azure AI / Vertex AI when callers pass it on
+        the messages route). Mirrors ``AnthropicConfig.map_openai_params``
+        on the chat completion path so the two routes can't drift.
+
+        - Pops ``reasoning_effort`` from ``optional_params`` so it never
+          reaches the wire.
+        - Caller-supplied ``thinking`` / ``output_config`` always win — we
+          don't override an explicit native value.
+        - Effort=``none`` clears thinking + output_config so callers can
+          opt out per request.
+        - Invalid efforts raise ``BadRequestError`` (clean 400) instead of
+          surfacing as 500s downstream.
+        """
+        from litellm.llms.anthropic.chat.transformation import (
+            REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
+            AnthropicConfig,
+        )
+
+        reasoning_effort = optional_params.pop("reasoning_effort", None)
+        if not isinstance(reasoning_effort, str):
+            return
+
+        # ``_map_reasoning_effort`` raises ``BadRequestError`` (400) directly
+        # on unmapped efforts. The /v1/messages pass-through surfaces errors
+        # as ``AnthropicError``; convert here so callers see a provider-shaped
+        # 400 rather than the LiteLLM-shaped one.
+        from litellm.exceptions import BadRequestError as _BadRequestError
+
+        try:
+            mapped_thinking = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort=reasoning_effort, model=model
+            )
+        except _BadRequestError as e:
+            raise AnthropicError(message=str(e.message), status_code=400)
+
+        if mapped_thinking is None:
+            optional_params.pop("thinking", None)
+            optional_params.pop("output_config", None)
+            return
+
+        optional_params.setdefault("thinking", mapped_thinking)
+        if AnthropicModelInfo._is_adaptive_thinking_model(model):
+            mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                reasoning_effort
+            )
+            # ``_map_reasoning_effort`` returns ``type=adaptive`` for any
+            # string on adaptive models without checking the value. The
+            # chat completion path validates the resolved effort downstream
+            # via ``_apply_output_config``; /v1/messages has no equivalent
+            # downstream check, so reject unmapped values here so callers
+            # see a clean 400 instead of a 500 from the provider.
+            if mapped_effort is None:
+                raise AnthropicError(
+                    message=(
+                        f"Invalid reasoning_effort: {reasoning_effort!r}. "
+                        f"Must be one of: 'minimal', 'low', 'medium', 'high', "
+                        f"'xhigh', 'max', 'none'"
+                    ),
+                    status_code=400,
+                )
+            # Per-model gating: ``xhigh`` and ``max`` are only valid on
+            # specific tiers (Opus 4.6/4.7 for max; data-driven for xhigh).
+            # The chat completion path enforces this via
+            # ``_apply_output_config``; mirror it here so /v1/messages
+            # callers see a clean 400 instead of a provider-side error.
+            # ``max`` is supported on Claude 4.6 (Opus + Sonnet) and Claude
+            # 4.7 adaptive-thinking models. Prefer the data-driven
+            # ``supports_max_reasoning_effort`` flag in
+            # ``model_prices_and_context_window.json``; family-level checks
+            # are a fallback for variants whose entries don't yet carry the
+            # flag.
+            if mapped_effort == "max" and not (
+                AnthropicConfig._is_claude_4_6_model(model)
+                or AnthropicConfig._is_claude_4_7_model(model)
+                or AnthropicConfig._supports_effort_level(model, "max")
+            ):
+                raise AnthropicError(
+                    message=(
+                        f"effort='max' is not supported by this model. "
+                        f"Got model: {model}"
+                    ),
+                    status_code=400,
+                )
+            if mapped_effort == "xhigh" and not AnthropicConfig._supports_effort_level(
+                model, "xhigh"
+            ):
+                raise AnthropicError(
+                    message=(
+                        f"effort='xhigh' is not supported by this model. "
+                        f"Got model: {model}"
+                    ),
+                    status_code=400,
+                )
+            existing_output_config = optional_params.get("output_config")
+            if not isinstance(existing_output_config, dict):
+                existing_output_config = {}
+            existing_output_config.setdefault("effort", mapped_effort)
+            optional_params["output_config"] = existing_output_config
+
+    @staticmethod
     def _translate_legacy_thinking_for_adaptive_model(
         model: str, optional_params: Dict
     ) -> None:
@@ -216,6 +328,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 message="max_tokens is required for Anthropic /v1/messages API",
                 status_code=400,
             )
+
+        self._translate_reasoning_effort_to_anthropic(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+        )
 
         self._translate_legacy_thinking_for_adaptive_model(
             model=model,

@@ -310,6 +310,126 @@ def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
     assert "thinking" not in optional_params
 
 
+@pytest.mark.parametrize(
+    "model,effort,expected_effort",
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "low", "low"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "medium", "medium"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "high", "high"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "xhigh", "xhigh"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-opus-4-6-v1", "max", "max"),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "high", "high"),
+        ("bedrock/converse/us.anthropic.claude-sonnet-4-6", "minimal", "low"),
+    ],
+)
+def test_reasoning_effort_sets_output_config_for_adaptive_models_converse(
+    model, effort, expected_effort
+):
+    """Adaptive-thinking Claude 4.6 / 4.7 on Bedrock Converse must carry the
+    requested tier via ``output_config.effort``. The prior strip silently
+    flattened every adaptive tier on the wire (verified in the PR #27039
+    QA sweep)."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["thinking"]["type"] == "adaptive"
+    assert optional_params["output_config"] == {"effort": expected_effort}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        "bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_output_config_effort_forwarded_into_additional_request_fields(model):
+    """``output_config`` must ride along inside ``additionalModelRequestFields``
+    so the Anthropic-on-Bedrock wire request actually carries the effort
+    tier. The prior ``inference_params.pop("output_config")`` dropped it
+    on the floor for every adaptive tier."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = config._transform_request(
+        model=model,
+        messages=messages,
+        optional_params={
+            "maxTokens": 256,
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "high"}
+
+
+@pytest.mark.parametrize(
+    "effort",
+    ["disabled", "invalid", ""],
+)
+def test_reasoning_effort_garbage_raises_bad_request_converse(effort):
+    """Garbage / empty-string reasoning_effort on Bedrock Converse Anthropic
+    must surface as a clean 400 ``BadRequestError`` instead of 500. The
+    earlier ``ValueError`` from ``_map_reasoning_effort`` propagated up as
+    a generic 500 in the proxy and ate the request."""
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/global.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/eu.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/au.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_output_config_effort_max_passes_through_on_sonnet_46_variants(model):
+    """``effort='max'`` is supported on Claude 4.6 (Opus + Sonnet) per
+    https://platform.claude.com/docs/en/build-with-claude/effort. The earlier
+    Opus-only allow-list in ``_validate_anthropic_adaptive_effort`` has been
+    widened to ``_is_claude_4_6_model`` (Opus + Sonnet) plus the
+    ``supports_max_reasoning_effort`` JSON flag. Verify the param actually
+    flows through to ``additionalModelRequestFields.output_config.effort``
+    for every Bedrock Converse Sonnet 4.6 id variant."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    result = config._transform_request(
+        model=model,
+        messages=messages,
+        optional_params={
+            "maxTokens": 256,
+            "output_config": {"effort": "max"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "max"}
+
+
 def test_get_supported_openai_params():
     config = AmazonConverseConfig()
     supported_params = config.get_supported_openai_params(
@@ -3327,6 +3447,59 @@ def test_transform_request_strips_anthropic_output_config():
     assert "outputConfig" not in result
     additional_fields = result.get("additionalModelRequestFields", {})
     assert "output_config" not in additional_fields
+
+
+def test_converse_drop_params_strips_output_config_for_pre_4_5_anthropic():
+    """``drop_params=True`` strips ``output_config`` for pre-4.5 Anthropic
+    models on Bedrock Converse so a proxy fronting Claude Code at haiku doesn't
+    force a 400 on every request."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config._transform_request(
+            model="bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            optional_params={
+                "maxTokens": 256,
+                "output_config": {"effort": "low"},
+            },
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert "output_config" not in additional
+
+
+def test_converse_drop_params_keeps_output_config_for_supporting_anthropic():
+    """``drop_params=True`` must not strip on supporting models."""
+    config = AmazonConverseConfig()
+    messages = [{"role": "user", "content": "hi"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config._transform_request(
+            model="bedrock/converse/us.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params={
+                "maxTokens": 256,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": "high"},
+            },
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "high"}
 
 
 def test_transform_response_native_structured_output():

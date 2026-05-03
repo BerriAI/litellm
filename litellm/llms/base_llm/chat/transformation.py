@@ -84,12 +84,16 @@ class BaseConfig(ABC):
 
     @classmethod
     def get_config(cls):
+        # Subclasses lean on this to surface their public default settings
+        # (e.g. ``max_tokens``) as request params. Anything ``_``-prefixed is
+        # treated as private (lookup tables, ABC machinery, internal flags)
+        # and must not leak into the wire body — a tuple/dict/frozenset class
+        # attribute would otherwise serialise into the request as an extra
+        # top-level key and the provider would 400 it.
         return {
             k: v
             for k, v in cls.__dict__.items()
-            if not k.startswith("__")
-            and not k.startswith("_abc")
-            and not k.startswith("_is_base_class")
+            if not k.startswith("_")
             and not isinstance(
                 v,
                 (
