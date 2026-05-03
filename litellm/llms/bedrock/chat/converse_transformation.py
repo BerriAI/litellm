@@ -485,15 +485,11 @@ class AmazonConverseConfig(BaseConfig):
                 if AnthropicConfig._is_claude_4_6_model(
                     model
                 ) or AnthropicConfig._is_claude_4_7_model(model):
-                    effort_map = {
-                        "low": "low",
-                        "minimal": "low",
-                        "medium": "medium",
-                        "high": "high",
-                        "xhigh": "xhigh",
-                        "max": "max",
-                    }
-                    mapped_effort = effort_map.get(reasoning_effort, reasoning_effort)
+                    mapped_effort = (
+                        AnthropicConfig.REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                            reasoning_effort, reasoning_effort
+                        )
+                    )
                     self._validate_anthropic_adaptive_effort(
                         model=model, effort=mapped_effort
                     )
@@ -534,7 +530,7 @@ class AmazonConverseConfig(BaseConfig):
                 message=(
                     f"Invalid reasoning_effort/output_config.effort value: "
                     f"{effort!r}. Must be one of: 'low', 'medium', 'high', "
-                    f"'xhigh', 'max', or 'none'."
+                    f"'xhigh', or 'max'."
                 ),
                 model=model,
                 llm_provider="bedrock_converse",
