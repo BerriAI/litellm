@@ -675,6 +675,7 @@ OPENAI_TRANSCRIPTION_PARAMS = [
     "language",
     "response_format",
     "timestamp_granularities",
+    "stream",
 ]
 
 OPENAI_EMBEDDING_PARAMS = ["dimensions", "encoding_format", "user"]

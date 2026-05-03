@@ -109,6 +109,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     TextCompletionResponse,
     TokenCountResponse,
+    TranscriptionStreamingResponse,
 )
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
@@ -8562,6 +8563,25 @@ async def audio_speech(
         raise e
 
 
+def _coerce_stream_form_field(data: Dict) -> None:
+    """Form fields arrive as strings; coerce `stream` to a real bool in-place."""
+    raw = data.get("stream")
+    if isinstance(raw, str):
+        data["stream"] = raw.strip().lower() == "true"
+
+
+def _wrap_audio_streaming_response(response: Any, fastapi_response: Response) -> Any:
+    """Wrap a TranscriptionStreamingResponse iterator in FastAPI StreamingResponse
+    so SSE chunks flush directly instead of being JSON-serialized."""
+    if isinstance(response, TranscriptionStreamingResponse):
+        return StreamingResponse(
+            content=response,
+            media_type="text/event-stream",
+            headers=dict(fastapi_response.headers),
+        )
+    return response
+
+
 @router.post(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
@@ -8589,6 +8609,8 @@ async def audio_transcriptions(
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data = await get_form_data(request)
         data = {key: value for key, value in form_data.items() if key != "file"}
+
+        _coerce_stream_form_field(data)
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -8696,7 +8718,7 @@ async def audio_transcriptions(
         if callback_headers:
             fastapi_response.headers.update(callback_headers)
 
-        return response
+        return _wrap_audio_streaming_response(response, fastapi_response)
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data

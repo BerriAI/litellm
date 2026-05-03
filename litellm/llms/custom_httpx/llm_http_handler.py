@@ -7,6 +7,7 @@ from typing import (
     AsyncIterator,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Literal,
     Optional,
@@ -109,6 +110,7 @@ from litellm.types.utils import (
     FileTypes,
     LiteLLMBatch,
     TranscriptionResponse,
+    TranscriptionStreamingResponse,
 )
 from litellm.types.vector_store_files import (
     VectorStoreFileContentResponse,
@@ -1206,6 +1208,53 @@ class BaseLLMHTTPHandler:
             raw_response=response,
         )
 
+    def _build_audio_transcription_streaming_response(
+        self,
+        provider_config: BaseAudioTranscriptionConfig,
+        response: httpx.Response,
+        is_async: bool,
+    ) -> TranscriptionStreamingResponse:
+        """
+        Wrap an upstream streaming httpx response so callers (proxy / SDK) can
+        iterate raw SSE bytes. The provider config gets a hook
+        (`transform_audio_transcription_streaming_chunk`) to translate
+        non-OpenAI-compatible chunks; default is pass-through.
+        """
+        if is_async:
+
+            async def _aiter() -> AsyncIterator[bytes]:
+                try:
+                    async for chunk in response.aiter_bytes():
+                        if not chunk:
+                            continue
+                        yield provider_config.transform_audio_transcription_streaming_chunk(
+                            chunk
+                        )
+                finally:
+                    await response.aclose()
+
+            iterator: Any = _aiter()
+        else:
+
+            def _iter() -> Iterator[bytes]:
+                try:
+                    for chunk in response.iter_bytes():
+                        if not chunk:
+                            continue
+                        yield provider_config.transform_audio_transcription_streaming_chunk(
+                            chunk
+                        )
+                finally:
+                    response.close()
+
+            iterator = _iter()
+
+        return TranscriptionStreamingResponse(
+            iterator=iterator,
+            is_async=is_async,
+            response_headers=dict(response.headers),
+        )
+
     def audio_transcriptions(
         self,
         model: str,
@@ -1224,7 +1273,13 @@ class BaseLLMHTTPHandler:
         headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[BaseAudioTranscriptionConfig] = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+    ) -> Union[
+        TranscriptionResponse,
+        TranscriptionStreamingResponse,
+        Coroutine[
+            Any, Any, Union[TranscriptionResponse, TranscriptionStreamingResponse]
+        ],
+    ]:
         if provider_config is None:
             raise ValueError(
                 f"No provider config found for model: {model} and provider: {custom_llm_provider}"
@@ -1270,6 +1325,8 @@ class BaseLLMHTTPHandler:
         if client is None or not isinstance(client, HTTPHandler):
             client = _get_httpx_client()
 
+        is_streaming = bool(isinstance(data, dict) and data.get("stream"))
+
         try:
             # Make the POST request - clean and simple, always use data and files
             response = client.post(
@@ -1278,12 +1335,22 @@ class BaseLLMHTTPHandler:
                 data=data,
                 files=files,
                 json=(
-                    data if files is None and isinstance(data, dict) else None
+                    data
+                    if files is None and isinstance(data, dict) and not is_streaming
+                    else None
                 ),  # Use json param only when no files and data is dict
                 timeout=timeout,
+                stream=is_streaming,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        if is_streaming:
+            return self._build_audio_transcription_streaming_response(
+                provider_config=provider_config,
+                response=response,
+                is_async=False,
+            )
 
         return self._transform_audio_transcription_response(
             provider_config=provider_config,
@@ -1312,7 +1379,7 @@ class BaseLLMHTTPHandler:
         headers: Optional[Dict[str, Any]] = None,
         provider_config: Optional[BaseAudioTranscriptionConfig] = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> TranscriptionResponse:
+    ) -> Union[TranscriptionResponse, TranscriptionStreamingResponse]:
         if provider_config is None:
             raise ValueError(
                 f"No provider config found for model: {model} and provider: {custom_llm_provider}"
@@ -1345,6 +1412,8 @@ class BaseLLMHTTPHandler:
         else:
             async_httpx_client = client
 
+        is_streaming = bool(isinstance(data, dict) and data.get("stream"))
+
         try:
             # Make the async POST request - clean and simple, always use data and files
             response = await async_httpx_client.post(
@@ -1353,12 +1422,22 @@ class BaseLLMHTTPHandler:
                 data=data,
                 files=files,
                 json=(
-                    data if files is None and isinstance(data, dict) else None
+                    data
+                    if files is None and isinstance(data, dict) and not is_streaming
+                    else None
                 ),  # Use json param only when no files and data is dict
                 timeout=timeout,
+                stream=is_streaming,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
+
+        if is_streaming:
+            return self._build_audio_transcription_streaming_response(
+                provider_config=provider_config,
+                response=response,
+                is_async=True,
+            )
 
         return self._transform_audio_transcription_response(
             provider_config=provider_config,

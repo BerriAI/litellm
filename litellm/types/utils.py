@@ -2407,6 +2407,39 @@ class TranscriptionUsageTokensObject(BaseModel):
     input_token_details: TranscriptionUsageInputTokenDetailsObject
 
 
+class TranscriptionStreamingResponse:
+    """
+    Wraps a streaming audio transcription response.
+
+    Holds an async iterator of raw SSE byte chunks from the upstream provider
+    so the proxy / SDK caller can stream them through to the client.
+    """
+
+    def __init__(
+        self,
+        iterator: Any,
+        is_async: bool = True,
+        hidden_params: Optional[dict] = None,
+        response_headers: Optional[dict] = None,
+    ):
+        self._iterator = iterator
+        self._is_async = is_async
+        self._hidden_params: dict = hidden_params or {}
+        self._response_headers: Optional[dict] = response_headers
+
+    def __aiter__(self):
+        return self._iterator.__aiter__()
+
+    async def __anext__(self):
+        return await self._iterator.__anext__()
+
+    def __iter__(self):
+        return self._iterator.__iter__()
+
+    def __next__(self):
+        return self._iterator.__next__()
+
+
 class TranscriptionResponse(OpenAIObject):
     text: Optional[str] = None
     usage: Optional[
