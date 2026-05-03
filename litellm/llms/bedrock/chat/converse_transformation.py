@@ -463,20 +463,16 @@ class AmazonConverseConfig(BaseConfig):
             optional_params.update(reasoning_config)
         else:
             # Anthropic and other models: convert to thinking parameter.
-            # Wrap the ``ValueError`` ``_map_reasoning_effort`` raises on
-            # unmapped efforts (``disabled`` / ``invalid`` / ``""`` /
-            # ``xhigh``/``max`` on budget-mode Claude 4.5) into a clean 400
-            # ``BadRequestError`` instead of letting it surface as 500.
-            try:
-                mapped_thinking = AnthropicConfig._map_reasoning_effort(
-                    reasoning_effort=reasoning_effort, model=model
-                )
-            except ValueError as e:
-                raise litellm.exceptions.BadRequestError(
-                    message=str(e),
-                    model=model,
-                    llm_provider="bedrock_converse",
-                )
+            # ``_map_reasoning_effort`` raises ``BadRequestError`` (400)
+            # directly on unmapped efforts (``disabled`` / ``invalid`` /
+            # ``""`` / ``xhigh``/``max`` on budget-mode Claude 4.5); pass
+            # ``llm_provider="bedrock_converse"`` so the error carries the
+            # right provider name.
+            mapped_thinking = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort=reasoning_effort,
+                model=model,
+                llm_provider="bedrock_converse",
+            )
             if mapped_thinking is None:
                 optional_params.pop("thinking", None)
                 optional_params.pop("output_config", None)
@@ -555,9 +551,15 @@ class AmazonConverseConfig(BaseConfig):
                 model=model,
                 llm_provider="bedrock_converse",
             )
+        # ``max`` is supported on Claude 4.6 (Opus + Sonnet) and Claude 4.7
+        # adaptive-thinking models. Prefer the data-driven
+        # ``supports_max_reasoning_effort`` flag in
+        # ``model_prices_and_context_window.json`` so new variants only
+        # require a model-map update; family-level checks remain a fallback
+        # for Bedrock model ids whose entries don't yet carry the flag.
         if effort == "max" and not (
-            AnthropicConfig._is_opus_4_6_model(model)
-            or AnthropicConfig._is_opus_4_7_model(model)
+            AnthropicConfig._is_claude_4_6_model(model)
+            or AnthropicConfig._is_claude_4_7_model(model)
             or AmazonConverseConfig._supports_effort_level_on_bedrock(model, "max")
         ):
             raise litellm.exceptions.BadRequestError(
@@ -1535,9 +1537,29 @@ class AmazonConverseConfig(BaseConfig):
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
 
+        # Auto-attach the effort beta header for non-adaptive Anthropic
+        # models on Bedrock Converse (i.e. Opus 4.5). Claude 4.6/4.7 accept
+        # ``output_config.effort`` as a stable, GA feature with no beta
+        # header; Opus 4.5 still gates it behind ``effort-2025-11-24``. The
+        # check mirrors ``AnthropicModelInfo.is_effort_used`` (which returns
+        # False for adaptive models) so we don't double-flag adaptive routes.
+        base_model = BedrockModelInfo.get_base_model(model)
+        if base_model.startswith("anthropic"):
+            output_config = additional_request_params.get("output_config")
+            if (
+                isinstance(output_config, dict)
+                and output_config.get("effort") is not None
+                and not AnthropicConfig._is_adaptive_thinking_model(model)
+            ):
+                from litellm.types.llms.anthropic import (
+                    ANTHROPIC_EFFORT_BETA_HEADER,
+                )
+
+                if ANTHROPIC_EFFORT_BETA_HEADER not in anthropic_beta_list:
+                    anthropic_beta_list.append(ANTHROPIC_EFFORT_BETA_HEADER)
+
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
-        base_model = BedrockModelInfo.get_base_model(model)
         if anthropic_beta_list and base_model.startswith("anthropic"):
             additional_request_params["anthropic_beta"] = anthropic_beta_list
 

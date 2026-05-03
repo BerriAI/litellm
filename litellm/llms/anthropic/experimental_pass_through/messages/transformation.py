@@ -201,12 +201,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not isinstance(reasoning_effort, str):
             return
 
+        # ``_map_reasoning_effort`` raises ``BadRequestError`` (400) directly
+        # on unmapped efforts. The /v1/messages pass-through surfaces errors
+        # as ``AnthropicError``; convert here so callers see a provider-shaped
+        # 400 rather than the LiteLLM-shaped one.
+        from litellm.exceptions import BadRequestError as _BadRequestError
+
         try:
             mapped_thinking = AnthropicConfig._map_reasoning_effort(
                 reasoning_effort=reasoning_effort, model=model
             )
-        except ValueError as e:
-            raise AnthropicError(message=str(e), status_code=400)
+        except _BadRequestError as e:
+            raise AnthropicError(message=str(e.message), status_code=400)
 
         if mapped_thinking is None:
             optional_params.pop("thinking", None)
@@ -238,9 +244,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # The chat completion path enforces this via
             # ``_apply_output_config``; mirror it here so /v1/messages
             # callers see a clean 400 instead of a provider-side error.
+            # ``max`` is supported on Claude 4.6 (Opus + Sonnet) and Claude
+            # 4.7 adaptive-thinking models. Prefer the data-driven
+            # ``supports_max_reasoning_effort`` flag in
+            # ``model_prices_and_context_window.json``; family-level checks
+            # are a fallback for variants whose entries don't yet carry the
+            # flag.
             if mapped_effort == "max" and not (
-                AnthropicConfig._is_opus_4_6_model(model)
-                or AnthropicConfig._is_opus_4_7_model(model)
+                AnthropicConfig._is_claude_4_6_model(model)
+                or AnthropicConfig._is_claude_4_7_model(model)
                 or AnthropicConfig._supports_effort_level(model, "max")
             ):
                 raise AnthropicError(

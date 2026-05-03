@@ -395,24 +395,39 @@ def test_reasoning_effort_garbage_raises_bad_request_converse(effort):
         )
 
 
-def test_output_config_effort_unsupported_max_on_sonnet_46_raises_bad_request():
-    """``effort='max'`` is Opus-only. On Sonnet 4.6 the explicit-output_config
-    path must surface a 400 (matching the chat-completion validation), not
-    silently forward an unsupported tier to Bedrock."""
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/global.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/eu.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/au.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_output_config_effort_max_passes_through_on_sonnet_46_variants(model):
+    """``effort='max'`` is supported on Claude 4.6 (Opus + Sonnet) per
+    https://platform.claude.com/docs/en/build-with-claude/effort. The earlier
+    Opus-only allow-list in ``_validate_anthropic_adaptive_effort`` has been
+    widened to ``_is_claude_4_6_model`` (Opus + Sonnet) plus the
+    ``supports_max_reasoning_effort`` JSON flag. Verify the param actually
+    flows through to ``additionalModelRequestFields.output_config.effort``
+    for every Bedrock Converse Sonnet 4.6 id variant."""
     config = AmazonConverseConfig()
     messages = [{"role": "user", "content": "hi"}]
 
-    with pytest.raises(litellm.exceptions.BadRequestError):
-        config._transform_request(
-            model="bedrock/converse/us.anthropic.claude-sonnet-4-6",
-            messages=messages,
-            optional_params={
-                "maxTokens": 256,
-                "output_config": {"effort": "max"},
-            },
-            litellm_params={},
-            headers={},
-        )
+    result = config._transform_request(
+        model=model,
+        messages=messages,
+        optional_params={
+            "maxTokens": 256,
+            "output_config": {"effort": "max"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    additional = result.get("additionalModelRequestFields", {})
+    assert additional.get("output_config") == {"effort": "max"}
 
 
 def test_get_supported_openai_params():

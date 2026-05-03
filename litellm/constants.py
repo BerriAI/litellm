@@ -202,6 +202,23 @@ DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET = int(
 DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET = int(
     os.getenv("DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET", 4096)
 )
+# ``xhigh`` / ``max`` budget extrapolation for legacy ``thinking.budget_tokens``
+# models (Claude 4.5 series + haiku). Continues the 2× progression
+# 1024 → 2048 → 4096 from the existing low/medium/high tiers. These tiers
+# also exist as adaptive ``output_config.effort`` enum values on Claude 4.6+
+# / 4.7; this constant only governs the budget-tokens fallback for models
+# that aren't on the adaptive path. Per
+# https://platform.claude.com/docs/en/build-with-claude/effort the ``effort``
+# enum is gated by model, but the legacy ``budget_tokens`` knob accepts any
+# integer up to the model's max_tokens — adopting #27051's mapping here lets
+# ``reasoning_effort=xhigh|max`` Just Work as a unified OpenAI-format knob
+# regardless of which Anthropic API surface implements it.
+DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET", 8192)
+)
+DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET = int(
+    os.getenv("DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET", 16384)
+)
 MAX_TOKEN_TRIMMING_ATTEMPTS = int(
     os.getenv("MAX_TOKEN_TRIMMING_ATTEMPTS", 10)
 )  # Maximum number of attempts to trim the message

@@ -132,11 +132,11 @@ def test_invalid_reasoning_effort_raises_400(bad_effort):
 @pytest.mark.parametrize(
     "model,bad_effort",
     [
+        # ``xhigh`` is Opus-4.7-only on the public Anthropic effort matrix,
+        # so Opus 4.6 / Sonnet 4.6 must still 400 on it.
         ("claude-opus-4-6", "xhigh"),
         ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh"),
         ("claude-sonnet-4-6", "xhigh"),
-        ("claude-sonnet-4-6", "max"),
-        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "max"),
     ],
 )
 def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort):
@@ -158,6 +158,32 @@ def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort
 
     assert exc_info.value.status_code == 400
     assert "not supported by this model" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        # ``max`` is documented as supported on Claude 4.6 (Opus + Sonnet)
+        # and Claude 4.7. Verify the /v1/messages route accepts it for
+        # Sonnet 4.6 variants instead of 400-ing client-side.
+        "claude-sonnet-4-6",
+        "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_reasoning_effort_max_accepted_on_sonnet_46_messages(model):
+    config = AnthropicMessagesConfig()
+    optional_params = {"max_tokens": 1024, "reasoning_effort": "max"}
+
+    result = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    output_config = result.get("output_config")
+    assert isinstance(output_config, dict) and output_config.get("effort") == "max"
 
 
 def test_explicit_output_config_wins_over_reasoning_effort():
