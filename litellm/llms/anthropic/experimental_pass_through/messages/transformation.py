@@ -192,7 +192,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - Invalid efforts raise ``BadRequestError`` (clean 400) instead of
           surfacing as 500s downstream.
         """
-        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.llms.anthropic.chat.transformation import (
+            REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
+            AnthropicConfig,
+        )
 
         reasoning_effort = optional_params.pop("reasoning_effort", None)
         if not isinstance(reasoning_effort, str):
@@ -212,10 +215,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         optional_params.setdefault("thinking", mapped_thinking)
         if AnthropicModelInfo._is_adaptive_thinking_model(model):
-            mapped_effort = (
-                AnthropicConfig.REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
-                    reasoning_effort
-                )
+            mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                reasoning_effort
             )
             # ``_map_reasoning_effort`` returns ``type=adaptive`` for any
             # string on adaptive models without checking the value. The
@@ -229,6 +230,33 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                         f"Invalid reasoning_effort: {reasoning_effort!r}. "
                         f"Must be one of: 'minimal', 'low', 'medium', 'high', "
                         f"'xhigh', 'max', 'none'"
+                    ),
+                    status_code=400,
+                )
+            # Per-model gating: ``xhigh`` and ``max`` are only valid on
+            # specific tiers (Opus 4.6/4.7 for max; data-driven for xhigh).
+            # The chat completion path enforces this via
+            # ``_apply_output_config``; mirror it here so /v1/messages
+            # callers see a clean 400 instead of a provider-side error.
+            if mapped_effort == "max" and not (
+                AnthropicConfig._is_opus_4_6_model(model)
+                or AnthropicConfig._is_opus_4_7_model(model)
+                or AnthropicConfig._supports_effort_level(model, "max")
+            ):
+                raise AnthropicError(
+                    message=(
+                        f"effort='max' is not supported by this model. "
+                        f"Got model: {model}"
+                    ),
+                    status_code=400,
+                )
+            if mapped_effort == "xhigh" and not AnthropicConfig._supports_effort_level(
+                model, "xhigh"
+            ):
+                raise AnthropicError(
+                    message=(
+                        f"effort='xhigh' is not supported by this model. "
+                        f"Got model: {model}"
                     ),
                     status_code=400,
                 )

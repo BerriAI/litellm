@@ -31,7 +31,10 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
 )
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.transformation import (
+    REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
+    AnthropicConfig,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
@@ -492,10 +495,8 @@ class AmazonConverseConfig(BaseConfig):
                     # catch it, but only because validation happens to run).
                     # Matches the /v1/messages pattern where validation is
                     # co-located with the mapping.
-                    mapped_effort = (
-                        AnthropicConfig.REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
-                            reasoning_effort
-                        )
+                    mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                        reasoning_effort
                     )
                     if mapped_effort is None:
                         raise litellm.exceptions.BadRequestError(

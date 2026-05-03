@@ -1959,6 +1959,45 @@ def test_get_config_without_model_uses_fallback():
     assert config["max_tokens"] == 4096
 
 
+def test_get_config_does_not_leak_module_constants():
+    """``BaseConfig.get_config`` returns class attributes; the
+    reasoning-effort mapping must not be one of them or it ends up
+    serialised onto the wire as an extra request key.
+    """
+    cfg = AnthropicConfig.get_config(model="claude-opus-4-7")
+    for forbidden in (
+        "REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT",
+        "_REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT",
+    ):
+        assert forbidden not in cfg
+
+
+@pytest.mark.parametrize(
+    "model,level,expected",
+    [
+        ("claude-opus-4-7", "max", True),
+        ("claude-opus-4-7", "xhigh", True),
+        ("claude-opus-4-6", "max", True),
+        ("claude-opus-4-6", "xhigh", False),
+        ("claude-sonnet-4-6", "max", False),
+        ("claude-sonnet-4-6", "xhigh", False),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-7", "max", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-7", "xhigh", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "max", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh", False),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "max", False),
+        ("vertex_ai/claude-opus-4-7", "xhigh", True),
+        ("azure_ai/claude-opus-4-7", "xhigh", True),
+    ],
+)
+def test_supports_effort_level_handles_provider_prefixes(model, level, expected):
+    """``_supports_effort_level`` must handle bedrock/ vertex_ai/ azure_ai/
+    prefixed model ids so per-model gating works on every route, not just
+    the bare-Anthropic chat completion path.
+    """
+    assert AnthropicConfig._supports_effort_level(model, level) is expected
+
+
 def test_transform_request_uses_dynamic_max_tokens():
     """
     Test that transform_request uses dynamic max_tokens based on model

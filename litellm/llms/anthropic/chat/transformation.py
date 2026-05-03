@@ -93,6 +93,16 @@ else:
     LoggingClass = Any
 
 
+REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT: Dict[str, str] = {
+    "low": "low",
+    "minimal": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
+}
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -107,18 +117,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     top_k: Optional[int] = None
     metadata: Optional[dict] = None
     system: Optional[str] = None
-
-    # Shared mapping from OpenAI ``reasoning_effort`` values to Anthropic
-    # ``output_config.effort`` tier values. Used by both the direct Anthropic
-    # path and the Bedrock Converse path so the two routes cannot drift.
-    REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT: Dict[str, str] = {
-        "low": "low",
-        "minimal": "low",
-        "medium": "medium",
-        "high": "high",
-        "xhigh": "xhigh",
-        "max": "max",
-    }
 
     def __init__(
         self,
@@ -217,15 +215,54 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         Mirrors the pattern used in ``openai/chat/gpt_5_transformation.py`` so
         that adding support for a new effort level is a pure model-map change.
+        Handles bedrock-prefixed and vertex-prefixed model ids by stripping
+        the prefix and re-checking against ``litellm.model_cost`` directly,
+        so a Bedrock-routed Claude 4.6/4.7 keeps its model-map flag.
         """
+        key = f"supports_{level}_reasoning_effort"
         try:
-            return _supports_factory(
+            if _supports_factory(
                 model=model,
                 custom_llm_provider="anthropic",
-                key=f"supports_{level}_reasoning_effort",
-            )
+                key=key,
+            ):
+                return True
         except Exception:
-            return False
+            pass
+        # Bedrock and Vertex route the model id with a provider-prefix
+        # (e.g. ``bedrock/invoke/us.anthropic.claude-opus-4-7``). Strip
+        # known prefixes and look the resulting Anthropic-flavoured key
+        # up directly in ``litellm.model_cost`` so the lookup keeps
+        # working regardless of which route the request arrived on.
+        candidates = [model]
+        for prefix in (
+            "bedrock/converse/",
+            "bedrock/invoke/",
+            "bedrock/",
+            "vertex_ai/",
+        ):
+            if model.startswith(prefix):
+                candidates.append(model[len(prefix) :])
+        try:
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            base = BedrockModelInfo.get_base_model(model)
+            if base:
+                candidates.append(base)
+                candidates.append(f"bedrock/{base}")
+        except Exception:
+            pass
+        try:
+            import litellm
+
+            for cand in candidates:
+                if cand in litellm.model_cost and (
+                    litellm.model_cost[cand].get(key) is True
+                ):
+                    return True
+        except Exception:
+            pass
+        return False
 
     def get_supported_openai_params(self, model: str):
         params = [
@@ -1141,7 +1178,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         # validation with the mapping prevents garbage from
                         # leaking into ``optional_params`` if ``map_openai_params``
                         # is ever called without a subsequent ``transform_request``.
-                        mapped_effort = AnthropicConfig.REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                        mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
                             value
                         )
                         if mapped_effort is None:
