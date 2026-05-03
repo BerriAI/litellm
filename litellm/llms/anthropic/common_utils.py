@@ -763,8 +763,9 @@ def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
     Detect Anthropic 400 when encrypted thinking signatures in history do not match
     the current deployment (e.g. user rotated API key or switched model endpoint).
 
-    Example API message:
-    messages.N.content.M: Invalid `signature` in `thinking` block
+    Example API messages:
+    - messages.N.content.M: Invalid `signature` in `thinking` block
+    - messages.N.content.M.thinking.signature.str: Input should be a valid string
     """
     if not error_text:
         return False
@@ -773,7 +774,6 @@ def is_anthropic_invalid_thinking_signature_error(error_text: str) -> bool:
         "invalid" in lower
         and "signature" in lower
         and "thinking" in lower
-        and "block" in lower
     )
 
 
