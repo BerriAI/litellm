@@ -70,7 +70,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
-from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.exceptions import LiteLLMUnknownProvider, UnsupportedParamsError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -6486,6 +6486,16 @@ def transcription(
 
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
+
+    if custom_llm_provider == "openrouter":
+        raise UnsupportedParamsError(
+            message=(
+                "OpenRouter does not support audio transcription. "
+                "Use model='whisper-1' with provider OpenAI directly."
+            ),
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
 
     optional_params = get_optional_params_transcription(
         model=model,
