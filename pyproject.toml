@@ -109,6 +109,12 @@ proxy-runtime = [
     "llm-sandbox==0.3.39",
     "detect-secrets==1.5.0",
 ]
+natasha-ru-person = [
+    "natasha==1.6.0",
+    "razdel==0.5.0",
+    "navec==0.10.0",
+    "slovnet==0.6.0",
+]
 
 [project.scripts]
 litellm = "litellm:run_server"
