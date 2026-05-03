@@ -45,6 +45,21 @@ def _make_logging_obj(
     return obj
 
 
+def _make_logging_obj_with_credentials(
+    model: str = "bedrock/us.anthropic.claude-opus-4-6-v1",
+) -> MagicMock:
+    obj = MagicMock()
+    obj.model_call_details = {
+        "agentic_loop_params": {
+            "model": model,
+            "custom_llm_provider": "bedrock",
+            "api_key": "sk-test-agentic-key",
+            "api_base": "https://custom.provider.host/plan/anthropic",
+        },
+    }
+    return obj
+
+
 # ---------------------------------------------------------------------------
 # M1-I1 / M1-I3: max_tokens validation against thinking.budget_tokens
 # ---------------------------------------------------------------------------
@@ -473,3 +488,79 @@ class TestFollowUpErrorScenarios:
         # But ALL proxy metadata must be preserved
         assert captured_kwargs.get("metadata") == proxy_metadata
         assert captured_kwargs.get("litellm_call_id") == "call-abc-123"
+
+
+# ---------------------------------------------------------------------------
+# Credentials forwarding from agentic_loop_params
+# ---------------------------------------------------------------------------
+
+
+class TestAgenticLoopCredentialsForwarding:
+    """Verify api_key and api_base from agentic_loop_params are forwarded
+    to the follow-up acreate() call so third-party Anthropic-compatible
+    providers (e.g. Tencent Cloud) receive the correct endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_api_key_and_api_base_forwarded_from_agentic_loop_params(self):
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def _fake_acreate(**kw):
+            captured_kwargs.update(kw)
+            return MagicMock()
+
+        with (
+            patch(
+                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+                side_effect=_fake_acreate,
+            ),
+            patch.object(logger, "_execute_search", return_value="search result"),
+        ):
+            await logger._execute_agentic_loop(
+                model="us.anthropic.claude-opus-4-6-v1",
+                messages=[{"role": "user", "content": "hi"}],
+                tool_calls=_make_tool_calls(),
+                thinking_blocks=[],
+                anthropic_messages_optional_request_params={"max_tokens": 4096},
+                logging_obj=_make_logging_obj_with_credentials(),
+                stream=False,
+                kwargs={},
+            )
+
+        assert captured_kwargs.get("api_key") == "sk-test-agentic-key"
+        assert (
+            captured_kwargs.get("api_base")
+            == "https://custom.provider.host/plan/anthropic"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_credentials_forwarded_when_agentic_params_missing(self):
+        """When agentic_loop_params lacks api_key/api_base, neither key should appear
+        in the follow-up call kwargs (avoiding None overrides)."""
+        logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def _fake_acreate(**kw):
+            captured_kwargs.update(kw)
+            return MagicMock()
+
+        with (
+            patch(
+                "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
+                side_effect=_fake_acreate,
+            ),
+            patch.object(logger, "_execute_search", return_value="search result"),
+        ):
+            await logger._execute_agentic_loop(
+                model="us.anthropic.claude-opus-4-6-v1",
+                messages=[{"role": "user", "content": "hi"}],
+                tool_calls=_make_tool_calls(),
+                thinking_blocks=[],
+                anthropic_messages_optional_request_params={"max_tokens": 4096},
+                logging_obj=_make_logging_obj(),
+                stream=False,
+                kwargs={},
+            )
+
+        assert "api_key" not in captured_kwargs
+        assert "api_base" not in captured_kwargs

@@ -4679,6 +4679,13 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
 
+        # Avoid duplicate keyword arguments if patch.kwargs already contains
+        # api_key or api_base, so agentic credentials take precedence.
+        if agentic_api_key is not None:
+            kwargs_for_followup.pop("api_key", None)
+        if agentic_api_base is not None:
+            kwargs_for_followup.pop("api_base", None)
+
         return await anthropic_messages.acreate(
             **{
                 "max_tokens": max_tokens,

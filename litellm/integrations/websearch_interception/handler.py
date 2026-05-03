@@ -766,14 +766,22 @@ class WebSearchInterceptionLogger(CustomLogger):
             _followup_api_key = agentic_params.get("api_key")
             _followup_api_base = agentic_params.get("api_base")
 
+        # Avoid duplicate keyword arguments if request_patch.kwargs already
+        # contains api_key or api_base.
+        followup_kwargs = dict(request_patch.kwargs)
+        if _followup_api_key is not None:
+            followup_kwargs.pop("api_key", None)
+        if _followup_api_base is not None:
+            followup_kwargs.pop("api_base", None)
+
         return await anthropic_messages.acreate(
             max_tokens=max_tokens,
             messages=request_patch.messages,
             model=request_patch.model or model,
-            api_key=_followup_api_key,
-            api_base=_followup_api_base,
+            **({"api_key": _followup_api_key} if _followup_api_key else {}),
+            **({"api_base": _followup_api_base} if _followup_api_base else {}),
             **optional_params,
-            **request_patch.kwargs,
+            **followup_kwargs,
         )
 
     async def _build_anthropic_request_patch(
