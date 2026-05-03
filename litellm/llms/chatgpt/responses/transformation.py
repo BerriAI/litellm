@@ -96,9 +96,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "stream",
             "store",
             "include",
+            "parallel_tool_calls",
             "tools",
             "tool_choice",
             "reasoning",
+            "text",
             "previous_response_id",
             "truncation",
         }
