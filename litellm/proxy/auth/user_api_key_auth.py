@@ -1307,6 +1307,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     user_obj = None
 
+                if (
+                    user_obj is not None
+                    and isinstance(user_obj.metadata, dict)
+                    and user_obj.metadata.get("scim_active") is False
+                ):
+                    raise Exception(
+                        f"User={valid_token.user_id} has been deactivated via SCIM. Keys owned by this user cannot be used."
+                    )
+
             # Check 2a. Check if model has zero cost - if so, skip all budget checks
             model = _get_model_from_request_context(
                 request_data=request_data,

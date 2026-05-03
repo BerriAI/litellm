@@ -26,7 +26,7 @@ import {
   Text,
 } from "@tremor/react";
 import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
-import { Button as AntButton, Popover, Skeleton, Tooltip, Typography } from "antd";
+import { Button as AntButton, Popover, Skeleton, Tag, Tooltip, Typography } from "antd";
 import React, { useEffect, useDeferredValue, useMemo, useState } from "react";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { useFilterLogic } from "../key_team_helpers/filter_logic";
@@ -180,6 +180,35 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
           <span className="font-mono text-xs truncate block" style={{ maxWidth: width, overflow: "hidden" }}>
             {value ?? "-"}
           </span>
+        );
+      },
+    },
+    {
+      id: "status",
+      header: "Status",
+      size: 100,
+      enableSorting: false,
+      cell: ({ row }) => {
+        const key = row.original;
+        if (key.blocked !== true) {
+          return (
+            <Tag color="green" data-testid={`key-status-${key.token_id}`}>
+              Active
+            </Tag>
+          );
+        }
+        const isScimBlocked =
+          (key.metadata as Record<string, unknown> | null | undefined)
+            ?.scim_blocked === true;
+        const reason = isScimBlocked
+          ? "Blocked by SCIM (external identity provider deactivated or deleted the owning user)."
+          : "Blocked. Requests using this key will be rejected with 401.";
+        return (
+          <Tooltip title={reason}>
+            <Tag color="red" data-testid={`key-status-${key.token_id}`}>
+              Blocked
+            </Tag>
+          </Tooltip>
         );
       },
     },
