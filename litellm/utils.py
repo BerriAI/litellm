@@ -8864,7 +8864,7 @@ class ProviderConfigManager:
     def get_provider_vector_store_files_config(
         provider: LlmProviders,
     ) -> Optional[BaseVectorStoreFilesConfig]:
-        if litellm.LlmProviders.OPENAI == provider:
+        if provider in (litellm.LlmProviders.OPENAI, litellm.LlmProviders.PG_VECTOR):
             from litellm.llms.openai.vector_store_files.transformation import (
                 OpenAIVectorStoreFilesConfig,
             )

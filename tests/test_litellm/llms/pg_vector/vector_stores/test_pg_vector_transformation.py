@@ -313,3 +313,24 @@ class TestPGVectorStoreConfig:
         finally:
             # Restore original registry
             litellm.vector_store_registry = original_registry
+
+    def test_pg_vector_in_openai_compatible_providers(self):
+        """
+        Test that pg_vector is in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS.
+        This is required for file uploads and vector store files functionality.
+        """
+        import litellm
+        from litellm.types.utils import OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+        
+        assert litellm.LlmProviders.PG_VECTOR.value in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS
+
+    def test_pg_vector_store_files_config(self):
+        """
+        Test that get_provider_vector_store_files_config returns OpenAIVectorStoreFilesConfig for pg_vector.
+        """
+        import litellm
+        from litellm.utils import ProviderConfigManager
+        from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
+        
+        config = ProviderConfigManager.get_provider_vector_store_files_config(litellm.LlmProviders.PG_VECTOR)
+        assert isinstance(config, OpenAIVectorStoreFilesConfig)

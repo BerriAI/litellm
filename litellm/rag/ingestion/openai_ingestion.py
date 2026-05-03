@@ -89,7 +89,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
             )
             create_response = await vector_store_acreate(
                 name=self.ingest_name or "litellm-rag-ingest",
-                custom_llm_provider="openai",
+                custom_llm_provider=self.custom_llm_provider,
                 expires_after=expires_after,
                 api_key=api_key,
                 api_base=api_base,
@@ -99,7 +99,7 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
         # Upload file and attach to vector store
         result_file_id = None
         if file_content and filename and vector_store_id:
-            # Upload file to OpenAI
+            # Upload file to OpenAI (or compatible provider)
             file_response = await litellm.acreate_file(
                 file=(
                     filename,
@@ -107,17 +107,17 @@ class OpenAIRAGIngestion(BaseRAGIngestion):
                     content_type or "application/octet-stream",
                 ),
                 purpose="assistants",
-                custom_llm_provider="openai",
+                custom_llm_provider=self.custom_llm_provider,
                 api_key=api_key,
                 api_base=api_base,
             )
             result_file_id = file_response.id
 
-            # Attach file to vector store (OpenAI handles chunking/embedding)
+            # Attach file to vector store (Provider handles chunking/embedding)
             await vector_store_file_acreate(
                 vector_store_id=vector_store_id,
                 file_id=result_file_id,
-                custom_llm_provider="openai",
+                custom_llm_provider=self.custom_llm_provider,
                 chunking_strategy=cast(
                     Optional[Dict[str, Any]], self.chunking_strategy
                 ),
