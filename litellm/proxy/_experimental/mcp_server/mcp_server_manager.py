@@ -1596,7 +1596,10 @@ class MCPServerManager:
         """Discover OAuth metadata by following RFC 9728 (protected resource metadata discovery)."""
 
         try:
-            client = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
+            client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.MCP,
+                params={"timeout": MCP_METADATA_TIMEOUT},
+            )
             response = await client.get(server_url)
             response.raise_for_status()
             (
