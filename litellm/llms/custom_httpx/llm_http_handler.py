@@ -181,6 +181,46 @@ def _google_genai_streaming_hidden_params(
 
 
 class BaseLLMHTTPHandler:
+    @staticmethod
+    def _coerce_http_timeout(
+        timeout: Optional[Union[float, int, str, httpx.Timeout]],
+    ) -> Optional[Union[float, httpx.Timeout]]:
+        if timeout is None:
+            return None
+        if isinstance(timeout, httpx.Timeout):
+            return timeout
+
+        timeout_value: Any = timeout
+        if isinstance(timeout, str) and timeout.startswith("os.environ/"):
+            timeout_value = litellm.get_secret(timeout)
+            if timeout_value is None:
+                return None
+            if isinstance(timeout_value, httpx.Timeout):
+                return timeout_value
+
+        try:
+            return float(cast(Union[float, int, str], timeout_value))
+        except (TypeError, ValueError):
+            verbose_logger.warning(
+                "Invalid Anthropic /v1/messages timeout value: %s", timeout_value
+            )
+            return None
+
+    @staticmethod
+    def _get_anthropic_messages_timeout(
+        *,
+        litellm_params: GenericLiteLLMParams,
+        stream: bool,
+    ) -> Optional[Union[float, httpx.Timeout]]:
+        request_timeout = dict(litellm_params).get("request_timeout")
+        if stream and litellm_params.stream_timeout is not None:
+            return BaseLLMHTTPHandler._coerce_http_timeout(
+                litellm_params.stream_timeout
+            )
+        if litellm_params.timeout is not None:
+            return BaseLLMHTTPHandler._coerce_http_timeout(litellm_params.timeout)
+        return BaseLLMHTTPHandler._coerce_http_timeout(request_timeout)
+
     async def _make_common_async_call(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -1866,6 +1906,10 @@ class BaseLLMHTTPHandler:
         )
         litellm_params_dict = dict(litellm_params)
         optional_params_dict = dict(litellm_params)
+        timeout = self._get_anthropic_messages_timeout(
+            litellm_params=litellm_params,
+            stream=stream,
+        )
         for attempt_idx in range(max_attempts):
             try:
                 response = await async_httpx_client.post(
@@ -1874,6 +1918,7 @@ class BaseLLMHTTPHandler:
                     data=signed_json_body or json.dumps(request_body),
                     stream=stream or False,
                     logging_obj=logging_obj,
+                    timeout=timeout,
                 )
                 response.raise_for_status()
                 return response
