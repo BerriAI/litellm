@@ -1522,7 +1522,6 @@ class Usage(SafeAttributeModel, CompletionUsage):
         None
     )  # hidden param for Anthropic-specific iterations.
 
-
     server_tool_use: Optional[ServerToolUse] = None
     cost: Optional[float] = None
 
@@ -1531,7 +1530,6 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
-
 
     def __init__(  # noqa: PLR0915
         self,
