@@ -4601,6 +4601,7 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     model_mappings: Dict[str, str]
     flat_model_file_ids: List[str]
     created_by: Optional[str] = None
+    created_by_team_id: Optional[str] = None
     updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None
@@ -4611,6 +4612,8 @@ class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     model_object_id: str
     file_purpose: Literal["batch", "fine-tune", "response"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
+    created_by: Optional[str] = None
+    created_by_team_id: Optional[str] = None
 
 
 class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
@@ -4621,6 +4624,7 @@ class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     model_mappings: Dict[str, str]
     flat_model_resource_ids: List[str]
     created_by: Optional[str] = None
+    created_by_team_id: Optional[str] = None
     updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None
