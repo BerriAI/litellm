@@ -1718,21 +1718,38 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         web_search_requests: Optional[int] = None
         tool_search_requests: Optional[int] = None
         inference_geo: Optional[str] = None
+        iterations: Optional[List[Any]] = usage_object.get("iterations")
+        if iterations:
+            prompt_tokens = sum(it.get("input_tokens", 0) or 0 for it in iterations)
+            completion_tokens = sum(
+                it.get("output_tokens", 0) or 0 for it in iterations
+            )
+            cache_creation_input_tokens = sum(
+                it.get("cache_creation_input_tokens", 0) or 0 for it in iterations
+            )
+            cache_read_input_tokens = sum(
+                it.get("cache_read_input_tokens", 0) or 0 for it in iterations
+            )
+            # Caching tokens are additive to prompt_tokens in LiteLLM's Anthropic mapping
+            prompt_tokens += cache_creation_input_tokens
+            prompt_tokens += cache_read_input_tokens
+
         if "inference_geo" in _usage and _usage["inference_geo"] is not None:
             inference_geo = _usage["inference_geo"]
 
-        if (
-            "cache_creation_input_tokens" in _usage
-            and _usage["cache_creation_input_tokens"] is not None
-        ):
-            cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
-            prompt_tokens += cache_creation_input_tokens
-        if (
-            "cache_read_input_tokens" in _usage
-            and _usage["cache_read_input_tokens"] is not None
-        ):
-            cache_read_input_tokens = _usage["cache_read_input_tokens"]
-            prompt_tokens += cache_read_input_tokens
+        if iterations is None:
+            if (
+                "cache_creation_input_tokens" in _usage
+                and _usage["cache_creation_input_tokens"] is not None
+            ):
+                cache_creation_input_tokens = _usage["cache_creation_input_tokens"]
+                prompt_tokens += cache_creation_input_tokens
+            if (
+                "cache_read_input_tokens" in _usage
+                and _usage["cache_read_input_tokens"] is not None
+            ):
+                cache_read_input_tokens = _usage["cache_read_input_tokens"]
+                prompt_tokens += cache_read_input_tokens
         if "server_tool_use" in _usage and _usage["server_tool_use"] is not None:
             if (
                 "web_search_requests" in _usage["server_tool_use"]
@@ -1771,7 +1788,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
 
-        raw_input_tokens = usage_object.get("input_tokens", 0) or 0
+        raw_input_tokens = (
+            prompt_tokens - cache_creation_input_tokens - cache_read_input_tokens
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
@@ -1812,6 +1831,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             ),
             inference_geo=inference_geo,
             speed=speed,
+            iterations=iterations,
         )
         return usage
 
