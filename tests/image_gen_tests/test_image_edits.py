@@ -33,6 +33,18 @@ class TestCustomLogger(CustomLogger):
         pass
 
 
+class MockResponse:
+    """Shared mock HTTP response used across image edit tests."""
+
+    def __init__(self, json_data, status_code):
+        self._json_data = json_data
+        self.status_code = status_code
+        self.text = json.dumps(json_data)
+
+    def json(self):
+        return self._json_data
+
+
 class BaseLLMImageEditTest(ABC):
     """
     Abstract base test class that enforces a common test across all image edit test classes.
@@ -256,15 +268,6 @@ async def test_azure_image_edit_litellm_sdk():
         ],
     }
 
-    class MockResponse:
-        def __init__(self, json_data, status_code):
-            self._json_data = json_data
-            self.status_code = status_code
-            self.text = json.dumps(json_data)
-
-        def json(self):
-            return self._json_data
-
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
@@ -326,13 +329,13 @@ async def test_azure_image_edit_litellm_sdk():
                 prompt.strip() in form_data["prompt"]
             ), f"Expected prompt to contain '{prompt.strip()}'"
 
-        # Check headers
+        # Check headers - API key auth uses the api-key header
         headers = call_args.kwargs.get("headers", {})
         print("Request headers:", headers)
-        assert "Authorization" in headers, "Authorization header should be present"
-        assert headers["Authorization"].startswith(
-            "Bearer "
-        ), "Authorization should be Bearer token"
+        assert "api-key" in headers, "api-key header should be present for API key auth"
+        assert (
+            headers["api-key"] == test_api_key
+        ), f"Expected api-key '{test_api_key}', got {headers['api-key']}"
 
         print("result from image edit", result)
 
@@ -373,15 +376,6 @@ async def test_openai_image_edit_cost_tracking():
             "output_tokens": 1000,
         },
     }
-
-    class MockResponse:
-        def __init__(self, json_data, status_code):
-            self._json_data = json_data
-            self.status_code = status_code
-            self.text = json.dumps(json_data)
-
-        def json(self):
-            return self._json_data
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -463,15 +457,6 @@ async def test_azure_image_edit_cost_tracking():
             "output_tokens": 1000,
         },
     }
-
-    class MockResponse:
-        def __init__(self, json_data, status_code):
-            self._json_data = json_data
-            self.status_code = status_code
-            self.text = json.dumps(json_data)
-
-        def json(self):
-            return self._json_data
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -743,15 +728,6 @@ async def test_image_edit_array_handling():
         ],
     }
 
-    class MockResponse:
-        def __init__(self, json_data, status_code):
-            self._json_data = json_data
-            self.status_code = status_code
-            self.text = json.dumps(json_data)
-
-        def json(self):
-            return self._json_data
-
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
         new_callable=AsyncMock,
@@ -780,3 +756,235 @@ async def test_image_edit_array_handling():
 
         # Verify that both calls were made to the API
         assert mock_post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_azure_image_edit_azure_ad_token_auth():
+    """Test Azure image edit uses Azure AD token when no API key is provided."""
+    from litellm import aimage_edit
+
+    mock_response = {
+        "created": 1589478378,
+        "data": [
+            {
+                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+            }
+        ],
+    }
+
+    fake_ad_token = "fake-azure-ad-token-12345"
+    token_provider = lambda: fake_ad_token
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch.object(litellm, "api_key", None),
+        patch.object(litellm, "azure_key", None),
+        patch.dict(
+            os.environ,
+            {},
+        ),
+    ):
+        # Remove ambient Azure env vars that would override AD token auth
+        os.environ.pop("AZURE_OPENAI_API_KEY", None)
+        os.environ.pop("AZURE_API_KEY", None)
+
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        test_api_base = "https://ai-api-gw-uae-north.openai.azure.com"
+        test_api_version = "2025-04-01-preview"
+
+        result = await aimage_edit(
+            prompt="Edit this image",
+            model="azure/gpt-image-1",
+            api_base=test_api_base,
+            api_version=test_api_version,
+            azure_ad_token_provider=token_provider,
+            image=TEST_IMAGES,
+        )
+
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        headers = call_args.kwargs.get("headers", {})
+
+        # Azure AD token auth should use Authorization: Bearer header
+        assert (
+            "Authorization" in headers
+        ), "Authorization header should be present for Azure AD auth"
+        assert (
+            headers["Authorization"] == f"Bearer {fake_ad_token}"
+        ), f"Expected Bearer token with AD token, got {headers['Authorization']}"
+        # api-key header should NOT be present
+        assert (
+            "api-key" not in headers
+        ), "api-key header should not be present for Azure AD auth"
+
+        ImageResponse.model_validate(result)
+
+
+@pytest.mark.asyncio
+async def test_azure_image_edit_api_key_takes_precedence():
+    """Test that API key auth takes precedence over Azure AD token."""
+    from litellm import aimage_edit
+
+    mock_response = {
+        "created": 1589478378,
+        "data": [
+            {
+                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+            }
+        ],
+    }
+
+    fake_ad_token = "fake-azure-ad-token-12345"
+    token_provider = lambda: fake_ad_token
+    test_api_key = "test-api-key-priority"
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch.object(litellm, "api_key", None),
+        patch.object(litellm, "azure_key", None),
+        patch.dict(
+            os.environ,
+            {},
+        ),
+    ):
+        # Remove ambient Azure env vars so only the explicit api_key arg is used
+        os.environ.pop("AZURE_OPENAI_API_KEY", None)
+        os.environ.pop("AZURE_API_KEY", None)
+
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        result = await aimage_edit(
+            prompt="Edit this image",
+            model="azure/gpt-image-1",
+            api_base="https://test.openai.azure.com",
+            api_key=test_api_key,
+            api_version="2025-04-01-preview",
+            azure_ad_token_provider=token_provider,
+            image=TEST_IMAGES,
+        )
+
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        headers = call_args.kwargs.get("headers", {})
+
+        # API key should take precedence — uses api-key header
+        assert (
+            "api-key" in headers
+        ), "api-key header should be present when API key is provided"
+        assert headers["api-key"] == test_api_key
+        # Authorization header should NOT be present
+        assert (
+            "Authorization" not in headers
+        ), "Authorization header should not be set when API key is available"
+
+        ImageResponse.model_validate(result)
+
+
+@pytest.mark.asyncio
+async def test_azure_image_edit_azure_ad_token_string_auth():
+    """Test Azure image edit uses a static azure_ad_token string when no API key is provided."""
+    from litellm import aimage_edit
+
+    mock_response = {
+        "created": 1589478378,
+        "data": [
+            {
+                "b64_json": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+            }
+        ],
+    }
+
+    static_ad_token = "static-azure-ad-token-67890"
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch.object(litellm, "api_key", None),
+        patch.object(litellm, "azure_key", None),
+        patch.dict(
+            os.environ,
+            {},
+        ),
+    ):
+        os.environ.pop("AZURE_OPENAI_API_KEY", None)
+        os.environ.pop("AZURE_API_KEY", None)
+
+        mock_post.return_value = MockResponse(mock_response, 200)
+
+        result = await aimage_edit(
+            prompt="Edit this image",
+            model="azure/gpt-image-1",
+            api_base="https://test.openai.azure.com",
+            api_version="2025-04-01-preview",
+            azure_ad_token=static_ad_token,
+            image=TEST_IMAGES,
+        )
+
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        headers = call_args.kwargs.get("headers", {})
+
+        # Static AD token should use Authorization: Bearer header
+        assert (
+            "Authorization" in headers
+        ), "Authorization header should be present for static azure_ad_token"
+        assert (
+            headers["Authorization"] == f"Bearer {static_ad_token}"
+        ), f"Expected Bearer token with static AD token, got {headers['Authorization']}"
+        # api-key header should NOT be present
+        assert (
+            "api-key" not in headers
+        ), "api-key header should not be present for static azure_ad_token auth"
+
+        ImageResponse.model_validate(result)
+
+
+@pytest.mark.asyncio
+async def test_azure_image_edit_ad_token_provider_raises():
+    """Test that an exception from azure_ad_token_provider propagates to the caller."""
+    from litellm import aimage_edit
+
+    def failing_provider():
+        raise ValueError("Token refresh failed")
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post,
+        patch.object(litellm, "api_key", None),
+        patch.object(litellm, "azure_key", None),
+        patch.dict(
+            os.environ,
+            {},
+        ),
+    ):
+        os.environ.pop("AZURE_OPENAI_API_KEY", None)
+        os.environ.pop("AZURE_API_KEY", None)
+
+        mock_post.return_value = MockResponse({"error": "should not reach"}, 200)
+
+        with pytest.raises(
+            litellm.exceptions.APIConnectionError,
+            match="Failed to get Azure AD token",
+        ):
+            await aimage_edit(
+                prompt="Edit this image",
+                model="azure/gpt-image-1",
+                api_base="https://test.openai.azure.com",
+                api_version="2025-04-01-preview",
+                azure_ad_token_provider=failing_provider,
+                image=TEST_IMAGES,
+            )
+
+        # The HTTP call should never have been made
+        mock_post.assert_not_called()
