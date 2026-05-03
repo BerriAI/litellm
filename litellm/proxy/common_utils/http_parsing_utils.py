@@ -12,6 +12,22 @@ from litellm.proxy.common_utils.callback_utils import (
 )
 from litellm.types.router import Deployment
 
+# Root-level keys the proxy never accepts from a client request body.
+# ``user_config`` historically let a caller hand the proxy a full
+# ``litellm.Router`` config (model_list, api_base, fallbacks, …) which
+# the proxy would instantiate as a fresh router for that request,
+# bypassing the central ``llm_router``'s RBAC, budget, and model-access
+# enforcement. There is no internal proxy code path that sets
+# ``user_config`` — it was always client-supplied — so the entire
+# capability comes off at the parser boundary.
+_ROOT_KEYS_TO_STRIP_FROM_REQUEST_BODY: tuple = ("user_config",)
+
+
+def _strip_disallowed_root_keys(parsed_body: Dict) -> Dict:
+    for key in _ROOT_KEYS_TO_STRIP_FROM_REQUEST_BODY:
+        parsed_body.pop(key, None)
+    return parsed_body
+
 
 async def _read_request_body(request: Optional[Request]) -> Dict:
     """
@@ -79,6 +95,8 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
                             param="request_body",
                             code=status.HTTP_400_BAD_REQUEST,
                         )
+
+        _strip_disallowed_root_keys(parsed_body)
 
         # Cache the parsed result
         _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)

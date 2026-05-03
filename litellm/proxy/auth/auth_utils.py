@@ -179,7 +179,6 @@ _NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config",)
 _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "api_base",
     "base_url",
-    "user_config",
     "aws_sts_endpoint",
     "aws_web_identity_token",
     "aws_role_name",

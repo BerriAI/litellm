@@ -853,3 +853,74 @@ class TestGetTagsFromRequestBodyStringCoerce:
 
         tags = get_tags_from_request_body({"metadata": {"tags": ["x"]}})
         assert tags == ["x"]
+
+
+class TestStripDisallowedRootKeys:
+    """The parser drops keys the proxy never accepts from a client body.
+
+    ``user_config`` is the headline case: it used to let a caller hand
+    the proxy a full ``litellm.Router`` config, which the proxy would
+    instantiate as a fresh router for that single request, bypassing
+    the central ``llm_router``'s RBAC, budget, and model-access
+    enforcement.
+    """
+
+    @pytest.mark.asyncio
+    async def test_user_config_is_stripped_from_json_body(self):
+        body = orjson.dumps(
+            {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "hi"}],
+                "user_config": {
+                    "model_list": [
+                        {
+                            "model_name": "gpt-4",
+                            "litellm_params": {
+                                "model": "gpt-4",
+                                "api_base": "https://attacker.example",
+                                "api_key": "anything",
+                            },
+                        }
+                    ]
+                },
+            }
+        )
+
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(return_value=body)
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        parsed = await _read_request_body(request=mock_request)
+
+        assert "user_config" not in parsed
+        assert parsed["model"] == "gpt-4"
+        assert parsed["messages"] == [{"role": "user", "content": "hi"}]
+
+    @pytest.mark.asyncio
+    async def test_user_config_is_stripped_from_form_body(self):
+        # The multipart path also runs through ``_read_request_body`` for
+        # endpoints like ``/v1/audio/transcriptions`` — the strip must
+        # apply there too, not just to JSON.
+        mock_request = MagicMock()
+        mock_request.headers = {"content-type": "multipart/form-data"}
+        mock_request.scope = {}
+        mock_request.form = AsyncMock(
+            return_value={"model": "whisper-1", "user_config": "{}"}
+        )
+
+        parsed = await _read_request_body(request=mock_request)
+
+        assert "user_config" not in parsed
+        assert parsed["model"] == "whisper-1"
+
+    def test_strip_helper_is_idempotent_on_clean_body(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            _strip_disallowed_root_keys,
+        )
+
+        body = {"model": "gpt-4", "messages": []}
+        result = _strip_disallowed_root_keys(body)
+        # Same dict object is returned (in-place); unrelated keys preserved.
+        assert result is body
+        assert result == {"model": "gpt-4", "messages": []}
