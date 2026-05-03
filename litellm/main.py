@@ -70,7 +70,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
-from litellm.exceptions import LiteLLMUnknownProvider, UnsupportedParamsError
+from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -212,6 +212,9 @@ from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
 from .llms.openai.openai import OpenAIChatCompletion
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
+from .llms.openrouter.transcription_validation import (
+    ensure_audio_transcription_supported,
+)
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
 from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
@@ -6487,15 +6490,10 @@ def transcription(
     if dynamic_api_key is not None:
         api_key = dynamic_api_key
 
-    if custom_llm_provider == "openrouter":
-        raise UnsupportedParamsError(
-            message=(
-                "OpenRouter does not support audio transcription. "
-                "Use model='whisper-1' with provider OpenAI directly."
-            ),
-            model=model,
-            llm_provider=custom_llm_provider,
-        )
+    ensure_audio_transcription_supported(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+    )
 
     optional_params = get_optional_params_transcription(
         model=model,

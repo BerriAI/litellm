@@ -29,4 +29,5 @@ async def test_should_raise_unsupported_params_error_for_openrouter_transcriptio
         )
     msg = str(exc_info.value)
     assert "OpenRouter" in msg
+    assert "audio transcription" in msg.lower()
     assert "whisper-1" in msg
