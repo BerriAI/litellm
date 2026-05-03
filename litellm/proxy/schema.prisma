@@ -1292,6 +1292,47 @@ model LiteLLM_AdaptiveRouterSession {
   @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
 }
 
+model LiteLLM_ScheduledTaskTable {
+  task_id              String    @id @default(uuid())
+  // owner_token holds the hashed verification token of the calling key.
+  // Intentionally not declared as a foreign key — the proxy's master key
+  // has no row in LiteLLM_VerificationToken, so a hard FK would block any
+  // master-key caller from creating a task. Cleanup of orphaned rows is
+  // an operator responsibility.
+  owner_token          String
+  user_id              String?
+  team_id              String?
+  agent_id             String?
+
+  title                String
+  action               String
+  action_args          Json?
+  check_prompt         String?
+  format_prompt        String?
+  metadata             Json?
+
+  schedule_kind        String
+  schedule_spec        String
+  schedule_tz          String?
+
+  next_run_at          DateTime
+  expires_at           DateTime
+  fire_once            Boolean   @default(true)
+
+  status               String    @default("pending")
+  last_fired_at        DateTime?
+  consecutive_errors   Int       @default(0)
+  last_error           String?
+
+  created_at           DateTime  @default(now())
+  updated_at           DateTime  @updatedAt
+
+  @@index([owner_token, status])
+  @@index([user_id])
+  @@index([team_id])
+  @@index([agent_id, status])
+}
+
 // ---------------------------------------------------------------------------
 // Workflow Run Tracking
 //
