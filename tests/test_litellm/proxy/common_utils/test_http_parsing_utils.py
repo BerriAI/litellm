@@ -853,3 +853,367 @@ class TestGetTagsFromRequestBodyStringCoerce:
 
         tags = get_tags_from_request_body({"metadata": {"tags": ["x"]}})
         assert tags == ["x"]
+
+
+class TestStripInternalControlFields:
+    """Coverage for ``strip_internal_control_fields``: proxy-internal
+    fields supplied in the request body must not reach downstream
+    readers. Tests exercise the helper directly and the end-to-end path
+    through ``_read_request_body``.
+    """
+
+    @staticmethod
+    def _clear_allow_mock(monkeypatch):
+        """Ensure general_settings.allow_client_side_mock_response is unset."""
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(
+            proxy_server.general_settings, "allow_client_side_mock_response", False
+        )
+
+    @staticmethod
+    def _allow_mock(monkeypatch):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setitem(
+            proxy_server.general_settings, "allow_client_side_mock_response", True
+        )
+
+    def test_mock_response_stripped_by_default(self, monkeypatch):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        self._clear_allow_mock(monkeypatch)
+        data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "mock_response": "canned",
+            "mock_tool_calls": [{"id": "x"}],
+        }
+        strip_internal_control_fields(data)
+        assert "mock_response" not in data
+        assert "mock_tool_calls" not in data
+        # Other fields are preserved.
+        assert data["model"] == "gpt-4o"
+        assert data["messages"] == [{"role": "user", "content": "hi"}]
+
+    def test_mock_response_preserved_with_opt_in_setting(self, monkeypatch):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        self._allow_mock(monkeypatch)
+        data = {
+            "model": "x",
+            "mock_response": "legit testing",
+            "mock_tool_calls": [{"id": "x"}],
+        }
+        strip_internal_control_fields(data)
+        assert data["mock_response"] == "legit testing"
+        assert data["mock_tool_calls"] == [{"id": "x"}]
+
+    def test_internal_objects_always_stripped(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        data = {
+            "model": "x",
+            "proxy_server_request": {"url": "caller-supplied"},
+            "standard_logging_object": {"caller_supplied": True},
+            "secret_fields": {"raw_headers": "caller-supplied"},
+            "litellm_logging_obj": object(),
+        }
+        strip_internal_control_fields(data)
+        assert data == {"model": "x"}
+
+    def test_metadata_internal_fields_stripped(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        data = {
+            "model": "x",
+            "metadata": {
+                "applied_guardrails": ["presidio-pii"],
+                "applied_policies": ["dlp"],
+                "policy_sources": {"x": "y"},
+                "pillar_response_headers": {"Set-Cookie": "v"},
+                "pillar_flagged": True,
+                "semantic-similarity": 0.92,
+                "_guardrail_pipelines": [{"name": "p"}],
+                "tags": ["ok"],
+            },
+        }
+        strip_internal_control_fields(data)
+        # Every restricted key is removed; user-controlled tags survive.
+        assert data["metadata"] == {"tags": ["ok"]}
+
+    def test_litellm_metadata_alias_stripped(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        data = {
+            "model": "x",
+            "litellm_metadata": {
+                "applied_guardrails": ["caller"],
+                "user_tag": "keep",
+            },
+        }
+        strip_internal_control_fields(data)
+        assert data["litellm_metadata"] == {"user_tag": "keep"}
+
+    def test_user_api_key_prefix_stripped_from_metadata(self):
+        """User-supplied user_api_key_* fields in metadata are removed so
+        they don't collide with the values the proxy writes itself."""
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        data = {
+            "metadata": {
+                "user_api_key_user_id": "caller-supplied",
+                "user_api_key_team_id": "caller-supplied",
+                "user_api_key_alias": "caller-supplied",
+                "tags": ["ok"],
+            }
+        }
+        strip_internal_control_fields(data)
+        assert data["metadata"] == {"tags": ["ok"]}
+
+    def test_json_string_metadata_is_also_sanitized(self):
+        """Multipart form-data / extra_body can deliver metadata as a JSON
+        string; the strip parses, removes, and re-serializes so the
+        restricted fields don't survive downstream dict coercion."""
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        data = {
+            "model": "x",
+            "metadata": json.dumps(
+                {
+                    "applied_guardrails": ["caller"],
+                    "pillar_response_headers": {"X-Caller": "yes"},
+                    "tag": "ok",
+                }
+            ),
+        }
+        strip_internal_control_fields(data)
+        assert isinstance(data["metadata"], str)
+        parsed = json.loads(data["metadata"])
+        assert parsed == {"tag": "ok"}
+
+    def test_json_string_metadata_preserves_unicode_when_stripped(self):
+        """When the JSON-string metadata is re-serialized after stripping,
+        non-ASCII characters survive as UTF-8 instead of being
+        \\uXXXX-escaped (ensure_ascii=False)."""
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        data = {
+            "metadata": json.dumps(
+                {"applied_guardrails": ["caller"], "tag": "café"},
+                ensure_ascii=False,
+            )
+        }
+        strip_internal_control_fields(data)
+        # The literal "é" survives in the re-serialized output.
+        assert "é" in data["metadata"]
+        assert "\\u00e9" not in data["metadata"]
+        assert json.loads(data["metadata"]) == {"tag": "café"}
+
+    def test_clean_json_string_metadata_not_reserialized(self):
+        """When nothing is removed from a JSON-string metadata, the
+        original byte representation is preserved (no ordering / whitespace /
+        unicode-escape rewrite)."""
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        # Choose a string whose Python-round-tripped form would differ
+        # (non-ASCII char that json.dumps would default to \u-escape).
+        original = '{"tag":"café","count":1}'
+        data = {"metadata": original}
+        strip_internal_control_fields(data)
+        assert data["metadata"] == original
+
+    def test_non_dict_input_noop(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        # Must not raise for any of these.
+        strip_internal_control_fields(None)  # type: ignore[arg-type]
+        strip_internal_control_fields("string")  # type: ignore[arg-type]
+        strip_internal_control_fields([1, 2])  # type: ignore[arg-type]
+
+    def test_idempotent(self, monkeypatch):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_internal_control_fields,
+        )
+
+        self._clear_allow_mock(monkeypatch)
+        data = {
+            "mock_response": "x",
+            "metadata": {"applied_guardrails": ["a"], "keep": 1},
+        }
+        strip_internal_control_fields(data)
+        snapshot = json.dumps(data, sort_keys=True)
+        strip_internal_control_fields(data)
+        assert json.dumps(data, sort_keys=True) == snapshot
+
+    @pytest.mark.asyncio
+    async def test_read_request_body_strips_on_fresh_parse(self, monkeypatch):
+        """End-to-end: a body containing restricted fields is sanitized
+        before any downstream reader sees it."""
+        self._clear_allow_mock(monkeypatch)
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(
+            return_value=orjson.dumps(
+                {
+                    "model": "x",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "mock_response": "canned",
+                    "metadata": {
+                        "applied_guardrails": ["caller"],
+                        "pillar_response_headers": {"Set-Cookie": "v"},
+                        "tags": ["ok"],
+                    },
+                }
+            )
+        )
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        result = await _read_request_body(mock_request)
+
+        assert "mock_response" not in result
+        assert result["metadata"] == {"tags": ["ok"]}
+
+    @pytest.mark.asyncio
+    async def test_read_request_body_caches_stripped_form(self, monkeypatch):
+        """The cache stores the sanitized body, and a handler that
+        enriches metadata with user_api_key_* afterwards does NOT see
+        those values removed on a subsequent read (regression against an
+        earlier defensive re-strip that would have wiped proxy-populated
+        fields)."""
+        self._clear_allow_mock(monkeypatch)
+        mock_request = MagicMock()
+        mock_request.body = AsyncMock(
+            return_value=orjson.dumps(
+                {
+                    "model": "x",
+                    "mock_response": "canned",
+                    "metadata": {"applied_guardrails": ["caller"]},
+                }
+            )
+        )
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.scope = {}
+
+        first = await _read_request_body(mock_request)
+        assert "mock_response" not in first
+        assert first["metadata"] == {}
+
+        # Simulate the proxy enriching metadata after ingress.
+        first["metadata"]["user_api_key_user_id"] = "real-user"
+
+        # Second read returns the cached (and enriched) body without
+        # removing the proxy-populated user_api_key_user_id.
+        mock_request.body.reset_mock()
+        second = await _read_request_body(mock_request)
+        mock_request.body.assert_not_called()
+        assert second["metadata"]["user_api_key_user_id"] == "real-user"
+
+    @pytest.mark.asyncio
+    async def test_get_form_data_strips_restricted_fields(self, monkeypatch):
+        """Multipart endpoints (audio transcription, skills, container
+        uploads, passthrough) route through get_form_data directly via
+        get_request_body and would otherwise bypass the JSON-ingress
+        strip. Form values are strings, so metadata arrives as a JSON
+        string."""
+        self._clear_allow_mock(monkeypatch)
+        mock_request = MagicMock()
+        mock_request.form = AsyncMock(
+            return_value={
+                "model": "whisper-1",
+                "file": "<binary>",
+                "mock_response": "canned",
+                "metadata": json.dumps(
+                    {
+                        "applied_guardrails": ["caller"],
+                        "pillar_response_headers": {"X-Caller": "yes"},
+                        "user_api_key_user_id": "caller-supplied",
+                        "tag": "ok",
+                    }
+                ),
+            }
+        )
+
+        result = await get_form_data(mock_request)
+
+        assert "mock_response" not in result
+        # metadata stays a string (form values are strings) but the
+        # restricted keys inside it are gone.
+        assert isinstance(result["metadata"], str)
+        assert json.loads(result["metadata"]) == {"tag": "ok"}
+        # Other form fields are untouched.
+        assert result["model"] == "whisper-1"
+        assert result["file"] == "<binary>"
+
+    def test_extract_nested_form_metadata_strips_restricted_fields(self):
+        """File-upload endpoints reach extract_nested_form_metadata via
+        request.form() directly, bypassing _read_request_body /
+        get_form_data. Bracket-notation keys like
+        ``litellm_metadata[applied_guardrails]`` and
+        ``litellm_metadata[user_api_key_user_id]`` would otherwise survive
+        the assembly step and land in the request data unsanitized."""
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            extract_nested_form_metadata,
+        )
+
+        form_data = {
+            "litellm_metadata[applied_guardrails]": "presidio-pii",
+            "litellm_metadata[user_api_key_user_id]": "caller-supplied",
+            "litellm_metadata[user_api_key_team_id]": "caller-supplied",
+            "litellm_metadata[pillar_response_headers]": "caller",
+            "litellm_metadata[spend_logs_metadata][owner]": "alice",
+            "litellm_metadata[tags]": "production",
+            "purpose": "fine-tune",  # outside the prefix, ignored
+        }
+        result = extract_nested_form_metadata(
+            form_data=form_data, prefix="litellm_metadata["
+        )
+        # Restricted keys (exact match and prefix) are removed.
+        assert "applied_guardrails" not in result
+        assert "user_api_key_user_id" not in result
+        assert "user_api_key_team_id" not in result
+        assert "pillar_response_headers" not in result
+        # Non-restricted keys (including nested ones) survive.
+        assert result["spend_logs_metadata"] == {"owner": "alice"}
+        assert result["tags"] == "production"
+
+    @pytest.mark.asyncio
+    async def test_get_request_body_dispatcher_strips_multipart(
+        self, monkeypatch
+    ):
+        """The dispatcher routes multipart/form-data to get_form_data;
+        confirm that path is also sanitized end-to-end."""
+        self._clear_allow_mock(monkeypatch)
+        mock_request = MagicMock()
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
+        mock_request.form = AsyncMock(
+            return_value={
+                "model": "whisper-1",
+                "mock_response": "canned",
+            }
+        )
+
+        result = await get_request_body(mock_request)
+        assert "mock_response" not in result
+        assert result["model"] == "whisper-1"
