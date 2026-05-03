@@ -242,7 +242,7 @@ If `make test-unit` fails:
 - **Write descriptive commit messages**: Help reviewers understand your changes
 - **Keep PRs focused**: One feature/fix per PR
 - **Test edge cases**: Don't just test the happy path
-- **Update documentation**: If you change APIs, update docs
+- **Update documentation**: If you change APIs, update docs in the [litellm-docs](https://github.com/BerriAI/litellm-docs) repo (see [Documentation](#documentation) below)
 
 ## Building and Running Locally
 
@@ -312,6 +312,12 @@ Ensure the UI builds successfully before submitting your PR:
 npm run build
 ```
 
+## Documentation
+
+LiteLLM documentation lives in a **separate repository**: [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs), served at [docs.litellm.ai](https://docs.litellm.ai).
+
+**Do not create or edit documentation files in this repository.** If your changes require documentation updates, please open a separate PR against the [litellm-docs](https://github.com/BerriAI/litellm-docs) repo.
+
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
@@ -336,7 +342,7 @@ Looking for ideas? Check out:
 
 - 🐛 [Good first issues](https://github.com/BerriAI/litellm/labels/good%20first%20issue)
 - 🚀 [Feature requests](https://github.com/BerriAI/litellm/labels/enhancement)
-- 📚 Documentation improvements
+- 📚 Documentation improvements (in the [litellm-docs](https://github.com/BerriAI/litellm-docs) repo)
 - 🧪 Test coverage improvements
 - 🔌 New LLM provider integrations
 
