@@ -108,6 +108,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     metadata: Optional[dict] = None
     system: Optional[str] = None
 
+    # Shared mapping from OpenAI ``reasoning_effort`` values to Anthropic
+    # ``output_config.effort`` tier values. Used by both the direct Anthropic
+    # path and the Bedrock Converse path so the two routes cannot drift.
+    REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT: Dict[str, str] = {
+        "low": "low",
+        "minimal": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max",
+    }
+
     def __init__(
         self,
         max_tokens: Optional[int] = None,
@@ -1121,15 +1133,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     if AnthropicConfig._is_claude_4_6_model(
                         model
                     ) or AnthropicConfig._is_claude_4_7_model(model):
-                        effort_map = {
-                            "low": "low",
-                            "minimal": "low",
-                            "medium": "medium",
-                            "high": "high",
-                            "xhigh": "xhigh",
-                            "max": "max",
-                        }
-                        mapped_effort = effort_map.get(value, value)
+                        mapped_effort = AnthropicConfig.REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                            value, value
+                        )
                         optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
