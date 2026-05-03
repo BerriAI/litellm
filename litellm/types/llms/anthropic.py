@@ -393,6 +393,13 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
         AnthropicOutputConfig
     ]  # Configuration for Claude's output behavior
     cache_control: Optional[Dict[str, Any]]  # Automatic prompt caching
+    # OpenAI-style ``reasoning_effort`` is accepted on /v1/messages so callers
+    # can drive adaptive/extended thinking with a single tier-name knob (the
+    # same vocabulary as the chat completion path). The transformation layer
+    # maps it to native Anthropic ``thinking`` + ``output_config`` and pops
+    # this key before the request is forwarded — no provider receives
+    # ``reasoning_effort`` on the wire.
+    reasoning_effort: Optional[str]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
