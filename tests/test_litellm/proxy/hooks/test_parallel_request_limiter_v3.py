@@ -2762,3 +2762,66 @@ async def test_project_model_rate_limits_not_triggered_for_other_model_v3():
     assert (
         "model_per_project" not in descriptor_keys
     ), f"model_per_project should not be added for unrelated model, got: {descriptor_keys}"
+
+
+def test_team_metadata_model_tpm_limit_single_model_per_team_descriptor():
+    """
+    team_metadata.model_tpm_limit must not produce duplicate model_per_team descriptors.
+    Duplicates caused the same counter to increment twice per request (effective limit halved).
+    """
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user = UserAPIKeyAuth(
+        api_key=hash_token("sk-team-model-tpm-dedupe"),
+        team_id="team-dedupe-test",
+        team_metadata={"model_tpm_limit": {"gpt-4o-mini": 100}},
+    )
+    data = {"model": "gpt-4o-mini"}
+    descriptors = parallel_request_handler._create_rate_limit_descriptors(
+        user_api_key_dict=user,
+        data=data,
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+    mpt = [d for d in descriptors if d["key"] == "model_per_team"]
+    assert len(mpt) == 1, (
+        f"expected exactly one model_per_team descriptor, got {len(mpt)}: {mpt}"
+    )
+    assert mpt[0]["value"] == "team-dedupe-test:gpt-4o-mini"
+    assert mpt[0]["rate_limit"]["tokens_per_unit"] == 100
+
+
+@pytest.mark.asyncio
+async def test_team_metadata_model_tpm_pre_call_not_double_incremented():
+    """
+    With team model TPM = N, pre-call should allow N increments on model_per_team
+    (one per request), not N/2 from duplicate descriptors.
+    """
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user = UserAPIKeyAuth(
+        api_key=hash_token("sk-team-model-tpm-pre"),
+        team_id="team-pre-dedupe",
+        team_metadata={"model_tpm_limit": {"gpt-4o-mini": 10}},
+    )
+    data = {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "x"}]}
+    allowed = 0
+    for _ in range(20):
+        try:
+            await parallel_request_handler.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=local_cache,
+                data=dict(data),
+                call_type="completion",
+            )
+            allowed += 1
+        except HTTPException:
+            break
+    assert allowed == 10, (
+        f"expected 10 pre-calls before model_per_team TPM block, got {allowed}"
+    )
