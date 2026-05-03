@@ -4683,8 +4683,10 @@ class BaseLLMHTTPHandler:
         # api_key or api_base, so agentic credentials take precedence.
         if agentic_api_key is not None:
             kwargs_for_followup.pop("api_key", None)
+            kwargs_for_followup["api_key"] = agentic_api_key
         if agentic_api_base is not None:
             kwargs_for_followup.pop("api_base", None)
+            kwargs_for_followup["api_base"] = agentic_api_base
 
         return await anthropic_messages.acreate(
             **{
@@ -4692,8 +4694,6 @@ class BaseLLMHTTPHandler:
                 "messages": patch.messages,
                 "model": patch.model or full_model_name,
                 "stream": stream,
-                **({"api_key": agentic_api_key} if agentic_api_key else {}),
-                **({"api_base": agentic_api_base} if agentic_api_base else {}),
                 **optional_params,
                 **kwargs_for_followup,
             }

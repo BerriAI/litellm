@@ -771,15 +771,15 @@ class WebSearchInterceptionLogger(CustomLogger):
         followup_kwargs = dict(request_patch.kwargs)
         if _followup_api_key is not None:
             followup_kwargs.pop("api_key", None)
+            followup_kwargs["api_key"] = _followup_api_key
         if _followup_api_base is not None:
             followup_kwargs.pop("api_base", None)
+            followup_kwargs["api_base"] = _followup_api_base
 
         return await anthropic_messages.acreate(
             max_tokens=max_tokens,
             messages=request_patch.messages,
             model=request_patch.model or model,
-            **({"api_key": _followup_api_key} if _followup_api_key else {}),
-            **({"api_base": _followup_api_base} if _followup_api_base else {}),
             **optional_params,
             **followup_kwargs,
         )
