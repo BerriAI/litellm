@@ -1,4 +1,5 @@
 #!/bin/sh
+# ⚠️ KEEP IN SYNC: Changes here should be reviewed for docker/*/entrypoint.sh
 
 if [ "$SEPARATE_HEALTH_APP" = "1" ]; then
     export LITELLM_ARGS="$@"

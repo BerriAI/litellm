@@ -1,0 +1,912 @@
+"""
+New Relic AI Monitoring Integration for LiteLLM
+
+This module provides integration with New Relic's AI Monitoring feature to track
+LLM requests, responses, and usage metrics.
+
+Environment Variables (consumed by the New Relic agent at process bootstrap -
+set via container env, or before invoking `newrelic-admin run-program`):
+    NEW_RELIC_LICENSE_KEY: Your New Relic license key (required)
+    NEW_RELIC_APP_NAME: Your application name (required)
+
+UI- and runtime-toggleable:
+    NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED: Whether to record message
+        content (optional, default: true)
+
+Configuration:
+    Message logging can be controlled via (both must agree to record):
+    1. turn_off_message_logging parameter - pass via callback initialization or config YAML
+    2. NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED env var
+
+    Default behavior: Messages ARE recorded unless explicitly disabled by either method
+    Either method can disable recording - both must enable for recording to occur
+
+Usage - Python SDK:
+    import litellm
+    litellm.callbacks = ["newrelic"]
+
+    # Or with explicit configuration:
+    from litellm.integrations.newrelic import NewRelicLogger
+    litellm.callbacks = [NewRelicLogger(turn_off_message_logging=True)]
+
+Usage - Proxy Server (config.yaml):
+    litellm_settings:
+      callbacks: ["newrelic"]
+      newrelic_params:
+        turn_off_message_logging: true  # Disable message content recording
+
+    # Or disable via environment variable:
+    # export NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED=false
+
+    # Ensure New Relic agent is initialized (use newrelic-admin or initialize manually)
+    # newrelic-admin run-program python your_app.py
+"""
+
+import json
+import os
+import threading
+import time
+import uuid
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+import litellm
+from litellm._logging import verbose_logger
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.integrations.newrelic import NewRelicInitParams
+from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
+from litellm.types.utils import ModelResponse, Message, StandardLoggingPayload
+
+try:
+    import newrelic.agent as _newrelic_agent
+except ImportError:
+    _newrelic_agent = None  # type: ignore
+
+
+class NewRelicLogger(CustomLogger):
+    """
+    New Relic logger for LiteLLM to send AI monitoring events.
+
+    This logger creates two types of New Relic custom events:
+    1. LlmChatCompletionSummary - One per completion request
+    2. LlmChatCompletionMessage - One per message (request and response)
+    """
+
+    # Class-level state for supportability metric emission, shared across all instances.
+    # Protected by _metric_lock to ensure thread-safe access.
+    _last_metric_emission_time: float = 0.0
+    _metric_lock = threading.Lock()
+
+    def __init__(self, **kwargs):
+        #########################################################
+        # Handle newrelic_params set as litellm.newrelic_params
+        #########################################################
+        dict_newrelic_params = self._get_newrelic_params()
+
+        # Use setdefault so constructor kwargs take priority over global params.
+        # model_dump() always returns all fields (including defaults), so update()
+        # would silently overwrite explicit constructor args like turn_off_message_logging=True.
+        for k, v in dict_newrelic_params.items():
+            kwargs.setdefault(k, v)
+
+        # CustomLogger.__init__ will set self.turn_off_message_logging from kwargs
+        super().__init__(**kwargs)
+
+        # Check for required environment variables
+        self.license_key = os.getenv("NEW_RELIC_LICENSE_KEY")
+        self.app_name = os.getenv("NEW_RELIC_APP_NAME")
+
+        # Validate configuration
+        if not self.license_key or not self.app_name:
+            verbose_logger.warning(
+                "New Relic integration requires NEW_RELIC_LICENSE_KEY and "
+                "NEW_RELIC_APP_NAME environment variables. Integration will be disabled."
+            )
+            self.enabled = False
+        elif _newrelic_agent is None:
+            verbose_logger.error(
+                "New Relic Python agent not installed. Use the "
+                "`docker.litellm.ai/berriai/litellm-newrelic` Docker image, which bundles the agent "
+                "and wraps startup with `newrelic-admin run-program`. To run from "
+                "source, install the agent (`pip install newrelic`) and start the "
+                "proxy with `newrelic-admin run-program litellm --config config.yaml`. "
+                "Integration will be disabled."
+            )
+            self.enabled = False
+        else:
+            try:
+                # timeout=0 forces non-blocking startup: the agent connects in a
+                # background thread regardless of newrelic.ini / NEW_RELIC_STARTUP_TIMEOUT.
+                _newrelic_agent.register_application(timeout=0)
+
+                self.enabled = True
+                verbose_logger.info(
+                    f"New Relic AI Monitoring initialized for app: {self.app_name}, "
+                    f"content recording: {self.record_content}"
+                )
+            except Exception as e:
+                verbose_logger.error(
+                    f"Failed to initialize New Relic agent: {e}. "
+                    "Integration will be disabled."
+                )
+                self.enabled = False
+
+    def _get_newrelic_params(self) -> Dict:
+        """
+        Get the newrelic_params from litellm.newrelic_params
+
+        These are params specific to initializing the NewRelicLogger e.g. turn_off_message_logging
+        """
+        dict_newrelic_params: Dict = {}
+        if litellm.newrelic_params is not None:
+            if isinstance(litellm.newrelic_params, NewRelicInitParams):
+                dict_newrelic_params = litellm.newrelic_params.model_dump()
+            elif isinstance(litellm.newrelic_params, Dict):
+                # only allow params that are of NewRelicInitParams
+                dict_newrelic_params = NewRelicInitParams(
+                    **litellm.newrelic_params
+                ).model_dump()
+        return dict_newrelic_params
+
+    @property
+    def record_content(self) -> bool:
+        """Whether to record message content in New Relic.
+
+        Both turn_off_message_logging param AND NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED
+        env var must agree to record content. If either disables recording, content will not
+        be recorded. Read at call time so UI config changes take effect without a restart.
+        Default: True (record content) unless explicitly disabled by either method.
+        """
+        return (not self.turn_off_message_logging) and self._parse_bool_env(
+            "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED", True
+        )
+
+    def _parse_bool_env(self, var_name: str, default: bool = False) -> bool:
+        """Parse a boolean environment variable.
+
+        Accepts true/false, 1/0, yes/no, on/off (case-insensitive,
+        whitespace-tolerant) — matching the convention used in
+        ``litellm/__init__.py`` and the standard library's
+        ``configparser.BOOLEAN_STATES``. Unrecognised values log a
+        warning and fall back to ``default`` rather than silently
+        flipping user intent.
+        """
+        raw = os.getenv(var_name)
+        if not raw:
+            return default
+        value = raw.strip().lower()
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+        verbose_logger.warning(
+            f"{var_name}={raw!r} is not a recognised boolean "
+            f"(accepts true/false, 1/0, yes/no, on/off). "
+            f"Falling back to default ({default})."
+        )
+        return default
+
+    def _get_litellm_version(self) -> str:
+        """
+        Get litellm version for supportability metrics.
+
+        Returns:
+            Version string (e.g., "1.80.0") or "unknown" if unable to determine
+        """
+        try:
+            from importlib.metadata import version
+
+            return version("litellm")
+        except Exception as e:
+            verbose_logger.warning(f"Unable to determine litellm version: {e}")
+            return "unknown"
+
+    def _emit_supportability_metric(self):
+        """
+        Emit New Relic supportability metric for LiteLLM usage.
+
+        Per spec, this metric should be emitted at least once every 27 hours
+        to indicate the library is in use. Format:
+        Supportability/Python/ML/LiteLLM/{version}
+
+        This method updates _last_metric_emission_time and should
+        be called within a lock when checking periodic emission.
+        """
+        try:
+            litellm_version = self._get_litellm_version()
+            metric_name = f"Supportability/Python/ML/LiteLLM/{litellm_version}"
+
+            # Record metric with value of 1 (will be aggregated by New Relic)
+            app = _newrelic_agent.application()
+
+            # Always update the timestamp so the 27-hour back-off applies
+            # regardless of whether the app is ready, preventing lock contention
+            # on every request when the agent is slow to register or never starts.
+            NewRelicLogger._last_metric_emission_time = time.time()
+
+            if app and app.enabled:
+                app.record_custom_metric(metric_name, 1)
+                verbose_logger.info(
+                    f"Emitted New Relic supportability metric: {metric_name}"
+                )
+            else:
+                verbose_logger.info(
+                    "New Relic application is not enabled; skipping metric recording."
+                )
+
+        except Exception as e:
+            verbose_logger.warning(f"Failed to emit supportability metric: {e}")
+
+    def _check_and_emit_periodic_metric(self):
+        """
+        Check if 27 hours have passed since last metric emission and re-emit if needed.
+
+        Uses a mutex to ensure only one thread emits the metric even if multiple
+        requests are being processed concurrently.
+        """
+        # Quick check without lock to avoid unnecessary locking
+        current_time = time.time()
+        time_since_last_emission = (
+            current_time - NewRelicLogger._last_metric_emission_time
+        )
+
+        if time_since_last_emission >= 97200:  # 27 hours = 97200 seconds
+            # Acquire lock to ensure only one thread emits
+            with NewRelicLogger._metric_lock:
+                # Double-check inside lock in case another thread just emitted
+                current_time = time.time()
+                time_since_last_emission = (
+                    current_time - NewRelicLogger._last_metric_emission_time
+                )
+
+                if time_since_last_emission >= 97200:
+                    self._emit_supportability_metric()
+
+    def _get_trace_context(
+        self,
+        kwargs: Dict,
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
+    ) -> str:
+        """
+        Get the New Relic trace ID for AI monitoring events.
+
+        This integration runs in LiteLLM's async logging worker, outside the
+        New Relic agent's current transaction. Because we can't call
+        `newrelic.agent.current_trace_id()` to let the agent populate the
+        trace_id on AIM custom events, we manually simulate what the agent
+        would do. An AIM event without a trace_id is malformed per the NR
+        schema, so this method always returns a valid string.
+
+        Resolution order:
+        1. W3C traceparent header (litellm_params.metadata.headers.traceparent) -
+           what the agent would link to if we were in-transaction.
+        2. StandardLoggingPayload.trace_id - LiteLLM's internal trace for
+           retry/fallback grouping.
+        3. Generated UUID - synthetic grouping key when upstream context is
+           absent or parsing it fails.
+
+        Span IDs are intentionally not emitted: any span ID recoverable from
+        the inbound traceparent is the caller's parent span, not ours.
+
+        Returns:
+            trace_id: always a non-empty string.
+        """
+        trace_id: Optional[str] = None
+        try:
+            litellm_params = kwargs.get("litellm_params") or {}
+            metadata = litellm_params.get("metadata") or {}
+            headers = metadata.get("headers") or {}
+            # Normalize header key lookup to be case-insensitive per W3C spec
+            traceparent = next(
+                (v for k, v in headers.items() if k.lower() == "traceparent"), None
+            )
+
+            if traceparent:
+                # Extract trace_id from traceparent header if available
+                # traceparent format: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"
+                parts = traceparent.split("-")
+                if len(parts) == 4:
+                    trace_id = parts[1]
+
+            if not trace_id and standard_logging_object:
+                slo_trace_id = standard_logging_object.get("trace_id")
+                if slo_trace_id:
+                    trace_id = slo_trace_id
+
+        except Exception as e:
+            verbose_logger.warning(
+                f"Unable to parse New Relic trace context from upstream sources: {e}"
+            )
+
+        if not trace_id:
+            trace_id = uuid.uuid4().hex
+            verbose_logger.debug(
+                f"New Relic trace_id not available from distributed tracing headers or "
+                f"StandardLoggingPayload. Generated trace_id={trace_id} for AI monitoring "
+                f"event grouping."
+            )
+
+        return trace_id
+
+    def _extract_completion_id(self, kwargs: Dict, response_obj: ModelResponse) -> str:
+        """
+        Extract completion ID from kwargs or response_obj, or generate one.
+        """
+        completion_id = None
+
+        if response_obj:
+            completion_id = response_obj.get("id")
+
+        if not completion_id:
+            completion_id = kwargs.get("litellm_call_id")
+
+        # If still not found, generate UUID and log warning per spec
+        if not completion_id:
+            completion_id = str(uuid.uuid4())
+
+        return completion_id
+
+    def _get_vendor(
+        self,
+        kwargs: Dict,
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
+    ) -> str:
+        """Extract vendor/provider, preferring StandardLoggingPayload."""
+        if standard_logging_object:
+            vendor = standard_logging_object.get("custom_llm_provider")
+            if vendor:
+                return vendor
+        litellm_params = kwargs.get("litellm_params", {}) or {}
+        return litellm_params.get("custom_llm_provider") or "litellm"
+
+    def _get_model_names(
+        self,
+        kwargs: Dict,
+        response_obj: ModelResponse,
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
+    ) -> Tuple[str, str]:
+        """
+        Extract request and response model names, preferring StandardLoggingPayload
+        for the request model.
+
+        Returns:
+            Tuple of (request_model, response_model)
+        """
+        request_model = None
+        if standard_logging_object:
+            slo_model = standard_logging_object.get("model")
+            if slo_model:
+                request_model = str(slo_model)
+        if not request_model:
+            request_model = str(kwargs.get("model") or "unknown")
+        response_model: str = str(response_obj.get("model") or request_model)
+        return request_model, response_model
+
+    def _extract_usage(
+        self,
+        response_obj: ModelResponse,
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
+    ) -> Dict[str, int]:
+        """Extract usage statistics, preferring StandardLoggingPayload."""
+        if standard_logging_object:
+            prompt = standard_logging_object.get("prompt_tokens")
+            completion = standard_logging_object.get("completion_tokens")
+            total = standard_logging_object.get("total_tokens")
+            if any(x is not None for x in [prompt, completion, total]):
+                return {
+                    "prompt_tokens": prompt or 0,
+                    "completion_tokens": completion or 0,
+                    "total_tokens": total or 0,
+                }
+
+        usage = response_obj.get("usage", None)
+        if not usage:
+            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+        return {
+            "prompt_tokens": usage.get("prompt_tokens") or 0,
+            "completion_tokens": usage.get("completion_tokens") or 0,
+            "total_tokens": usage.get("total_tokens") or 0,
+        }
+
+    def _get_finish_reason(self, response_obj: ModelResponse) -> str:
+        """
+        Extract finish reason from first choice in the response.
+
+        Returns "unknown" if choices are not present or finish_reason is not found.
+        """
+        choices = response_obj.get("choices") or []
+        if choices and len(choices) > 0:
+            return choices[0].get("finish_reason") or "unknown"
+        return "unknown"
+
+    def _to_epoch_ms(self, t: Any) -> float:
+        """Convert a datetime or float timestamp to epoch milliseconds."""
+        if hasattr(t, "timestamp"):
+            return t.timestamp() * 1000.0
+        return float(t) * 1000.0
+
+    def _get_duration(
+        self,
+        kwargs: Dict,
+        start_time: Any,
+        end_time: Any,
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
+    ) -> Optional[float]:
+        """
+        Extract duration in milliseconds.
+
+        Resolution order:
+        1. StandardLoggingPayload.response_time (already computed by LiteLLM)
+        2. llm_api_duration_ms from kwargs
+        3. Calculated from start_time and end_time
+        """
+        if standard_logging_object:
+            response_time = standard_logging_object.get("response_time")
+            if response_time is not None:
+                return (
+                    float(response_time) * 1000.0
+                )  # SLO stores seconds; convert to ms
+
+        duration_ms = kwargs.get("llm_api_duration_ms")
+        if duration_ms is not None:
+            return float(duration_ms)
+
+        if start_time is not None and end_time is not None:
+            return self._to_epoch_ms(end_time) - self._to_epoch_ms(start_time)
+
+        return None
+
+    def _get_request_params(
+        self,
+        kwargs: Dict,
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
+    ) -> Dict[str, Any]:
+        """
+        Extract request parameters like temperature and max_tokens, preferring
+        StandardLoggingPayload.model_parameters.
+
+        Returns dict with available parameters, omitting those not present.
+        """
+        if standard_logging_object:
+            source_params = standard_logging_object.get("model_parameters") or {}
+        else:
+            source_params = kwargs.get("optional_params") or {}
+
+        params = {}
+
+        temperature = source_params.get("temperature")
+        if temperature is not None:
+            params["temperature"] = temperature
+
+        max_tokens = source_params.get("max_tokens")
+        if max_tokens is not None:
+            params["max_tokens"] = max_tokens
+
+        return params
+
+    def _extract_message_content(self, message: Union[Message, Dict]) -> str:
+        """
+        Extract content from a message, handling various formats.
+
+        Handles tool calls, multimodal content (as JSON), and standard text content.
+        Returns empty string if content is None or missing.
+        """
+        content = message.get("content")
+
+        # Handle tool calls
+        if message.get("tool_calls"):
+            try:
+                return json.dumps(message["tool_calls"])
+            except Exception:
+                return str(message["tool_calls"])
+
+        # Handle None or missing content
+        if content is None:
+            return ""
+
+        # Handle list content (multimodal)
+        if isinstance(content, list):
+            try:
+                return json.dumps(content)
+            except Exception:
+                return str(content)
+
+        # Handle non-string content
+        if not isinstance(content, str):
+            return str(content)
+
+        return content
+
+    def _extract_all_messages(
+        self,
+        kwargs: Dict,
+        response_obj: ModelResponse,
+        response_model: str,
+        vendor: str,
+        standard_logging_object: Optional[StandardLoggingPayload] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract all messages (request + response) with sequence numbers and timestamps.
+
+        Processes request messages from StandardLoggingPayload.messages (preferred) or
+        kwargs["messages"] (fallback), and response messages from response_obj["choices"].
+        Assigns sequential numbers starting at 0.
+        Adds timestamps from StandardLoggingPayload (preferred) or kwargs if available
+        (converted to epoch milliseconds).
+        """
+        messages = []
+        sequence = 0
+
+        # Extract timestamps, preferring StandardLoggingPayload
+        start_time = None
+        if standard_logging_object:
+            start_time = standard_logging_object.get("startTime")
+        if not start_time:
+            start_time = kwargs.get("start_time")
+
+        end_time = None
+        if standard_logging_object:
+            end_time = standard_logging_object.get("endTime")
+        if not end_time:
+            end_time = kwargs.get("end_time")
+
+        # Extract request messages, preferring StandardLoggingPayload.
+        # SLO messages can be a string (serialized/redacted), so only use it when it's a list.
+        slo_messages = (
+            standard_logging_object.get("messages") if standard_logging_object else None
+        )
+        if isinstance(slo_messages, list):
+            request_messages = slo_messages
+        else:
+            request_messages = kwargs.get("messages") or []
+        for msg in request_messages:
+            message_data = {
+                "role": msg.get("role") or "user",
+                "sequence": sequence,
+                "response.model": response_model,
+                "vendor": vendor,
+            }
+
+            # Add timestamp for request message if available (convert to milliseconds)
+            if start_time is not None:
+                message_data["timestamp"] = int(self._to_epoch_ms(start_time))
+
+            # Only add content if recording is enabled
+            if self.record_content:
+                message_data["content"] = self._extract_message_content(msg)
+
+            messages.append(message_data)
+            sequence += 1
+
+        # Extract response messages from choices
+        choices = response_obj.get("choices") or []
+        if choices and len(choices) > 0:
+            for choice in choices:
+                # Prefer "message" (non-streaming); fall back to "delta" (streaming-assembled)
+                message = choice.get("message", None) or choice.get("delta", None)
+                if message:
+                    message_data = {
+                        "role": message.get("role") or "assistant",
+                        "sequence": sequence,
+                        "response.model": response_model,
+                        "vendor": vendor,
+                        "is_response": True,
+                    }
+
+                    # Add timestamp for response message if available (convert to milliseconds)
+                    if end_time is not None:
+                        message_data["timestamp"] = int(self._to_epoch_ms(end_time))
+
+                    # Only add content if recording is enabled
+                    if self.record_content:
+                        message_data["content"] = self._extract_message_content(message)
+
+                    messages.append(message_data)
+                    sequence += 1
+
+        return messages
+
+    def _record_summary_event(
+        self,
+        request_id: str,
+        trace_id: Optional[str],
+        request_model: str,
+        response_model: str,
+        vendor: str,
+        finish_reason: str,
+        num_messages: int,
+        usage: Dict[str, int],
+        duration: Optional[float] = None,
+        request_params: Optional[Dict[str, Any]] = None,
+    ):
+        """Record LlmChatCompletionSummary event to New Relic."""
+        try:
+            event_data = {
+                "id": request_id,
+                "request_id": request_id,
+                "request.model": request_model,
+                "response.model": response_model,
+                "response.choices.finish_reason": finish_reason,
+                "response.number_of_messages": num_messages,
+                "vendor": vendor,
+                "ingest_source": "litellm",
+                "response.usage.prompt_tokens": usage["prompt_tokens"],
+                "response.usage.completion_tokens": usage["completion_tokens"],
+                "response.usage.total_tokens": usage["total_tokens"],
+            }
+
+            # Add optional attributes if present
+            if trace_id:
+                event_data["trace_id"] = trace_id
+
+            if duration is not None:
+                event_data["duration"] = duration
+
+            # Add request parameters if present
+            if request_params:
+                if "temperature" in request_params:
+                    event_data["request.temperature"] = request_params["temperature"]
+                if "max_tokens" in request_params:
+                    event_data["request.max_tokens"] = request_params["max_tokens"]
+
+            app = _newrelic_agent.application()
+
+            if app and app.enabled:
+                app.record_custom_event("LlmChatCompletionSummary", event_data)
+            else:
+                verbose_logger.warning(
+                    "New Relic application is not enabled; skipping summary event recording."
+                )
+
+        except Exception as e:
+            verbose_logger.warning(f"Failed to record New Relic summary event: {e}")
+            self.handle_callback_failure("newrelic")
+
+    def _record_message_events(
+        self,
+        request_id: str,
+        llm_response_id: str,
+        trace_id: Optional[str],
+        messages: List[Dict[str, Any]],
+    ):
+        """Record LlmChatCompletionMessage events to New Relic.
+
+        Args:
+            request_id: Agent-generated UUID that links to Summary event's id
+            llm_response_id: LLM's response ID (e.g., "chatcmpl-...") for message id format
+            trace_id: Trace ID for distributed tracing (None if not available)
+            messages: List of message dicts to record
+        """
+        try:
+            app = _newrelic_agent.application()
+
+            if not (app and app.enabled):
+                verbose_logger.warning(
+                    "New Relic application is not enabled; skipping message event recording."
+                )
+                return
+
+            for message in messages:
+                sequence = message["sequence"]
+                event_data = {
+                    "id": f"{llm_response_id}-{sequence}",
+                    "request_id": request_id,
+                    "completion_id": request_id,
+                    "role": message["role"],
+                    "sequence": sequence,
+                    "response.model": message["response.model"],
+                    "vendor": message["vendor"],
+                    "ingest_source": "litellm",
+                    "token_count": 0,  # Per-message token counts are not available from LiteLLM
+                }
+
+                # Add trace context if available
+                if trace_id:
+                    event_data["trace_id"] = trace_id
+
+                # Add content only if it was included in the message data
+                if "content" in message:
+                    event_data["content"] = message["content"]
+
+                # Add is_response only if True (per spec, omit for request messages)
+                if message.get("is_response"):
+                    event_data["is_response"] = True
+
+                # Forward actual request/response timestamp (ms) so NR uses the
+                # real LLM call window rather than the async-logger fire time.
+                # Requires newrelic>=11.2.0 which reads params["timestamp"] as
+                # the intrinsic event timestamp.
+                if "timestamp" in message:
+                    event_data["timestamp"] = message["timestamp"]
+
+                app.record_custom_event("LlmChatCompletionMessage", event_data)
+
+        except Exception as e:
+            verbose_logger.warning(f"Failed to record New Relic message events: {e}")
+            self.handle_callback_failure("newrelic")
+
+    def _record_error_metric(self):
+        """Record error metric to New Relic."""
+        try:
+            if not self.enabled:
+                return
+
+            self._check_and_emit_periodic_metric()
+
+            app = _newrelic_agent.application()
+            if app and app.enabled:
+                app.record_custom_metric("LLM/LiteLLM/Error", 1)
+        except Exception as e:
+            verbose_logger.warning(f"Failed to record New Relic error metric: {e}")
+            self.handle_callback_failure("newrelic")
+
+    def _process_success(
+        self,
+        kwargs: Dict,
+        response_obj: ModelResponse,
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+    ):
+        """
+        Core logic for processing successful LLM calls.
+        Used by both sync and async success event handlers.
+        """
+        # Early exit if not enabled
+        if not self.enabled:
+            return
+
+        # Check and emit periodic supportability metric if 27 hours have passed
+        self._check_and_emit_periodic_metric()
+
+        # Use StandardLoggingPayload where available for normalized, pre-computed values
+        standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
+        )
+
+        # Get trace context
+        trace_id = self._get_trace_context(kwargs, standard_logging_object)
+
+        # Generate unique request ID for this request (used as Summary event id)
+        request_id = str(uuid.uuid4())
+
+        # Extract data from response
+        llm_response_id = self._extract_completion_id(kwargs, response_obj)
+        vendor = self._get_vendor(kwargs, standard_logging_object)
+        request_model, response_model = self._get_model_names(
+            kwargs, response_obj, standard_logging_object
+        )
+        usage = self._extract_usage(response_obj, standard_logging_object)
+        finish_reason = self._get_finish_reason(response_obj)
+
+        # Extract additional summary event fields
+        duration = self._get_duration(
+            kwargs, start_time, end_time, standard_logging_object
+        )
+        request_params = self._get_request_params(kwargs, standard_logging_object)
+
+        # Extract all messages
+        messages = self._extract_all_messages(
+            kwargs, response_obj, response_model, vendor, standard_logging_object
+        )
+
+        # Record summary event
+        self._record_summary_event(
+            request_id=request_id,
+            trace_id=trace_id,
+            request_model=request_model,
+            response_model=response_model,
+            vendor=vendor,
+            finish_reason=finish_reason,
+            num_messages=len(messages),
+            usage=usage,
+            duration=duration,
+            request_params=request_params,
+        )
+
+        # Record message events
+        self._record_message_events(
+            request_id=request_id,
+            llm_response_id=llm_response_id,
+            trace_id=trace_id,
+            messages=messages,
+        )
+
+    async def async_health_check(self) -> IntegrationHealthCheckStatus:
+        """
+        Check if the New Relic integration is healthy.
+
+        Verifies that the integration is enabled and the New Relic agent
+        has an active, connected application.
+        """
+        if not self.enabled:
+            return IntegrationHealthCheckStatus(
+                status="unhealthy",
+                error_message="New Relic integration is disabled. Check that "
+                "NEW_RELIC_LICENSE_KEY and NEW_RELIC_APP_NAME are set and the "
+                "newrelic package is installed.",
+            )
+
+        try:
+            app = _newrelic_agent.application()
+            if app and app.enabled:
+                return IntegrationHealthCheckStatus(
+                    status="healthy", error_message=None
+                )
+            return IntegrationHealthCheckStatus(
+                status="unhealthy",
+                error_message=(
+                    "New Relic agent application is not enabled. The process "
+                    "must be started under `newrelic-admin run-program` so the "
+                    "agent initializes before litellm imports. Use the "
+                    "`docker.litellm.ai/berriai/litellm-newrelic` Docker image (preferred) or, "
+                    "from source, run "
+                    "`newrelic-admin run-program litellm --config config.yaml`."
+                ),
+            )
+        except Exception as e:
+            return IntegrationHealthCheckStatus(
+                status="unhealthy",
+                error_message=str(e),
+            )
+
+    # CustomLogger interface implementation
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        """Unused per spec."""
+        pass
+
+    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+        """Unused per spec."""
+        pass
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Main success path for non-streaming requests.
+
+        Note: New Relic's record_custom_event is synchronous but non-blocking
+        (in-memory operation), so it's safe to call from sync context.
+        """
+        try:
+            self._process_success(kwargs, response_obj, start_time, end_time)
+        except Exception as e:
+            verbose_logger.warning(f"Error in New Relic log_success_event: {e}")
+            self.handle_callback_failure("newrelic")
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Main success path for async/streaming requests.
+
+        Note: New Relic's SDK is thread-safe and record_custom_event is fast,
+        so we can call it directly without asyncio.to_thread().
+        """
+        try:
+            self._process_success(kwargs, response_obj, start_time, end_time)
+        except Exception as e:
+            verbose_logger.warning(f"Error in New Relic async_log_success_event: {e}")
+            self.handle_callback_failure("newrelic")
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Log error metric for failed LLM calls (sync).
+
+        Per spec: Do not send AI events on failure, only record error metric.
+        """
+        try:
+            self._record_error_metric()
+
+        except Exception as e:
+            verbose_logger.warning(f"Error in New Relic log_failure_event: {e}")
+            self.handle_callback_failure("newrelic")
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        """
+        Log error metric for failed LLM calls (async).
+
+        Per spec: Do not send AI events on failure, only record error metric.
+        """
+        try:
+            self._record_error_metric()
+
+        except Exception as e:
+            verbose_logger.warning(f"Error in New Relic async_log_failure_event: {e}")
+            self.handle_callback_failure("newrelic")

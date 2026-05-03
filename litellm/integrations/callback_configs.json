@@ -246,6 +246,21 @@
     "description": "Langsmith Logging Integration"
   },
   {
+    "id": "newrelic",
+    "displayName": "New Relic",
+    "logo": "newrelic.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED": {
+        "type": "text",
+        "ui_name": "Record AI Content (default: true)",
+        "description": "Whether to record AI message content. Set to false to disable.",
+        "required": false
+      }
+    },
+    "description": "New Relic AI Monitoring Integration"
+  },
+  {
     "id": "openmeter",
     "displayName": "OpenMeter",
     "logo": "openmeter.png",
