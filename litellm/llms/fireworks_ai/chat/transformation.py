@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, AsyncIterator, Dict, Iterator, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -9,6 +9,9 @@ from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -23,6 +26,7 @@ from litellm.types.utils import (
     Function,
     Message,
     ModelResponse,
+    ModelResponseStream,
     ProviderSpecificModelInfo,
 )
 from litellm.utils import (
@@ -31,7 +35,7 @@ from litellm.utils import (
     supports_tool_choice,
 )
 
-from ...openai.chat.gpt_transformation import OpenAIGPTConfig
+from ...openai.chat.gpt_transformation import OpenAIGPTConfig, OpenAIChatCompletionStreamingHandler
 from ..common_utils import FireworksAIException
 
 
@@ -399,9 +403,32 @@ class FireworksAIConfig(OpenAIGPTConfig):
                 )
             )
 
+        ## Extract <think>...</think> reasoning from content into reasoning_content.
+        ## Applied to all Fireworks models — only activates when tags are present.
+        for choice in response.choices:
+            _msg = cast(Choices, choice).message
+            if _msg.content is not None and getattr(_msg, "reasoning_content", None) is None:
+                _msg_dict = {"content": _msg.content}
+                reasoning_content, content = _extract_reasoning_content(_msg_dict)
+                if reasoning_content is not None:
+                    _msg.reasoning_content = reasoning_content
+                    _msg.content = content
+
         response._hidden_params = {"additional_headers": additional_headers}
 
         return response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return FireworksAIChatCompletionStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
@@ -459,3 +486,62 @@ class FireworksAIConfig(OpenAIGPTConfig):
             or get_secret_str("FIREWORKSAI_API_KEY")
             or get_secret_str("FIREWORKS_AI_TOKEN")
         )
+
+
+class FireworksAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
+    """
+    Streaming handler for Fireworks AI that extracts <think>...</think> tags
+    from delta content into reasoning_content, mirroring DeepSeek / Ollama behavior.
+
+    Applied to all Fireworks models — only activates when <think> tags are
+    actually present in the stream, so models that don't emit them are unaffected.
+    """
+
+    started_reasoning_content: bool = False
+    finished_reasoning_content: bool = False
+
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        try:
+            choices = chunk.get("choices", [])
+            choices = self._map_reasoning_to_reasoning_content(choices)
+
+            for choice in choices:
+                delta: Dict[str, Any] = choice.get("delta", {})
+                content: Optional[str] = delta.get("content")
+
+                # Extract <think> tags into reasoning_content when present.
+                if content is not None and delta.get("reasoning_content") is None:
+                    if "<think>" in content:
+                        content = content.replace("<think>", "")
+                        self.started_reasoning_content = True
+
+                    if "</think>" in content and self.started_reasoning_content:
+                        # Split on </think>: part before → reasoning, part after → content
+                        parts = content.split("</think>", 1)
+                        reasoning_chunk = parts[0]
+                        content_after = parts[1] if len(parts) > 1 else ""
+                        self.finished_reasoning_content = True
+
+                        delta["reasoning_content"] = reasoning_chunk
+                        delta["content"] = content_after if content_after else None
+                    elif self.started_reasoning_content and not self.finished_reasoning_content:
+                        # Mid-think chunk — move content to reasoning_content
+                        delta["reasoning_content"] = content
+                        delta["content"] = None
+                    else:
+                        delta["content"] = content
+
+                    choice["delta"] = delta
+
+            kwargs: Dict[str, Any] = {
+                "id": chunk.get("id"),
+                "object": "chat.completion.chunk",
+                "created": chunk.get("created"),
+                "model": chunk.get("model"),
+                "choices": choices,
+            }
+            if "usage" in chunk and chunk["usage"] is not None:
+                kwargs["usage"] = chunk["usage"]
+            return ModelResponseStream(**kwargs)
+        except Exception as e:
+            raise e

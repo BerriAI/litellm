@@ -11,7 +11,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm import supports_reasoning
-from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+from litellm.llms.fireworks_ai.chat.transformation import (
+    FireworksAIConfig,
+    FireworksAIChatCompletionStreamingHandler,
+)
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
@@ -232,3 +235,281 @@ def test_transform_messages_helper_removes_provider_specific_fields():
     )
     for msg in out:
         assert "provider_specific_fields" not in msg
+
+
+# ---------------------------------------------------------------------------
+# <think> tag extraction — non-streaming transform_response
+# ---------------------------------------------------------------------------
+
+
+def _make_raw_response(body: dict) -> MagicMock:
+    """Build a minimal httpx.Response-like mock from a dict body."""
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.json.return_value = body
+    mock_resp.text = json.dumps(body)
+    mock_resp.status_code = 200
+    mock_resp.headers = {}
+    return mock_resp
+
+
+def _make_completion_body(content: str) -> dict:
+    return {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "accounts/fireworks/models/kimi-k2.5",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    }
+
+
+def test_transform_response_extracts_think_tags():
+    """Non-streaming: <think>...</think> in content → reasoning_content + clean content."""
+    config = FireworksAIConfig()
+    body = _make_completion_body("<think>step one\nstep two</think>The answer is 42.")
+    raw = _make_raw_response(body)
+
+    from litellm.types.utils import ModelResponse
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    model_response = ModelResponse()
+    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.post_call = MagicMock()
+
+    response = config.transform_response(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k2.5",
+        raw_response=raw,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key=None,
+    )
+
+    msg = response.choices[0].message
+    assert msg.reasoning_content == "step one\nstep two"
+    assert msg.content == "The answer is 42."
+
+
+def test_transform_response_no_think_tags_unchanged():
+    """Non-streaming: content without <think> tags is not modified."""
+    config = FireworksAIConfig()
+    body = _make_completion_body("Just a plain response.")
+    raw = _make_raw_response(body)
+
+    from litellm.types.utils import ModelResponse
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    model_response = ModelResponse()
+    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.post_call = MagicMock()
+
+    response = config.transform_response(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k2.5",
+        raw_response=raw,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key=None,
+    )
+
+    msg = response.choices[0].message
+    assert msg.content == "Just a plain response."
+    assert getattr(msg, "reasoning_content", None) is None
+
+
+def test_transform_response_existing_reasoning_content_not_overwritten():
+    """Non-streaming: explicit reasoning_content field is preserved as-is."""
+    config = FireworksAIConfig()
+    body = _make_completion_body("The answer.")
+    # Inject reasoning_content directly in the raw response message
+    body["choices"][0]["message"]["reasoning_content"] = "pre-existing reasoning"
+    raw = _make_raw_response(body)
+
+    from litellm.types.utils import ModelResponse
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    model_response = ModelResponse()
+    logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+    logging_obj.post_call = MagicMock()
+
+    response = config.transform_response(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k2.5",
+        raw_response=raw,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key=None,
+    )
+
+    msg = response.choices[0].message
+    assert msg.reasoning_content == "pre-existing reasoning"
+    assert msg.content == "The answer."
+
+
+# ---------------------------------------------------------------------------
+# <think> tag extraction — streaming chunk_parser
+# ---------------------------------------------------------------------------
+
+
+def test_streaming_chunk_parser_no_think_tags():
+    """Streaming: plain content chunks pass through unchanged."""
+    handler = FireworksAIChatCompletionStreamingHandler(
+        streaming_response=iter([]), sync_stream=True
+    )
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "accounts/fireworks/models/kimi-k2.5",
+        "choices": [{"index": 0, "delta": {"content": "Hello world"}, "finish_reason": None}],
+    }
+    result = handler.chunk_parser(chunk)
+    assert result.choices[0].delta.content == "Hello world"
+    assert getattr(result.choices[0].delta, "reasoning_content", None) is None
+
+
+def test_streaming_chunk_parser_open_think_tag():
+    """Streaming: chunk containing <think> starts reasoning accumulation."""
+    handler = FireworksAIChatCompletionStreamingHandler(
+        streaming_response=iter([]), sync_stream=True
+    )
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "accounts/fireworks/models/kimi-k2.5",
+        "choices": [{"index": 0, "delta": {"content": "<think>start of reasoning"}, "finish_reason": None}],
+    }
+    result = handler.chunk_parser(chunk)
+    assert handler.started_reasoning_content is True
+    assert handler.finished_reasoning_content is False
+    assert result.choices[0].delta.reasoning_content == "start of reasoning"
+    assert result.choices[0].delta.content is None
+
+
+def test_streaming_chunk_parser_mid_think_chunk():
+    """Streaming: mid-think chunk (no open/close tag) routed to reasoning_content."""
+    handler = FireworksAIChatCompletionStreamingHandler(
+        streaming_response=iter([]), sync_stream=True
+    )
+    handler.started_reasoning_content = True
+    handler.finished_reasoning_content = False
+
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "accounts/fireworks/models/kimi-k2.5",
+        "choices": [{"index": 0, "delta": {"content": "middle of reasoning"}, "finish_reason": None}],
+    }
+    result = handler.chunk_parser(chunk)
+    assert result.choices[0].delta.reasoning_content == "middle of reasoning"
+    assert result.choices[0].delta.content is None
+
+
+def test_streaming_chunk_parser_close_think_tag():
+    """Streaming: chunk with </think> splits reasoning from content correctly."""
+    handler = FireworksAIChatCompletionStreamingHandler(
+        streaming_response=iter([]), sync_stream=True
+    )
+    handler.started_reasoning_content = True
+    handler.finished_reasoning_content = False
+
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "accounts/fireworks/models/kimi-k2.5",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "final reasoning bit</think>Actual answer here"},
+                "finish_reason": None,
+            }
+        ],
+    }
+    result = handler.chunk_parser(chunk)
+    assert handler.finished_reasoning_content is True
+    assert result.choices[0].delta.reasoning_content == "final reasoning bit"
+    assert result.choices[0].delta.content == "Actual answer here"
+
+
+def test_streaming_chunk_parser_content_after_think_closed():
+    """Streaming: chunks after </think> are plain content."""
+    handler = FireworksAIChatCompletionStreamingHandler(
+        streaming_response=iter([]), sync_stream=True
+    )
+    handler.started_reasoning_content = True
+    handler.finished_reasoning_content = True
+
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "accounts/fireworks/models/kimi-k2.5",
+        "choices": [{"index": 0, "delta": {"content": "More answer text"}, "finish_reason": None}],
+    }
+    result = handler.chunk_parser(chunk)
+    assert result.choices[0].delta.content == "More answer text"
+    assert getattr(result.choices[0].delta, "reasoning_content", None) is None
+
+
+def test_streaming_chunk_parser_think_tags_in_single_chunk():
+    """Streaming: single chunk with full <think>...</think> is split correctly."""
+    handler = FireworksAIChatCompletionStreamingHandler(
+        streaming_response=iter([]), sync_stream=True
+    )
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "accounts/fireworks/models/kimi-k2.5",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "<think>I think</think>Here is the answer"},
+                "finish_reason": None,
+            }
+        ],
+    }
+    result = handler.chunk_parser(chunk)
+    assert handler.started_reasoning_content is True
+    assert handler.finished_reasoning_content is True
+    assert result.choices[0].delta.reasoning_content == "I think"
+    assert result.choices[0].delta.content == "Here is the answer"
+
+
+def test_streaming_chunk_parser_no_think_tags_any_model():
+    """Streaming: content without <think> tags passes through unchanged regardless of model."""
+    handler = FireworksAIChatCompletionStreamingHandler(
+        streaming_response=iter([]), sync_stream=True
+    )
+    chunk = {
+        "id": "chatcmpl-1",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "accounts/fireworks/models/llama-v3-70b-instruct",
+        "choices": [{"index": 0, "delta": {"content": "Plain response"}, "finish_reason": None}],
+    }
+    result = handler.chunk_parser(chunk)
+    assert result.choices[0].delta.content == "Plain response"
+    assert getattr(result.choices[0].delta, "reasoning_content", None) is None
+    assert handler.started_reasoning_content is False
