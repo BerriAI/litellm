@@ -4664,7 +4664,7 @@ class ProxyConfig:
         config_data: dict = {}
         search_tools = None
         try:
-            config_data = await proxy_config.get_config()
+            config_data = await self.get_config()
             search_tools = self.parse_search_tools(config_data)
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -4702,7 +4702,9 @@ class ProxyConfig:
                 await self._delete_deployment(db_models=models_list)
 
                 ## ADD MODEL LOGIC
-                self._add_deployment(db_models=models_list)
+                result=self._add_deployment(db_models=models_list)
+                if asyncio.iscoroutine(result):
+                    await result
 
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -4713,19 +4715,22 @@ class ProxyConfig:
             llm_model_list = llm_router.get_model_list()
 
         # check if user set any callbacks in Config Table
-        self._add_callbacks_from_db_config(config_data)
+        if config_data:
+            self._add_callbacks_from_db_config(config_data)
 
-        # router settings
-        await self._add_router_settings_from_db_config(
-            config_data=config_data, llm_router=llm_router, prisma_client=prisma_client
-        )
+            #router settings
+            await self._add_router_settings_from_db_config(
+                config_data=config_data,
+                llm_router=llm_router,
+                prisma_client=prisma_client
+            )
 
-        # general settings
-        self._add_general_settings_from_db_config(
-            config_data=config_data,
-            general_settings=general_settings,
-            proxy_logging_obj=proxy_logging_obj,
-        )
+            #general settings
+            self._add_general_settings_from_db_config(
+                config_data=config_data,
+                general_settings=general_settings,
+                proxy_logging_obj=proxy_logging_obj,
+            )
 
     def _add_callback_from_db_to_in_memory_litellm_callbacks(
         self,
