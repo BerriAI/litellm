@@ -314,13 +314,23 @@ class StandardBuiltInToolCostTracking:
         from litellm.types.utils import PromptTokensDetailsWrapper
 
         if isinstance(response_object, ModelResponse):
-            # chat completions only include url_citation annotations when a web search call is made
             has_url_citations = (
                 StandardBuiltInToolCostTracking.response_includes_annotation_type(
                     response_object=response_object, annotation_type="url_citation"
                 )
             )
-            if has_url_citations:
+            # Gemini's url_context tool also emits url_citation annotations for
+            # per-claim grounding against user-specified URLs. url_context is
+            # token-billed only, not a grounded-search request, so annotation
+            # presence alone is not a valid signal here. When url_context
+            # metadata is attached, fall through to usage-based detection which
+            # distinguishes actual web_search calls via web_search_requests.
+            if (
+                has_url_citations
+                and not StandardBuiltInToolCostTracking.response_object_includes_url_context_call(
+                    response_object
+                )
+            ):
                 return True
             if usage is not None:
                 # Vertex AI Gemini uses usage.prompt_tokens_details.web_search_requests
@@ -366,6 +376,25 @@ class StandardBuiltInToolCostTracking:
                 return True
 
         return False
+
+    @staticmethod
+    def response_object_includes_url_context_call(response_object: Any) -> bool:
+        """
+        Check if Gemini's url_context tool populated metadata on the response.
+
+        url_context is distinct from Grounding with Google Search: it fetches
+        user-specified URLs and is billed as input tokens per model pricing
+        (no per-request surcharge). It emits the same `url_citation` annotation
+        type as web_search, so annotation presence alone cannot distinguish the
+        two tools — the `vertex_ai_url_context_metadata` field is the reliable
+        signal (attached by the Gemini adapter).
+        """
+        if not isinstance(response_object, ModelResponse):
+            return False
+        if getattr(response_object, "vertex_ai_url_context_metadata", None):
+            return True
+        hidden = getattr(response_object, "_hidden_params", None) or {}
+        return bool(hidden.get("vertex_ai_url_context_metadata"))
 
     @staticmethod
     def response_object_includes_file_search_call(

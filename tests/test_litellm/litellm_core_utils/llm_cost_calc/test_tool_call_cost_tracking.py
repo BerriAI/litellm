@@ -311,3 +311,157 @@ def test_completion_cost_includes_web_search_without_standard_built_in_tools_par
 
 # Note: File search integration test removed due to complex annotation detection logic
 # The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+def _make_model_response_with_url_citation(model: str, url_context_metadata=None):
+    """Build a Gemini-style ModelResponse with a url_citation annotation.
+
+    Optionally attaches vertex_ai_url_context_metadata (set by the Gemini adapter
+    when the url_context tool is invoked).
+    """
+    from litellm.types.utils import Choices, Message
+
+    message = Message(content="Study summary with citation.", role="assistant")
+    # url_citation annotations are emitted by both web_search AND url_context.
+    # Attach one on the message to exercise the annotation-based detection path.
+    message.annotations = [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 0,
+                "end_index": 10,
+                "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10018306/",
+                "title": "Spleen Length Study",
+            },
+        }
+    ]
+    response = ModelResponse(
+        id="test-id",
+        choices=[Choices(finish_reason="stop", index=0, message=message)],
+        created=1234567890,
+        model=model,
+        object="chat.completion",
+        system_fingerprint=None,
+    )
+    if url_context_metadata is not None:
+        response.vertex_ai_url_context_metadata = url_context_metadata  # type: ignore[attr-defined]
+    return response
+
+
+def test_url_context_does_not_trigger_web_search_cost():
+    """
+    Regression test: Gemini's url_context tool emits url_citation annotations
+    for per-claim grounding against user-specified URLs, but is NOT a
+    Grounding-with-Google-Search request and is billed as input tokens only.
+
+    Detection must return False when vertex_ai_url_context_metadata is present
+    and web_search_requests is not reported in usage.
+    """
+    response = _make_model_response_with_url_citation(
+        model="gemini-3-flash-preview",
+        url_context_metadata=[
+            {
+                "urlMetadata": [
+                    {
+                        "retrievedUrl": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10018306/",
+                        "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS",
+                    }
+                ]
+            }
+        ],
+    )
+
+    includes = StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response, usage=None
+    )
+    assert includes is False, (
+        "url_context with url_citation annotation should not be classified "
+        "as a web_search call"
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gemini-3-flash-preview",
+        usage=None,
+        response_object=response,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == 0.0, f"Expected no grounding surcharge for url_context, got ${cost}"
+
+
+def test_url_citation_without_url_context_still_triggers_web_search_cost():
+    """
+    Regression test for #15858: Anthropic-style url_citation-only responses
+    (no url_context metadata) must still be detected as web_search calls.
+    Guards against the fix over-broadly suppressing web_search detection.
+    """
+    response = _make_model_response_with_url_citation(
+        model="claude-3-5-sonnet-20241022",
+        url_context_metadata=None,  # no url_context, just plain annotation
+    )
+
+    includes = StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response, usage=None
+    )
+    assert includes is True, (
+        "url_citation annotation without url_context metadata should still be "
+        "detected as a web_search call (regression for #15858)"
+    )
+
+
+def test_response_object_includes_url_context_call():
+    """Direct test of the new helper."""
+    # ModelResponse with url_context metadata as a top-level attribute
+    response_with_ctx = _make_model_response_with_url_citation(
+        model="gemini-3-flash-preview",
+        url_context_metadata=[
+            {
+                "urlMetadata": [
+                    {
+                        "retrievedUrl": "https://example.com",
+                        "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS",
+                    }
+                ]
+            }
+        ],
+    )
+    assert (
+        StandardBuiltInToolCostTracking.response_object_includes_url_context_call(
+            response_with_ctx
+        )
+        is True
+    )
+
+    # Same metadata attached via _hidden_params (alternate storage path in the
+    # Gemini adapter).
+    response_with_hidden = _make_model_response_with_url_citation(
+        model="gemini-3-flash-preview"
+    )
+    response_with_hidden._hidden_params = {
+        "vertex_ai_url_context_metadata": [{"urlMetadata": [{"retrievedUrl": "x"}]}]
+    }
+    assert (
+        StandardBuiltInToolCostTracking.response_object_includes_url_context_call(
+            response_with_hidden
+        )
+        is True
+    )
+
+    # No metadata → False
+    response_without = _make_model_response_with_url_citation(
+        model="gemini-3-flash-preview"
+    )
+    assert (
+        StandardBuiltInToolCostTracking.response_object_includes_url_context_call(
+            response_without
+        )
+        is False
+    )
+
+    # Non-ModelResponse → False
+    assert (
+        StandardBuiltInToolCostTracking.response_object_includes_url_context_call(
+            {"foo": "bar"}
+        )
+        is False
+    )
