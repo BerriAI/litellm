@@ -1054,6 +1054,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "sonnet-4-6",
                         "sonnet_4.6",
                         "sonnet_4_6",
+                        "sonnet-4.7",
+                        "sonnet-4-7",
+                        "sonnet_4.7",
+                        "sonnet_4_7",
+                        "4.7-sonnet",
+                        "4-7-sonnet",
+                        "4_7_sonnet",
                     }
                 ):
                     _output_format = (
