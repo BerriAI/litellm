@@ -4642,11 +4642,15 @@ class BaseLLMHTTPHandler:
             raise ValueError("Agentic loop plan missing patched messages")
 
         full_model_name = model
+        agentic_api_key: Optional[str] = None
+        agentic_api_base: Optional[str] = None
         if logging_obj is not None:
             agentic_params = logging_obj.model_call_details.get(
                 "agentic_loop_params", {}
             )
             full_model_name = cast(str, agentic_params.get("model", model))
+            agentic_api_key = agentic_params.get("api_key")
+            agentic_api_base = agentic_params.get("api_base")
 
         optional_params = dict(anthropic_messages_optional_request_params)
         optional_params.update(patch.optional_params)
@@ -4674,6 +4678,15 @@ class BaseLLMHTTPHandler:
         kwargs_for_followup["_agentic_loop_depth"] = depth + 1
         kwargs_for_followup["max_agentic_loops"] = max_loops
         kwargs_for_followup["_agentic_loop_fingerprints"] = fingerprints + [fingerprint]
+
+        # Avoid duplicate keyword arguments if patch.kwargs already contains
+        # api_key or api_base, so agentic credentials take precedence.
+        if agentic_api_key is not None:
+            kwargs_for_followup.pop("api_key", None)
+            kwargs_for_followup["api_key"] = agentic_api_key
+        if agentic_api_base is not None:
+            kwargs_for_followup.pop("api_base", None)
+            kwargs_for_followup["api_base"] = agentic_api_base
 
         return await anthropic_messages.acreate(
             **{
