@@ -1799,6 +1799,12 @@ if TYPE_CHECKING:
     from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
         FireworksAIEmbeddingConfig as FireworksAIEmbeddingConfig,
     )
+    from .llms.fireworks_ai.messages.transformation import (
+        FireworksAIMessagesConfig as FireworksAIMessagesConfig,
+    )
+    from .llms.fireworks_ai.responses.transformation import (
+        FireworksAIResponsesConfig as FireworksAIResponsesConfig,
+    )
     from .llms.friendliai.chat.transformation import (
         FriendliaiChatConfig as FriendliaiChatConfig,
     )
