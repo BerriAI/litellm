@@ -1455,6 +1455,36 @@ class TestObservabilityCallbackBans:
         )
 
 
+def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
+    """Greptile P1: ``_check_banned_params`` previously ``return``-ed when a
+    deployment's ``configurable_clientside_auth_params`` permitted one
+    banned field, exiting before any later banned field in the same body
+    was checked. The metadata walk this PR adds multiplies the surface
+    where that bypass matters: a body pairing a model-level-allowed
+    ``api_base`` with an observability credential like ``langfuse_host``
+    must still reject on the second field, not silently pass."""
+    from litellm.proxy.auth import auth_utils
+
+    monkeypatch.setattr(
+        auth_utils,
+        "_allow_model_level_clientside_configurable_parameters",
+        lambda model, param, request_body_value, llm_router: param == "api_base",
+    )
+
+    with pytest.raises(ValueError) as exc:
+        is_request_body_safe(
+            request_body={
+                "model": "gpt-4",
+                "api_base": "https://allowed-by-deployment.example",
+                "langfuse_host": "https://attacker.example",
+            },
+            general_settings={},
+            llm_router=None,
+            model="gpt-4",
+        )
+    assert "langfuse_host" in str(exc.value)
+
+
 def test_observability_ban_covers_canonical_supported_callback_params():
     """Guard test: every entry in the canonical
     ``_supported_callback_params`` allow-list must end up either banned by

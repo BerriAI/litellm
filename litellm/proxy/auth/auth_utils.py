@@ -279,6 +279,8 @@ def _check_banned_params(
         if param not in body:
             continue
         if general_settings.get("allow_client_side_credentials") is True:
+            # Proxy-wide opt-in: every banned param is permitted, exit
+            # entirely so the rest of the loop doesn't waste work.
             return
         if (
             _allow_model_level_clientside_configurable_parameters(
@@ -289,7 +291,12 @@ def _check_banned_params(
             )
             is True
         ):
-            return
+            # Per-param opt-in: only THIS param is permitted by the
+            # deployment's ``configurable_clientside_auth_params``. Skip
+            # to the next banned param so a body that pairs an allowed
+            # ``api_base`` with an unallowed ``langfuse_host`` is still
+            # rejected for the second field.
+            continue
         raise ValueError(
             f"Rejected Request: {param} is not allowed in request body. "
             "Clientside passthrough requires explicit admin opt-in via "
