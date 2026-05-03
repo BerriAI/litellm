@@ -192,9 +192,10 @@ class TestWebFetchInterceptionLogger:
         with patch.object(
             logger, "_get_fetch_config", new_callable=AsyncMock
         ) as mock_get_config:
+            from unittest.mock import MagicMock
             mock_config = AsyncMock()
             mock_config.afetch_url = AsyncMock(return_value=mock_fetch_response)
-            mock_config.ui_friendly_name.return_value = "Firecrawl"
+            mock_config.ui_friendly_name = MagicMock(return_value="Firecrawl")
             mock_get_config.return_value = mock_config
 
             with patch(
@@ -244,9 +245,10 @@ class TestWebFetchInterceptionLogger:
         with patch.object(
             logger, "_get_fetch_config", new_callable=AsyncMock
         ) as mock_get_config:
+            from unittest.mock import MagicMock
             mock_config = AsyncMock()
             mock_config.afetch_url = AsyncMock(return_value=mock_fetch_response)
-            mock_config.ui_friendly_name.return_value = "Firecrawl"
+            mock_config.ui_friendly_name = MagicMock(return_value="Firecrawl")
             mock_get_config.return_value = mock_config
 
             with patch(

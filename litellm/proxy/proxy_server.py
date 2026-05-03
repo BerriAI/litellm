@@ -560,6 +560,7 @@ from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import DeploymentTypedDict
 from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
+    FetchToolTypedDict,
     RouterGeneralSettings,
     SearchToolTypedDict,
     updateDeployment,
@@ -3115,6 +3116,63 @@ class ProxyConfig:
 
         return search_tools_parsed if search_tools_parsed else None
 
+    def parse_fetch_tools(self, config: dict) -> Optional[List[FetchToolTypedDict]]:
+        """
+        Parse and validate fetch tools from config.
+        Loads environment variables and casts to FetchToolTypedDict.
+
+        Args:
+            config: Config dictionary containing fetch_tools
+
+        Returns:
+            List of validated FetchToolTypedDict or None if not configured
+        """
+        fetch_tools_raw = config.get("fetch_tools", None)
+        if not fetch_tools_raw:
+            # Check in general_settings
+            general_settings = config.get("general_settings", {})
+            if general_settings:
+                fetch_tools_raw = general_settings.get("fetch_tools", None)
+
+        if not fetch_tools_raw:
+            return None
+
+        fetch_tools_parsed: List[FetchToolTypedDict] = []
+
+        print(  # noqa
+            "\033[32mLiteLLM: Proxy initialized with Fetch Tools:\033[0m"
+        )  # noqa
+
+        for fetch_tool in fetch_tools_raw:
+            # Display loaded fetch tool
+            fetch_tool_name = fetch_tool.get("fetch_tool_name", "")
+            fetch_provider = fetch_tool.get("litellm_params", {}).get(
+                "fetch_provider", ""
+            )
+            print(f"\033[32m    {fetch_tool_name} ({fetch_provider})\033[0m")  # noqa
+
+            # Handle os.environ/ variables in litellm_params
+            litellm_params = fetch_tool.get("litellm_params", {})
+            if litellm_params:
+                for k, v in litellm_params.items():
+                    if isinstance(v, str) and v.startswith("os.environ/"):
+                        _v = v.replace("os.environ/", "")
+                        v = get_secret(_v)
+                        litellm_params[k] = v
+                fetch_tool["litellm_params"] = litellm_params
+
+            # Cast to FetchToolTypedDict for type safety
+            try:
+                fetch_tool_typed: FetchToolTypedDict = FetchToolTypedDict(**fetch_tool)  # type: ignore
+                fetch_tools_parsed.append(fetch_tool_typed)
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    f"Error parsing fetch tool {fetch_tool_name}: {str(e)}"
+                )
+                continue
+
+        return fetch_tools_parsed if fetch_tools_parsed else None
+
     # Environment variable keys that must not be overridden via config because
     # they can alter process execution, library loading, or network routing.
     _BLOCKED_ENV_KEYS: Set[str] = {
@@ -3768,6 +3826,11 @@ class ProxyConfig:
             config
         )
 
+        ## FETCH TOOLS SETTINGS
+        fetch_tools: Optional[List[FetchToolTypedDict]] = self.parse_fetch_tools(
+            config
+        )
+
         ## /fine_tuning/jobs endpoints config
         finetuning_config = config.get("finetune_settings", None)
         set_fine_tuning_config(config=finetuning_config)
@@ -3786,10 +3849,11 @@ class ProxyConfig:
         router_settings = config.get("router_settings", None)
 
         if router_settings and isinstance(router_settings, dict):
-            # model list and search_tools already set
+            # model list, search_tools and fetch_tools already set
             exclude_args = {
                 "model_list",
                 "search_tools",
+                "fetch_tools",
             }
 
             available_args = [
@@ -3811,6 +3875,7 @@ class ProxyConfig:
             **router_params,
             assistants_config=assistants_config,
             search_tools=search_tools,
+            fetch_tools=fetch_tools,
             router_general_settings=RouterGeneralSettings(
                 async_only_mode=True  # only init async clients
             ),
@@ -4240,9 +4305,11 @@ class ProxyConfig:
         # Load config separately so a timeout here doesn't block model loading
         config_data: dict = {}
         search_tools = None
+        fetch_tools = None
         try:
             config_data = await proxy_config.get_config()
             search_tools = self.parse_search_tools(config_data)
+            fetch_tools = self.parse_fetch_tools(config_data)
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Failed to load config in _update_llm_router: %s. "
@@ -4260,7 +4327,7 @@ class ProxyConfig:
                 )
                 # Only create router if we have models or search_tools to route
                 # Router can function with model_list=[] if search_tools are configured
-                if len(_model_list) > 0 or search_tools:
+                if len(_model_list) > 0 or search_tools or fetch_tools:
                     verbose_proxy_logger.debug(f"_model_list: {_model_list}")
                     llm_router = litellm.Router(
                         model_list=_model_list,
@@ -4268,6 +4335,7 @@ class ProxyConfig:
                             async_only_mode=True  # only init async clients
                         ),
                         search_tools=search_tools,
+                        fetch_tools=fetch_tools,
                         ignore_invalid_deployments=True,
                     )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
@@ -4275,6 +4343,8 @@ class ProxyConfig:
                 verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
                 if search_tools is not None and llm_router is not None:
                     llm_router.search_tools = search_tools
+                if fetch_tools is not None and llm_router is not None:
+                    llm_router.fetch_tools = fetch_tools
                 ## DELETE MODEL LOGIC
                 await self._delete_deployment(db_models=models_list)
 
