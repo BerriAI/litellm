@@ -189,10 +189,12 @@ class AmazonConverseConfig(BaseConfig):
 
     @classmethod
     def get_config(cls):
+        # ``_``-prefixed names are private (lookup tables, ABC machinery,
+        # internal flags) and must not leak into the wire body.
         return {
             k: v
             for k, v in cls.__dict__.items()
-            if not k.startswith("__")
+            if not k.startswith("_")
             and not isinstance(
                 v,
                 (
