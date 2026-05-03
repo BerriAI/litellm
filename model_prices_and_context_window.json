@@ -4559,7 +4559,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "azure/gpt-5.4-2026-03-05": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -4601,7 +4602,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "azure/gpt-5.4-pro": {
         "cache_read_input_token_cost": 3e-06,
@@ -20125,7 +20127,8 @@
         "supports_vision": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": true,
+        "supports_web_search": true
     },
     "gpt-5.4-2026-03-05": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -20169,7 +20172,8 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_service_tier": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_web_search": true
     },
     "gpt-5.4-pro": {
         "cache_read_input_token_cost": 3e-06,
