@@ -48,6 +48,7 @@ from tokenizers import Tokenizer
 
 import litellm
 import litellm.litellm_core_utils
+from litellm.llms.base_llm.fetch.transformation import BaseFetchConfig
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
