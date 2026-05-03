@@ -379,7 +379,9 @@ def anthropic_messages_handler(
             agentic_loop_params["api_key"] = dynamic_api_key
         if dynamic_api_base is not None:
             agentic_loop_params["api_base"] = dynamic_api_base
-        litellm_logging_obj.model_call_details["agentic_loop_params"] = agentic_loop_params
+        litellm_logging_obj.model_call_details["agentic_loop_params"] = (
+            agentic_loop_params
+        )
 
         # Check if stream was converted for WebSearch interception
         # This is set in the async wrapper above when stream=True is converted to stream=False
