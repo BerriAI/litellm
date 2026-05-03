@@ -6,7 +6,7 @@ Native provider tools (like Anthropic's web_fetch_20250305) are converted
 to this format for consistent interception and execution.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from litellm.constants import LITELLM_WEB_FETCH_TOOL_NAME
 

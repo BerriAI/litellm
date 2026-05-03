@@ -3,7 +3,7 @@ WebFetch tests for Firecrawl fetch provider.
 """
 
 import pytest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from litellm.llms.firecrawl.fetch.transformation import FirecrawlFetchConfig
 from litellm.llms.base_llm.fetch.transformation import WebFetchResponse
@@ -16,16 +16,14 @@ class TestFirecrawlFetchConfig:
     def fetch_config(self):
         return FirecrawlFetchConfig()
 
-    @pytest.mark.asyncio
-    async def test_validate_environment_with_api_key(self, fetch_config):
+    def test_validate_environment_with_api_key(self, fetch_config):
         """Test that API key validation works."""
         headers = {}
         result = fetch_config.validate_environment(headers, api_key="test-key")
         assert result["Authorization"] == "Bearer test-key"
         assert result["Content-Type"] == "application/json"
 
-    @pytest.mark.asyncio
-    async def test_validate_environment_without_api_key(self, fetch_config):
+    def test_validate_environment_without_api_key(self, fetch_config):
         """Test that missing API key raises ValueError."""
         headers = {}
         with patch(
@@ -59,11 +57,12 @@ class TestFirecrawlFetchConfig:
         mock_response.headers = {}
 
         mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "litellm.llms.firecrawl.fetch.transformation.get_async_httpx_client",
+            return_value=mock_client,
+        ):
             result = await fetch_config.afetch_url(
                 url="https://example.com",
                 headers={"Authorization": "Bearer test-key"},
@@ -84,11 +83,12 @@ class TestFirecrawlFetchConfig:
         mock_response.headers = {}
 
         mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
         mock_client.post = AsyncMock(return_value=mock_response)
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "litellm.llms.firecrawl.fetch.transformation.get_async_httpx_client",
+            return_value=mock_client,
+        ):
             with pytest.raises(Exception, match="Firecrawl fetch failed"):
                 await fetch_config.afetch_url(
                     url="https://example.com",
