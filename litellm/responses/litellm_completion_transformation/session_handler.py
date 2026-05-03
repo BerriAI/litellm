@@ -116,7 +116,7 @@ class ResponsesSessionHandler:
             _messages = proxy_server_request_dict.get("messages", None)
             if isinstance(_response_input_param, str):
                 response_input_param = _response_input_param
-            elif isinstance(_response_input_param, dict):
+            elif isinstance(_response_input_param, (list, dict)):
                 response_input_param = cast(ResponseInputParam, _response_input_param)
 
         if response_input_param:
