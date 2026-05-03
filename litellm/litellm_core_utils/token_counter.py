@@ -623,6 +623,94 @@ def _count_image_tokens(
         )
 
 
+def _count_anthropic_image(
+    content: Mapping[str, Any],
+    use_default_image_token_count: bool,
+) -> int:
+    """
+    Count tokens for an Anthropic-native image content block.
+
+    Anthropic shape: {"type": "image", "source": {...}}
+    Source variants:
+        - {"type": "base64", "media_type": ..., "data": ...}
+        - {"type": "url", "url": ...}
+        - {"type": "file", "file_id": ...}
+
+    For base64/url sources we delegate to calculate_img_tokens (same path as
+    the OpenAI image_url branch). For file sources, and unknown future source
+    types, we fall back to DEFAULT_IMAGE_TOKEN_COUNT — there is no fetchable
+    payload to dimension and we don't want to re-introduce the log-spam bug
+    fixed here.
+    """
+    source = content.get("source")
+    if not isinstance(source, dict):
+        raise ValueError("Anthropic image block missing required 'source' dict")
+
+    source_type = source.get("type")
+    if source_type == "base64":
+        media_type = source.get("media_type", "")
+        data = source.get("data", "")
+        data_url = f"data:{media_type};base64,{data}"
+        return calculate_img_tokens(
+            data=data_url,
+            mode="auto",
+            use_default_image_token_count=use_default_image_token_count,
+        )
+    if source_type == "url":
+        url = source.get("url")
+        if not url:
+            raise ValueError(
+                "Anthropic image block with source.type='url' missing 'url'"
+            )
+        return calculate_img_tokens(
+            data=url,
+            mode="auto",
+            use_default_image_token_count=use_default_image_token_count,
+        )
+    # source.type == "file" or unknown — no fetchable image data.
+    return DEFAULT_IMAGE_TOKEN_COUNT
+
+
+def _count_anthropic_document(
+    content: Mapping[str, Any],
+    count_function: TokenCounterFunction,
+) -> int:
+    """
+    Count tokens for an Anthropic-native document content block.
+
+    Anthropic shape:
+        {"type": "document", "source": {...}, "title": ..., "context": ..., "citations": ...}
+
+    Source variants (per the Anthropic Citations API):
+        - {"type": "text", "media_type": "text/plain", "data": "<inline text>"}
+        - {"type": "base64", "media_type": ..., "data": ...}
+        - {"type": "url", "url": ...}
+        - {"type": "file", "file_id": ...}
+
+    For text sources we tokenize source["data"] with the model tokenizer
+    (it's plain prompt content). For base64 / url / file sources the
+    payload is opaque (typically a PDF — we cannot dimension it) and we
+    add DEFAULT_IMAGE_TOKEN_COUNT as the fallback.
+
+    Title and context are always counted. Skipped: "type", "cache_control",
+    "citations" (configuration metadata, not prompt content).
+    """
+    tokens = 0
+    for field in ("title", "context"):
+        value = content.get(field)
+        if isinstance(value, str) and value:
+            tokens += count_function(value)
+    source = content.get("source")
+    if isinstance(source, dict) and source.get("type") == "text":
+        data = source.get("data")
+        if isinstance(data, str) and data:
+            tokens += count_function(data)
+    elif source is not None:
+        # base64 / url / file / unknown — opaque payload, use the fallback.
+        tokens += DEFAULT_IMAGE_TOKEN_COUNT
+    return tokens
+
+
 def _validate_anthropic_content(content: Mapping[str, Any]) -> type:
     """
     Validate and determine which Anthropic TypedDict applies.
@@ -736,6 +824,10 @@ def _count_content_list(
                 thinking_text = str(c.get("thinking", ""))
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
+            elif c["type"] == "image":
+                num_tokens += _count_anthropic_image(c, use_default_image_token_count)
+            elif c["type"] == "document":
+                num_tokens += _count_anthropic_document(c, count_function)
             else:
                 content_type = (
                     c.get("type", type(c).__name__)
@@ -744,7 +836,8 @@ def _count_content_list(
                 )
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking)."
+                    f"Expected str or dict with 'type' field "
+                    f"(text, image_url, image, document, tool_use, tool_result, thinking)."
                 )
         return num_tokens
     except Exception as e:
