@@ -2817,6 +2817,141 @@ def test_update_kwargs_with_deployment_merge_tools_request_overrides_tool_choice
     assert kwargs["tool_choice"] == "none"
 
 
+def test_update_kwargs_with_deployment_forwards_use_chat_completions_api_dict():
+    """
+    Deployment-level `use_chat_completions_api` set via a dict-form
+    `litellm_params` (the shape that comes from the DB) should be forwarded
+    into the request kwargs.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+    )
+
+    deployment = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "fake-key",
+            "use_chat_completions_api": True,
+        },
+        "model_info": {"id": "test-id"},
+    }
+
+    kwargs: dict = {"metadata": {}}
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs.get("use_chat_completions_api") is True
+
+
+def test_update_kwargs_with_deployment_forwards_use_chat_completions_api_pydantic():
+    """
+    Deployment-level `use_chat_completions_api` set via a Pydantic
+    `LiteLLM_Params` (the shape that comes from code-configured deployments
+    via `_create_deployment`) should also be forwarded.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                    "use_chat_completions_api": True,
+                },
+            },
+        ],
+    )
+
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    # Sanity: the Pydantic branch is the one we're exercising here.
+    assert not isinstance(deployment.litellm_params, dict)
+
+    kwargs: dict = {"metadata": {}}
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs.get("use_chat_completions_api") is True
+
+
+def test_update_kwargs_with_deployment_request_overrides_use_chat_completions_api():
+    """
+    A value already present in the request kwargs must win over the
+    deployment-level default (setdefault semantics).
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                    "use_chat_completions_api": True,
+                },
+            },
+        ],
+    )
+
+    deployment = router.get_deployment_by_model_group_name(
+        model_group_name="gpt-4o-mini"
+    )
+    kwargs: dict = {"metadata": {}, "use_chat_completions_api": False}
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    assert kwargs["use_chat_completions_api"] is False
+
+
+def test_update_kwargs_with_deployment_does_not_forward_router_internal_params():
+    """
+    Router/proxy-internal fields on `litellm_params` (tpm, rpm, max_budget,
+    litellm_credential_name, ...) must not be injected into the request
+    kwargs — they are not LLM call parameters and forwarding them would be a
+    backwards-incompatible change for any deployment that has them set.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "fake-key",
+                },
+            },
+        ],
+    )
+
+    # Hand-built deployment dict so we can attach router-internal fields
+    # without triggering Router-init side effects (e.g. budget pre-call checks).
+    deployment = {
+        "model_name": "gpt-4o-mini",
+        "litellm_params": {
+            "model": "openai/gpt-4o-mini",
+            "api_key": "fake-key",
+            "tpm": 1000,
+            "rpm": 60,
+            "max_budget": 10.0,
+            "litellm_credential_name": "openai-prod",
+        },
+        "model_info": {"id": "test-id"},
+    }
+
+    kwargs: dict = {"metadata": {}}
+    router._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+
+    for forbidden in ("tpm", "rpm", "max_budget", "litellm_credential_name"):
+        assert (
+            forbidden not in kwargs
+        ), f"router-internal param {forbidden!r} must not leak into request kwargs"
+
+
 def test_credential_name_injected_as_tag():
     """
     Test that litellm_credential_name from deployment litellm_params
