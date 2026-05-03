@@ -60,6 +60,7 @@ from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
     StandardLoggingUserAPIKeyMetadata,
@@ -154,6 +155,20 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY = (
     "allow_client_message_redaction_opt_out"
 )
 
+# Per-request pricing parameters mutate cost-tracking output and (via
+# ``litellm.completion`` → ``register_model``) the process-wide
+# ``litellm.model_cost`` map. Both effects belong to deployment configuration,
+# not to user-supplied request bodies, so the proxy strips them before they
+# reach the call path. Built from the Pydantic model so newly-added pricing
+# fields are covered automatically.
+_CLIENT_PRICING_CONTROL_FIELDS = frozenset(
+    CustomPricingLiteLLMParams.model_fields.keys()
+)
+# ``model_info`` carries the same pricing fields when read by
+# ``use_custom_pricing_for_model``; strip from metadata for the same reason.
+_CLIENT_PRICING_METADATA_FIELDS = frozenset({"model_info"})
+_ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY = "allow_client_pricing_override"
+
 
 def _strip_untrusted_request_header_controls(
     headers: Any,
@@ -210,6 +225,31 @@ def _key_or_team_allows_client_message_redaction_opt_out(
         user_api_key_dict=user_api_key_dict,
         metadata_key=_ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY,
     )
+
+
+def _key_or_team_allows_client_pricing_override(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    return _key_or_team_metadata_flag_is_true(
+        user_api_key_dict=user_api_key_dict,
+        metadata_key=_ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY,
+    )
+
+
+def _strip_client_pricing_overrides(data: Dict[str, Any]) -> None:
+    """Drop pricing overrides from the request body and any metadata variant.
+
+    Skipped only when the calling key/team carries
+    ``allow_client_pricing_override: True`` in its metadata.
+    """
+    for field in _CLIENT_PRICING_CONTROL_FIELDS:
+        data.pop(field, None)
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = data.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        for field in _CLIENT_PRICING_METADATA_FIELDS:
+            metadata.pop(field, None)
 
 
 def _get_metadata_variable_name(request: Request) -> str:
@@ -1109,6 +1149,8 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
             continue
         data.pop(_internal_key, None)
+    if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
+        _strip_client_pricing_overrides(data)
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")
     if isinstance(_user_metadata, dict):
