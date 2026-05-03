@@ -432,20 +432,17 @@ async def create_vector_store_in_db(
     if user_id is not None:
         data_to_create["user_id"] = user_id
 
-    # Handle litellm_params - always provide at least an empty dict
+    # Handle litellm_params - always provide at least an empty dict.
+    # The earlier behaviour resolved ``litellm_embedding_config`` from the
+    # admin-configured router/DB model and persisted the cleartext result
+    # (``api_key``, ``api_base``, ``api_version``) into this row. That
+    # exposed every env-stored embedding-model credential on the
+    # ``/vector_store/{new,info,update,list}`` responses. Keep the user's
+    # raw ``litellm_embedding_model`` reference; resolution now happens in
+    # ``_update_request_data_with_litellm_managed_vector_store_registry``
+    # at request-handling time so the cleartext config exists only in
+    # per-request memory and never reaches the database.
     if litellm_params:
-        # Auto-resolve embedding config if embedding model is provided but config is not
-        embedding_model = litellm_params.get("litellm_embedding_model")
-        if embedding_model and not litellm_params.get("litellm_embedding_config"):
-            resolved_config = await _resolve_embedding_config(
-                embedding_model=embedding_model, prisma_client=prisma_client
-            )
-            if resolved_config:
-                litellm_params["litellm_embedding_config"] = resolved_config
-                verbose_proxy_logger.info(
-                    f"Auto-resolved embedding config for model {embedding_model}"
-                )
-
         litellm_params_dict = GenericLiteLLMParams(**litellm_params).model_dump(
             exclude_none=True
         )
@@ -531,10 +528,19 @@ async def new_vector_store(
             user_id=user_api_key_dict.user_id,
         )
 
+        # Apply the same litellm_params redaction the list / info / update
+        # endpoints already use, so a caller-supplied credential or a
+        # cleartext value persisted by an earlier proxy version doesn't
+        # come back in the response.
+        response_vs = LiteLLM_ManagedVectorStore(**new_vector_store)
+        response_vs["litellm_params"] = _redact_sensitive_litellm_params(
+            new_vector_store.get("litellm_params")
+        )
+
         return {
             "status": "success",
             "message": f"Vector store {vector_store.get('vector_store_id')} created successfully",
-            "vector_store": new_vector_store,
+            "vector_store": response_vs,
         }
     except Exception as e:
         verbose_proxy_logger.exception(f"Error creating vector store: {str(e)}")
@@ -865,24 +871,15 @@ async def update_vector_store(
                 update_data["vector_store_metadata"]
             )
 
-        # Handle litellm_params if provided
+        # Handle litellm_params if provided. As with the create path, the
+        # embedding-config auto-resolve previously persisted cleartext
+        # credentials into the row; resolution now happens at request-
+        # handling time in
+        # ``_update_request_data_with_litellm_managed_vector_store_registry``
+        # so this row only ever stores the user-supplied
+        # ``litellm_embedding_model`` reference.
         if "litellm_params" in update_data:
             _input_litellm_params: dict = update_data.get("litellm_params", {}) or {}
-
-            # Auto-resolve embedding config if embedding model is provided but config is not
-            embedding_model = _input_litellm_params.get("litellm_embedding_model")
-            if embedding_model and not _input_litellm_params.get(
-                "litellm_embedding_config"
-            ):
-                resolved_config = await _resolve_embedding_config(
-                    embedding_model=embedding_model, prisma_client=prisma_client
-                )
-                if resolved_config:
-                    _input_litellm_params["litellm_embedding_config"] = resolved_config
-                    verbose_proxy_logger.info(
-                        f"Auto-resolved embedding config for model {embedding_model}"
-                    )
-
             litellm_params_dict = GenericLiteLLMParams(
                 **_input_litellm_params
             ).model_dump(exclude_none=True)
