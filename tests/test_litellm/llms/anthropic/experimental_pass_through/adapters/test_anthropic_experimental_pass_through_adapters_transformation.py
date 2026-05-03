@@ -165,7 +165,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_content_block():
     assert block_type == "thinking"
     assert content_block_start == {
         "type": "thinking",
-        "thinking": "I need to summar",
+        "thinking": "",
         "signature": "",
     }
 
@@ -214,7 +214,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_thinking_signature_block(
     assert content_block_start == {
         "type": "thinking",
         "thinking": "",
-        "signature": "sigsig",
+        "signature": "",
     }
 
 
@@ -586,7 +586,7 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
     assert content_block_delta["thinking"] == "I need to summar"
 
 
-def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
+def test_translate_streaming_openai_chunk_to_anthropic_with_signature_delta():
     choices = [
         StreamingChoices(
             finish_reason=None,
@@ -629,6 +629,43 @@ def test_translate_streaming_openai_chunk_to_anthropic_with_thinking():
     assert type_of_content == "signature_delta"
     assert content_block_delta["type"] == "signature_delta"
     assert content_block_delta["signature"] == "sigsig"
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_empty_thinking_while_in_thinking_block():
+    """Databricks may emit an empty reasoning summary chunk mid-stream."""
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="",
+                thinking_blocks=[
+                    {
+                        "type": "thinking",
+                        "thinking": "",
+                        "signature": "",
+                    }
+                ],
+                content="",
+                role="assistant",
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices,
+        current_content_block_type="thinking",
+    )
+
+    assert type_of_content == "thinking_delta"
+    assert content_block_delta["type"] == "thinking_delta"
+    assert content_block_delta["thinking"] == ""
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_raises_when_thinking_and_signature():

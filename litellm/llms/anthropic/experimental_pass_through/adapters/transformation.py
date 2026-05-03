@@ -1443,14 +1443,19 @@ class LiteLLMAnthropicMessagesAdapter:
                                 "Both `thinking` and `signature` in a single streaming chunk isn't supported."
                             )
 
+                        # Anthropic streaming: content_block_start must use empty
+                        # thinking/signature; payload is delivered via thinking_delta /
+                        # signature_delta only.
                         return "thinking", ChatCompletionThinkingBlock(
-                            type="thinking", thinking=thinking, signature=signature
+                            type="thinking", thinking="", signature=""
                         )
 
         return "text", TextBlock(type="text", text="")
 
     def _translate_streaming_openai_chunk_to_anthropic(
-        self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
+        self,
+        choices: List[Union[OpenAIStreamingChoice, StreamingChoices]],
+        current_content_block_type: Literal["text", "tool_use", "thinking"] = "text",
     ) -> Tuple[
         Literal["text_delta", "input_json_delta", "thinking_delta", "signature_delta"],
         Union[
@@ -1515,11 +1520,24 @@ class LiteLLMAnthropicMessagesAdapter:
             return "signature_delta", ContentThinkingSignatureBlockDelta(
                 type="signature_delta", signature=reasoning_signature
             )
+        elif current_content_block_type == "thinking":
+            # Databricks-style chunks may carry an empty reasoning summary block
+            # (no text, no signature). Emit thinking_delta, not text_delta, so clients
+            # stay inside the thinking block state machine.
+            return "thinking_delta", ContentThinkingBlockDelta(
+                type="thinking_delta", thinking=""
+            )
         else:
             return "text_delta", ContentTextBlockDelta(type="text_delta", text=text)
 
     def translate_streaming_openai_response_to_anthropic(
-        self, response: ModelResponse, current_content_block_index: int
+        self,
+        response: ModelResponse,
+        current_content_block_index: int,
+        *,
+        current_content_block_type: Optional[
+            Literal["text", "tool_use", "thinking"]
+        ] = None,
     ) -> Union[ContentBlockDelta, MessageBlockDelta]:
         ## base case - final chunk w/ finish reason
         if response.choices[0].finish_reason is not None:
@@ -1576,7 +1594,8 @@ class LiteLLMAnthropicMessagesAdapter:
             type_of_content,
             content_block_delta,
         ) = self._translate_streaming_openai_chunk_to_anthropic(
-            choices=response.choices  # type: ignore
+            choices=response.choices,  # type: ignore
+            current_content_block_type=current_content_block_type or "text",
         )
         return ContentBlockDelta(
             type="content_block_delta",
