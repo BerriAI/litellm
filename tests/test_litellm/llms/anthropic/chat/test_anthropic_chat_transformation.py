@@ -3677,3 +3677,212 @@ def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
     original_content = [dict(b) for b in messages[1]["content"]]
     result = strip_advisor_blocks_from_messages(messages)
     assert result[1]["content"] == original_content
+
+
+def test_reasoning_effort_sets_display_summarized_for_claude_4_7_models():
+    """
+    Claude Opus 4.7 omits thinking content from the response by default
+    (silent breaking change vs 4.6). When callers use the
+    ``reasoning_effort`` abstraction, LiteLLM must explicitly request
+    ``display="summarized"`` so the human-readable reasoning summary is
+    returned (matching the upstream default that 4.6 had).
+    """
+    config = AnthropicConfig()
+
+    claude_4_7_models = [
+        "claude-opus-4-7",
+        "claude-opus-4-7-20260415",
+    ]
+
+    for model in claude_4_7_models:
+        for effort in ["low", "medium", "high", "minimal", "max"]:
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": effort},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+
+            assert "thinking" in result, f"thinking missing for {model}/{effort}"
+            assert (
+                result["thinking"]["type"] == "adaptive"
+            ), f"adaptive type missing for {model}/{effort}"
+            assert result["thinking"].get("display") == "summarized", (
+                f"display='summarized' missing for {model}/{effort}; "
+                f"got thinking={result['thinking']!r}"
+            )
+
+
+def test_reasoning_effort_does_not_set_display_for_claude_4_6_models():
+    """
+    Claude 4.6 already returns the visible reasoning summary by default
+    upstream, so the ``display`` field is unnecessary on this branch and
+    is intentionally omitted to keep the request body minimal and to keep
+    the 4.7-specific opt-in scoped to 4.7.
+    """
+    config = AnthropicConfig()
+
+    claude_4_6_models = [
+        "claude-opus-4-6",
+        "claude-opus-4-6-20251101",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6-20260219",
+    ]
+
+    for model in claude_4_6_models:
+        for effort in ["low", "medium", "high", "minimal", "max"]:
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": effort},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+
+            assert (
+                result["thinking"]["type"] == "adaptive"
+            ), f"adaptive type missing for {model}/{effort}"
+            assert "display" not in result["thinking"], (
+                f"display must not be auto-injected for 4.6 model {model}/{effort}; "
+                f"got thinking={result['thinking']!r}"
+            )
+
+
+def test_reasoning_effort_does_not_set_display_for_pre_4_6_claude_models():
+    """
+    Pre-4.6 Claude models use the legacy manual thinking mode
+    (``type="enabled"`` + ``budget_tokens``) and do not understand
+    ``display``. The display field must only be set for adaptive-thinking
+    Claude 4.7 models.
+    """
+    config = AnthropicConfig()
+
+    legacy_models = [
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-1-20250805",
+        "claude-sonnet-4-5-20250929",
+        "claude-3-7-sonnet-20250219",
+    ]
+
+    for model in legacy_models:
+        for effort in ["low", "medium", "high", "minimal"]:
+            result = config.map_openai_params(
+                non_default_params={"reasoning_effort": effort},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+
+            assert "thinking" in result, f"thinking missing for {model}/{effort}"
+            assert (
+                result["thinking"]["type"] == "enabled"
+            ), f"enabled type expected for legacy {model}/{effort}"
+            assert "display" not in result["thinking"], (
+                f"display must not be set on legacy thinking for {model}/{effort}; "
+                f"got thinking={result['thinking']!r}"
+            )
+
+
+def test_user_supplied_thinking_display_is_preserved():
+    """
+    Callers passing the ``thinking`` dict directly (instead of
+    ``reasoning_effort``) keep full control over the ``display`` field.
+    ``map_openai_params`` must pass the user-supplied dict through
+    untouched.
+    """
+    config = AnthropicConfig()
+
+    for display_value in ("summarized", "omitted"):
+        result = config.map_openai_params(
+            non_default_params={
+                "thinking": {"type": "adaptive", "display": display_value}
+            },
+            optional_params={},
+            model="claude-opus-4-7",
+            drop_params=False,
+        )
+
+        assert result["thinking"] == {
+            "type": "adaptive",
+            "display": display_value,
+        }
+
+
+def test_transform_request_includes_display_summarized_for_claude_4_7():
+    """
+    End-to-end check on the request body that LiteLLM ships to the
+    Anthropic API for ``vertex_ai/claude-opus-4-7`` style calls. The
+    final body must carry ``thinking.display="summarized"`` when the
+    user only specified ``reasoning_effort``.
+    """
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Think through this carefully."}]
+    model = "claude-opus-4-7"
+
+    mapped_optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    data = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params=mapped_optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert data.get("thinking", {}).get("type") == "adaptive"
+    assert data.get("thinking", {}).get("display") == "summarized"
+
+
+def test_reasoning_effort_sets_display_for_dotted_claude_4_7_model_alias():
+    """
+    Dotted/provider-prefixed model aliases (``claude-opus-4.7``,
+    ``vertex_ai/...``, ``anthropic.claude-opus-4-7-v1:0``) must also
+    receive ``display="summarized"`` so the silent-omit default on 4.7
+    does not bite users that wired up short aliases in their config.
+    """
+    config = AnthropicConfig()
+
+    for model in [
+        "claude-opus-4.7",
+        "vertex_ai/claude-opus-4.7",
+        "anthropic.claude-opus-4-7-v1:0",
+    ]:
+        result = config.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+
+        assert result["thinking"]["type"] == "adaptive"
+        assert (
+            result["thinking"].get("display") == "summarized"
+        ), f"display='summarized' missing for alias {model}"
+
+
+def test_user_supplied_thinking_without_display_is_preserved_verbatim():
+    """
+    When a caller passes ``thinking`` directly (not via ``reasoning_effort``)
+    and omits ``display``, LiteLLM must not auto-inject ``display``. The
+    caller is taking explicit control of the thinking dict and we respect
+    their omission (Anthropic's default of ``omitted`` will apply
+    server-side on Opus 4.7).
+
+    This documents the contract: ``display`` is only auto-injected for
+    callers using the ``reasoning_effort`` abstraction.
+    """
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "adaptive"}},
+        optional_params={},
+        model="claude-opus-4-7",
+        drop_params=False,
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert "display" not in result["thinking"]

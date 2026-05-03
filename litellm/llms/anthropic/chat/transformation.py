@@ -797,9 +797,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
-        if AnthropicConfig._is_claude_4_6_model(
-            model
-        ) or AnthropicConfig._is_claude_4_7_model(model):
+        if AnthropicConfig._is_claude_4_7_model(model):
+            # Claude Opus 4.7 omits thinking content from the response by
+            # default. Explicitly request the human-readable summary so
+            # callers using the ``reasoning_effort`` abstraction get the
+            # same visibility they had on 4.6 (where the summary was the
+            # upstream default).
+            return AnthropicThinkingParam(
+                type="adaptive",
+                display="summarized",
+            )
+        if AnthropicConfig._is_claude_4_6_model(model):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
