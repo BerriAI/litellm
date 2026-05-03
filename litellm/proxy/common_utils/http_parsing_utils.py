@@ -13,6 +13,16 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 
+def _parse_form_json_field(
+    parsed_body: Dict[str, Any], field_name: str, *, require_json: bool = False
+) -> None:
+    value = parsed_body.get(field_name)
+    if not isinstance(value, str):
+        return
+    if require_json or value.lstrip().startswith(("{", "[")):
+        parsed_body[field_name] = json.loads(value)
+
+
 async def _read_request_body(request: Optional[Request]) -> Dict:
     """
     Safely read the request body and parse it as JSON.
@@ -39,8 +49,9 @@ async def _read_request_body(request: Optional[Request]) -> Dict:
 
         if "form" in content_type:
             parsed_body = dict(await request.form())
-            if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
-                parsed_body["metadata"] = json.loads(parsed_body["metadata"])
+            _parse_form_json_field(parsed_body, "metadata", require_json=True)
+            _parse_form_json_field(parsed_body, "user_config")
+            _parse_form_json_field(parsed_body, "tags")
         else:
             # Read the request body
             body = await request.body()
