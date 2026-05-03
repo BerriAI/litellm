@@ -25,9 +25,12 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
     _get_service_tier_cost_key,
-    _parse_prompt_tokens_details,
+    _get_prompt_tokens_details_for_cost_calc,
+    _get_token_base_cost,
+    calculate_cache_writing_cost,
     calculate_cost_component,
     generic_cost_per_token,
+    generic_cost_per_token_from_model_info,
     get_billable_input_tokens,
     select_cost_metric_for_model,
 )
@@ -173,6 +176,10 @@ def _cost_per_token_custom_pricing_helper(
     prompt_tokens: float = 0,
     completion_tokens: float = 0,
     response_time_ms: Optional[float] = 0.0,
+    usage_object: Optional[Usage] = None,
+    custom_llm_provider: Optional[str] = None,
+    service_tier: Optional[str] = None,
+    custom_cost_model_info: Optional[ModelInfo] = None,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
     custom_cost_per_second: Optional[float] = None,
@@ -182,6 +189,22 @@ def _cost_per_token_custom_pricing_helper(
         return None
 
     if custom_cost_per_token is not None:
+        if usage_object is not None and _custom_cost_per_token_has_cache_pricing(
+            custom_cost_per_token
+        ):
+            model_info = (
+                custom_cost_model_info
+                or _get_model_info_from_custom_cost_per_token(
+                    custom_cost_per_token=custom_cost_per_token,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            )
+            return generic_cost_per_token_from_model_info(
+                model_info=model_info,
+                usage=usage_object,
+                service_tier=service_tier,
+            )
+
         input_cost = custom_cost_per_token["input_cost_per_token"] * prompt_tokens
         output_cost = custom_cost_per_token["output_cost_per_token"] * completion_tokens
         return input_cost, output_cost
@@ -190,6 +213,35 @@ def _cost_per_token_custom_pricing_helper(
         return 0, output_cost
 
     return None
+
+
+def _custom_cost_per_token_has_cache_pricing(
+    custom_cost_per_token: CostPerToken,
+) -> bool:
+    return any(
+        key.startswith("cache_read_input_token_cost")
+        or key.startswith("cache_creation_input_token_cost")
+        for key in cast(dict, custom_cost_per_token)
+    )
+
+
+def _get_model_info_from_custom_cost_per_token(
+    custom_cost_per_token: CostPerToken,
+    custom_llm_provider: Optional[str],
+) -> ModelInfo:
+    model_info: dict[str, Any] = {
+        "key": "custom_cost_per_token",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": custom_cost_per_token["input_cost_per_token"],
+        "output_cost_per_token": custom_cost_per_token["output_cost_per_token"],
+        "litellm_provider": custom_llm_provider or "custom",
+        "mode": "chat",
+        "supported_openai_params": None,
+    }
+    model_info.update(cast(dict[str, Any], custom_cost_per_token))
+    return cast(ModelInfo, model_info)
 
 
 def _get_additional_costs(
@@ -272,6 +324,7 @@ def cost_per_token(  # noqa: PLR0915
     cache_read_input_tokens: Optional[int] = 0,
     ### CUSTOM PRICING ###
     custom_cost_per_token: Optional[CostPerToken] = None,
+    custom_cost_model_info: Optional[ModelInfo] = None,
     custom_cost_per_second: Optional[float] = None,
     ### NUMBER OF QUERIES ###
     number_of_queries: Optional[int] = None,
@@ -327,6 +380,10 @@ def cost_per_token(  # noqa: PLR0915
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         response_time_ms=response_time_ms,
+        usage_object=usage_block,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=service_tier,
+        custom_cost_model_info=custom_cost_model_info,
         custom_cost_per_second=custom_cost_per_second,
         custom_cost_per_token=custom_cost_per_token,
     )
@@ -1016,6 +1073,85 @@ def _store_cost_breakdown_in_logging_obj(
         pass
 
 
+def _get_cache_costs_for_breakdown(
+    usage_object: Optional[Usage],
+    model: Optional[str],
+    custom_llm_provider: Optional[str],
+    custom_cost_per_token: Optional[CostPerToken],
+    model_info: Optional[ModelInfo] = None,
+    service_tier: Optional[str] = None,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Return cache-read/write costs for standard logging breakdown fields."""
+    if usage_object is None:
+        return None, None
+
+    prompt_tokens_details = _get_prompt_tokens_details_for_cost_calc(usage_object)
+
+    if (
+        prompt_tokens_details["cache_hit_tokens"] <= 0
+        and prompt_tokens_details["cache_creation_tokens"] <= 0
+        and prompt_tokens_details["cache_creation_token_details"] is None
+    ):
+        return None, None
+
+    if (
+        model_info is None
+        and custom_cost_per_token is not None
+        and _custom_cost_per_token_has_cache_pricing(custom_cost_per_token)
+    ):
+        model_info = _get_model_info_from_custom_cost_per_token(
+            custom_cost_per_token=custom_cost_per_token,
+            custom_llm_provider=custom_llm_provider,
+        )
+    elif model_info is None and model:
+        try:
+            model_info = cast(
+                ModelInfo,
+                litellm.get_model_info(
+                    model=model, custom_llm_provider=custom_llm_provider
+                ),
+            )
+        except Exception:
+            return None, None
+
+    if model_info is None:
+        return None, None
+
+    (
+        _,
+        _,
+        cache_creation_cost_per_token,
+        cache_creation_cost_above_1hr,
+        cache_read_cost_per_token,
+    ) = _get_token_base_cost(
+        model_info=model_info,
+        usage=usage_object,
+        service_tier=service_tier,
+    )
+
+    cache_read_cost = (
+        prompt_tokens_details["cache_hit_tokens"] * cache_read_cost_per_token
+        if prompt_tokens_details["cache_hit_tokens"] > 0
+        else None
+    )
+    cache_creation_cost = (
+        calculate_cache_writing_cost(
+            cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
+            cache_creation_token_details=prompt_tokens_details[
+                "cache_creation_token_details"
+            ],
+            cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
+            cache_creation_cost=cache_creation_cost_per_token,
+        )
+        if (
+            prompt_tokens_details["cache_creation_tokens"] > 0
+            or prompt_tokens_details["cache_creation_token_details"] is not None
+        )
+        else None
+    )
+    return cache_read_cost, cache_creation_cost
+
+
 def completion_cost(  # noqa: PLR0915
     completion_response=None,
     model: Optional[str] = None,
@@ -1505,6 +1641,16 @@ def completion_cost(  # noqa: PLR0915
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
+                custom_cost_model_info: Optional[ModelInfo] = None
+                if (
+                    custom_cost_per_token is not None
+                    and _custom_cost_per_token_has_cache_pricing(custom_cost_per_token)
+                ):
+                    custom_cost_model_info = _get_model_info_from_custom_cost_per_token(
+                        custom_cost_per_token=custom_cost_per_token,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
@@ -1517,6 +1663,7 @@ def completion_cost(  # noqa: PLR0915
                     region_name=region_name,
                     custom_cost_per_second=custom_cost_per_second,
                     custom_cost_per_token=custom_cost_per_token,
+                    custom_cost_model_info=custom_cost_model_info,
                     prompt_characters=prompt_characters,
                     completion_characters=completion_characters,
                     cache_creation_input_tokens=cache_creation_input_tokens,
@@ -1606,37 +1753,26 @@ def completion_cost(  # noqa: PLR0915
 
                 # Store cost breakdown in logging object if available
                 if litellm_logging_obj is not None:
-                    _cache_read_cost: Optional[float] = None
-                    _cache_creation_cost: Optional[float] = None
-                    if cost_per_token_usage_object is not None:
-                        _cr = getattr(
-                            cost_per_token_usage_object, "cache_read_input_tokens", None
-                        ) or (cost_per_token_usage_object.model_extra or {}).get(
-                            "cache_read_input_tokens"
+                    _cache_read_cost, _cache_creation_cost = (
+                        _get_cache_costs_for_breakdown(
+                            usage_object=cost_per_token_usage_object,
+                            model=model,
+                            custom_llm_provider=custom_llm_provider,
+                            custom_cost_per_token=custom_cost_per_token,
+                            model_info=custom_cost_model_info,
+                            service_tier=service_tier,
                         )
-                        _cc = getattr(
-                            cost_per_token_usage_object,
-                            "cache_creation_input_tokens",
-                            None,
-                        ) or (cost_per_token_usage_object.model_extra or {}).get(
-                            "cache_creation_input_tokens"
-                        )
-                        if (_cr or _cc) and model:
-                            try:
-                                _mi = litellm.get_model_info(
-                                    model=model, custom_llm_provider=custom_llm_provider
-                                )
-                                _cr_rate = _mi.get("cache_read_input_token_cost")
-                                if _cr and _cr_rate is not None:
-                                    _cache_read_cost = float(_cr) * float(_cr_rate)
-                                _cc_rate = _mi.get("cache_creation_input_token_cost")
-                                if _cc and _cc_rate is not None:
-                                    _cache_creation_cost = float(_cc) * float(_cc_rate)
-                            except Exception:
-                                pass
+                    )
+                    _prompt_tokens_cost_for_breakdown = (
+                        prompt_tokens_cost_usd_dollar
+                        - (_cache_read_cost or 0.0)
+                        - (_cache_creation_cost or 0.0)
+                    )
+                    if _prompt_tokens_cost_for_breakdown < 0:
+                        _prompt_tokens_cost_for_breakdown = 0.0
                     _store_cost_breakdown_in_logging_obj(
                         litellm_logging_obj=litellm_logging_obj,
-                        prompt_tokens_cost_usd_dollar=prompt_tokens_cost_usd_dollar,
+                        prompt_tokens_cost_usd_dollar=_prompt_tokens_cost_for_breakdown,
                         completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
                         cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
                         total_cost_usd_dollar=_final_cost,
@@ -2140,7 +2276,7 @@ def batch_cost_calculator(
         )  # batch cost is usually half of the regular token cost
 
         # Add cache read cost if applicable
-        details = _parse_prompt_tokens_details(usage)
+        details = _get_prompt_tokens_details_for_cost_calc(usage)
         cache_read_tokens = details["cache_hit_tokens"]
         cache_read_cost_key = _get_service_tier_cost_key(
             "cache_read_input_token_cost", None
