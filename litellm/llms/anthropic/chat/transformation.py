@@ -1580,7 +1580,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         # ``max`` is for Opus 4.6+ output effort (not Sonnet 4.6, not Opus 4.5).
         # Accept known Opus 4.6/4.7 id patterns and/or ``supports_max_reasoning_effort``
-        # in the model map (same pattern as ``xhigh`` below).
+        # in the model map (same pattern as ``xhigh`` below). The hardcoded
+        # patterns cover OpenRouter/GitHub Copilot/Vercel variants that don't
+        # carry the model-map flag yet — keep both checks until those provider
+        # entries are fully populated.
         if effort == "max" and not (
             self._is_opus_4_6_model(model)
             or self._is_opus_4_7_model(model)
