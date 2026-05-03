@@ -1376,3 +1376,74 @@ class TestEndpointRoleChecks:
             user_api_key_dict=user_key,
         )
         assert result["status"] == "ok"
+
+
+class TestPreviewOpenAPITools:
+    """Verify the OpenAPI preview endpoint emits provider-safe tool names.
+
+    Regression: GitHub's OpenAPI spec uses tag-namespaced operationIds like
+    `actions/download-job-logs-for-workflow-run` which contain '/'. The
+    preview must sanitize so what the dashboard shows matches what gets
+    registered (and what makes it past LLM provider tool-name validation).
+    """
+
+    pytestmark = pytest.mark.asyncio
+
+    async def test_preview_sanitizes_slash_in_operation_id(self, monkeypatch):
+        import re
+
+        async def fake_load_spec(spec_path):  # noqa: ANN001
+            return {
+                "paths": {
+                    "/repos/{owner}/{repo}/actions/jobs/{job_id}/logs": {
+                        "get": {
+                            "operationId": (
+                                "actions/download-job-logs-for-workflow-run"
+                            ),
+                            "summary": "Download job logs",
+                        }
+                    },
+                    "/repos/{owner}/{repo}/pulls/{pull_number}/files": {
+                        "get": {
+                            "operationId": "pulls/list-files",
+                            "summary": "List files",
+                        }
+                    },
+                }
+            }
+
+        from litellm.proxy._experimental.mcp_server import (
+            openapi_to_mcp_generator,
+        )
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator,
+            "load_openapi_spec_async",
+            fake_load_spec,
+            raising=False,
+        )
+
+        payload = NewMCPServerRequest(
+            server_name="github_openapi_mcp",
+            spec_path="https://example.invalid/openapi.json",
+            transport="http",
+        )
+        request = _build_request()
+
+        from litellm.proxy._types import LitellmUserRoles
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+        assert result.get("error") is None, result
+        names = [t["name"] for t in result["tools"]]
+        anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+        for name in names:
+            assert anthropic_re.match(
+                name
+            ), f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+        assert "actions_download-job-logs-for-workflow-run" in names
+        assert "pulls_list-files" in names
