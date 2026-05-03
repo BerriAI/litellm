@@ -23,6 +23,7 @@ import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
+import KeyModelList from "../key_team_helpers/KeyModelList";
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -396,7 +397,7 @@ export default function KeyInfoView({
   };
 
   return (
-    <div className="w-full h-screen p-4">
+    <div className="w-full p-4">
       <KeyInfoHeader
         data={{
           keyName: currentKeyData.key_alias || "Virtual Key",
@@ -516,22 +517,16 @@ export default function KeyInfoView({
                   <Text>RPM: {currentKeyData.rpm_limit !== null ? currentKeyData.rpm_limit : "Unlimited"}</Text>
                 </div>
               </Card>
-
-              <Card>
-                <Text>Models</Text>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {currentKeyData.models && currentKeyData.models.length > 0 ? (
-                    currentKeyData.models.map((model, index) => (
-                      <Badge key={index} color="red">
-                        {model}
-                      </Badge>
-                    ))
-                  ) : (
-                    <Text>No models specified</Text>
-                  )}
-                </div>
-              </Card>
-
+              {currentKeyData.token ? (
+                <KeyModelList key_id={currentKeyData.token} />
+              ) : (
+                <Card>
+                  <Text>Models</Text>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Text>Key token unavailable</Text>
+                  </div>
+                </Card>
+              )}
               <Card>
                 <ObjectPermissionsView
                   objectPermission={currentKeyData.object_permission}
@@ -798,7 +793,10 @@ export default function KeyInfoView({
                           </span>
                         ))
                       ) : (
-                        <Text>No models specified</Text>
+                        <Text>
+                          No explicit list — this key can use all models available on the proxy. See the Models
+                          section on the Overview tab for the resolved list.
+                        </Text>
                       )}
                     </div>
                   </div>

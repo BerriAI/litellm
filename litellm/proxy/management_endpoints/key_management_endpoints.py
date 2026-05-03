@@ -59,6 +59,10 @@ from litellm.proxy.management_endpoints.common_utils import (
     _set_object_metadata_field,
     _team_member_has_permission,
 )
+from litellm.proxy.auth.model_checks import (
+    prepare_key_models_response_payload,
+    resolve_key_models_for_display,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
@@ -3014,6 +3018,100 @@ async def info_key_fn(
         key_info = await attach_object_permission_to_dict(key_info, prisma_client)
 
         return {"key": key, "info": key_info}
+    except Exception as e:
+        raise handle_exception_on_proxy(e)
+
+
+@router.get(
+    "/key/{key_id}/models",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def key_resolved_models_fn(
+    key_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    search: Optional[str] = Query(
+        default=None,
+        description="Case-insensitive substring filter on resolved model names. Omit or blank for no filter.",
+    ),
+    compact: bool = Query(
+        default=False,
+        description="When true, returns section structure and counts but omits per-section model name lists.",
+    ),
+):
+    """
+    Return resolved models for a virtual key as `model_display_sections` for the admin UI.
+
+    - **source**: How models were resolved (`all-team-models`, `all-proxy-models`, `no-default-models`).
+    - **model_display_sections**: Ordered sections (`all_proxy_models`, `all_team_models`, `access_group`, `ungrouped`); a model may appear under multiple access-group sections.
+    - **search**: Filters the resolved list before truncation and sectioning.
+    - **compact**: Metadata-only payload (empty `models` arrays in each section) for fast initial load.
+    - **all_team_models_without_team**: True when the key uses `all-team-models` but has no `team_id` (assign a team in key settings).
+    - **resolved_config_entry_count**: Length of the post-sentinel-resolution pattern list (not the same as concrete `matched_count` when wildcards are present).
+    - **matched_count**: Number of concrete router model names after expansion and optional search (before display truncation).
+    """
+    from litellm.proxy.proxy_server import llm_router, prisma_client
+
+    try:
+        if prisma_client is None:
+            raise Exception(
+                "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
+            )
+
+        hashed_key = _hash_token_if_needed(token=key_id)
+        key_info = await prisma_client.db.litellm_verificationtoken.find_unique(
+            where={"token": hashed_key},  # type: ignore
+        )
+        if key_info is None:
+            raise ProxyException(
+                message="Key not found in database",
+                type=ProxyErrorTypes.not_found_error,
+                param="key",
+                code=status.HTTP_404_NOT_FOUND,
+            )
+
+        if (
+            await _can_user_query_key_info(
+                user_api_key_dict=user_api_key_dict,
+                key=key_id,
+                key_info=key_info,
+            )
+            is not True
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not allowed to access this key's info. Your role={}".format(
+                    user_api_key_dict.user_role
+                ),
+            )
+
+        key_models = list(key_info.models or [])
+        model_access_groups: Dict[str, List[str]] = {}
+        if llm_router is not None:
+            model_access_groups = llm_router.get_model_access_groups()
+
+        resolved, source, all_team_models_without_team = (
+            await resolve_key_models_for_display(
+                key_models=key_models,
+                team_id=key_info.team_id,
+                prisma_client=prisma_client,
+                llm_router=llm_router,
+            )
+        )
+
+        all_router_model_names: List[str] = []
+        if llm_router is not None:
+            all_router_model_names = list(llm_router.get_model_names())
+
+        return prepare_key_models_response_payload(
+            resolved=resolved,
+            source=source,
+            all_team_models_without_team=all_team_models_without_team,
+            model_access_groups=model_access_groups,
+            search=search,
+            compact=compact,
+            all_router_model_names=all_router_model_names,
+        )
     except Exception as e:
         raise handle_exception_on_proxy(e)
 
