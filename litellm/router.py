@@ -308,6 +308,7 @@ class Router:
         ] = "simple-shuffle",
         optional_pre_call_checks: Optional[OptionalPreCallChecks] = None,
         routing_strategy_args: dict = {},  # just for latency-based
+        routing_strategy_model_filter: Optional[List[str]] = None,
         provider_budget_config: Optional[GenericBudgetConfigType] = None,
         alerting_config: Optional[AlertingConfig] = None,
         router_general_settings: Optional[
@@ -349,6 +350,7 @@ class Router:
             cooldown_time (float): Time to cooldown a deployment after failure in seconds. Defaults to 1.
             routing_strategy (Literal["simple-shuffle", "least-busy", "usage-based-routing", "latency-based-routing", "cost-based-routing"]): Routing strategy. Defaults to "simple-shuffle".
             routing_strategy_args (dict): Additional args for latency-based routing. Defaults to {}.
+            routing_strategy_model_filter (Optional[List[str]]): Restricts the configured `routing_strategy` to deployments whose `model_name` is in this list. Requests for any other model fall back to `"simple-shuffle"`. Defaults to None (strategy applies to all models).
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
@@ -542,6 +544,7 @@ class Router:
 
         self.retry_after = retry_after
         self.routing_strategy = routing_strategy
+        self.routing_strategy_model_filter = routing_strategy_model_filter
 
         ## SETTING FALLBACKS ##
         ### validate if it's set + in correct format
@@ -8997,6 +9000,7 @@ class Router:
         vars_to_include = [
             "routing_strategy_args",
             "routing_strategy",
+            "routing_strategy_model_filter",
             "allowed_fails",
             "cooldown_time",
             "num_retries",
@@ -9028,6 +9032,7 @@ class Router:
         _allowed_settings = [
             "routing_strategy_args",
             "routing_strategy",
+            "routing_strategy_model_filter",
             "allowed_fails",
             "cooldown_time",
             "num_retries",
@@ -9733,6 +9738,20 @@ class Router:
 
         return healthy_deployments
 
+    def _get_effective_routing_strategy(self, model: str) -> str:
+        """
+        Resolves the routing strategy to use for a request.
+
+        If `routing_strategy_model_filter` is set and `model` is not in it, fall
+        back to `"simple-shuffle"`. Otherwise return the configured strategy.
+        """
+        if (
+            self.routing_strategy_model_filter is not None
+            and model not in self.routing_strategy_model_filter
+        ):
+            return "simple-shuffle"
+        return self.routing_strategy
+
     async def async_get_available_deployment(
         self,
         model: str,
@@ -9779,6 +9798,11 @@ class Router:
                 messages = pre_routing_hook_response.messages
             #########################################################
 
+            # Resolve the effective strategy AFTER the pre-routing hook, since
+            # the hook can replace `model` and the filter must key off the
+            # final model name.
+            effective_strategy = self._get_effective_routing_strategy(model)
+
             healthy_deployments = await self.async_get_healthy_deployments(
                 model=model,
                 request_kwargs=request_kwargs,
@@ -9799,7 +9823,7 @@ class Router:
 
             start_time = time.time()
             if (
-                self.routing_strategy == "usage-based-routing-v2"
+                effective_strategy == "usage-based-routing-v2"
                 and self.lowesttpm_logger_v2 is not None
             ):
                 deployment = (
@@ -9811,7 +9835,7 @@ class Router:
                     )
                 )
             elif (
-                self.routing_strategy == "cost-based-routing"
+                effective_strategy == "cost-based-routing"
                 and self.lowestcost_logger is not None
             ):
                 deployment = (
@@ -9823,7 +9847,7 @@ class Router:
                     )
                 )
             elif (
-                self.routing_strategy == "latency-based-routing"
+                effective_strategy == "latency-based-routing"
                 and self.lowestlatency_logger is not None
             ):
                 deployment = (
@@ -9835,15 +9859,14 @@ class Router:
                         request_kwargs=request_kwargs,
                     )
                 )
-            elif self.routing_strategy == "simple-shuffle":
+            elif effective_strategy == "simple-shuffle":
                 return simple_shuffle(
                     llm_router_instance=self,
                     healthy_deployments=healthy_deployments,
                     model=model,
                 )
             elif (
-                self.routing_strategy == "least-busy"
-                and self.leastbusy_logger is not None
+                effective_strategy == "least-busy" and self.leastbusy_logger is not None
             ):
                 deployment = (
                     await self.leastbusy_logger.async_get_available_deployments(
@@ -10191,11 +10214,12 @@ class Router:
                 cooldown_list=_cooldown_list,
             )
 
-        if self.routing_strategy == "least-busy" and self.leastbusy_logger is not None:
+        effective_strategy = self._get_effective_routing_strategy(model)
+        if effective_strategy == "least-busy" and self.leastbusy_logger is not None:
             deployment = self.leastbusy_logger.get_available_deployments(
                 model_group=model, healthy_deployments=healthy_deployments  # type: ignore
             )
-        elif self.routing_strategy == "simple-shuffle":
+        elif effective_strategy == "simple-shuffle":
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
             return simple_shuffle(
@@ -10204,7 +10228,7 @@ class Router:
                 model=model,
             )
         elif (
-            self.routing_strategy == "latency-based-routing"
+            effective_strategy == "latency-based-routing"
             and self.lowestlatency_logger is not None
         ):
             deployment = self.lowestlatency_logger.get_available_deployments(
@@ -10213,7 +10237,7 @@ class Router:
                 request_kwargs=request_kwargs,
             )
         elif (
-            self.routing_strategy == "usage-based-routing"
+            effective_strategy == "usage-based-routing"
             and self.lowesttpm_logger is not None
         ):
             deployment = self.lowesttpm_logger.get_available_deployments(
@@ -10223,7 +10247,7 @@ class Router:
                 input=input,
             )
         elif (
-            self.routing_strategy == "usage-based-routing-v2"
+            effective_strategy == "usage-based-routing-v2"
             and self.lowesttpm_logger_v2 is not None
         ):
             deployment = self.lowesttpm_logger_v2.get_available_deployments(
