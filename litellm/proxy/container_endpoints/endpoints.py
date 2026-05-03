@@ -2,9 +2,10 @@
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -13,6 +14,12 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
+)
+from litellm.proxy.container_endpoints.ownership import (
+    assert_user_can_access_container,
+    filter_container_list_response,
+    get_container_forwarding_params,
+    record_container_owner,
 )
 
 router = APIRouter()
@@ -98,7 +105,7 @@ async def create_container(
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -123,6 +130,31 @@ async def create_container(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+    # Ownership recording sits between the upstream create and the response
+    # to the caller. The recorder swallows DB errors internally (falling
+    # back to in-memory tracking) and only surfaces HTTPException on auth
+    # conflicts; we let those propagate verbatim so the client sees the
+    # real status code rather than a generic LLM error wrapper.
+    try:
+        return await record_container_owner(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Unexpected (non-HTTPException) failure after upstream create.
+        # The container exists upstream but is now untracked — log loudly
+        # so an operator can reconcile, and return the response so the
+        # caller does not get charged for a resource they cannot use.
+        verbose_proxy_logger.exception(
+            "Container ownership recording failed after upstream create; "
+            "returning response with untracked ownership: %s",
+            e,
+        )
+        return response
 
 
 @router.get(
@@ -191,7 +223,7 @@ async def list_containers(
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -208,6 +240,11 @@ async def list_containers(
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
             version=version,
+        )
+        return await filter_container_list_response(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
         )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
@@ -280,7 +317,18 @@ async def retrieve_container(
     )
 
     # Add custom_llm_provider to data
-    data["custom_llm_provider"] = custom_llm_provider
+    original_container_id, custom_llm_provider = await assert_user_can_access_container(
+        container_id=container_id,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
+    )
+    data.update(
+        get_container_forwarding_params(
+            container_id,
+            original_container_id,
+            custom_llm_provider,
+        )
+    )
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -374,7 +422,18 @@ async def delete_container(
     )
 
     # Add custom_llm_provider to data
-    data["custom_llm_provider"] = custom_llm_provider
+    original_container_id, custom_llm_provider = await assert_user_can_access_container(
+        container_id=container_id,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
+    )
+    data.update(
+        get_container_forwarding_params(
+            container_id,
+            original_container_id,
+            custom_llm_provider,
+        )
+    )
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)

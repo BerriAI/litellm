@@ -5,11 +5,79 @@ This module contains the actual database operations for skills CRUD.
 Used by the transformation layer and skills injection hook.
 """
 
+import os
+import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger
-from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest
+from litellm.llms.litellm_proxy.skills.store import LiteLLMSkillsStore
+from litellm.proxy._types import LiteLLM_SkillsTable, NewSkillRequest, UserAPIKeyAuth
+from litellm.proxy.common_utils.resource_ownership import (
+    get_primary_resource_owner_scope,
+    get_resource_owner_scopes,
+    is_proxy_admin,
+    user_can_access_resource_owner,
+)
+
+ALLOW_UNOWNED_SKILL_ACCESS_ENV = "LITELLM_ALLOW_UNOWNED_SKILL_ACCESS"
+
+# Skills are looked up on every chat completion that has skills enabled
+# (`LiteLLMSkillsHandler.fetch_skill_from_db` in the injection hook). Cache
+# the Prisma skill row for a short window so the hot path doesn't issue a DB
+# round-trip per request. Same shape as `_byok_cred_cache` and the container
+# ownership cache: (value, monotonic_timestamp). `None` is cached as a true
+# negative ("skill does not exist") so repeated misses also avoid the DB.
+_SKILL_CACHE: Dict[str, Tuple[Optional[Any], float]] = {}
+_SKILL_CACHE_TTL = 60  # seconds
+_SKILL_CACHE_MAX_SIZE = 10000
+
+
+def _read_skill_cache(skill_id: str) -> Tuple[bool, Optional[Any]]:
+    """Return (hit, value). hit=False means caller must consult the DB."""
+    entry = _SKILL_CACHE.get(skill_id)
+    if entry is None:
+        return False, None
+    value, timestamp = entry
+    if time.monotonic() - timestamp > _SKILL_CACHE_TTL:
+        _SKILL_CACHE.pop(skill_id, None)
+        return False, None
+    return True, value
+
+
+def _write_skill_cache(skill_id: str, skill: Optional[Any]) -> None:
+    if len(_SKILL_CACHE) >= _SKILL_CACHE_MAX_SIZE:
+        _SKILL_CACHE.clear()
+    _SKILL_CACHE[skill_id] = (skill, time.monotonic())
+
+
+def _invalidate_skill_cache(skill_id: str) -> None:
+    """Drop the cache entry after a write so the next read sees the new row."""
+    _SKILL_CACHE.pop(skill_id, None)
+
+
+def _allow_unowned_skill_access() -> bool:
+    return os.getenv(ALLOW_UNOWNED_SKILL_ACCESS_ENV, "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _user_can_access_skill_owner(
+    owner: Optional[str],
+    user_api_key_dict: Optional[UserAPIKeyAuth],
+) -> bool:
+    if owner is None and user_api_key_dict is not None:
+        if is_proxy_admin(user_api_key_dict):
+            return True
+        if _allow_unowned_skill_access():
+            verbose_logger.warning(
+                "Allowing unowned skill access because %s is enabled",
+                ALLOW_UNOWNED_SKILL_ACCESS_ENV,
+            )
+            return True
+    return user_can_access_resource_owner(owner, user_api_key_dict)
 
 
 def _prisma_skill_to_litellm(prisma_skill) -> LiteLLM_SkillsTable:
@@ -58,6 +126,7 @@ class LiteLLMSkillsHandler:
     async def create_skill(
         data: NewSkillRequest,
         user_id: Optional[str] = None,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     ) -> LiteLLM_SkillsTable:
         """
         Create a new skill in the LiteLLM database.
@@ -70,8 +139,10 @@ class LiteLLMSkillsHandler:
             LiteLLM_SkillsTable record
         """
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        store = LiteLLMSkillsStore(prisma_client)
 
         skill_id = f"litellm_skill_{uuid.uuid4()}"
+        owner = get_primary_resource_owner_scope(user_api_key_dict) or user_id
 
         skill_data: Dict[str, Any] = {
             "skill_id": skill_id,
@@ -79,8 +150,8 @@ class LiteLLMSkillsHandler:
             "description": data.description,
             "instructions": data.instructions,
             "source": "custom",
-            "created_by": user_id,
-            "updated_by": user_id,
+            "created_by": owner,
+            "updated_by": owner,
         }
 
         # Handle metadata
@@ -103,7 +174,7 @@ class LiteLLMSkillsHandler:
             f"LiteLLMSkillsHandler: Creating skill {skill_id} with title={data.display_title}"
         )
 
-        new_skill = await prisma_client.db.litellm_skillstable.create(data=skill_data)
+        new_skill = await store.create_skill(skill_data)
 
         return _prisma_skill_to_litellm(new_skill)
 
@@ -111,6 +182,7 @@ class LiteLLMSkillsHandler:
     async def list_skills(
         limit: int = 20,
         offset: int = 0,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
     ) -> List[LiteLLM_SkillsTable]:
         """
         List skills from the LiteLLM database.
@@ -123,21 +195,58 @@ class LiteLLMSkillsHandler:
             List of LiteLLM_SkillsTable records
         """
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        store = LiteLLMSkillsStore(prisma_client)
 
         verbose_logger.debug(
             f"LiteLLMSkillsHandler: Listing skills with limit={limit}, offset={offset}"
         )
 
-        skills = await prisma_client.db.litellm_skillstable.find_many(
-            take=limit,
-            skip=offset,
-            order={"created_at": "desc"},
-        )
+        find_many_kwargs: Dict[str, Any] = {
+            "take": limit,
+            "skip": offset,
+            "order": {"created_at": "desc"},
+        }
+        if user_api_key_dict is not None and not is_proxy_admin(user_api_key_dict):
+            owner_scopes = get_resource_owner_scopes(user_api_key_dict)
+            if not owner_scopes:
+                return []
+            if _allow_unowned_skill_access():
+                find_many_kwargs["where"] = {
+                    "OR": [
+                        {"created_by": {"in": owner_scopes}},
+                        {"created_by": None},
+                    ]
+                }
+            else:
+                find_many_kwargs["where"] = {"created_by": {"in": owner_scopes}}
+
+        skills = await store.list_skills(find_many_kwargs)
 
         return [_prisma_skill_to_litellm(s) for s in skills]
 
     @staticmethod
-    async def get_skill(skill_id: str) -> LiteLLM_SkillsTable:
+    async def _load_skill(skill_id: str) -> Optional[Any]:
+        """Cache-first read of the Prisma skill row.
+
+        Caching here keeps `fetch_skill_from_db` (called per chat completion in
+        the skills injection hook) off the DB. Owner-scope filtering happens
+        on the cached row, so the cache is per-skill and not per-caller.
+        """
+        cached_hit, cached_skill = _read_skill_cache(skill_id)
+        if cached_hit:
+            return cached_skill
+
+        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        store = LiteLLMSkillsStore(prisma_client)
+        skill = await store.find_skill(skill_id)
+        _write_skill_cache(skill_id, skill)
+        return skill
+
+    @staticmethod
+    async def get_skill(
+        skill_id: str,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    ) -> LiteLLM_SkillsTable:
         """
         Get a skill by ID from the LiteLLM database.
 
@@ -150,21 +259,25 @@ class LiteLLMSkillsHandler:
         Raises:
             ValueError: If skill not found
         """
-        prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
-
         verbose_logger.debug(f"LiteLLMSkillsHandler: Getting skill {skill_id}")
 
-        skill = await prisma_client.db.litellm_skillstable.find_unique(
-            where={"skill_id": skill_id}
-        )
+        skill = await LiteLLMSkillsHandler._load_skill(skill_id)
 
         if skill is None:
+            raise ValueError(f"Skill not found: {skill_id}")
+
+        if not _user_can_access_skill_owner(
+            getattr(skill, "created_by", None), user_api_key_dict
+        ):
             raise ValueError(f"Skill not found: {skill_id}")
 
         return _prisma_skill_to_litellm(skill)
 
     @staticmethod
-    async def delete_skill(skill_id: str) -> Dict[str, str]:
+    async def delete_skill(
+        skill_id: str,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    ) -> Dict[str, str]:
         """
         Delete a skill by ID from the LiteLLM database.
 
@@ -178,24 +291,32 @@ class LiteLLMSkillsHandler:
             ValueError: If skill not found
         """
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
+        store = LiteLLMSkillsStore(prisma_client)
 
         verbose_logger.debug(f"LiteLLMSkillsHandler: Deleting skill {skill_id}")
 
         # Check if skill exists
-        skill = await prisma_client.db.litellm_skillstable.find_unique(
-            where={"skill_id": skill_id}
-        )
+        skill = await LiteLLMSkillsHandler._load_skill(skill_id)
 
         if skill is None:
             raise ValueError(f"Skill not found: {skill_id}")
 
+        if not _user_can_access_skill_owner(
+            getattr(skill, "created_by", None), user_api_key_dict
+        ):
+            raise ValueError(f"Skill not found: {skill_id}")
+
         # Delete the skill
-        await prisma_client.db.litellm_skillstable.delete(where={"skill_id": skill_id})
+        await store.delete_skill(skill_id)
+        _invalidate_skill_cache(skill_id)
 
         return {"id": skill_id, "type": "skill_deleted"}
 
     @staticmethod
-    async def fetch_skill_from_db(skill_id: str) -> Optional[LiteLLM_SkillsTable]:
+    async def fetch_skill_from_db(
+        skill_id: str,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    ) -> Optional[LiteLLM_SkillsTable]:
         """
         Fetch a skill from the database (used by skills injection hook).
 
@@ -209,7 +330,10 @@ class LiteLLMSkillsHandler:
             LiteLLM_SkillsTable or None if not found
         """
         try:
-            return await LiteLLMSkillsHandler.get_skill(skill_id)
+            return await LiteLLMSkillsHandler.get_skill(
+                skill_id,
+                user_api_key_dict=user_api_key_dict,
+            )
         except ValueError:
             return None
         except Exception as e:
