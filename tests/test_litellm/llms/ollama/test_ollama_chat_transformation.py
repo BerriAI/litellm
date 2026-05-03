@@ -341,7 +341,84 @@ class TestOllamaToolCalling:
     Issue: https://github.com/BerriAI/litellm/issues/18922
     """
 
-    def test_tools_passed_directly_without_capability_check(self):
+    def test_transform_request_malformed_tool_call_arguments_raises_bad_request(self):
+        """Test that malformed JSON in tool call arguments raises BadRequestError.
+
+        Regression: json.JSONDecodeError was previously raised directly, wrapping it
+        in litellm.BadRequestError gives callers an actionable error with context.
+
+        Issue: https://github.com/BerriAI/litellm/issues/25985
+        """
+        config = OllamaChatConfig()
+
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city": "Toky',  # truncated JSON
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+        import litellm
+
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            config.transform_request(
+                model="qwen3:14b",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+        assert "malformed JSON" in str(exc_info.value)
+
+    def test_transform_request_valid_tool_call_arguments_passes(self):
+        """Test that valid JSON tool call arguments are parsed without raising an exception."""
+        config = OllamaChatConfig()
+
+        messages = cast(
+            list[AllMessageValues],
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city": "Tokyo"}',
+                            },
+                        }
+                    ],
+                }
+            ],
+        )
+
+        # Should not raise any exception
+        result = config.transform_request(
+            model="qwen3:14b",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert "messages" in result
+
+
         """Test that tools are passed directly to Ollama without model capability checks.
 
         Previously, the code called litellm.get_model_info() which could fail
