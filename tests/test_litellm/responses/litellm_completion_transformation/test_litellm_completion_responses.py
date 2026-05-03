@@ -992,6 +992,100 @@ class TestContentTypeTransformation:
         assert result[0]["text"] == "valid text"
         assert result[1]["text"] == "another valid"
 
+    def test_cache_control_propagated_to_content_block(self):
+        """
+        Test that a cache_control field on a Responses API content item is
+        propagated onto the Chat Completion content block.
+        """
+        cache_control = {"type": "ephemeral"}
+        content = [
+            {"type": "text", "text": "cached text", "cache_control": cache_control},
+            {"type": "text", "text": "uncached text"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert len(result) == 2
+        assert result[0]["text"] == "cached text"
+        assert result[0]["cache_control"] == cache_control
+        assert result[1]["text"] == "uncached text"
+        assert "cache_control" not in result[1]
+
+    def test_cache_control_propagated_to_input_file_block(self):
+        """
+        Test that cache_control on an input_file item is propagated onto the
+        resulting file content block.
+        """
+        cache_control = {"type": "ephemeral"}
+        content = [
+            {
+                "type": "input_file",
+                "file_id": "file-abc123",
+                "cache_control": cache_control,
+            },
+            {"type": "input_file", "file_id": "file-xyz789"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert len(result) == 2
+        assert result[0]["cache_control"] == cache_control
+        assert "cache_control" not in result[1]
+
+    def test_cache_control_propagated_to_input_image_block(self):
+        """
+        Test that cache_control on an input_image item is propagated onto the
+        resulting image content block.
+        """
+        cache_control = {"type": "ephemeral"}
+        content = [
+            {
+                "type": "input_image",
+                "image_url": "https://example.com/img.png",
+                "cache_control": cache_control,
+            },
+            {"type": "input_image", "image_url": "https://example.com/other.png"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert len(result) == 2
+        assert result[0]["cache_control"] == cache_control
+        assert "cache_control" not in result[1]
+
+    def test_cache_control_propagated_to_message(self):
+        """
+        Test that a cache_control field on a Responses API input item is
+        propagated onto the resulting GenericChatCompletionMessage.
+        """
+        cache_control = {"type": "ephemeral"}
+        input_item = {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}],
+            "cache_control": cache_control,
+        }
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item
+        )
+        assert len(result) == 1
+        assert result[0]["role"] == "user"
+        assert result[0]["cache_control"] == cache_control
+
+    def test_cache_control_absent_when_not_provided(self):
+        """
+        Test that no cache_control key is added when the input item does not
+        carry one.
+        """
+        input_item = {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}],
+        }
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+            input_item
+        )
+        assert len(result) == 1
+        assert "cache_control" not in result[0]
+
 
 class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""
@@ -1470,6 +1564,86 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 3
         assert response_usage.input_tokens_details.text_tokens == 6
+
+    def test_transform_usage_with_cache_creation_tokens_anthropic(self):
+        """Test that Anthropic cache creation token fields are propagated onto input_tokens_details"""
+        usage = Usage(
+            prompt_tokens=20,
+            completion_tokens=10,
+            total_tokens=30,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=4,  # cache_read_input_tokens
+                cache_creation_tokens=12,  # cache_creation_input_tokens
+                text_tokens=4,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hi!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 4
+        assert (
+            getattr(
+                response_usage.input_tokens_details, "cache_creation_tokens", None
+            )
+            == 12
+        )
+
+    def test_transform_usage_without_cache_creation_tokens(self):
+        """Test that cache_creation_tokens is absent when not present on prompt_tokens_details"""
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=5,
+            total_tokens=15,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0,
+                text_tokens=10,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hi!", role="assistant"),
+                )
+            ],
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        assert response_usage.input_tokens_details is not None
+        assert (
+            getattr(
+                response_usage.input_tokens_details, "cache_creation_tokens", None
+            )
+            is None
+        )
 
     def test_transform_usage_with_reasoning_tokens_gemini(self):
         """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""
