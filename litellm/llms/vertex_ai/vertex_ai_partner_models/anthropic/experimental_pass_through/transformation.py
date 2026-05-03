@@ -17,6 +17,13 @@ from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
+    @staticmethod
+    def _has_vertex_predict_endpoint(api_base: str) -> bool:
+        api_base_without_query = api_base.split("?", 1)[0]
+        return api_base_without_query.endswith(
+            (":rawPredict", ":streamRawPredict")
+        )
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
@@ -52,8 +59,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             # Authorization already in headers, but we still need project_id
             project_id = vertex_ai_project
 
-        # Always calculate api_base if not provided, regardless of Authorization header
-        if api_base is None:
+        if api_base is None or not self._has_vertex_predict_endpoint(api_base):
+            # Normalize Vertex model URLs, but preserve fully-qualified endpoints
+            # provided by callers (for example ...:rawPredict).
             api_base = self.get_complete_vertex_url(
                 custom_api_base=api_base,
                 vertex_location=vertex_ai_location,
