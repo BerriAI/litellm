@@ -1,8 +1,8 @@
 import { Member } from "@/components/networking";
 import { CrownOutlined, InfoCircleOutlined, UserAddOutlined, UserOutlined } from "@ant-design/icons";
-import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
+import { Button, Pagination, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import React from "react";
+import React, { useState } from "react";
 import TableIconActionButton from "./IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 const { Text } = Typography;
@@ -18,6 +18,15 @@ export interface MemberTableProps {
   extraColumns?: ColumnsType<Member>;
   showDeleteForMember?: (member: Member) => boolean;
   emptyText?: string;
+  loading?: boolean;
+  /** When true, renders top-right pagination controls instead of the default antd bottom pagination. */
+  withPagination?: boolean;
+  defaultPageSize?: number;
+  /** Controlled current page (optional). When provided, pair with onPageChange. */
+  currentPage?: number;
+  onPageChange?: (page: number) => void;
+  /** Total unfiltered member count. When provided and differs from members.length, shows "X of Y Members". */
+  totalMembers?: number;
 }
 
 export default function MemberTable({
@@ -31,7 +40,26 @@ export default function MemberTable({
   extraColumns = [],
   showDeleteForMember,
   emptyText,
+  loading,
+  withPagination = false,
+  defaultPageSize = 50,
+  currentPage: controlledPage,
+  onPageChange,
+  totalMembers,
 }: MemberTableProps) {
+  const [internalPage, setInternalPage] = useState(1);
+  const [pageSize, setPageSize] = useState(defaultPageSize);
+
+  const page = controlledPage ?? internalPage;
+  const setPage = onPageChange ?? setInternalPage;
+
+  const total = members.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pagedMembers = withPagination ? members.slice((safePage - 1) * pageSize, safePage * pageSize) : members;
+  const countDisplay = totalMembers !== undefined && total !== totalMembers
+    ? `${total} of ${totalMembers} Members`
+    : `${total} Member${total !== 1 ? "s" : ""}`;
   const baseColumns: ColumnsType<Member> = [
     {
       title: "User Email",
@@ -104,14 +132,36 @@ export default function MemberTable({
 
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
-      <span className="inline-flex text-sm text-gray-700">
-        {members.length} Member{members.length !== 1 ? "s" : ""}
-      </span>
+      <div className="flex items-center justify-between w-full">
+        <span className="text-sm text-gray-700">
+          {countDisplay}
+        </span>
+        {withPagination && (
+          <Pagination
+            size="small"
+            current={safePage}
+            pageSize={pageSize}
+            total={total}
+            showSizeChanger
+            pageSizeOptions={["10", "25", "50", "100"]}
+            showQuickJumper
+            onChange={(p, ps) => {
+              if (ps !== pageSize) {
+                setPageSize(ps);
+                setPage(1);
+              } else {
+                setPage(p);
+              }
+            }}
+          />
+        )}
+      </div>
       <Table
         columns={baseColumns}
-        dataSource={members}
+        dataSource={pagedMembers}
         rowKey={(record) => record.user_id ?? record.user_email ?? JSON.stringify(record)}
         pagination={false}
+        loading={loading}
         size="small"
         scroll={{ x: "max-content" }}
         locale={emptyText ? { emptyText } : undefined}

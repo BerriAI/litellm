@@ -368,6 +368,110 @@ describe("TeamMembersComponent", () => {
     expect(screen.getAllByTestId("edit-member")).toHaveLength(2);
   });
 
+  it("should filter members by email search", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const searchInput = screen.getByPlaceholderText(/search by email or user id/i);
+    await user.type(searchInput, "user1");
+
+    expect(screen.getAllByText("user1@test.com").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("user2@test.com")).not.toBeInTheDocument();
+  });
+
+  it("should filter members by role", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const roleSelect = screen.getByRole("combobox");
+    await user.click(roleSelect);
+    // "Admin" filter: only user2 (role: "admin") should remain
+    await user.click(screen.getByText("Admin"));
+
+    expect(screen.getAllByText("user2@test.com").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("user1@test.com")).not.toBeInTheDocument();
+  });
+
+  it("should filter to non-admin members when Non-admin is selected", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const roleSelect = screen.getByRole("combobox");
+    await user.click(roleSelect);
+    // "Non-admin" filter: only user1 (role: "member") should remain
+    await user.click(screen.getByText("Non-admin"));
+
+    expect(screen.getAllByText("user1@test.com").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText("user2@test.com")).not.toBeInTheDocument();
+  });
+
+  it("should show all members when search is cleared", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const searchInput = screen.getByPlaceholderText(/search by email or user id/i);
+    await user.type(searchInput, "user1");
+    await user.clear(searchInput);
+
+    expect(screen.getAllByText("user1@test.com").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("user2@test.com").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("should show filtered count when search is active", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <TeamMembersComponent
+        teamData={createMockTeamData()}
+        canEditTeam={false}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    const searchInput = screen.getByPlaceholderText(/search by email or user id/i);
+    await user.type(searchInput, "user1");
+
+    expect(screen.getByText("1 of 2 Members")).toBeInTheDocument();
+  });
+
   it("should hide action buttons when canEditTeam is false", () => {
     renderWithProviders(
       <TeamMembersComponent
