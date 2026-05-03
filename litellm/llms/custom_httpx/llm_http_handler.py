@@ -4642,11 +4642,15 @@ class BaseLLMHTTPHandler:
             raise ValueError("Agentic loop plan missing patched messages")
 
         full_model_name = model
+        agentic_api_key: Optional[str] = None
+        agentic_api_base: Optional[str] = None
         if logging_obj is not None:
             agentic_params = logging_obj.model_call_details.get(
                 "agentic_loop_params", {}
             )
             full_model_name = cast(str, agentic_params.get("model", model))
+            agentic_api_key = agentic_params.get("api_key")
+            agentic_api_base = agentic_params.get("api_base")
 
         optional_params = dict(anthropic_messages_optional_request_params)
         optional_params.update(patch.optional_params)
@@ -4681,6 +4685,8 @@ class BaseLLMHTTPHandler:
                 "messages": patch.messages,
                 "model": patch.model or full_model_name,
                 "stream": stream,
+                **({"api_key": agentic_api_key} if agentic_api_key else {}),
+                **({"api_base": agentic_api_base} if agentic_api_base else {}),
                 **optional_params,
                 **kwargs_for_followup,
             }
