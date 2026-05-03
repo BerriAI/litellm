@@ -134,6 +134,14 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         completed_response = None
         error_message = None
+        # The ChatGPT Codex backend streams output items via
+        # `response.output_item.done` events and emits a final
+        # `response.completed` event whose `response.output` is empty — it
+        # only carries metadata (id, status, usage). Accumulate the items
+        # while iterating so the assembled non-streaming response is not
+        # empty. See `codex-rs/core/src/client.rs` (OutputItemDone handler)
+        # in the upstream Codex CLI for the reference implementation.
+        accumulated_output_items: list = []
         for chunk in body_text.splitlines():
             stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
             if not stripped_chunk:
@@ -150,20 +158,17 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             if not isinstance(parsed_chunk, dict):
                 continue
             event_type = parsed_chunk.get("type")
+            if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+                item = parsed_chunk.get("item")
+                if isinstance(item, dict):
+                    accumulated_output_items.append(item)
+                continue
             if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
                 response_payload = parsed_chunk.get("response")
                 if isinstance(response_payload, dict):
-                    response_payload = dict(response_payload)
-                    if "created_at" in response_payload:
-                        response_payload["created_at"] = _safe_convert_created_field(
-                            response_payload["created_at"]
-                        )
-                    try:
-                        completed_response = ResponsesAPIResponse(**response_payload)
-                    except Exception:
-                        completed_response = ResponsesAPIResponse.model_construct(
-                            **response_payload
-                        )
+                    completed_response = self._build_completed_response(
+                        response_payload, accumulated_output_items
+                    )
                 break
             if event_type in (
                 ResponsesAPIStreamEvents.RESPONSE_FAILED,
@@ -191,6 +196,22 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         completed_response._hidden_params["additional_headers"] = processed_headers
         completed_response._hidden_params["headers"] = raw_headers
         return completed_response
+
+    @staticmethod
+    def _build_completed_response(
+        response_payload: dict, accumulated_output_items: list
+    ) -> ResponsesAPIResponse:
+        response_payload = dict(response_payload)
+        if "created_at" in response_payload:
+            response_payload["created_at"] = _safe_convert_created_field(
+                response_payload["created_at"]
+            )
+        if not response_payload.get("output") and accumulated_output_items:
+            response_payload["output"] = accumulated_output_items
+        try:
+            return ResponsesAPIResponse(**response_payload)
+        except Exception:
+            return ResponsesAPIResponse.model_construct(**response_payload)
 
     def get_complete_url(
         self,
