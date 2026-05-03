@@ -21,6 +21,7 @@ from typing import (
 import httpx
 from pydantic import BaseModel
 
+import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _handle_invalid_parallel_tool_calls,
@@ -56,7 +57,10 @@ from litellm.types.utils import (
     Usage,
 )
 
-from ...anthropic.chat.transformation import AnthropicConfig
+from ...anthropic.chat.transformation import (
+    REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
+    AnthropicConfig,
+)
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
 
@@ -335,11 +339,40 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             # so the surfaced error carries the correct provider name (the
             # default is ``"anthropic"``, which would mislead users routing
             # via Databricks Foundation Model APIs).
-            optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort=non_default_params.get("reasoning_effort"),
+            reasoning_effort_value = non_default_params.get("reasoning_effort")
+            mapped_thinking = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort=reasoning_effort_value,
                 model=model,
                 llm_provider="databricks",
             )
+            if mapped_thinking is None:
+                optional_params.pop("thinking", None)
+                optional_params.pop("output_config", None)
+            else:
+                optional_params["thinking"] = mapped_thinking
+                # For Claude 4.6/4.7 adaptive models, ``_map_reasoning_effort``
+                # returns ``type=adaptive`` for ANY non-None / non-"none"
+                # string without validating the value, so reject unmapped
+                # efforts here and set ``output_config.effort`` (matching the
+                # Anthropic native / Bedrock Converse / Bedrock Invoke /
+                # /v1/messages paths).
+                if AnthropicConfig._is_claude_4_6_model(
+                    model
+                ) or AnthropicConfig._is_claude_4_7_model(model):
+                    mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                        reasoning_effort_value
+                    )
+                    if mapped_effort is None:
+                        raise litellm.exceptions.BadRequestError(
+                            message=(
+                                f"Invalid reasoning_effort: {reasoning_effort_value!r}. "
+                                f"Must be one of: 'minimal', 'low', "
+                                f"'medium', 'high', 'xhigh', 'max', 'none'"
+                            ),
+                            model=model,
+                            llm_provider="databricks",
+                        )
+                    optional_params["output_config"] = {"effort": mapped_effort}
             optional_params.pop("reasoning_effort", None)
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
