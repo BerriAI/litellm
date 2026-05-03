@@ -59,6 +59,7 @@ sequenceDiagram
 |-----------|-------------|
 | `x-pass-*` headers | Strip prefix and forward (e.g., `x-pass-anthropic-beta` → `anthropic-beta`) |
 | `x-litellm-tags` header | Extract tags and add to request metadata for logging |
+| `x-litellm-spend-logs-metadata` header | Parse as JSON and propagate into `StandardLoggingPayload.metadata.spend_logs_metadata` (matches OpenAI-compatible endpoints) |
 | Streaming chunk collection | Collect chunks async for logging after stream completes |
 | Multipart form handling | Reconstruct multipart/form-data requests for file uploads |
 | Guardrails (opt-in) | Run content filtering when explicitly configured |

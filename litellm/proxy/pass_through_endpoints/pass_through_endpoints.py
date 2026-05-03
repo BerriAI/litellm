@@ -804,11 +804,17 @@ async def pass_through_request(  # noqa: PLR0915
             params={"timeout": 600},
         )
         async_client = async_client_obj.client
+        spend_logs_metadata = (
+            LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(
+                _safe_get_request_headers(request)
+            )
+        )
         passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
             request_body=_parsed_body,
             request_method=getattr(request, "method", None),
             cost_per_request=cost_per_request,
+            spend_logs_metadata=spend_logs_metadata,
         )
         kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
             user_api_key_dict=user_api_key_dict,
@@ -1505,11 +1511,18 @@ async def websocket_passthrough_request(  # noqa: PLR0915
     )
 
     # Create passthrough logging payload
+    websocket_headers = dict(websocket.headers) if hasattr(websocket, "headers") else {}
+    spend_logs_metadata = (
+        LiteLLMProxyRequestSetup._get_spend_logs_metadata_from_request_headers(
+            websocket_headers
+        )
+    )
     passthrough_logging_payload = PassthroughStandardLoggingPayload(
         url=target,
         request_body={},  # WebSocket doesn't have a traditional request body
         request_method="WEBSOCKET",
         cost_per_request=cost_per_request,
+        spend_logs_metadata=spend_logs_metadata,
     )
 
     # Create a dummy request object for WebSocket connections to maintain compatibility
