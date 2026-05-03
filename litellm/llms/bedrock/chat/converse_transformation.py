@@ -415,6 +415,15 @@ class AmazonConverseConfig(BaseConfig):
         - Nova 2 models: Transform to reasoningConfig structure
         - Other models (Anthropic, etc.): Convert to thinking parameter
 
+        For Claude 4.6 / 4.7 (adaptive thinking) the tier is carried via
+        ``output_config.effort`` rather than ``thinking.budget_tokens``. We
+        validate the effort with the same rules ``AnthropicConfig._apply_output_config``
+        uses (low/medium/high/xhigh/max + per-model gating) and stage the
+        validated dict on ``optional_params["output_config"]`` so it rides
+        along to ``additionalModelRequestFields`` on the Anthropic-on-Bedrock
+        wire path. Without this the silent strip in ``_prepare_request_params``
+        collapsed every adaptive tier to identical behavior.
+
         Args:
             model: The model identifier
             reasoning_effort: The reasoning effort value
@@ -448,14 +457,115 @@ class AmazonConverseConfig(BaseConfig):
             )
             optional_params.update(reasoning_config)
         else:
-            # Anthropic and other models: convert to thinking parameter
-            mapped_thinking = AnthropicConfig._map_reasoning_effort(
-                reasoning_effort=reasoning_effort, model=model
-            )
+            # Anthropic and other models: convert to thinking parameter.
+            # Wrap the ``ValueError`` ``_map_reasoning_effort`` raises on
+            # unmapped efforts (``disabled`` / ``invalid`` / ``""`` /
+            # ``xhigh``/``max`` on budget-mode Claude 4.5) into a clean 400
+            # ``BadRequestError`` instead of letting it surface as 500.
+            try:
+                mapped_thinking = AnthropicConfig._map_reasoning_effort(
+                    reasoning_effort=reasoning_effort, model=model
+                )
+            except ValueError as e:
+                raise litellm.exceptions.BadRequestError(
+                    message=str(e),
+                    model=model,
+                    llm_provider="bedrock_converse",
+                )
             if mapped_thinking is None:
                 optional_params.pop("thinking", None)
+                optional_params.pop("output_config", None)
             else:
                 optional_params["thinking"] = mapped_thinking
+                # Adaptive-thinking models (Claude 4.6 / 4.7) take the tier
+                # via output_config.effort. Mirror the mapping used by
+                # AnthropicConfig.map_openai_params and apply the same
+                # validation rules so unmapped/garbage efforts surface as a
+                # 400 instead of being silently flattened on the wire.
+                if AnthropicConfig._is_claude_4_6_model(
+                    model
+                ) or AnthropicConfig._is_claude_4_7_model(model):
+                    effort_map = {
+                        "low": "low",
+                        "minimal": "low",
+                        "medium": "medium",
+                        "high": "high",
+                        "xhigh": "xhigh",
+                        "max": "max",
+                    }
+                    mapped_effort = effort_map.get(reasoning_effort, reasoning_effort)
+                    self._validate_anthropic_adaptive_effort(
+                        model=model, effort=mapped_effort
+                    )
+                    optional_params["output_config"] = {"effort": mapped_effort}
+
+    @staticmethod
+    def _supports_effort_level_on_bedrock(model: str, level: str) -> bool:
+        """Look up ``supports_{level}_reasoning_effort`` for a Bedrock-routed
+        model id directly in ``litellm.model_cost`` so the bedrock provider
+        prefix is irrelevant to the lookup. ``AnthropicConfig._supports_effort_level``
+        hard-codes ``custom_llm_provider="anthropic"`` and returns False for
+        the same effort level on a Bedrock model id.
+        """
+        try:
+            base_model = BedrockModelInfo.get_base_model(model)
+            for key in (model, base_model, f"bedrock/{base_model}"):
+                if key and key in litellm.model_cost:
+                    if (
+                        litellm.model_cost[key].get(
+                            f"supports_{level}_reasoning_effort"
+                        )
+                        is True
+                    ):
+                        return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _validate_anthropic_adaptive_effort(model: str, effort: str) -> None:
+        """Validate ``output_config.effort`` for adaptive-thinking Claude 4.6/4.7
+        on Bedrock. Raises ``BadRequestError`` (clean 400) instead of letting
+        a downstream ``ValueError`` surface as 500.
+        """
+        valid_efforts = {"high", "medium", "low", "xhigh", "max"}
+        if effort not in valid_efforts:
+            raise litellm.exceptions.BadRequestError(
+                message=(
+                    f"Invalid reasoning_effort/output_config.effort value: "
+                    f"{effort!r}. Must be one of: 'low', 'medium', 'high', "
+                    f"'xhigh', 'max', or 'none'."
+                ),
+                model=model,
+                llm_provider="bedrock_converse",
+            )
+        if effort == "max" and not (
+            AnthropicConfig._is_opus_4_6_model(model)
+            or AnthropicConfig._is_opus_4_7_model(model)
+            or AmazonConverseConfig._supports_effort_level_on_bedrock(model, "max")
+        ):
+            raise litellm.exceptions.BadRequestError(
+                message=(
+                    f"effort='max' is not supported by this model. "
+                    f"Got model: {model}"
+                ),
+                model=model,
+                llm_provider="bedrock_converse",
+            )
+        if (
+            effort == "xhigh"
+            and not AmazonConverseConfig._supports_effort_level_on_bedrock(
+                model, "xhigh"
+            )
+        ):
+            raise litellm.exceptions.BadRequestError(
+                message=(
+                    f"effort='xhigh' is not supported by this model. "
+                    f"Got model: {model}"
+                ),
+                model=model,
+                llm_provider="bedrock_converse",
+            )
 
     @staticmethod
     def _clamp_thinking_budget_tokens(optional_params: dict) -> None:
@@ -1196,9 +1306,15 @@ class AmazonConverseConfig(BaseConfig):
             + supported_config_params
         )
         inference_params.pop("json_mode", None)  # used for handling json_schema
-        # Anthropic-only key. Bedrock expects `outputConfig` (camelCase) and
-        # will reject `output_config` if it leaks through pass-through routes.
-        inference_params.pop("output_config", None)
+
+        # Anthropic-only ``output_config`` (snake_case) is the adaptive-
+        # thinking effort payload (e.g. ``{"effort": "max"}``) for Claude
+        # 4.6/4.7. On Bedrock Converse it must ride along inside
+        # ``additionalModelRequestFields`` so the model actually sees the
+        # tier; stripping it (the prior behavior) silently flattened every
+        # adaptive tier to identical thinking. Only the Bedrock-native
+        # ``outputConfig`` (camelCase) goes at the top level.
+        anthropic_output_config = inference_params.pop("output_config", None)
 
         # Extract requestMetadata before processing other parameters
         request_metadata = inference_params.pop("requestMetadata", None)
@@ -1208,9 +1324,6 @@ class AmazonConverseConfig(BaseConfig):
         output_config: Optional[OutputConfigBlock] = inference_params.pop(
             "outputConfig", None
         )
-        inference_params.pop(
-            "output_config", None
-        )  # Bedrock Converse doesn't support it
 
         # keep supported params in 'inference_params', and set all model-specific params in 'additional_request_params'
         additional_request_params = {
@@ -1252,6 +1365,20 @@ class AmazonConverseConfig(BaseConfig):
         additional_request_params = filter_exceptions_from_params(
             additional_request_params
         )
+
+        # Re-attach the Anthropic ``output_config`` (e.g. adaptive thinking
+        # ``{"effort": "max"}``) onto additional_request_params for Anthropic
+        # Bedrock models so the wire request carries the requested tier. Other
+        # model families (Nova, GPT-OSS, ...) don't accept it; drop it for them.
+        if anthropic_output_config is not None and isinstance(
+            anthropic_output_config, dict
+        ):
+            base_model = BedrockModelInfo.get_base_model(model)
+            if base_model.startswith("anthropic"):
+                effort = anthropic_output_config.get("effort")
+                if effort is not None:
+                    self._validate_anthropic_adaptive_effort(model=model, effort=effort)
+                additional_request_params["output_config"] = anthropic_output_config
 
         return (
             inference_params,
