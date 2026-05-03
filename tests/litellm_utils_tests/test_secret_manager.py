@@ -199,13 +199,14 @@ def test_oidc_file(monkeypatch):
         assert secret_val == secret_value
 
 
-def test_oidc_env_path():
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(mode="w+") as temp_file:
+def test_oidc_env_path(monkeypatch):
+    # Create a temporary file inside a directory added to the allowlist.
+    with tempfile.TemporaryDirectory() as temp_dir:
+        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", temp_dir)
+        temp_file_path = os.path.join(temp_dir, "token.txt")
         secret_value = "secret-" + uuid4().hex
-        temp_file.write(secret_value)
-        temp_file.flush()
-        temp_file_path = temp_file.name
+        with open(temp_file_path, "w") as temp_file:
+            temp_file.write(secret_value)
 
         # Create a unique environment variable name
         env_var_name = "OIDC_TEST_PATH_" + uuid4().hex
@@ -221,6 +222,21 @@ def test_oidc_env_path():
         assert secret_val == secret_value
 
         del os.environ[env_var_name]
+
+
+def test_oidc_env_path_rejects_paths_outside_allowed_dirs(monkeypatch):
+    with tempfile.TemporaryDirectory() as allowed_dir:
+        monkeypatch.setenv("LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS", allowed_dir)
+        with tempfile.NamedTemporaryFile(mode="w+") as temp_file:
+            temp_file.write("do-not-read")
+            temp_file.flush()
+            env_var_name = "OIDC_TEST_PATH_" + uuid4().hex
+            monkeypatch.setenv(env_var_name, temp_file.name)
+
+            with pytest.raises(
+                ValueError, match="outside the allowed credential directories"
+            ):
+                get_secret(f"oidc/env_path/{env_var_name}")
 
 
 def test_google_secret_manager():
