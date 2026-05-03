@@ -731,25 +731,13 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         has_error = bool(status)
 
         if has_error:
-            # Return error response in OpenAI format
             return {
                 "id": f"batch_req_{uuid.uuid4()}",
                 "custom_id": custom_id,
-                "response": {
-                    "status_code": 400,
-                    "request_id": "",
-                    "body": {
-                        "error": {
-                            "message": status,
-                            "type": "vertex_ai_error",
-                            "code": "vertex_ai_error",
-                        }
-                    },
-                },
+                "response": None,
                 "error": {
-                    "message": status,
-                    "type": "vertex_ai_error",
                     "code": "vertex_ai_error",
+                    "message": status,
                 },
             }
 
@@ -789,25 +777,13 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             }
 
         except Exception as e:
-            # If transformation fails, return error
             return {
                 "id": f"batch_req_{uuid.uuid4()}",
                 "custom_id": custom_id,
-                "response": {
-                    "status_code": 500,
-                    "request_id": "",
-                    "body": {
-                        "error": {
-                            "message": f"Failed to transform response: {str(e)}",
-                            "type": "transformation_error",
-                            "code": "transformation_error",
-                        }
-                    },
-                },
+                "response": None,
                 "error": {
-                    "message": f"Failed to transform response: {str(e)}",
-                    "type": "transformation_error",
                     "code": "transformation_error",
+                    "message": f"Failed to transform response: {str(e)}",
                 },
             }
 
