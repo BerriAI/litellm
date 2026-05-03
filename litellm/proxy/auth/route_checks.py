@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request, status
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     CommonProxyErrors,
+    KeyManagementRoutes,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
@@ -13,6 +14,49 @@ from litellm.proxy._types import (
 )
 
 from .auth_checks_organization import _user_is_org_admin
+
+# Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
+# endpoint to a management router REQUIRES adding it here too — the surrounding
+# check falls through to "allow" if the route is not matched, which previously
+# let view-only admins call /team/block, /team/unblock, /key/bulk_update, etc.
+_PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
+    [
+        # user
+        "/user/new",
+        "/user/delete",
+        "/user/bulk_update",
+        # team
+        "/team/new",
+        "/team/update",
+        "/team/delete",
+        "/team/block",
+        "/team/unblock",
+        "/team/permissions_update",
+        "/team/permissions_bulk_update",
+        # model
+        "/model/new",
+        "/model/update",
+        "/model/delete",
+        # JWT key mapping
+        "/jwt/key/mapping/new",
+        "/jwt/key/mapping/update",
+        "/jwt/key/mapping/delete",
+        # key management — keep in sync with KeyManagementRoutes write entries
+        KeyManagementRoutes.KEY_GENERATE.value,
+        KeyManagementRoutes.KEY_UPDATE.value,
+        KeyManagementRoutes.KEY_DELETE.value,
+        KeyManagementRoutes.KEY_REGENERATE.value,
+        KeyManagementRoutes.KEY_GENERATE_SERVICE_ACCOUNT.value,
+        KeyManagementRoutes.KEY_BLOCK.value,
+        KeyManagementRoutes.KEY_UNBLOCK.value,
+        KeyManagementRoutes.KEY_BULK_UPDATE.value,
+    ]
+)
+
+# Suffixes for `/key/{key_id}/...` path-parameterized write routes that the
+# enum templates with `{key_id}`. The blocklist above can't match templated
+# paths directly because the request route carries the resolved key id.
+_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES = ("/regenerate", "/reset_spend")
 
 
 class RouteChecks:
@@ -664,6 +708,31 @@ class RouteChecks:
                 detail=f"user not allowed to access this OpenAI routes, role= {_user_role}",
             )
 
+        # Check if this is a write operation on management routes
+        if RouteChecks.check_route_access(
+            route=route, allowed_routes=LiteLLMRoutes.management_routes.value
+        ):
+            # For management routes, only allow read operations or specific allowed updates
+            if route == "/user/update":
+                # Check the Request params are valid for PROXY_ADMIN_VIEW_ONLY
+                if request_data is not None and isinstance(request_data, dict):
+                    _params_updated = request_data.keys()
+                    for param in _params_updated:
+                        if param not in ["user_email", "password"]:
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route} and updating invalid param: {param}. only user_email and password can be updated",
+                            )
+            elif route in _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES or (
+                route.startswith("/key/")
+                and route.endswith(_PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES)
+            ):
+                # Block write operations for PROXY_ADMIN_VIEW_ONLY
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"user not allowed to access this route, role= {_user_role}. Trying to access: {route}",
+                )
+            # Allow read operations on management routes (like /user/info, /team/info, /model/info)
         method = request.method.upper() if request is not None else "GET"
         is_safe_method = method in RouteChecks._SAFE_HTTP_METHODS
 
