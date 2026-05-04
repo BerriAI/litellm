@@ -133,6 +133,22 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
+    @staticmethod
+    def azure_deployment_image_generation_json_body(api_base: str, data: dict) -> dict:
+        """
+        JSON body for Azure OpenAI image generation HTTP calls.
+
+        For ``.../openai/deployments/{deployment}/images/generations``, routing uses
+        the deployment in the URL only; sending ``model`` in the body (especially the
+        deployment name) breaks some models (e.g. gpt-image-2). See LiteLLM #26316.
+
+        Provider-style URLs (e.g. ``/providers/...`` for FLUX on Azure AI) keep all
+        keys so non–OpenAI-deployment payloads still work.
+        """
+        if "images/generations" in api_base and "/openai/deployments/" in api_base:
+            return {k: v for k, v in data.items() if k != "model"}
+        return data
+
     def make_sync_azure_openai_chat_completion_request(
         self,
         azure_client: Union[AzureOpenAI, OpenAI],
@@ -966,9 +982,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
+        request_json = AzureChatCompletion.azure_deployment_image_generation_json_body(
+            api_base, data
+        )
         return await async_handler.post(
             url=api_base,
-            json=data,
+            json=request_json,
             headers=headers,
         )
 
@@ -1085,9 +1104,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
+        request_json = AzureChatCompletion.azure_deployment_image_generation_json_body(
+            api_base, data
+        )
         return sync_handler.post(
             url=api_base,
-            json=data,
+            json=request_json,
             headers=headers,
         )
 

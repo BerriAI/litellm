@@ -33,6 +33,26 @@ def test_azure_image_generation_config(received_model, expected_config):
     )
 
 
+def test_azure_deployment_image_generation_json_body():
+    """Deployment-scoped Azure image URL must not send ``model`` in JSON."""
+    api = (
+        "https://example.openai.azure.com/openai/deployments/my-dep/"
+        "images/generations?api-version=2025-04-01-preview"
+    )
+    data = {"model": "my-dep", "prompt": "x", "n": 1}
+    out = AzureChatCompletion.azure_deployment_image_generation_json_body(api, data)
+    assert "model" not in out
+    assert out == {"prompt": "x", "n": 1}
+
+
+def test_azure_providers_image_generation_json_body_keeps_model():
+    """Non-deployment routes (e.g. FLUX on Azure AI) keep the payload unchanged."""
+    api = "https://example.services.ai.azure.com/providers/blackforestlabs/v1/flux-2-pro?api-version=preview"
+    data = {"model": "flux.2-pro", "prompt": "x"}
+    out = AzureChatCompletion.azure_deployment_image_generation_json_body(api, data)
+    assert out == data
+
+
 def test_azure_image_generation_flattens_extra_body():
     """
     Test that Azure image generation correctly flattens extra_body parameters.
@@ -260,20 +280,17 @@ def test_azure_image_generation_drop_params_false_raises_error():
 
 def test_azure_image_generation_base_model_vs_deployment_name():
     """
-    Test that Azure image generation correctly uses base_model in request body
-    but deployment name in the URL.
+    Test that Azure image generation omits ``model`` from the JSON body for
+    deployment URLs while keeping the deployment in the path.
 
-    When base_model is specified in litellm_params, the request should:
-    1. Use base_model (e.g., "gpt-image-1.5") in the JSON request body
-    2. Use the deployment name (e.g., "gpt-image-15") in the URL path
-
-    This is important because Azure expects:
-    - URL: /openai/deployments/{deployment_name}/images/generations
-    - Body: {"model": "{base_model}", ...}
+    Azure OpenAI routes image generation by deployment in the URL; the REST body
+    must not include ``model`` (sending deployment or base model there can break
+    gpt-image-2; see LiteLLM #26316). ``base_model`` in litellm_params is still used
+    internally for logging / hidden params.
 
     Example config:
-      model: azure/gpt-image-15  # deployment name
-      base_model: gpt-image-1.5  # actual model name
+      model: azure/gpt-image-15  # deployment name (URL only)
+      base_model: gpt-image-1.5  # optional, for LiteLLM metadata
     """
     from unittest.mock import MagicMock
 
@@ -344,26 +361,27 @@ def test_azure_image_generation_base_model_vs_deployment_name():
             f"but got: {api_base_used}"
         )
 
-        # Verify the request body uses base_model (not deployment name)
+        # Verify the HTTP JSON body omits model (deployment is only in the URL)
         request_data = call_kwargs.get("data", {})
-        assert request_data.get("model") == base_model, (
-            f"Request body 'model' field should be base_model '{base_model}', "
-            f"but got: {request_data.get('model')}"
+        wire_json = AzureChatCompletion.azure_deployment_image_generation_json_body(
+            api_base_used, request_data
         )
+        assert (
+            "model" not in wire_json
+        ), f"Azure deployment image gen must not send 'model' in JSON body; got keys: {list(wire_json)}"
+        assert request_data.get("model") == base_model  # internal dict unchanged
 
-        # Verify other fields are correct
-        assert request_data.get("prompt") == prompt
-        assert request_data.get("n") == 1
-        assert request_data.get("size") == "1024x1024"
+        # Verify other fields are correct on the wire payload
+        assert wire_json.get("prompt") == prompt
+        assert wire_json.get("n") == 1
+        assert wire_json.get("size") == "1024x1024"
 
 
 @pytest.mark.asyncio
 async def test_azure_aimage_generation_base_model_vs_deployment_name():
     """
-    Test that Azure async image generation correctly uses base_model in request body
-    but deployment name in the URL.
-
-    This is the async version of test_azure_image_generation_base_model_vs_deployment_name.
+    Async variant of test_azure_image_generation_base_model_vs_deployment_name:
+    deployment in URL, no ``model`` in the JSON body sent to Azure.
     """
     from unittest.mock import MagicMock
 
@@ -433,9 +451,9 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
             f"but got: {api_base_used}"
         )
 
-        # Verify the request body uses base_model (not deployment name)
         request_data = call_kwargs.get("data", {})
-        assert request_data.get("model") == base_model, (
-            f"Request body 'model' field should be base_model '{base_model}', "
-            f"but got: {request_data.get('model')}"
+        wire_json = AzureChatCompletion.azure_deployment_image_generation_json_body(
+            api_base_used, request_data
         )
+        assert "model" not in wire_json
+        assert request_data.get("model") == base_model
