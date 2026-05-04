@@ -111,6 +111,254 @@ commands:
       - wait_for_service:
           url: tcp://localhost:6379
           timeout: "60"
+  start_cassette_proxy:
+    description: |
+      Start the e2e cassette proxy sidecar (mitmproxy + Redis-backed
+      cache) as a background subprocess on the CI runner. Works on both
+      ``docker:`` and ``machine:`` executors (no Docker daemon access
+      required — we just install mitmproxy via uv and run mitmdump).
+
+      After this command runs you'll have:
+        - mitmdump listening on 0.0.0.0:8080 of the runner
+        - the proxy CA at /tmp/cassette-proxy-ca.crt
+        - $CASSETTE_PROXY_URL      exported in $BASH_ENV
+          (host.docker.internal:8080 — the URL containers should use)
+        - $CASSETTE_PROXY_HOST_URL exported in $BASH_ENV
+          (localhost:8080 — the URL the runner shell should use)
+        - $CASSETTE_PROXY_CA       exported in $BASH_ENV
+
+      For containers under test, also pass ``HTTPS_PROXY``,
+      ``SSL_CERT_FILE``, etc. via ``docker run -e`` (see
+      tests/e2e_cassette_proxy/README.md). For in-process pytest jobs,
+      follow this command with ``enable_cassette_proxy_for_pytest``.
+    parameters:
+      listen_port:
+        type: string
+        default: "8080"
+    steps:
+      - run:
+          name: Install mitmproxy + addon dependencies
+          command: |
+            # uv was installed by install_uv earlier in the job.
+            export PATH="$HOME/.local/bin:$PATH"
+            uv tool install --with redis==5.2.0 --with msgpack==1.1.0 \
+              "mitmproxy==11.0.2"
+      - run:
+          name: Resolve Redis target for the cassette store
+          command: |
+            # Cassette must use a dedicated Redis. Sharing with the
+            # litellm proxy's Redis (REDIS_SSL_URL/REDIS_URL/REDIS_HOST)
+            # means whoever calls /cache/flushall on litellm wipes our
+            # cassette mid-run — we observed 4150 FLUSHALLs on the
+            # shared instance over 33 days, each one nuking 740+
+            # cassette entries and forcing every "hit" back to a
+            # billable upstream call. CASSETTE_REDIS_URL is configured
+            # as a CircleCI project secret pointing at a separate
+            # instance (currently Upstash) that no other workload
+            # touches.
+            if [ -n "${CASSETTE_REDIS_URL:-}" ]; then
+              REDIS_TARGET="$CASSETTE_REDIS_URL"
+            elif [ -n "${REDIS_SSL_URL:-}" ]; then
+              REDIS_TARGET="$REDIS_SSL_URL"
+            elif [ -n "${REDIS_URL:-}" ]; then
+              REDIS_TARGET="$REDIS_URL"
+            else
+              : "${REDIS_HOST:?REDIS_HOST or REDIS_(SSL_)URL must be set}"
+              : "${REDIS_PORT:?REDIS_PORT must be set}"
+              : "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"
+              REDIS_TARGET="rediss://default:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
+            fi
+            echo "export LITELLM_E2E_CASS_REDIS_URL=$REDIS_TARGET" >> "$BASH_ENV"
+
+            # Extract host portion of the cassette Redis URL so we can
+            # add it to NO_PROXY in enable_cassette_proxy_for_pytest.
+            # Tolerates rediss://user:pass@host:port and bare host:port.
+            CASSETTE_REDIS_HOST=$(printf '%s' "$REDIS_TARGET" \
+              | sed -E 's|^[a-z]+://||; s|^[^@]*@||; s|:[0-9]+/?$||; s|/.*$||')
+            echo "export LITELLM_E2E_CASS_REDIS_HOST=$CASSETTE_REDIS_HOST" >> "$BASH_ENV"
+      - run:
+          name: Launch cassette-proxy (mitmdump) in the background
+          background: true
+          command: |
+            export PATH="$HOME/.local/bin:$PATH"
+            export PYTHONPATH="$(pwd)"
+            mitmdump \
+              --listen-host 0.0.0.0 \
+              --listen-port << parameters.listen_port >> \
+              --set block_global=false \
+              --set ssl_insecure=true \
+              --set termlog_verbosity=info \
+              -s tests/e2e_cassette_proxy/addon.py \
+              2>&1 | tee /tmp/cassette-proxy.log
+      - wait_for_service:
+          url: tcp://localhost:<< parameters.listen_port >>
+          timeout: "60"
+      - run:
+          name: Fetch CA from cassette-proxy
+          command: |
+            mkdir -p /tmp
+            for i in 1 2 3 4 5; do
+              if curl --silent --show-error --max-time 30 \
+                   --proxy http://localhost:<< parameters.listen_port >> \
+                   -o /tmp/cassette-proxy-ca.crt http://mitm.it/cert/pem; then
+                break
+              fi
+              sleep 2
+            done
+            test -s /tmp/cassette-proxy-ca.crt
+            # Two URLs: containers reach the runner via host.docker.internal,
+            # the CircleCI step's own shell reaches it via localhost.
+            echo "export CASSETTE_PROXY_URL=http://host.docker.internal:<< parameters.listen_port >>" >> "$BASH_ENV"
+            echo "export CASSETTE_PROXY_HOST_URL=http://localhost:<< parameters.listen_port >>"       >> "$BASH_ENV"
+            echo "export CASSETTE_PROXY_CA=/tmp/cassette-proxy-ca.crt"                                >> "$BASH_ENV"
+  export_cassette_proxy_docker_args:
+    description: |
+      Export $CASSETTE_PROXY_DOCKER_ARGS — a string of ``-e ...`` and
+      ``-v ...`` flags ready to splice into a ``docker run`` command —
+      so opt-in for an in-Docker SUT job is exactly two lines:
+
+          - start_cassette_proxy
+          - export_cassette_proxy_docker_args
+
+      …followed by ``$CASSETTE_PROXY_DOCKER_ARGS \\`` somewhere inside
+      the SUT's ``docker run``.
+
+      Must be called *after* ``start_cassette_proxy``.
+    steps:
+      - run:
+          name: Compose docker-run flags for cassette-proxy
+          command: |
+            : "${CASSETTE_PROXY_URL:?run start_cassette_proxy first}"
+            : "${CASSETTE_PROXY_CA:?run start_cassette_proxy first}"
+            EXTRA_NO_PROXY=""
+            if [ -n "${REDIS_HOST:-}" ]; then
+              EXTRA_NO_PROXY=",${REDIS_HOST}"
+            fi
+            BASE_NO_PROXY="localhost,127.0.0.1,0.0.0.0,host.docker.internal,postgres-db,redis-cache,cassette-proxy${EXTRA_NO_PROXY}"
+            ARGS=$(printf '%s ' \
+              "-e HTTP_PROXY=$CASSETTE_PROXY_URL" \
+              "-e HTTPS_PROXY=$CASSETTE_PROXY_URL" \
+              "-e http_proxy=$CASSETTE_PROXY_URL" \
+              "-e https_proxy=$CASSETTE_PROXY_URL" \
+              "-e NO_PROXY=$BASE_NO_PROXY" \
+              "-e no_proxy=$BASE_NO_PROXY" \
+              "-e SSL_CERT_FILE=/etc/litellm-cassette-proxy-ca.crt" \
+              "-e REQUESTS_CA_BUNDLE=/etc/litellm-cassette-proxy-ca.crt" \
+              "-e CURL_CA_BUNDLE=/etc/litellm-cassette-proxy-ca.crt" \
+              "-e AWS_CA_BUNDLE=/etc/litellm-cassette-proxy-ca.crt" \
+              "-e NODE_EXTRA_CA_CERTS=/etc/litellm-cassette-proxy-ca.crt" \
+              "-e AIOHTTP_TRUST_ENV=true" \
+              "-v $CASSETTE_PROXY_CA:/etc/litellm-cassette-proxy-ca.crt:ro")
+            echo "export CASSETTE_PROXY_DOCKER_ARGS='$ARGS'" >> "$BASH_ENV"
+  enable_cassette_proxy_for_pytest:
+    description: |
+      Prepare the cassette-proxy environment for in-process pytest jobs (the
+      ``llm_translation_testing``, ``agent_testing``, ``logging_testing``,
+      ``audio_testing``, etc. family) so live ``litellm.completion(...)``
+      calls flow through the recording proxy.
+
+      Must be called *after* ``start_cassette_proxy`` (which populates
+      $CASSETTE_PROXY_HOST_URL and $CASSETTE_PROXY_CA in $BASH_ENV).
+
+      Does three things:
+
+      1. Patches certifi's bundled cacert in every venv on the runner so
+         libraries that read certifi directly (openai-python, httpx,
+         google-auth, langfuse, etc.) trust the proxy CA without any code
+         changes.
+      2. Appends the proxy CA to the system trust store (curl/git/wget).
+      3. Writes the proxy/CA env vars to ``/tmp/cassette-proxy-pytest.env``
+         and installs a ``cassette-pytest`` wrapper at
+         ``/usr/local/bin/cassette-pytest`` that sources that env and execs
+         its arguments. Pytest invocations should use this wrapper.
+
+      We deliberately do NOT export HTTP_PROXY / HTTPS_PROXY / SSL_CERT_FILE
+      etc. globally via $BASH_ENV. Doing so would route the CircleCI agent's
+      own outbound calls (``circleci tests run`` plugin auto-installer,
+      ``store_test_results`` upload, etc.) through mitmproxy, and the
+      CircleCI Go binary uses Go's built-in cert pool which ignores
+      SSL_CERT_FILE, producing
+      ``tls: failed to verify certificate: x509: certificate signed by
+      unknown authority``. Scoping the env to just the ``cassette-pytest``
+      wrapper keeps mitmproxy traffic confined to test processes.
+    steps:
+      - run:
+          name: Trust cassette-proxy CA + install cassette-pytest wrapper
+          command: |
+            : "${CASSETTE_PROXY_CA:?run start_cassette_proxy first}"
+            : "${CASSETTE_PROXY_HOST_URL:?run start_cassette_proxy first}"
+            # Append CA to certifi cacert.pem in every venv we can find so
+            # certifi-backed clients (openai-python, httpx) trust it.
+            # Note: certifi *appends* to its trust list; it does not
+            # *replace* it, so public CAs continue to work too.
+            for cacert in $(find / -name cacert.pem 2>/dev/null); do
+              if ! grep -q -F "$(head -n 2 "$CASSETTE_PROXY_CA")" "$cacert" 2>/dev/null; then
+                cat "$CASSETTE_PROXY_CA" >> "$cacert" || true
+              fi
+            done
+            # Append CA to the system trust store too (for curl/requests).
+            sudo cp "$CASSETTE_PROXY_CA" /usr/local/share/ca-certificates/litellm-cassette-proxy.crt 2>/dev/null \
+              || cp "$CASSETTE_PROXY_CA" /usr/local/share/ca-certificates/litellm-cassette-proxy.crt 2>/dev/null \
+              || true
+            sudo update-ca-certificates 2>/dev/null \
+              || update-ca-certificates 2>/dev/null \
+              || true
+            # Build NO_PROXY: loopback, container sidecars, and any non-HTTP
+            # TCP service we depend on (Postgres, Redis, Datadog APM, etc.)
+            # since mitmproxy only speaks HTTP/HTTPS.
+            EXTRA_NO_PROXY=""
+            if [ -n "${REDIS_HOST:-}" ]; then
+              EXTRA_NO_PROXY="${EXTRA_NO_PROXY},${REDIS_HOST}"
+            fi
+            # The cassette-store Redis (Upstash, separate from the
+            # litellm proxy's Redis) speaks RESP-over-TLS — must bypass
+            # mitmproxy or the redis client would try to negotiate
+            # HTTP and fail.
+            if [ -n "${LITELLM_E2E_CASS_REDIS_HOST:-}" ]; then
+              EXTRA_NO_PROXY="${EXTRA_NO_PROXY},${LITELLM_E2E_CASS_REDIS_HOST}"
+            fi
+            BASE_NO_PROXY="localhost,127.0.0.1,0.0.0.0,host.docker.internal,postgres-db,redis-cache,cassette-proxy${EXTRA_NO_PROXY}"
+
+            # Write the proxy env to a sourceable file. Pytest jobs source
+            # this via the cassette-pytest wrapper installed below; nothing
+            # else on the runner is affected. (Using printf instead of a
+            # heredoc to dodge YAML literal-block indentation surprises.)
+            {
+              printf 'export HTTP_PROXY=%s\n'           "$CASSETTE_PROXY_HOST_URL"
+              printf 'export HTTPS_PROXY=%s\n'          "$CASSETTE_PROXY_HOST_URL"
+              printf 'export http_proxy=%s\n'           "$CASSETTE_PROXY_HOST_URL"
+              printf 'export https_proxy=%s\n'          "$CASSETTE_PROXY_HOST_URL"
+              printf 'export NO_PROXY=%s\n'             "$BASE_NO_PROXY"
+              printf 'export no_proxy=%s\n'             "$BASE_NO_PROXY"
+              printf 'export SSL_CERT_FILE=%s\n'        "$CASSETTE_PROXY_CA"
+              printf 'export REQUESTS_CA_BUNDLE=%s\n'   "$CASSETTE_PROXY_CA"
+              printf 'export CURL_CA_BUNDLE=%s\n'       "$CASSETTE_PROXY_CA"
+              printf 'export AWS_CA_BUNDLE=%s\n'        "$CASSETTE_PROXY_CA"
+              printf 'export NODE_EXTRA_CA_CERTS=%s\n'  "$CASSETTE_PROXY_CA"
+              # litellm's aiohttp transport ignores HTTPS_PROXY unless this
+              # is explicitly set (see http_handler.py:951-952).
+              printf 'export AIOHTTP_TRUST_ENV=true\n'
+            } > /tmp/cassette-proxy-pytest.env
+
+            # Install the cassette-pytest wrapper. Build with printf so we
+            # don't have to fight YAML literal-block indentation (a #! line
+            # must start at column 0). The wrapper sources the env file and
+            # execs its arguments, scoping the proxy env to test
+            # subprocesses only.
+            {
+              printf '%s\n' '#!/usr/bin/env bash'
+              printf '%s\n' 'set -e'
+              printf '%s\n' 'if [ -f /tmp/cassette-proxy-pytest.env ]; then'
+              printf '%s\n' '  # shellcheck disable=SC1091'
+              printf '%s\n' '  . /tmp/cassette-proxy-pytest.env'
+              printf '%s\n' 'fi'
+              printf '%s\n' 'exec "$@"'
+            } > /tmp/cassette-pytest
+            chmod +x /tmp/cassette-pytest
+            sudo mv /tmp/cassette-pytest /usr/local/bin/cassette-pytest 2>/dev/null \
+              || mv /tmp/cassette-pytest /usr/local/bin/cassette-pytest
+            # Sanity-check the wrapper resolved on PATH.
+            command -v cassette-pytest
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -207,6 +455,8 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -226,7 +476,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs cassette-pytest uv run --no-sync python -m pytest \
                 -vv \
                 --cov=litellm \
                 --cov-report=xml \
@@ -272,6 +522,8 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -291,7 +543,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs cassette-pytest uv run --no-sync python -m pytest \
                 -vv \
                 --cov=litellm \
                 --cov-report=xml \
@@ -338,6 +590,8 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -350,7 +604,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "langfuse"
+            cassette-pytest uv run --no-sync python -m pytest -v tests/local_testing -x --junitxml=test-results/junit.xml --durations=5 -k "langfuse"
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -521,6 +775,8 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -535,7 +791,7 @@ jobs:
             for dir in "${IGNORE_DIRS[@]}"; do
               IGNORE_ARGS="$IGNORE_ARGS --ignore=$dir"
             done
-            uv run --no-sync python -m pytest -v tests/llm_translation $IGNORE_ARGS --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread --retries 2 --retry-delay 5 --max-worker-restart=5
+            cassette-pytest uv run --no-sync python -m pytest -v tests/llm_translation $IGNORE_ARGS --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread --retries 2 --retry-delay 5 --max-worker-restart=5
           no_output_timeout: 15m
 
       # Store test results
@@ -555,12 +811,14 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run realtime tests
           command: |
             # Add --timeout to kill hanging tests after 120s (2 min)
             # Add --durations=20 to show 20 slowest tests for debugging
-            uv run --no-sync python -m pytest -vv tests/llm_translation/realtime --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/llm_translation/realtime --cov=litellm --cov-report=xml -v --junitxml=test-results/junit.xml --durations=20 -n 4 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -590,10 +848,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/agent_tests --ignore=tests/agent_tests/local_only_agent_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -623,10 +883,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2 --timeout=120 --timeout_method=thread
+            LITELLM_LOG=WARNING cassette-pytest uv run --no-sync python -m pytest tests/guardrails_tests -vv --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=5 -n 2 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -657,10 +919,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 --retries 3 --retry-delay 5
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/unified_google_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 --retries 3 --retry-delay 5
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -699,10 +963,12 @@ jobs:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/llm_responses_api_testing -x --junitxml=test-results/junit.xml --durations=5 -n 8
+            cassette-pytest uv run --no-sync python -m pytest -v tests/llm_responses_api_testing -x --junitxml=test-results/junit.xml --durations=5 -n 8
           no_output_timeout: 15m
 
       # Store test results
@@ -722,10 +988,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/ocr_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/ocr_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -755,10 +1023,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/search_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -789,11 +1059,13 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - setup_litellm_enterprise_pip
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run enterprise tests
           command: |
             uv run --no-sync python -m prisma generate
-            uv run --no-sync python -m pytest -v tests/enterprise -x --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
+            cassette-pytest uv run --no-sync python -m pytest -v tests/enterprise -x --junitxml=test-results/junit-enterprise.xml --durations=10 -n 4
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -812,10 +1084,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/batches_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -845,10 +1119,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/litellm_utils_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5 -n 2
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -879,10 +1155,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/pass_through_unit_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5 -n 4
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -913,10 +1191,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/image_gen_tests -n 4 -x --junitxml=test-results/junit.xml --durations=5
+            cassette-pytest uv run --no-sync python -m pytest -v tests/image_gen_tests -n 4 -x --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       # Store test results
       - store_test_results:
@@ -936,10 +1216,12 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            LITELLM_LOG=WARNING uv run --no-sync python -m pytest tests/logging_callback_tests -vv --cov=litellm --cov-report=xml -n 4 --junitxml=test-results/junit.xml --durations=5 --timeout=120 --timeout_method=thread
+            LITELLM_LOG=WARNING cassette-pytest uv run --no-sync python -m pytest tests/logging_callback_tests -vv --cov=litellm --cov-report=xml -n 4 --junitxml=test-results/junit.xml --durations=5 --timeout=120 --timeout_method=thread
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -969,10 +1251,12 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       # Run pytest and generate JUnit XML report
+      - start_cassette_proxy
+      - enable_cassette_proxy_for_pytest
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/audio_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
+            cassette-pytest uv run --no-sync python -m pytest -vv tests/audio_tests --cov=litellm --cov-report=xml -x -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1279,6 +1563,8 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_cassette_proxy
+      - export_cassette_proxy_docker_args
       - run:
           name: Load Docker Database Image
           command: |
@@ -1314,6 +1600,7 @@ jobs:
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              $CASSETTE_PROXY_DOCKER_ARGS \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
@@ -1351,6 +1638,8 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_cassette_proxy
+      - export_cassette_proxy_docker_args
       - attach_workspace:
           at: ~/project
       - run:
@@ -1389,6 +1678,7 @@ jobs:
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              $CASSETTE_PROXY_DOCKER_ARGS \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/oai_misc_config.yaml:/app/config.yaml \
@@ -1409,6 +1699,11 @@ jobs:
             uv run --no-sync python -m pytest -s -vv tests/openai_endpoints_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
 
+      - run:
+          name: Cassette-proxy stats
+          command: grep -E '\[E2ECASS\]' /tmp/cassette-proxy.log 2>/dev/null | tail -200 || true
+          when: always
+
       # Store test results
       - store_test_results:
           path: test-results
@@ -1426,6 +1721,8 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_cassette_proxy
+      - export_cassette_proxy_docker_args
       - attach_workspace:
           at: ~/project
       - run:
@@ -1457,6 +1754,7 @@ jobs:
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e COHERE_API_KEY=$COHERE_API_KEY \
               -e GCS_FLUSH_INTERVAL="1" \
+              $CASSETTE_PROXY_DOCKER_ARGS \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
@@ -1539,6 +1837,8 @@ jobs:
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
       - start_redis
+      - start_cassette_proxy
+      - export_cassette_proxy_docker_args
       - attach_workspace:
           at: ~/project
       - run:
@@ -1570,6 +1870,7 @@ jobs:
               -e DD_SITE=$DD_SITE \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e PROXY_BATCH_WRITE_AT=2 \
+              $CASSETTE_PROXY_DOCKER_ARGS \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/spend_tracking_config.yaml:/app/config.yaml \
@@ -1697,6 +1998,8 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_cassette_proxy
+      - export_cassette_proxy_docker_args
       - attach_workspace:
           at: ~/project
       - run:
@@ -1715,6 +2018,7 @@ jobs:
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              $CASSETTE_PROXY_DOCKER_ARGS \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
@@ -1765,6 +2069,8 @@ jobs:
           command: |
             docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
       - start_postgres
+      - start_cassette_proxy
+      - export_cassette_proxy_docker_args
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -1788,6 +2094,7 @@ jobs:
               -e DD_API_KEY=$DD_API_KEY \
               -e DD_SITE=$DD_SITE \
               -e GCS_FLUSH_INTERVAL="1" \
+              $CASSETTE_PROXY_DOCKER_ARGS \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/docker/build_from_pip/litellm_config.yaml:/app/config.yaml \
@@ -1830,6 +2137,8 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_cassette_proxy
+      - export_cassette_proxy_docker_args
       - attach_workspace:
           at: ~/project
       - run:
@@ -1855,6 +2164,7 @@ jobs:
               -e DD_SITE=$DD_SITE \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES=true \
+              $CASSETTE_PROXY_DOCKER_ARGS \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
@@ -1961,6 +2271,8 @@ jobs:
           command: |
             uv sync --frozen --all-groups --all-extras --python 3.12
       - start_postgres
+      - start_cassette_proxy
+      - export_cassette_proxy_docker_args
       - attach_workspace:
           at: ~/project
       - run:
@@ -1980,6 +2292,7 @@ jobs:
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME="us-east-1" \
               -e LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS="True" \
+              $CASSETTE_PROXY_DOCKER_ARGS \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/tests/proxy_e2e_anthropic_messages_tests/test_config.yaml:/app/config.yaml \
