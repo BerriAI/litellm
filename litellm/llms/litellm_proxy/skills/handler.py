@@ -5,7 +5,6 @@ This module contains the actual database operations for skills CRUD.
 Used by the transformation layer and skills injection hook.
 """
 
-import os
 import time
 import uuid
 from collections import OrderedDict
@@ -20,8 +19,6 @@ from litellm.proxy.common_utils.resource_ownership import (
     is_proxy_admin,
     user_can_access_resource_owner,
 )
-
-ALLOW_UNOWNED_SKILL_ACCESS_ENV = "LITELLM_ALLOW_UNOWNED_SKILL_ACCESS"
 
 # Skills are looked up on every chat completion that has skills enabled
 # (`LiteLLMSkillsHandler.fetch_skill_from_db` in the injection hook). Cache
@@ -62,27 +59,14 @@ def _invalidate_skill_cache(skill_id: str) -> None:
     _SKILL_CACHE.pop(skill_id, None)
 
 
-def _allow_unowned_skill_access() -> bool:
-    return os.getenv(ALLOW_UNOWNED_SKILL_ACCESS_ENV, "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-
-
 def _user_can_access_skill_owner(
     owner: Optional[str],
     user_api_key_dict: Optional[UserAPIKeyAuth],
 ) -> bool:
-    if owner is None and user_api_key_dict is not None:
-        if is_proxy_admin(user_api_key_dict):
-            return True
-        if _allow_unowned_skill_access():
-            verbose_logger.warning(
-                "Allowing unowned skill access because %s is enabled",
-                ALLOW_UNOWNED_SKILL_ACCESS_ENV,
-            )
-            return True
+    # Pre-isolation skills with no ``created_by`` are admin-only — same
+    # rule as untracked containers. Owners need to either re-create via
+    # the now-tracked flow or have an admin assign ``created_by`` on the
+    # row.
     return user_can_access_resource_owner(owner, user_api_key_dict)
 
 
@@ -216,15 +200,7 @@ class LiteLLMSkillsHandler:
             owner_scopes = get_resource_owner_scopes(user_api_key_dict)
             if not owner_scopes:
                 return []
-            if _allow_unowned_skill_access():
-                find_many_kwargs["where"] = {
-                    "OR": [
-                        {"created_by": {"in": owner_scopes}},
-                        {"created_by": None},
-                    ]
-                }
-            else:
-                find_many_kwargs["where"] = {"created_by": {"in": owner_scopes}}
+            find_many_kwargs["where"] = {"created_by": {"in": owner_scopes}}
 
         skills = await store.list_skills(find_many_kwargs)
 

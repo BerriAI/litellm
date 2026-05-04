@@ -1,4 +1,3 @@
-import os
 import time
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -19,7 +18,6 @@ from litellm.proxy.container_endpoints.ownership_store import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
-ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV = "LITELLM_ALLOW_UNTRACKED_CONTAINER_ACCESS"
 MAX_IN_MEMORY_CONTAINER_OWNERS = 10000
 _IN_MEMORY_CONTAINER_OWNERS: "OrderedDict[str, str]" = OrderedDict()
 
@@ -62,14 +60,6 @@ def _write_container_owner_cache(model_object_id: str, owner: Optional[str]) -> 
 def _invalidate_container_owner_cache(model_object_id: str) -> None:
     """Drop a cache entry after a write so the next read sees the new owner."""
     _CONTAINER_OWNER_CACHE.pop(model_object_id, None)
-
-
-def _allow_untracked_container_access() -> bool:
-    return os.getenv(ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV, "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
 
 
 def _remember_container_owner(model_object_id: str, owner: str) -> None:
@@ -280,14 +270,11 @@ async def assert_user_can_access_container(
     if is_proxy_admin(user_api_key_dict):
         return original_container_id, resolved_provider
 
+    # Untracked containers (no ownership row) are admin-only. Pre-isolation
+    # rows that pre-date this enforcement need the admin to either re-create
+    # via the now-tracked flow or explicitly assign ``created_by`` on the
+    # ``litellm_managedobjecttable`` row.
     owner = await _get_container_owner(original_container_id, resolved_provider)
-    if owner is None and _allow_untracked_container_access():
-        verbose_proxy_logger.warning(
-            "Allowing untracked container access because %s is enabled",
-            ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV,
-        )
-        return original_container_id, resolved_provider
-
     if not user_can_access_resource_owner(owner, user_api_key_dict):
         raise HTTPException(status_code=403, detail="Forbidden")
 

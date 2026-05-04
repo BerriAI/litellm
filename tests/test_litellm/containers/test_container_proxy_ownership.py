@@ -12,10 +12,9 @@ from litellm.types.containers.main import ContainerListResponse, ContainerObject
 
 
 @pytest.fixture(autouse=True)
-def clear_in_memory_container_owners(monkeypatch):
+def clear_in_memory_container_owners():
     ownership._IN_MEMORY_CONTAINER_OWNERS.clear()
     ownership._CONTAINER_OWNER_CACHE.clear()
-    monkeypatch.delenv(ownership.ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV, raising=False)
     yield
     ownership._IN_MEMORY_CONTAINER_OWNERS.clear()
     ownership._CONTAINER_OWNER_CACHE.clear()
@@ -384,23 +383,26 @@ async def test_should_fail_closed_when_owner_lookup_fails_without_memory(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_should_allow_untracked_container_access_when_enabled(monkeypatch):
+async def test_untracked_container_is_admin_only(monkeypatch):
+    """Pre-isolation containers with no ownership row are admin-only.
+    Non-admin callers see them as 403, with no opt-out flag re-opening
+    the cross-tenant access primitive."""
+    from fastapi import HTTPException
+
     monkeypatch.setattr(
         ownership,
         "_get_prisma_client",
         AsyncMock(return_value=None),
     )
-    monkeypatch.setenv(ownership.ALLOW_UNTRACKED_CONTAINER_ACCESS_ENV, "true")
     auth = UserAPIKeyAuth(user_id="user-1")
 
-    original_id, provider = await ownership.assert_user_can_access_container(
-        container_id="cntr_untracked",
-        user_api_key_dict=auth,
-        custom_llm_provider="openai",
-    )
-
-    assert original_id == "cntr_untracked"
-    assert provider == "openai"
+    with pytest.raises(HTTPException) as exc:
+        await ownership.assert_user_can_access_container(
+            container_id="cntr_untracked",
+            user_api_key_dict=auth,
+            custom_llm_provider="openai",
+        )
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio

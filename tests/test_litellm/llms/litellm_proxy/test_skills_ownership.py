@@ -18,8 +18,7 @@ from litellm.skills import main as skills_main
 
 
 @pytest.fixture(autouse=True)
-def clear_skill_ownership_env(monkeypatch):
-    monkeypatch.delenv(skills_handler.ALLOW_UNOWNED_SKILL_ACCESS_ENV, raising=False)
+def clear_skill_cache():
     skills_handler._SKILL_CACHE.clear()
     yield
     skills_handler._SKILL_CACHE.clear()
@@ -358,7 +357,10 @@ async def test_should_hide_unowned_skill_by_default(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_should_allow_unowned_skill_when_enabled(monkeypatch):
+async def test_unowned_skill_is_admin_only(monkeypatch):
+    """Pre-isolation skills with no ``created_by`` are admin-only — non-admin
+    callers see the same "not found" they'd see for a missing row, with no
+    opt-out env var that re-opens the cross-tenant access primitive."""
     table = AsyncMock()
     table.find_unique.return_value = _skill("litellm_skill_unowned", None)
     prisma_client = type(
@@ -369,22 +371,22 @@ async def test_should_allow_unowned_skill_when_enabled(monkeypatch):
         "_get_prisma_client",
         AsyncMock(return_value=prisma_client),
     )
-    monkeypatch.setenv(skills_handler.ALLOW_UNOWNED_SKILL_ACCESS_ENV, "true")
 
     auth = UserAPIKeyAuth(user_id="user-1")
 
-    skill = await LiteLLMSkillsHandler.get_skill(
-        "litellm_skill_unowned",
-        user_api_key_dict=auth,
-    )
-
-    assert skill.skill_id == "litellm_skill_unowned"
+    with pytest.raises(ValueError, match="Skill not found"):
+        await LiteLLMSkillsHandler.get_skill(
+            "litellm_skill_unowned",
+            user_api_key_dict=auth,
+        )
 
 
 @pytest.mark.asyncio
-async def test_should_include_unowned_skills_in_list_when_enabled(monkeypatch):
+async def test_list_skills_excludes_unowned_for_non_admin(monkeypatch):
+    """Non-admin list queries scope to ``created_by IN owner_scopes``; rows
+    with ``created_by IS NULL`` are excluded — admin-only."""
     table = AsyncMock()
-    table.find_many.return_value = [_skill("litellm_skill_unowned", None)]
+    table.find_many.return_value = []
     prisma_client = type(
         "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
     )()
@@ -393,18 +395,13 @@ async def test_should_include_unowned_skills_in_list_when_enabled(monkeypatch):
         "_get_prisma_client",
         AsyncMock(return_value=prisma_client),
     )
-    monkeypatch.setenv(skills_handler.ALLOW_UNOWNED_SKILL_ACCESS_ENV, "true")
 
     auth = UserAPIKeyAuth(user_id="user-1")
+    await LiteLLMSkillsHandler.list_skills(user_api_key_dict=auth)
 
-    skills = await LiteLLMSkillsHandler.list_skills(user_api_key_dict=auth)
-
-    assert [skill.skill_id for skill in skills] == ["litellm_skill_unowned"]
     where = table.find_many.await_args.kwargs["where"]
-    assert where["OR"] == [
-        {"created_by": {"in": ["user-1", "user:user-1"]}},
-        {"created_by": None},
-    ]
+    # No OR fallback to ``created_by IS NULL`` — strict scope only.
+    assert where == {"created_by": {"in": ["user-1", "user:user-1"]}}
 
 
 @pytest.mark.asyncio
