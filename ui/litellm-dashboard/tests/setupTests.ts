@@ -12,14 +12,23 @@ const ensureTestLocalStorage = () => {
     return;
   }
 
-  const store = new Map<string, string>();
+  const storageStores = new WeakMap<Storage, Map<string, string>>();
   const storagePrototype = window.Storage.prototype;
+  const getStore = (storage: Storage) => {
+    let store = storageStores.get(storage);
+    if (store === undefined) {
+      store = new Map<string, string>();
+      storageStores.set(storage, store);
+    }
+    return store;
+  };
 
   Object.defineProperties(storagePrototype, {
     getItem: {
       configurable: true,
       writable: true,
-      value(key: string) {
+      value(this: Storage, key: string) {
+        const store = getStore(this);
         const normalizedKey = String(key);
         return store.has(normalizedKey) ? store.get(normalizedKey)! : null;
       },
@@ -27,38 +36,43 @@ const ensureTestLocalStorage = () => {
     setItem: {
       configurable: true,
       writable: true,
-      value(key: string, value: string) {
+      value(this: Storage, key: string, value: string) {
+        const store = getStore(this);
         store.set(String(key), String(value));
       },
     },
     removeItem: {
       configurable: true,
       writable: true,
-      value(key: string) {
+      value(this: Storage, key: string) {
+        const store = getStore(this);
         store.delete(String(key));
       },
     },
     clear: {
       configurable: true,
       writable: true,
-      value() {
+      value(this: Storage) {
+        const store = getStore(this);
         store.clear();
       },
     },
     key: {
       configurable: true,
       writable: true,
-      value(index: number) {
+      value(this: Storage, index: number) {
+        const store = getStore(this);
         return Array.from(store.keys())[index] ?? null;
       },
     },
   });
 
   const localStorage = Object.create(storagePrototype);
+  storageStores.set(localStorage, new Map<string, string>());
   Object.defineProperty(localStorage, "length", {
     configurable: true,
     get() {
-      return store.size;
+      return getStore(localStorage).size;
     },
   });
 
@@ -102,7 +116,15 @@ vi.mock("@tremor/react", async (importOriginal) => {
       return React.createElement(React.Fragment, null, children);
     },
     // Render as a plain checkbox so toggle interactions are testable without Tremor internals
-    Switch: ({ checked, onChange, className }: { checked?: boolean; onChange?: (v: boolean) => void; className?: string }) =>
+    Switch: ({
+      checked,
+      onChange,
+      className,
+    }: {
+      checked?: boolean;
+      onChange?: (v: boolean) => void;
+      className?: string;
+    }) =>
       React.createElement("input", {
         type: "checkbox",
         role: "switch",
