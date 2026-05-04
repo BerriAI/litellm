@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -1511,6 +1512,62 @@ class TestVertexBase:
             assert (
                 refresh_call_count == 1
             ), f"Expected 1 refresh call, got {refresh_call_count}"
+
+    @pytest.mark.asyncio
+    async def test_async_reauthentication_uses_async_single_flight(self):
+        """Concurrent async reauth should reload once without using the sync path."""
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+        stale_creds = MagicMock()
+        stale_creds.token = "expired-token"
+        stale_creds.token_state = TokenState.INVALID
+        stale_creds.project_id = "project-1"
+        stale_creds.quota_project_id = "project-1"
+
+        refreshed_creds = MagicMock()
+        refreshed_creds.token = "refreshed-token"
+        refreshed_creds.token_state = TokenState.FRESH
+        refreshed_creds.project_id = "project-1"
+        refreshed_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+        cache_key = (json.dumps(credentials), "project-1")
+        vertex_base._credentials_project_mapping[cache_key] = (
+            stale_creds,
+            "project-1",
+        )
+
+        load_call_count = 0
+
+        def load_auth_impl(*_args, **_kwargs):
+            nonlocal load_call_count
+            load_call_count += 1
+            return refreshed_creds, "project-1"
+
+        with (
+            patch.object(
+                vertex_base,
+                "refresh_auth",
+                side_effect=Exception("Reauthentication is needed"),
+            ),
+            patch.object(vertex_base, "load_auth", side_effect=load_auth_impl),
+            patch.object(vertex_base, "get_access_token") as mock_get_access_token,
+        ):
+            results = await asyncio.gather(
+                *[
+                    vertex_base._ensure_access_token_async(
+                        credentials=credentials,
+                        project_id="project-1",
+                        custom_llm_provider="vertex_ai",
+                    )
+                    for _ in range(10)
+                ]
+            )
+
+            assert results == [("refreshed-token", "project-1")] * 10
+            assert load_call_count == 1
+            mock_get_access_token.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_background_refresh_when_near_expiry(self):
