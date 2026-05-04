@@ -14,7 +14,7 @@ WORKDIR /app
 COPY --from=uvbin /uv /usr/local/bin/uv
 COPY --from=uvbin /uvx /usr/local/bin/uvx
 
-RUN apk add --no-cache gcc python3-dev musl-dev nodejs npm libsndfile
+RUN apk add --no-cache bash gcc python3-dev musl-dev nodejs npm libsndfile
 
 ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
