@@ -285,10 +285,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @staticmethod
     def _model_supports_effort_param(model: str) -> bool:
         """Whether the model accepts ``output_config.effort`` at all."""
-        for level in ("low", "minimal", "medium", "high", "xhigh", "max"):
-            if AnthropicConfig._supports_effort_level(model, level):
-                return True
-        return False
+        return any(AnthropicConfig._supports_effort_level(model, level)
+                   for level in ("low", "minimal", "medium", "high", "xhigh", "max"))
 
     def get_supported_openai_params(self, model: str):
         params = [
