@@ -2904,9 +2904,9 @@ def test_gemini_embedding_2_ga_in_cost_map():
         assert info.get("input_cost_per_audio_per_second") == 0.00016
         assert info.get("input_cost_per_video_per_second") == 0.00079
         if provider in ("vertex_ai-embedding-models", "vertex_ai"):
-            assert info.get("uses_embed_content") is True, (
-                f"{key} must have uses_embed_content=true for correct Vertex AI routing"
-            )
+            assert (
+                info.get("uses_embed_content") is True
+            ), f"{key} must have uses_embed_content=true for correct Vertex AI routing"
 
 
 def test_gemini_lyria_3_preview_models_in_cost_map():
@@ -3536,6 +3536,177 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
         messages
     ) and not any_assistant_message_has_thinking_blocks(messages)
     assert should_drop_thinking is False
+
+
+def test_last_assistant_message_has_no_thinking_blocks_text_only():
+    """
+    Test that the function only fires when thinking was previously active.
+
+    A fresh conversation (no prior thinking blocks) must NOT cause thinking to be
+    dropped — the user may simply be enabling thinking for the first time.
+    """
+    from litellm.utils import (
+        any_assistant_message_has_thinking_blocks,
+        last_assistant_message_has_no_thinking_blocks,
+        last_assistant_with_tool_calls_has_no_thinking_blocks,
+    )
+
+    # Scenario 1: fresh conversation, thinking never used — must NOT drop
+    messages_no_prior_thinking = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},
+        {"role": "user", "content": "What's 2+2?"},
+        {"role": "assistant", "content": "4"},
+        {"role": "user", "content": "Thanks"},
+    ]
+    assert (
+        last_assistant_with_tool_calls_has_no_thinking_blocks(
+            messages_no_prior_thinking
+        )
+        is False
+    )
+    assert (
+        any_assistant_message_has_thinking_blocks(messages_no_prior_thinking) is False
+    )
+    # Must return False — no evidence thinking was ever enabled
+    assert (
+        last_assistant_message_has_no_thinking_blocks(messages_no_prior_thinking)
+        is False
+    )
+
+    # Scenario 2: thinking was used before, but last message has no blocks — MUST drop
+    messages_with_prior_thinking = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Let me think..."},
+                {"type": "text", "text": "Hi!"},
+            ],
+        },
+        {"role": "user", "content": "What's 2+2?"},
+        {"role": "assistant", "content": "4"},  # blocks stripped by client
+        {"role": "user", "content": "Thanks"},
+    ]
+    assert (
+        any_assistant_message_has_thinking_blocks(messages_with_prior_thinking) is True
+    )
+    assert (
+        last_assistant_message_has_no_thinking_blocks(messages_with_prior_thinking)
+        is True
+    )
+
+
+def test_last_assistant_message_has_no_thinking_blocks_with_content_list():
+    """
+    Test detection when last assistant has content list but no thinking blocks,
+    only when prior thinking blocks exist in the conversation.
+    """
+    from litellm.utils import last_assistant_message_has_no_thinking_blocks
+
+    # No prior thinking — should NOT drop
+    messages_no_prior = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hi there!"}],
+        },
+    ]
+    assert last_assistant_message_has_no_thinking_blocks(messages_no_prior) is False
+
+    # Prior thinking exists, last message has none — SHOULD drop
+    messages_with_prior = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "..."},
+                {"type": "text", "text": "First answer"},
+            ],
+        },
+        {"role": "user", "content": "Follow up"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Second answer"}],  # blocks stripped
+        },
+    ]
+    assert last_assistant_message_has_no_thinking_blocks(messages_with_prior) is True
+
+
+def test_last_assistant_message_has_thinking_in_content():
+    """
+    Test that function returns False when thinking blocks are in content array
+    (Anthropic format) rather than in the thinking_blocks field.
+    """
+    from litellm.utils import (
+        any_assistant_message_has_thinking_blocks,
+        last_assistant_message_has_no_thinking_blocks,
+    )
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "Let me think..."},
+                {"type": "text", "text": "The answer is 42."},
+            ],
+        },
+    ]
+
+    # Content has thinking blocks, so should return False
+    assert last_assistant_message_has_no_thinking_blocks(messages) is False
+
+    # any_assistant check should also detect thinking blocks in content
+    assert any_assistant_message_has_thinking_blocks(messages) is True
+
+
+def test_last_assistant_message_no_content():
+    """
+    Test that function returns False when last assistant has no content.
+    """
+    from litellm.utils import last_assistant_message_has_no_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": None},
+    ]
+
+    assert last_assistant_message_has_no_thinking_blocks(messages) is False
+
+
+def test_no_assistant_messages():
+    """
+    Test that function returns False when there are no assistant messages.
+    """
+    from litellm.utils import last_assistant_message_has_no_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+    ]
+
+    assert last_assistant_message_has_no_thinking_blocks(messages) is False
+
+
+def test_thinking_blocks_field_detected_by_any_check():
+    """
+    Test that any_assistant_message_has_thinking_blocks detects thinking blocks
+    in both the thinking_blocks field and in the content array.
+    """
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    # Thinking in content array (Anthropic format)
+    messages_content = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "redacted_thinking", "data": "xxx"},
+                {"type": "text", "text": "answer"},
+            ],
+        },
+    ]
+    assert any_assistant_message_has_thinking_blocks(messages_content) is True
 
 
 class TestAdditionalDropParamsForNonOpenAIProviders:
