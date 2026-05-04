@@ -121,7 +121,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if self.key:
             self._headers["Authorization"] = f"Bearer {self.key}"
 
-        asyncio.create_task(self.periodic_flush())
+        try:
+            asyncio.create_task(self.periodic_flush())
+        except RuntimeError:
+            verbose_logger.debug(
+                "Rubrik: no running event loop at init time; "
+                "periodic_flush will not run automatically."
+            )
 
     async def aclose(self):
         """Close the dedicated tool blocking HTTP client."""
