@@ -95,6 +95,8 @@ _FINISH_REASON_MAP: dict[str, OpenAIChatCompletionFinishReason] = {
     "sensitive": "content_filter",
     # Bedrock
     "guardrail_intervened": "content_filter",
+    # vLLM (server-side RepetitionDetectionParams cuts off contiguous loops)
+    "repetition": "stop",
     # OpenAI passthrough
     "stop": "stop",
     "length": "length",
