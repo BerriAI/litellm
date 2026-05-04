@@ -12,7 +12,6 @@ Pattern Overview:
 4. Apply guardrail responses back to the original structure
 """
 
-import copy
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
@@ -72,18 +71,26 @@ class AnthropicMessagesHandler(BaseTranslation):
     def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
         """Translate Anthropic request to OpenAI chat completion format.
 
-        Uses ``copy.deepcopy`` rather than ``data.copy()``: the adapter's tool
-        translation can mutate nested dicts (tools[i]["input_schema"]), so a
-        shallow copy would corrupt the caller's payload before the real LLM
-        call runs. This path is invoked by every pre-/post-call guardrail hook.
+        ``data.copy()`` is intentionally shallow. ``copy.deepcopy(data)`` was
+        tried first but crashed every request in production with
+        ``TypeError: no default __reduce__ due to non-trivial __cinit__`` at
+        ``uvloop.loop.Loop.__reduce_cython__`` — the proxy pipeline injects
+        non-copyable objects (uvloop event loop handles, aiohttp
+        ClientSession) into ``data`` before this hook runs, so deepcopy
+        cannot traverse it.
+
+        The nested-mutation concern that motivated deepcopy (adapter
+        overwriting ``tools[i]["input_schema"]``) is resolved upstream in
+        the adapter itself: ``translate_anthropic_tools_to_openai`` now
+        copies ``input_schema`` into ``function_chunk["parameters"]`` via
+        ``dict(...)`` and excludes the tool-level ``"type"`` key from the
+        fallback loop. With the adapter fixed, a shallow copy is enough.
         """
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
         ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            anthropic_message_request=cast(
-                AnthropicMessagesRequest, copy.deepcopy(data)
-            )
+            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
         )
         return chat_completion_compatible_request
 

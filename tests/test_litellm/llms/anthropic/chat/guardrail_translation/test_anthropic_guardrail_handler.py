@@ -346,6 +346,42 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert original_schema["type"] == "object"
         assert original_schema["properties"] == {"command": {"type": "string"}}
 
+    def test_translate_to_openai_tolerates_uncopyable_objects_in_data(self):
+        """Regression: ``_translate_to_openai`` must not deep-copy the request.
+
+        ``data`` carries proxy pipeline objects injected by LiteLLM (uvloop
+        event loops, aiohttp ClientSessions, custom logger instances) that
+        implement ``__cinit__`` and therefore cannot be pickled/deepcopy-ed.
+        A previous iteration of this handler used ``copy.deepcopy(data)`` and
+        broke every request in production with::
+
+            TypeError: no default __reduce__ due to non-trivial __cinit__
+            at uvloop.loop.Loop.__reduce_cython__
+
+        This test fakes an uncopyable payload entry and asserts the handler
+        doesn't try to deepcopy the top-level dict.
+        """
+
+        class Uncopyable:
+            """Raises on deepcopy, similar to uvloop/aiohttp C extensions."""
+
+            def __deepcopy__(self, memo):
+                raise TypeError(
+                    "no default __reduce__ due to non-trivial __cinit__"
+                )
+
+        handler = AnthropicMessagesHandler()
+        data = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hello"}],
+            "proxy_server_request": Uncopyable(),  # would kill deepcopy
+        }
+
+        # Must not raise. If someone reintroduces copy.deepcopy(data), this
+        # will fail with the same TypeError seen in production.
+        result = handler._translate_to_openai(data)
+        assert "messages" in result
+
 
 if __name__ == "__main__":
     # Run the tests
