@@ -12,7 +12,7 @@ import ast
 import asyncio
 import json
 import os
-from typing import Any, Optional, cast
+from typing import Any, Dict, Optional, cast
 
 import litellm
 from litellm._logging import print_verbose
@@ -135,6 +135,7 @@ class QdrantSemanticCache(BaseCache):
             )
             self._ensure_cache_key_payload_index()
         else:
+            quantization_params: Dict[str, Any]
             if quantization_config is None or quantization_config == "binary":
                 quantization_params = {
                     "binary": {
