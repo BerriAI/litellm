@@ -1,7 +1,15 @@
 """
-HTTP-level integration tests for MCP discoverable OAuth (authorize → callback → token).
+HTTP-level integration tests for MCP OAuth.
 
-Uses ASGITransport + httpx and mocks the upstream IdP with respx.
+Covers two layers:
+1. Management broker endpoints (mcp_management_endpoints.py) — the routes
+   actually modified by the auth-gate regression fix. These tests use
+   ASGITransport to hit the management router directly and assert that
+   /server/oauth/{id}/authorize and /server/oauth/{id}/token do NOT
+   require an API key (regression: they previously returned 401 for browsers).
+
+2. Discoverable OAuth router (discoverable_endpoints.py) — end-to-end
+   authorize → callback → token flow mocked with respx.
 """
 
 from __future__ import annotations
@@ -275,3 +283,75 @@ async def test_token_exchange_applies_token_validation_rules(
         assert err["detail"]["error"] == "token_validation_failed"
     finally:
         srv.token_validation = prev_validation
+
+
+# ---------------------------------------------------------------------------
+# Regression tests: management broker endpoints must not require an API key
+#
+# These tests hit the exact routes modified in mcp_management_endpoints.py
+# (/server/oauth/{server_id}/authorize and /server/oauth/{server_id}/token).
+# A 401 means user_api_key_auth was re-added to the route; any other status
+# (404 = server not found is expected here) means the auth gate is absent.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def management_asgi_app(monkeypatch) -> FastAPI:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "integration-test-salt-key-32chars")
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import router
+
+    app = FastAPI()
+    app.include_router(router)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_management_broker_authorize_requires_no_api_key(
+    management_asgi_app: FastAPI,
+) -> None:
+    transport = ASGITransport(app=management_asgi_app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        follow_redirects=False,
+    ) as client:
+        r = await client.get(
+            "/server/oauth/nonexistent-server-id/authorize",
+            params={
+                "redirect_uri": "http://127.0.0.1:8080/callback",
+                "state": "regression-test-state",
+                "response_type": "code",
+                "code_challenge": "abc123",
+                "code_challenge_method": "S256",
+                "client_id": "test-client",
+            },
+        )
+    assert r.status_code != 401, (
+        "Got 401 — user_api_key_auth was re-added to /authorize. " f"Response: {r.text}"
+    )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_management_broker_token_requires_no_api_key(
+    management_asgi_app: FastAPI,
+) -> None:
+    transport = ASGITransport(app=management_asgi_app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        follow_redirects=False,
+    ) as client:
+        r = await client.post(
+            "/server/oauth/nonexistent-server-id/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": "test-code",
+                "redirect_uri": "http://127.0.0.1:8080/callback",
+                "client_id": "test-client",
+            },
+        )
+    assert r.status_code != 401, (
+        "Got 401 — user_api_key_auth was re-added to /token. " f"Response: {r.text}"
+    )
+    assert r.status_code == 404
