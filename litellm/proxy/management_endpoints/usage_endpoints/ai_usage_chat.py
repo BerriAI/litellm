@@ -438,9 +438,8 @@ def _resolve_usage_chat_model_alias(model: str) -> str:
     try:
         from litellm.proxy.proxy_server import llm_router
 
-        if (
-            llm_router is not None
-            and resolved_model in getattr(llm_router, "model_group_alias", {})
+        if llm_router is not None and resolved_model in getattr(
+            llm_router, "model_group_alias", {}
         ):
             return llm_router._get_model_from_alias(resolved_model)
     except Exception:
