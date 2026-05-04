@@ -575,6 +575,12 @@ class AmazonAnthropicClaudeMessagesConfig(
                 dropped_user_betas,
             )
 
+        # Opus 4.7+ has native 1M context on Bedrock — strip the legacy beta
+        if any(
+            p in model.lower() for p in ("opus-4.7", "opus_4.7", "opus-4-7", "opus_4_7")
+        ):
+            filtered_betas = [b for b in filtered_betas if b != "context-1m-2025-08-07"]
+
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
 

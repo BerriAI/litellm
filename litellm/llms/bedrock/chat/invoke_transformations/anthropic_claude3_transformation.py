@@ -245,7 +245,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             beta_headers=list(beta_set - user_beta_set),
             provider="bedrock",
         )
-        return sorted(user_beta_set.union(set(auto_beta_list)))
+        filtered_user_betas = filter_and_transform_beta_headers(
+            beta_headers=list(user_beta_set),
+            provider="bedrock",
+        )
+        return sorted(set(filtered_user_betas).union(set(auto_beta_list)))
 
     def _convert_document_url_sources_to_base64(self, anthropic_request: dict) -> None:
         """

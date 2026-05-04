@@ -85,7 +85,6 @@ BEDROCK_COMPUTER_USE_TOOLS = [
 ]
 
 
-
 class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
@@ -1380,7 +1379,7 @@ class AmazonConverseConfig(BaseConfig):
         if anthropic_beta_list and base_model.startswith("anthropic"):
             filtered_betas = filter_and_transform_beta_headers(
                 beta_headers=anthropic_beta_list,
-                provider="bedrock",
+                provider="bedrock_converse",
             )
             if filtered_betas:
                 additional_request_params["anthropic_beta"] = filtered_betas
