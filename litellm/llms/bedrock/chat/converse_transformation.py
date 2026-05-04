@@ -442,13 +442,9 @@ class AmazonConverseConfig(BaseConfig):
                         reasoning_effort
                     )
                     if mapped_effort is None:
-                        raise litellm.exceptions.BadRequestError(
-                            message=(
-                                f"Invalid reasoning_effort: {reasoning_effort!r}. "
-                                f"Must be one of: 'minimal', 'low', 'medium', "
-                                f"'high', 'xhigh', 'max', 'none'"
-                            ),
+                        AnthropicConfig._raise_invalid_reasoning_effort(
                             model=model,
+                            value=reasoning_effort,
                             llm_provider="bedrock_converse",
                         )
                     self._validate_anthropic_adaptive_effort(

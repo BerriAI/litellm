@@ -6,6 +6,7 @@ from typing import (
     Any,
     Dict,
     List,
+    NoReturn,
     Optional,
     Tuple,
     Union,
@@ -291,8 +292,35 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     @staticmethod
     def _model_supports_effort_param(model: str) -> bool:
         """Whether the model accepts ``output_config.effort`` at all."""
-        return any(AnthropicConfig._supports_effort_level(model, level)
-                   for level in ("low", "minimal", "medium", "high", "xhigh", "max"))
+        return any(
+            AnthropicConfig._supports_effort_level(model, level)
+            for level in ("low", "minimal", "medium", "high", "xhigh", "max")
+        )
+
+    @staticmethod
+    def _raise_invalid_reasoning_effort(
+        model: str, value: Any, llm_provider: str
+    ) -> NoReturn:
+        """Raise a ``BadRequestError`` for an unrecognised ``reasoning_effort``.
+
+        Args:
+            model: The model id the request was routed to (surfaced in the error).
+            value: The offending ``reasoning_effort`` value supplied by the caller.
+            llm_provider: Provider tag for the raised exception (``"anthropic"``,
+                ``"bedrock_converse"``, ``"databricks"``, ...).
+
+        Raises:
+            litellm.exceptions.BadRequestError: Always.
+        """
+        raise litellm.exceptions.BadRequestError(
+            message=(
+                f"Invalid reasoning_effort: {value!r}. "
+                f"Must be one of: 'minimal', 'low', 'medium', "
+                f"'high', 'xhigh', 'max', 'none'"
+            ),
+            model=model,
+            llm_provider=llm_provider,
+        )
 
     def get_supported_openai_params(self, model: str):
         params = [
@@ -1203,13 +1231,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             value
                         )
                         if mapped_effort is None:
-                            raise litellm.exceptions.BadRequestError(
-                                message=(
-                                    f"Invalid reasoning_effort: {value!r}. "
-                                    f"Must be one of: 'minimal', 'low', "
-                                    f"'medium', 'high', 'xhigh', 'max', 'none'"
-                                ),
+                            AnthropicConfig._raise_invalid_reasoning_effort(
                                 model=model,
+                                value=value,
                                 llm_provider=self.custom_llm_provider or "anthropic",
                             )
                         optional_params["output_config"] = {"effort": mapped_effort}

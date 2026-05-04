@@ -352,13 +352,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                             reasoning_effort_value
                         )
                     if mapped_effort is None:
-                        raise litellm.exceptions.BadRequestError(
-                            message=(
-                                f"Invalid reasoning_effort: {reasoning_effort_value!r}. "
-                                f"Must be one of: 'minimal', 'low', "
-                                f"'medium', 'high', 'xhigh', 'max', 'none'"
-                            ),
+                        AnthropicConfig._raise_invalid_reasoning_effort(
                             model=model,
+                            value=reasoning_effort_value,
                             llm_provider="databricks",
                         )
                     optional_params["output_config"] = {"effort": mapped_effort}
