@@ -1493,6 +1493,7 @@ def test_observability_ban_covers_canonical_supported_callback_params():
     safe is an explicit decision recorded in
     ``_SAFE_CLIENT_CALLBACK_PARAMS``."""
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        _request_blocked_callback_params,
         _supported_callback_params,
     )
     from litellm.proxy.auth.auth_utils import (
@@ -1507,4 +1508,9 @@ def test_observability_ban_covers_canonical_supported_callback_params():
             f"safe-listed. Add it to _SAFE_CLIENT_CALLBACK_PARAMS if it is an "
             f"informational per-request field; otherwise the derivation will "
             f"ban it automatically."
+        )
+    for param in _request_blocked_callback_params:
+        assert param in banned, (
+            f"{param} is in _request_blocked_callback_params but is not banned "
+            "at the proxy request-body boundary."
         )
