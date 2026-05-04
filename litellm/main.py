@@ -1164,6 +1164,20 @@ def completion(  # type: ignore # noqa: PLR0915
         raise ValueError("model param not passed in.")
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
+    tools = validate_and_fix_openai_tools(tools=tools)
+    # validate tool_choice
+    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    # validate optional params
+    stop = validate_openai_optional_params(stop=stop)
+    # normalize camelCase thinking keys (e.g. budgetTokens -> budget_tokens)
+    thinking = validate_and_fix_thinking_param(thinking=thinking)
+
+    ######### unpacking kwargs #####################
+    args = locals()
+
+    # OpenAI tool-name sanitization — must run AFTER args = locals() so that the
+    # intermediate provider-detection variables are never captured by locals() and
+    # never forwarded as extra keys to the upstream API (e.g. Bedrock).
     begin_openai_tool_name_mapping_scope()
     try:
         _, _litellm_provider_for_tools, _, _ = get_llm_provider(
@@ -1178,7 +1192,7 @@ def completion(  # type: ignore # noqa: PLR0915
         )
     except Exception:
         _sanitize_openai_fn_tool_names = False
-    tools = validate_and_fix_openai_tools(
+    args["tools"] = tools = validate_and_fix_openai_tools(
         tools=tools,
         sanitize_openai_function_tool_names=_sanitize_openai_fn_tool_names,
     )
@@ -1195,19 +1209,10 @@ def completion(  # type: ignore # noqa: PLR0915
 
             _sanitized_tc_name = _get_sanitized(_fn["name"])
             if _sanitized_tc_name != _fn["name"]:
-                tool_choice = {
+                args["tool_choice"] = tool_choice = {
                     **tool_choice,
                     "function": {**_fn, "name": _sanitized_tc_name},
                 }
-    # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
-    # validate optional params
-    stop = validate_openai_optional_params(stop=stop)
-    # normalize camelCase thinking keys (e.g. budgetTokens -> budget_tokens)
-    thinking = validate_and_fix_thinking_param(thinking=thinking)
-
-    ######### unpacking kwargs #####################
-    args = locals()
 
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
