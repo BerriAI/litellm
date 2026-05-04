@@ -1449,7 +1449,7 @@ if MCP_AVAILABLE:
 
     async def _get_cached_temporary_mcp_server_or_404(
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
         request: Optional[Request] = None,
     ) -> MCPServer:
         server = await get_cached_temporary_mcp_server(server_id)
@@ -1475,8 +1475,11 @@ if MCP_AVAILABLE:
         # callers are unrestricted; non-admins must have the server in their
         # allowed-servers set. Temporary cached servers come from the
         # admin-only `/server/oauth/session` setup flow and are not exposed
-        # to non-admins.
-        if not _user_has_admin_view(user_api_key_dict):
+        # to non-admins. Unauthenticated OAuth browser flows omit the key and
+        # skip this gate (same as pre-broker-auth behavior on authorize/token).
+        if user_api_key_dict is not None and not _user_has_admin_view(
+            user_api_key_dict
+        ):
             if resolved_from_temp_cache:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -1497,12 +1500,10 @@ if MCP_AVAILABLE:
     @router.get(
         "/server/oauth/{server_id}/authorize",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
     )
     async def mcp_authorize(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         client_id: Optional[str] = None,
         redirect_uri: str = Query(...),
         state: str = "",
@@ -1512,7 +1513,7 @@ if MCP_AVAILABLE:
         scope: Optional[str] = None,
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, user_api_key_dict, request=request
+            server_id, request=request
         )
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
@@ -1542,12 +1543,10 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/token",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
     )
     async def mcp_token(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         grant_type: str = Form(...),
         code: Optional[str] = Form(None),
         redirect_uri: Optional[str] = Form(None),
@@ -1558,7 +1557,7 @@ if MCP_AVAILABLE:
         scope: Optional[str] = Form(None),
     ):
         mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, user_api_key_dict, request=request
+            server_id, request=request
         )
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
