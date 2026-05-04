@@ -11,11 +11,8 @@ keeps the parent module's import surface narrow.
 """
 
 # Keys inside ``output_config`` that Vertex AI Claude does not accept.
-# Vertex now accepts ``output_config.effort`` for the adaptive-thinking
-# Claude 4.6 / 4.7 models on direct ``:rawPredict`` (verified end-to-end
-# against ``us-east5`` for ``opus-4-6`` and ``global`` for ``opus-4-7``).
-# Keep this set narrow and only add a key here once a 400 "Extra inputs are
-# not permitted" is reproducible against the live Vertex endpoint.
+# Add an entry only when a 400 "Extra inputs are not permitted" is
+# reproducible against the live Vertex endpoint.
 VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS: frozenset = frozenset()
 
 

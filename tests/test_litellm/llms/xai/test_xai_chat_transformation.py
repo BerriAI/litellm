@@ -14,10 +14,7 @@ from litellm.types.utils import (
 
 
 class TestXAIReasoningTokenFolding:
-    """xAI breaks the OpenAI invariant total = prompt + completion by accounting
-    reasoning_tokens separately. ``_fold_reasoning_tokens_into_completion``
-    re-aligns Usage so downstream consumers see the OpenAI shape (o1/o3
-    semantics: completion_tokens includes reasoning)."""
+    """``_fold_reasoning_tokens_into_completion`` re-aligns xAI Usage to the OpenAI invariant."""
 
     @staticmethod
     def _make_response(
@@ -42,8 +39,7 @@ class TestXAIReasoningTokenFolding:
         return response
 
     def test_should_fold_when_total_explained_by_reasoning_gap(self):
-        # Real xAI live shape captured 2026-05-04: prompt=14, completion=10,
-        # total=336, reasoning=312. 14+10+312 == 336.
+        # xAI live shape: 14 + 10 + 312 == 336.
         response = self._make_response(
             prompt_tokens=14,
             completion_tokens=10,
@@ -58,7 +54,6 @@ class TestXAIReasoningTokenFolding:
         assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
 
     def test_should_not_fold_when_already_normalised(self):
-        # OpenAI-normalised shape: completion already includes reasoning.
         response = self._make_response(
             prompt_tokens=14,
             completion_tokens=322,
@@ -68,7 +63,6 @@ class TestXAIReasoningTokenFolding:
 
         XAIChatConfig._fold_reasoning_tokens_into_completion(response)
 
-        # Idempotent — no double-fold.
         assert response.usage.completion_tokens == 322
 
     def test_should_skip_when_no_reasoning_tokens(self):
@@ -84,8 +78,7 @@ class TestXAIReasoningTokenFolding:
         assert response.usage.completion_tokens == 10
 
     def test_should_skip_when_gap_does_not_match_reasoning(self):
-        # Defensive guard: if xAI ever changes accounting and the gap stops
-        # equalling reasoning_tokens, refuse to fold rather than corrupt.
+        # Refuse to fold if xAI accounting changes (gap != reasoning_tokens).
         response = self._make_response(
             prompt_tokens=14,
             completion_tokens=10,
@@ -95,7 +88,6 @@ class TestXAIReasoningTokenFolding:
 
         XAIChatConfig._fold_reasoning_tokens_into_completion(response)
 
-        # No fold; original values preserved.
         assert response.usage.completion_tokens == 10
         assert response.usage.total_tokens == 999
 

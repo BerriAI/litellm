@@ -169,11 +169,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("model", None)
         anthropic_request.pop("stream", None)
         anthropic_request.pop("output_format", None)
-        # ``output_config`` (e.g. ``{"effort": "max"}``) is the adaptive-thinking
-        # tier payload for Claude 4.6 / 4.7. Bedrock Invoke accepts it for
-        # those models — stripping it (the prior behavior) silently flattened
-        # every adaptive tier on this route. Forward it; if the model rejects
-        # it the surfaced error is correct, vs. swallowing the user's knob.
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
 

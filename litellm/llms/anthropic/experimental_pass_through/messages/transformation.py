@@ -47,9 +47,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "inference_geo",
             "speed",
             "output_config",
-            # OpenAI-style tier knob — translated to native ``thinking`` +
-            # ``output_config`` in ``transform_anthropic_messages_request``
-            # and popped before the request is forwarded.
             "reasoning_effort",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
@@ -176,22 +173,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     ) -> None:
         """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
 
-        The /v1/messages spec doesn't include ``reasoning_effort`` — without
-        this translation it gets silently dropped, leaving every adaptive
-        tier collapsed to the same behavior on Bedrock Invoke /v1/messages
-        (and on Anthropic / Azure AI / Vertex AI when callers pass it on
-        the messages route). Mirrors ``AnthropicConfig.map_openai_params``
-        on the chat completion path so the two routes can't drift.
-
-        - Pops ``reasoning_effort`` from ``optional_params`` so it never
-          reaches the wire.
-        - Caller-supplied ``thinking`` / ``output_config`` always win — we
-          don't override an explicit native value.
-        - Effort=``none`` clears thinking + output_config so callers can
-          opt out per request.
-        - Invalid efforts raise ``BadRequestError`` (clean 400) instead of
-          surfacing as 500s downstream.
+        Caller-supplied ``thinking`` / ``output_config`` win over the alias.
+        ``effort='none'`` clears both. Invalid efforts raise a 400.
         """
+        from litellm.exceptions import BadRequestError as _BadRequestError
         from litellm.llms.anthropic.chat.transformation import (
             REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
             AnthropicConfig,
@@ -200,12 +185,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         reasoning_effort = optional_params.pop("reasoning_effort", None)
         if not isinstance(reasoning_effort, str):
             return
-
-        # ``_map_reasoning_effort`` raises ``BadRequestError`` (400) directly
-        # on unmapped efforts. The /v1/messages pass-through surfaces errors
-        # as ``AnthropicError``; convert here so callers see a provider-shaped
-        # 400 rather than the LiteLLM-shaped one.
-        from litellm.exceptions import BadRequestError as _BadRequestError
 
         try:
             mapped_thinking = AnthropicConfig._map_reasoning_effort(
@@ -224,12 +203,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
                 reasoning_effort
             )
-            # ``_map_reasoning_effort`` returns ``type=adaptive`` for any
-            # string on adaptive models without checking the value. The
-            # chat completion path validates the resolved effort downstream
-            # via ``_apply_output_config``; /v1/messages has no equivalent
-            # downstream check, so reject unmapped values here so callers
-            # see a clean 400 instead of a 500 from the provider.
             if mapped_effort is None:
                 raise AnthropicError(
                     message=(
@@ -239,10 +212,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
-            # Per-model gating for ``max`` / ``xhigh`` is centralised in
-            # ``AnthropicConfig._validate_effort_for_model`` so the chat
-            # completion path and this /v1/messages pass-through stay in
-            # lock-step when a new model tier lands.
             gate_error = AnthropicConfig._validate_effort_for_model(
                 model, mapped_effort
             )

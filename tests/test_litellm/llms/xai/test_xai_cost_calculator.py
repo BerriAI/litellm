@@ -107,7 +107,6 @@ class TestXAICostCalculator:
 
     def test_grok_4_cost_calculation(self):
         """Test cost calculation for grok-4 model."""
-        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=10,
             completion_tokens=200,
@@ -134,7 +133,6 @@ class TestXAICostCalculator:
 
     def test_grok_3_fast_beta_cost_calculation(self):
         """Test cost calculation for grok-3-fast-beta model."""
-        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=20,
             completion_tokens=300,
@@ -176,7 +174,6 @@ class TestXAICostCalculator:
 
     def test_edge_case_large_reasoning_tokens(self):
         """Test cost calculation when reasoning_tokens is larger than completion_tokens."""
-        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=12,
             completion_tokens=50,  # Less than reasoning_tokens
@@ -204,7 +201,6 @@ class TestXAICostCalculator:
     def test_tiered_pricing_above_128k_tokens(self):
         """Test tiered pricing for tokens above 128k."""
         # Test with grok-4-fast-reasoning which has tiered pricing
-        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=150000,  # Above 128k threshold
             completion_tokens=100000,  # Above 128k threshold
@@ -234,7 +230,6 @@ class TestXAICostCalculator:
     def test_tiered_pricing_below_128k_tokens(self):
         """Test that regular pricing is used for tokens below 128k threshold."""
         # Test with grok-4-fast-reasoning which has tiered pricing
-        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=100000,  # Below 128k threshold
             completion_tokens=50000,
@@ -263,7 +258,6 @@ class TestXAICostCalculator:
 
     def test_tiered_pricing_grok_4_latest(self):
         """Test tiered pricing for grok-4-latest model."""
-        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=200000,  # Above 128k threshold
             completion_tokens=100000,
@@ -292,7 +286,6 @@ class TestXAICostCalculator:
 
     def test_tiered_pricing_output_tokens_below_128k(self):
         """Test that output tokens get tiered rate when input tokens > 128k, even if output tokens < 128k."""
-        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=150000,  # Above 128k threshold
             completion_tokens=50000,  # Below 128k threshold
@@ -339,16 +332,7 @@ class TestXAICostCalculator:
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
     def test_already_normalised_usage_does_not_double_count_reasoning(self):
-        """Cost calc receives Usage post-transformation (OpenAI invariant).
-
-        After XAIChatConfig.transform_response folds reasoning_tokens into
-        completion_tokens, the Usage block satisfies
-        ``total_tokens == prompt_tokens + completion_tokens``. Cost calc must
-        detect this and skip the reasoning_tokens add-on, otherwise it
-        double-bills the reasoning tokens.
-        """
-        # OpenAI-normalised shape: completion_tokens already includes the
-        # 100 reasoning tokens (so 100 visible + 100 reasoning -> 200).
+        """Cost calc must not double-bill when Usage is already OpenAI-normalised."""
         usage = Usage(
             prompt_tokens=12,
             completion_tokens=200,
@@ -364,7 +348,6 @@ class TestXAICostCalculator:
 
         prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
 
-        # Bill exactly what completion_tokens reports — no double-add.
         expected_prompt_cost = 12 * 3e-7
         expected_completion_cost = 200 * 5e-7
 

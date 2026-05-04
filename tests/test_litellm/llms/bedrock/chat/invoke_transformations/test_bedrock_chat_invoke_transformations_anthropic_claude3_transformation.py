@@ -407,18 +407,7 @@ def test_opus_4_5_model_detection():
 
 
 def test_output_config_forwarded_for_bedrock_chat_invoke_request():
-    """
-    Bedrock Invoke (chat/completions route) must forward
-    ``output_config`` for Anthropic adaptive-thinking models. The earlier
-    behavior stripped it unconditionally, which silently flattened every
-    adaptive tier (``low``/``medium``/``high``/``xhigh``/``max``) to identical
-    behavior on the wire.
-
-    The wire QA at https://github.com/BerriAI/litellm/pull/27039 showed
-    ``thinking.type: adaptive`` was forwarded but ``output_config.effort``
-    was always missing, even though direct curls to Anthropic's Bedrock
-    Invoke endpoint accept it.
-    """
+    """Bedrock Invoke chat path forwards ``output_config`` for adaptive Claude models."""
     config = AmazonAnthropicClaudeConfig()
 
     messages = [{"role": "user", "content": "test"}]
@@ -437,7 +426,6 @@ def test_output_config_forwarded_for_bedrock_chat_invoke_request():
     )
 
     assert result.get("output_config") == {"effort": "high"}
-    # Verify normal params survive
     assert result["max_tokens"] == 100
 
 

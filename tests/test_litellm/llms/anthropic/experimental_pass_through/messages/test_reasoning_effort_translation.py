@@ -1,18 +1,4 @@
-"""
-Tests for OpenAI-style ``reasoning_effort`` translation on the Anthropic
-/v1/messages route.
-
-The /v1/messages spec doesn't include ``reasoning_effort`` — without
-translation it gets silently dropped at the filter step, leaving every
-adaptive tier collapsed to the same behavior on Bedrock Invoke /v1/messages
-(and on Anthropic / Azure AI / Vertex AI when callers pass it on the
-messages route).
-
-These tests pin the translation and validation behavior at the shared
-``AnthropicMessagesConfig`` level so all four /v1/messages routes
-(direct Anthropic, Azure AI, Vertex AI, Bedrock Invoke) inherit the
-same mapping.
-"""
+"""Tests for ``reasoning_effort`` translation on the Anthropic /v1/messages route."""
 
 import pytest
 
@@ -36,12 +22,6 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 def test_reasoning_effort_maps_to_output_config_for_adaptive_model(
     reasoning_effort, expected_effort
 ):
-    """
-    For Claude 4.6 / 4.7, ``reasoning_effort`` is mapped to
-    ``thinking={"type": "adaptive"}`` plus ``output_config.effort=<tier>``,
-    using the same mapping table as the chat completion path so the two
-    routes can't drift.
-    """
     config = AnthropicMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": reasoning_effort}
 
@@ -59,7 +39,6 @@ def test_reasoning_effort_maps_to_output_config_for_adaptive_model(
 
 
 def test_reasoning_effort_none_clears_thinking_and_output_config():
-    """``reasoning_effort='none'`` opts out of extended thinking entirely."""
     config = AnthropicMessagesConfig()
     optional_params = {
         "max_tokens": 1024,
@@ -82,11 +61,6 @@ def test_reasoning_effort_none_clears_thinking_and_output_config():
 
 
 def test_reasoning_effort_on_non_adaptive_model_uses_thinking_budget():
-    """
-    Non-adaptive models (Opus 4.5 / earlier) take ``thinking.budget_tokens``
-    rather than ``output_config.effort``. The translation falls back to
-    the budget mapping in that case.
-    """
     config = AnthropicMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": "high"}
 
@@ -109,11 +83,6 @@ def test_reasoning_effort_on_non_adaptive_model_uses_thinking_budget():
 
 @pytest.mark.parametrize("bad_effort", ["invalid", "disabled", ""])
 def test_invalid_reasoning_effort_raises_400(bad_effort):
-    """
-    Garbage ``reasoning_effort`` values surface as a clean 400 instead of
-    silently passing through to the provider as an unknown
-    ``output_config.effort`` (which would 500).
-    """
     config = AnthropicMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": bad_effort}
 
@@ -132,18 +101,12 @@ def test_invalid_reasoning_effort_raises_400(bad_effort):
 @pytest.mark.parametrize(
     "model,bad_effort",
     [
-        # ``xhigh`` is Opus-4.7-only on the public Anthropic effort matrix,
-        # so Opus 4.6 / Sonnet 4.6 must still 400 on it.
         ("claude-opus-4-6", "xhigh"),
         ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh"),
         ("claude-sonnet-4-6", "xhigh"),
     ],
 )
 def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort):
-    """``xhigh`` and ``max`` are gated per-model. The /v1/messages route must
-    surface a clean 400 client-side instead of forwarding the unsupported
-    tier and letting the provider 500/400 it.
-    """
     config = AnthropicMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": bad_effort}
 
@@ -163,9 +126,6 @@ def test_reasoning_effort_unsupported_tier_raises_400_messages(model, bad_effort
 @pytest.mark.parametrize(
     "model",
     [
-        # ``max`` is documented as supported on Claude 4.6 (Opus + Sonnet)
-        # and Claude 4.7. Verify the /v1/messages route accepts it for
-        # Sonnet 4.6 variants instead of 400-ing client-side.
         "claude-sonnet-4-6",
         "bedrock/invoke/us.anthropic.claude-sonnet-4-6",
     ],
@@ -187,11 +147,6 @@ def test_reasoning_effort_max_accepted_on_sonnet_46_messages(model):
 
 
 def test_explicit_output_config_wins_over_reasoning_effort():
-    """
-    Explicit native ``output_config.effort`` is never overridden by the
-    OpenAI alias. Same precedence as
-    ``_translate_legacy_thinking_for_adaptive_model``.
-    """
     config = AnthropicMessagesConfig()
     optional_params = {
         "max_tokens": 1024,
@@ -212,7 +167,6 @@ def test_explicit_output_config_wins_over_reasoning_effort():
 
 
 def test_explicit_thinking_wins_over_reasoning_effort():
-    """Explicit native ``thinking`` is never overridden by the alias."""
     config = AnthropicMessagesConfig()
     optional_params = {
         "max_tokens": 1024,
@@ -233,8 +187,6 @@ def test_explicit_thinking_wins_over_reasoning_effort():
 
 
 def test_reasoning_effort_in_supported_params():
-    """``reasoning_effort`` is advertised as a supported messages param so
-    callers and validation paths can introspect the schema."""
     config = AnthropicMessagesConfig()
     assert "reasoning_effort" in config.get_supported_anthropic_messages_params(
         "claude-opus-4-7"

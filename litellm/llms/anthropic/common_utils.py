@@ -273,15 +273,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
-        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``.
-
-        Driven by the ``supports_adaptive_thinking`` flag in
-        ``model_prices_and_context_window.json`` so that adding a new
-        adaptive-thinking model is a pure model-map change. Falls back to
-        the family-pattern check for OpenRouter / Vercel / Bedrock /
-        provider-prefixed variants whose model-map entries don't (yet)
-        carry the flag.
-        """
+        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``."""
         from litellm.utils import _supports_factory
 
         try:

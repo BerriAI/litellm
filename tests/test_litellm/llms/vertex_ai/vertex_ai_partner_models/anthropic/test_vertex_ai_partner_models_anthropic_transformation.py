@@ -499,14 +499,7 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
 
 
 def test_vertex_ai_anthropic_output_config_effort_only_forwarded():
-    """
-    Vertex AI Claude 4.6 / 4.7 accept ``output_config.effort`` on direct
-    ``:rawPredict`` (verified end-to-end against ``us-east5`` for
-    ``claude-opus-4-6`` and ``global`` for ``claude-opus-4-7``). The earlier
-    strip silently flattened every adaptive tier on Vertex, so ``low`` /
-    ``medium`` / ``high`` / ``xhigh`` / ``max`` all produced identical
-    thinking with no tier differentiation.
-    """
+    """Vertex AI Claude 4.6/4.7 accept ``output_config.effort`` on rawPredict."""
     config = VertexAIAnthropicConfig()
 
     messages = [{"role": "user", "content": "What is 2+2?"}]
@@ -568,15 +561,7 @@ def test_vertex_ai_anthropic_output_config_format_passes_through():
 
 
 def test_vertex_ai_anthropic_output_config_format_plus_effort_preserved():
-    """
-    Vertex AI Claude 4.6 / 4.7 accept ``output_config.effort`` on direct
-    ``:rawPredict`` (verified end-to-end against ``us-east5`` for
-    ``claude-opus-4-6`` and ``global`` for ``claude-opus-4-7``). Since the
-    strip was unjustified, ``effort`` must now ride along with ``format``.
-
-    We use a Claude 4.6 model id here because ``_apply_output_config`` only
-    accepts ``effort`` on adaptive-thinking 4.6/4.7 model ids.
-    """
+    """Both ``format`` and ``effort`` ride along on Vertex Claude 4.6/4.7."""
     config = VertexAIAnthropicConfig()
     messages = [{"role": "user", "content": "Return a person object."}]
 
@@ -625,14 +610,7 @@ def test_vertex_ai_anthropic_output_config_non_dict_dropped():
 
 
 def test_vertex_ai_anthropic_output_format_and_output_config_effort_preserved():
-    """
-    Vertex AI Claude 4.6 / 4.7 accept ``output_config.effort`` on direct
-    ``:rawPredict`` (verified end-to-end). When both ``output_format`` and
-    ``output_config: {effort}`` are present, both must be forwarded — the
-    earlier ``effort`` strip caused silent loss of the requested adaptive
-    thinking tier on Vertex routes (``low``/``medium``/``high``/``xhigh``/``max``
-    all collapsed to identical adaptive thinking with no tier differentiation).
-    """
+    """Both ``output_format`` and ``output_config.effort`` are forwarded on Vertex 4.6/4.7."""
     config = VertexAIAnthropicConfig()
     messages = [{"role": "user", "content": "Extract structured data"}]
 

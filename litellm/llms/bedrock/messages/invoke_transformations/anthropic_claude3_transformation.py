@@ -582,10 +582,6 @@ class AmazonAnthropicClaudeMessagesConfig(
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
 
-        # 6a. When ``drop_params`` is set, strip ``output_config`` for models
-        # that don't accept it (e.g. proxy fronting Claude Code at haiku-3).
-        # Without this, every Claude Code request to a pre-4.5 Anthropic model
-        # routes a forced 400 from Bedrock that the client can't fix.
         if (
             litellm.drop_params is True
             and "output_config" in anthropic_messages_request

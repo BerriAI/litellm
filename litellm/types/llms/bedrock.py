@@ -1041,12 +1041,4 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # `metadata` is part of the common Anthropic Messages API shape.
     thinking: dict
     metadata: dict
-
-    # ``output_config`` is the adaptive-thinking effort payload for
-    # Claude 4.6 / 4.7 (e.g. ``{"effort": "max"}``). Bedrock Invoke
-    # accepts it for these models when ``thinking={"type": "adaptive"}``.
-    # Without this field in the allowlist, the runtime filter in
-    # ``AmazonAnthropicClaudeMessagesConfig.transform_anthropic_messages_request``
-    # silently drops it and every adaptive tier collapses to identical
-    # behavior on /v1/messages.
     output_config: dict
