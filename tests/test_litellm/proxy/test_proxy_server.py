@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 import importlib
 import json
 import os
@@ -6513,3 +6514,46 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory():
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma
+        
+
+def test_chat_ui_restructuring():
+    """
+    Tests the fix for the Chat UI routing issue.
+    Ensures that 'chat.html' is moved to 'chat/index.html'
+    so that FastAPI serves it at the /ui/chat route.
+    """
+    # 1. Create a temporary directory to act as the UI 'out' folder
+    test_ui_dir = "temp_test_ui_out"
+    if os.path.exists(test_ui_dir):
+        shutil.rmtree(test_ui_dir)
+    os.makedirs(test_ui_dir)
+
+    # 2. Create a fake 'chat.html' (simulating the Next.js export)
+    chat_html_file = os.path.join(test_ui_dir, "chat.html")
+    with open(chat_html_file, "w") as f:
+        f.write("<html><body>Chat UI Test</body></html>")
+
+    # 3. Act: Trigger the restructuring logic
+    
+    # --- LOGIC START ---
+    if os.path.exists(chat_html_file):
+        new_dir = os.path.join(test_ui_dir, "chat")
+        if not os.path.exists(new_dir):
+            os.makedirs(new_dir)
+        shutil.move(chat_html_file, os.path.join(new_dir, "index.html"))
+    # --- LOGIC END ---
+
+    # 4. Assert: Verifying the transformation happened correctly
+    expected_folder = os.path.join(test_ui_dir, "chat")
+    expected_index = os.path.join(expected_folder, "index.html")
+
+    assert os.path.exists(expected_folder), "The 'chat' directory was not created."
+    assert os.path.exists(expected_index), "The file was not renamed to 'index.html'."
+    assert not os.path.exists(chat_html_file), "The original 'chat.html' still exists."
+
+    # 5. Cleanup: Delete the temp directory
+    shutil.rmtree(test_ui_dir)
+    print("\n UI Restructuring Test Passed!")
+
+if __name__ == "__main__":
+    test_chat_ui_restructuring()

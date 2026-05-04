@@ -1311,14 +1311,18 @@ try:
         # Ignore directories starting with _ (Next.js internals like _next)
         try:
             for entry in os.scandir(ui_dir):
-                if entry.is_dir() and not entry.name.startswith("_"):
-                    index_path = os.path.join(entry.path, "index.html")
-                    if os.path.exists(index_path):
-                        # Found at least one restructured route - this proves the pattern
-                        verbose_proxy_logger.debug(
-                            f"Detected restructured UI via pattern: found {entry.name}/index.html"
-                        )
-                        return True
+                if (
+                    entry.is_file()
+                    and entry.name.endswith(".html")
+                    and entry.name not in ["index.html", "404.html"]
+                ):
+                    verbose_proxy_logger.debug(
+                        f"Detected unrestructured file: {entry.name}. Restructuring required."
+                    )
+                    return False
+
+            # If no loose .html files were found (other than index/404), it is fully restructured.
+            return True
         except (PermissionError, OSError) as e:
             verbose_proxy_logger.debug(
                 f"Could not scan {ui_dir} for restructuring detection: {e}"
