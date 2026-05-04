@@ -170,13 +170,44 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         anthropic_request.pop("stream", None)
         anthropic_request.pop("output_format", None)
         anthropic_request.pop("output_config", None)
+        anthropic_request.pop("context_management", None)
         if "anthropic_version" not in anthropic_request:
             anthropic_request["anthropic_version"] = self.anthropic_version
+
+        # Strip unsupported cache_control fields (e.g. scope) — Bedrock rejects them
+        # with "Extra inputs are not permitted"
+        self._strip_unsupported_cache_control_fields(anthropic_request)
 
         # Remove `custom` field from tools (Bedrock doesn't support it)
         remove_custom_field_from_tools(anthropic_request)
         normalize_tool_input_schema_types_for_bedrock_invoke(anthropic_request)
         return anthropic_request
+
+    @staticmethod
+    def _strip_unsupported_cache_control_fields(request: dict) -> None:
+        """Strip fields from cache_control that Bedrock doesn't support (e.g. scope)."""
+
+        def _sanitize(cache_control: dict) -> None:
+            if isinstance(cache_control, dict):
+                cache_control.pop("scope", None)
+
+        def _process_content(content: list) -> None:
+            for item in content:
+                if isinstance(item, dict) and "cache_control" in item:
+                    _sanitize(item["cache_control"])
+
+        for key in ("system", "messages"):
+            items = request.get(key)
+            if not items or not isinstance(items, list):
+                continue
+            if key == "system":
+                _process_content(items)
+            else:
+                for msg in items:
+                    if isinstance(msg, dict):
+                        content = msg.get("content")
+                        if isinstance(content, list):
+                            _process_content(content)
 
     def _compute_bedrock_invoke_beta_headers(
         self,
@@ -206,14 +237,19 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             programmatic_tool_calling_used or input_examples_used
         ):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if "opus-4" in model.lower() or "opus_4" in model.lower():
-                beta_set.add("tool-search-tool-2025-10-19")
+            beta_set.add(
+                "tool-search-tool-2025-10-19"
+            )  # centralized filter handles model restriction
 
         auto_beta_list = filter_and_transform_beta_headers(
             beta_headers=list(beta_set - user_beta_set),
             provider="bedrock",
         )
-        return sorted(user_beta_set.union(set(auto_beta_list)))
+        filtered_user_betas = filter_and_transform_beta_headers(
+            beta_headers=list(user_beta_set),
+            provider="bedrock",
+        )
+        return sorted(set(filtered_user_betas).union(set(auto_beta_list)))
 
     def _convert_document_url_sources_to_base64(self, anthropic_request: dict) -> None:
         """

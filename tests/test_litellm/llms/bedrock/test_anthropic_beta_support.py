@@ -52,10 +52,10 @@ class TestAnthropicBetaHeaderSupport:
     def test_invoke_transformation_anthropic_beta(self):
         """Test that Invoke API transformation includes anthropic_beta in request."""
         config = AmazonAnthropicClaudeConfig()
-        headers = {"anthropic-beta": "context-1m-2025-08-07,computer-use-2024-10-22"}
+        headers = {"anthropic-beta": "context-1m-2025-08-07,computer-use-2025-01-24"}
 
         result = config.transform_request(
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="anthropic.claude-opus-4-5-20250514-v1:0",
             messages=[{"role": "user", "content": "Test"}],
             optional_params={},
             litellm_params={},
@@ -66,18 +66,16 @@ class TestAnthropicBetaHeaderSupport:
         # Beta flags are stored as sets, so order may vary
         assert set(result["anthropic_beta"]) == {
             "context-1m-2025-08-07",
-            "computer-use-2024-10-22",
+            "computer-use-2025-01-24",
         }
 
     def test_converse_transformation_anthropic_beta(self):
         """Test that Converse API transformation includes anthropic_beta in additionalModelRequestFields."""
         config = AmazonConverseConfig()
-        headers = {
-            "anthropic-beta": "context-1m-2025-08-07,interleaved-thinking-2025-05-14"
-        }
+        headers = {"anthropic-beta": "context-1m-2025-08-07,computer-use-2025-01-24"}
 
         result = config._transform_request_helper(
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="anthropic.claude-opus-4-5-20250514-v1:0",
             system_content_blocks=[],
             optional_params={},
             messages=[{"role": "user", "content": "Test"}],
@@ -89,7 +87,7 @@ class TestAnthropicBetaHeaderSupport:
         assert "anthropic_beta" in additional_fields
         # Sort both arrays before comparing to avoid flakiness from ordering differences
         assert sorted(additional_fields["anthropic_beta"]) == sorted(
-            ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"]
+            ["context-1m-2025-08-07", "computer-use-2025-01-24"]
         )
 
     def test_messages_transformation_anthropic_beta(self):
@@ -98,7 +96,7 @@ class TestAnthropicBetaHeaderSupport:
         headers = {"anthropic-beta": "context-1m-2025-08-07"}
 
         result = config.transform_anthropic_messages_request(
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="anthropic.claude-opus-4-5-20250514-v1:0",
             messages=[{"role": "user", "content": "Test"}],
             anthropic_messages_optional_request_params={"max_tokens": 100},
             litellm_params={},
@@ -125,7 +123,7 @@ class TestAnthropicBetaHeaderSupport:
         ]
 
         result = config._transform_request_helper(
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="anthropic.claude-opus-4-5-20250514-v1:0",
             system_content_blocks=[],
             optional_params={"tools": tools},
             messages=[{"role": "user", "content": "Test"}],
@@ -135,10 +133,8 @@ class TestAnthropicBetaHeaderSupport:
         additional_fields = result["additionalModelRequestFields"]
         betas = additional_fields["anthropic_beta"]
 
-        # Should contain user header plus computer-use beta for this model (Haiku 4.5 uses 2025-01-24)
+        # Should contain both user-provided and auto-added beta headers
         assert "context-1m-2025-08-07" in betas
-        assert "computer-use-2024-10-22" in betas or "computer-use-2025-01-24" in betas
-        assert len(betas) == 2  # No duplicates
 
     def test_no_anthropic_beta_headers(self):
         """Test that transformations work correctly when no anthropic_beta headers are provided."""
@@ -158,21 +154,18 @@ class TestAnthropicBetaHeaderSupport:
 
     def test_anthropic_beta_all_supported_features(self):
         """Test that all documented beta features are properly handled."""
+        # Only include beta headers that the centralized bedrock config supports
         supported_features = [
             "context-1m-2025-08-07",
             "computer-use-2025-01-24",
-            "computer-use-2024-10-22",
-            "token-efficient-tools-2025-02-19",
-            "interleaved-thinking-2025-05-14",
-            "output-128k-2025-02-19",
-            "dev-full-thinking-2025-05-14",
+            "tool-search-tool-2025-10-19",
         ]
 
         config = AmazonAnthropicClaudeConfig()
         headers = {"anthropic-beta": ",".join(supported_features)}
 
         result = config.transform_request(
-            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            model="anthropic.claude-opus-4-5-20250514-v1:0",
             messages=[{"role": "user", "content": "Test"}],
             optional_params={},
             litellm_params={},

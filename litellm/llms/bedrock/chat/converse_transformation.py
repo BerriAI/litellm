@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
 )
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.bedrock import *
@@ -81,14 +82,6 @@ BEDROCK_COMPUTER_USE_TOOLS = [
     "computer_",
     "bash_",
     "text_editor_",
-]
-
-# Beta header patterns that are not supported by Bedrock Converse API
-# These will be filtered out to prevent errors
-UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
-    "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
-    "prompt-caching",  # Prompt caching not supported in Converse API
-    "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
 ]
 
 
@@ -1246,6 +1239,10 @@ class AmazonConverseConfig(BaseConfig):
         # These are LiteLLM internal parameters, not API parameters
         additional_request_params = filter_internal_params(additional_request_params)
 
+        # Remove Anthropic-specific body params that Bedrock doesn't support
+        # (these features are enabled via anthropic-beta headers instead)
+        additional_request_params.pop("context_management", None)
+
         # Filter out non-serializable objects (exceptions, callables, logging objects, etc.)
         # from additional_request_params to prevent JSON serialization errors
         # This filters: Exception objects, callable objects (functions), Logging objects, etc.
@@ -1376,11 +1373,16 @@ class AmazonConverseConfig(BaseConfig):
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
 
-        # Set anthropic_beta in additional_request_params if we have any beta features
-        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
+        # Filter beta headers using centralized whitelist with model-specific support
+        # This handles version/family restrictions and unsupported beta patterns
         base_model = BedrockModelInfo.get_base_model(model)
         if anthropic_beta_list and base_model.startswith("anthropic"):
-            additional_request_params["anthropic_beta"] = anthropic_beta_list
+            filtered_betas = filter_and_transform_beta_headers(
+                beta_headers=anthropic_beta_list,
+                provider="bedrock_converse",
+            )
+            if filtered_betas:
+                additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 
@@ -1413,15 +1415,23 @@ class AmazonConverseConfig(BaseConfig):
                 )
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
-        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        # This prevents Anthropic errors:
+        # - "Expected thinking or redacted_thinking, but found tool_use" (assistant with tool_calls)
+        # - "Expected thinking or redacted_thinking, but found text" (assistant with text content)
         #
         # IMPORTANT: Only drop thinking if NO assistant messages have thinking_blocks.
         # If any message has thinking_blocks, we must keep thinking enabled, otherwise
         # Related issues: https://github.com/BerriAI/litellm/issues/14194
+        # Lazy import to avoid circular dependency (utils -> bedrock -> utils)
+        from litellm.utils import last_assistant_message_has_no_thinking_blocks
+
         if (
             optional_params.get("thinking") is not None
             and messages is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+            and (
+                last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+                or last_assistant_message_has_no_thinking_blocks(messages)
+            )
             and not any_assistant_message_has_thinking_blocks(messages)
         ):
             if litellm.modify_params:

@@ -867,15 +867,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             sensitive_info_policy = assessment.get("sensitiveInformationPolicy")
             if sensitive_info_policy:
                 pii_entities = sensitive_info_policy.get("piiEntities") or []
-                if pii_entities:
-                    for pii_entity in pii_entities:
-                        if pii_entity.get("action") == "BLOCKED":
-                            return True
+                for pii_entity in pii_entities:
+                    if pii_entity.get("action") == "BLOCKED":
+                        return True
                 regexes = sensitive_info_policy.get("regexes") or []
-                if regexes:
-                    for regex in regexes:
-                        if regex.get("action") == "BLOCKED":
-                            return True
+                for regex in regexes:
+                    if regex.get("action") == "BLOCKED":
+                        return True
 
             # Check contextual grounding policy
             contextual_grounding_policy = assessment.get("contextualGroundingPolicy")
