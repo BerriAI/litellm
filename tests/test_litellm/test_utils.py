@@ -4117,8 +4117,9 @@ def test_convert_to_model_response_restores_openai_tool_call_names_when_mapped()
 def test_tool_choice_function_name_sanitized_with_tools():
     from litellm.litellm_core_utils.openai_tool_name_mapping import (
         begin_openai_tool_name_mapping_scope,
+        get_sanitized_tool_name,
     )
-    from litellm.utils import _sanitize_openai_function_tool_name, validate_and_fix_openai_tools
+    from litellm.utils import validate_and_fix_openai_tools
 
     begin_openai_tool_name_mapping_scope()
     validate_and_fix_openai_tools(
@@ -4133,11 +4134,44 @@ def test_tool_choice_function_name_sanitized_with_tools():
         ],
         sanitize_openai_function_tool_names=True,
     )
-    # Simulate what main.py does for tool_choice
+    # main.py uses get_sanitized_tool_name (reverse map) — not a re-computation
     tool_choice = {"type": "function", "function": {"name": "my.tool"}}
     _fn = tool_choice["function"]
-    sanitized = _sanitize_openai_function_tool_name(_fn["name"], -1)
+    sanitized = get_sanitized_tool_name(_fn["name"])
     if sanitized != _fn["name"]:
         tool_choice = {**tool_choice, "function": {**_fn, "name": sanitized}}
 
     assert tool_choice["function"]["name"] == "my_tool"
+
+
+def test_tool_choice_function_name_uses_collision_suffix():
+    """tool_choice pointing at the second of two colliding names must use the '_1' suffix."""
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
+        begin_openai_tool_name_mapping_scope,
+        get_sanitized_tool_name,
+    )
+    from litellm.utils import validate_and_fix_openai_tools
+
+    begin_openai_tool_name_mapping_scope()
+    validate_and_fix_openai_tools(
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "a.b",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "a/b",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+        sanitize_openai_function_tool_names=True,
+    )
+    # "a.b" → "a_b"; "a/b" also sanitizes to "a_b" but gets suffix → "a_b_1"
+    assert get_sanitized_tool_name("a.b") == "a_b"
+    assert get_sanitized_tool_name("a/b") == "a_b_1"

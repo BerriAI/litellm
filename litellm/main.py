@@ -1189,9 +1189,11 @@ def completion(  # type: ignore # noqa: PLR0915
     ):
         _fn = tool_choice.get("function")
         if isinstance(_fn, dict) and isinstance(_fn.get("name"), str):
-            from litellm.utils import _sanitize_openai_function_tool_name as _san_name
+            from litellm.litellm_core_utils.openai_tool_name_mapping import (
+                get_sanitized_tool_name as _get_sanitized,
+            )
 
-            _sanitized_tc_name = _san_name(_fn["name"], -1)
+            _sanitized_tc_name = _get_sanitized(_fn["name"])
             if _sanitized_tc_name != _fn["name"]:
                 tool_choice = {
                     **tool_choice,
