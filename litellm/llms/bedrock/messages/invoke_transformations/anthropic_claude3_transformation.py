@@ -525,6 +525,12 @@ class AmazonAnthropicClaudeMessagesConfig(
                 dropped_user_betas,
             )
 
+        # Opus 4.7+ has native 1M context on Bedrock — strip the legacy beta
+        if any(
+            p in model.lower() for p in ("opus-4.7", "opus_4.7", "opus-4-7", "opus_4_7")
+        ):
+            filtered_betas = [b for b in filtered_betas if b != "context-1m-2025-08-07"]
+
         return filtered_betas
 
     def _strip_unsupported_bedrock_invoke_fields(
