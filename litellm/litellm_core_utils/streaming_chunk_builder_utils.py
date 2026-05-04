@@ -2,6 +2,9 @@ import base64
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
+from litellm.litellm_core_utils.openai_tool_name_mapping import (
+    restore_openai_tool_name_for_user,
+)
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,

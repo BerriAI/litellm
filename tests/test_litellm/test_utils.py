@@ -3985,27 +3985,7 @@ class TestValidateAndFixThinkingParam:
         assert "budget_tokens" not in thinking
 
 
-def test_validate_and_fix_openai_tools_sanitizes_invalid_names():
-    from litellm.utils import validate_and_fix_openai_tools
-
-    tools_in = [
-        {
-            "type": "function",
-            "function": {
-                "name": "invalid.name",
-                "description": "x",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        }
-    ]
-    original_name = tools_in[0]["function"]["name"]
-    out = validate_and_fix_openai_tools(tools=tools_in)
-    assert out is not None
-    assert out[0]["function"]["name"] == "invalid_name"
-    assert original_name == "invalid.name"
-
-
-def test_validate_and_fix_openai_tools_dedupes_colliding_names():
+def test_validate_and_fix_openai_tools_skips_name_rewrite_when_disabled():
     from litellm.utils import validate_and_fix_openai_tools
 
     tools_in = [
@@ -4015,50 +3995,74 @@ def test_validate_and_fix_openai_tools_dedupes_colliding_names():
                 "name": "a.b",
                 "parameters": {"type": "object", "properties": {}},
             },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "a/b",
-                "parameters": {"type": "object", "properties": {}},
-            },
-        },
+        }
     ]
-    out = validate_and_fix_openai_tools(tools=tools_in)
-    assert out[0]["function"]["name"] == "a_b"
-    assert out[1]["function"]["name"] == "a_b_1"
-
-
-def test_openai_tool_name_mapping_restore_roundtrip():
-    from litellm.litellm_core_utils.openai_tool_name_mapping import (
-        restore_openai_tool_name_for_user,
+    out = validate_and_fix_openai_tools(
+        tools=tools_in, sanitize_openai_function_tool_names=False
     )
+    assert out is not None
+    assert out[0]["function"]["name"] == "a.b"
+
+
+def test_validate_and_fix_openai_tools_sanitizes_when_enabled():
     from litellm.utils import validate_and_fix_openai_tools
 
     tools_in = [
         {
             "type": "function",
             "function": {
-                "name": "invalid.name.at.index.71",
+                "name": "invalid.name",
                 "parameters": {"type": "object", "properties": {}},
             },
         }
     ]
-    out = validate_and_fix_openai_tools(tools=tools_in)
-    assert out[0]["function"]["name"] == "invalid_name_at_index_71"
+    original_name = tools_in[0]["function"]["name"]
+    out = validate_and_fix_openai_tools(
+        tools=tools_in, sanitize_openai_function_tool_names=True
+    )
+    assert out is not None
+    assert out[0]["function"]["name"] == "invalid_name"
+    assert original_name == "invalid.name"
+
+        begin_openai_tool_name_mapping_scope,
+    )
+    from litellm.utils import validate_and_fix_openai_tools
+
+    begin_openai_tool_name_mapping_scope()
+    validate_and_fix_openai_tools(
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "invalid.name.at.index.71",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        sanitize_openai_function_tool_names=True,
+    )
     assert (
         restore_openai_tool_name_for_user("invalid_name_at_index_71")
         == "invalid.name.at.index.71"
     )
+    begin_openai_tool_name_mapping_scope()
+    assert (
+        restore_openai_tool_name_for_user("invalid_name_at_index_71")
+        == "invalid_name_at_index_71"
+    )
 
 
-def test_convert_to_model_response_restores_openai_tool_call_names():
+def test_convert_to_model_response_restores_openai_tool_call_names_when_mapped():
     from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
         convert_to_model_response_object,
+    )
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
+        begin_openai_tool_name_mapping_scope,
     )
     from litellm.types.utils import ModelResponse
     from litellm.utils import validate_and_fix_openai_tools
 
+    begin_openai_tool_name_mapping_scope()
     validate_and_fix_openai_tools(
         tools=[
             {
@@ -4068,7 +4072,8 @@ def test_convert_to_model_response_restores_openai_tool_call_names():
                     "parameters": {"type": "object", "properties": {}},
                 },
             }
-        ]
+        ],
+        sanitize_openai_function_tool_names=True,
     )
     response_object = {
         "id": "test",

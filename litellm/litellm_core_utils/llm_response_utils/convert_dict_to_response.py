@@ -72,7 +72,7 @@ def _normalize_images_for_message(
 
 
 def _map_tool_call_dict_openai_names_to_user(tc: dict) -> dict:
-    """Restore client tool names when LiteLLM sanitized outbound tools for OpenAI."""
+    """Restore client tool names when this completion rewrote them for OpenAI."""
     from litellm.litellm_core_utils.openai_tool_name_mapping import (
         restore_openai_tool_name_for_user,
     )

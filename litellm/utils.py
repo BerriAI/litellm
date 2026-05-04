@@ -7880,7 +7880,6 @@ _OPENAI_FUNCTION_TOOL_NAME_MAX_LENGTH = 64
 def _sanitize_openai_function_tool_name(name: str, index: int) -> str:
     """
     Normalize function.name to match OpenAI's pattern ^[a-zA-Z0-9_-]+$ and length cap.
-    See: OpenAI Chat Completions tools[].function.name validation.
     """
     if name is None or (isinstance(name, str) and not str(name).strip()):
         return f"litellm_unnamed_tool_{index}"
@@ -7891,7 +7890,6 @@ def _sanitize_openai_function_tool_name(name: str, index: int) -> str:
 
 
 def _make_unique_openai_tool_name(base: str, used_names: set[str]) -> str:
-    """Disambiguate sanitized names when multiple tools map to the same string."""
     candidate = base
     n = 0
     while candidate in used_names:
@@ -7910,7 +7908,7 @@ def _maybe_fix_openai_function_tool_name(
     tool_dict: dict, index: int, used_names: set[str]
 ) -> None:
     from litellm.litellm_core_utils.openai_tool_name_mapping import (
-        openai_tool_name_mappings,
+        store_openai_tool_name_mapping,
     )
 
     fn = tool_dict.get("function")
@@ -7927,19 +7925,32 @@ def _maybe_fix_openai_function_tool_name(
     unique = _make_unique_openai_tool_name(base, used_names)
     fn["name"] = unique
     if unique != raw_original:
-        openai_tool_name_mappings.set_cache(key=unique, value=raw_original)
+        store_openai_tool_name_mapping(unique, raw_original)
 
 
-def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]:
+def validate_and_fix_openai_tools(
+    tools: Optional[List],
+    *,
+    sanitize_openai_function_tool_names: bool = False,
+) -> Optional[List[dict]]:
     """
     Ensure tools is List[dict] and not List[BaseModel].
 
-    Sanitizes OpenAI function tool names to match ^[a-zA-Z0-9_-]+$ (max 64 chars),
-    disambiguates collisions, and does not mutate caller-provided dicts.
+    When ``sanitize_openai_function_tool_names`` is True (OpenAI-compatible
+    providers only), rewrites function names to ``^[a-zA-Z0-9_-]+$`` (max 64 chars).
     """
     if tools is None:
         return tools
-    new_tools: List[dict] = []
+    if not sanitize_openai_function_tool_names:
+        new_tools: List[dict] = []
+        for tool in tools:
+            if isinstance(tool, BaseModel):
+                new_tools.append(tool.model_dump())
+            elif isinstance(tool, dict):
+                new_tools.append(tool)
+        return new_tools
+
+    new_tools = []
     used_names: set[str] = set()
     for idx, tool in enumerate(tools):
         if isinstance(tool, BaseModel):
