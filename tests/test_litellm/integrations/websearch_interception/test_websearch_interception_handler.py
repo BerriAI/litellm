@@ -4,7 +4,7 @@ Unit tests for WebSearch Interception Handler
 Tests the WebSearchInterceptionLogger class and helper functions.
 """
 
-from unittest.mock import AsyncMock, MagicMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
@@ -380,3 +380,122 @@ async def test_deployment_hook_converts_stream_and_logging_obj_syncs():
         logging_obj.stream = _hook_stream
 
     assert logging_obj.stream is False
+
+
+def _mock_proxy_server(mock_router):
+    """Create a mock proxy_server module with llm_router."""
+    mock_module = Mock()
+    mock_module.llm_router = mock_router
+    return mock_module
+
+
+@pytest.mark.asyncio
+async def test_execute_search_loads_api_key_from_named_tool():
+    """Test that _execute_search loads API key and base from router's named search tool."""
+    logger = WebSearchInterceptionLogger(
+        enabled_providers=["bedrock"], search_tool_name="my-search"
+    )
+
+    mock_router = Mock()
+    mock_router.search_tools = [
+        {
+            "search_tool_name": "my-search",
+            "litellm_params": {
+                "search_provider": "tavily",
+                "api_key": "tvly-secret",
+                "api_base": "https://custom.tavily.com",
+            },
+        }
+    ]
+
+    mock_search_result = Mock()
+    mock_search_result.results = []
+
+    with (
+        patch.dict(
+            "sys.modules",
+            {"litellm.proxy.proxy_server": _mock_proxy_server(mock_router)},
+        ),
+        patch(
+            "litellm.asearch",
+            new_callable=AsyncMock,
+            return_value=mock_search_result,
+        ) as mock_asearch,
+    ):
+        await logger._execute_search("test query")
+
+    mock_asearch.assert_called_once_with(
+        query="test query",
+        search_provider="tavily",
+        api_key="tvly-secret",
+        api_base="https://custom.tavily.com",
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_falls_back_to_first_tool():
+    """Test that _execute_search uses first available tool when no named tool matches."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    mock_router = Mock()
+    mock_router.search_tools = [
+        {
+            "search_tool_name": "default",
+            "litellm_params": {
+                "search_provider": "google",
+                "api_key": "google-key",
+            },
+        }
+    ]
+
+    mock_search_result = Mock()
+    mock_search_result.results = []
+
+    with (
+        patch.dict(
+            "sys.modules",
+            {"litellm.proxy.proxy_server": _mock_proxy_server(mock_router)},
+        ),
+        patch(
+            "litellm.asearch",
+            new_callable=AsyncMock,
+            return_value=mock_search_result,
+        ) as mock_asearch,
+    ):
+        await logger._execute_search("test query")
+
+    mock_asearch.assert_called_once_with(
+        query="test query",
+        search_provider="google",
+        api_key="google-key",
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_search_defaults_to_perplexity():
+    """Test that _execute_search falls back to perplexity when no router search tools."""
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    mock_router = Mock()
+    mock_router.search_tools = []
+
+    mock_search_result = Mock()
+    mock_search_result.results = []
+
+    with (
+        patch.dict(
+            "sys.modules",
+            {"litellm.proxy.proxy_server": _mock_proxy_server(mock_router)},
+        ),
+        patch(
+            "litellm.asearch",
+            new_callable=AsyncMock,
+            return_value=mock_search_result,
+        ) as mock_asearch,
+    ):
+        await logger._execute_search("test query")
+
+    mock_asearch.assert_called_once_with(
+        query="test query",
+        search_provider="perplexity",
+    )
