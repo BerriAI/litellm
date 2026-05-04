@@ -55,6 +55,7 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
         messages: list,
         optional_params: dict,
         litellm_params: dict,
+        headers: dict = {},
     ) -> dict:
         """
         Transforms standard LiteLLM request to Code Assist API format.
@@ -84,7 +85,7 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
         generation_config = {}
         # Handle parameter mapping
         base_params = self.map_openai_params(
-            {}, optional_params.copy(), model_name, messages
+            {}, optional_params.copy(), model_name, False
         )
 
         for key in ["temperature", "topP", "topK", "maxOutputTokens", "stopSequences"]:
@@ -158,6 +159,8 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
+        api_key: Any = None,
+        json_mode: Any = None,
     ) -> ModelResponse:
         """
         Transforms Code Assist API response to standard LiteLLM format.
@@ -168,7 +171,7 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
 
         return super().transform_response(
             model=model,
-            raw_response=ParsedJSONResponseAdapter(gemini_response),
+            raw_response=ParsedJSONResponseAdapter(gemini_response),  # type: ignore[arg-type]
             model_response=model_response,
             logging_obj=logging_obj,
             request_data=request_data,

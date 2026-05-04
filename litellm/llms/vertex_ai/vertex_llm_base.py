@@ -426,9 +426,9 @@ class VertexBase:
                 )
 
                 if gemini_oauth_token:
-                    auth_header = {"Authorization": f"Bearer {gemini_oauth_token}"}
+                    auth_header = {"Authorization": f"Bearer {gemini_oauth_token}"}  # type: ignore[assignment]
                     if gemini_auth_data and gemini_auth_data.get("project_id"):
-                        auth_header["x-goog-user-project"] = gemini_auth_data[
+                        auth_header["x-goog-user-project"] = gemini_auth_data[  # type: ignore[index]
                             "project_id"
                         ]
                 elif gemini_api_key is not None:
@@ -505,9 +505,9 @@ class VertexBase:
                 stream=stream,
             )
             if gemini_oauth_token:
-                auth_header = {"Authorization": f"Bearer {gemini_oauth_token}"}
+                auth_header = {"Authorization": f"Bearer {gemini_oauth_token}"}  # type: ignore[assignment]
                 if gemini_auth_data and gemini_auth_data.get("project_id"):
-                    auth_header["x-goog-user-project"] = gemini_auth_data["project_id"]
+                    auth_header["x-goog-user-project"] = gemini_auth_data["project_id"]  # type: ignore[index]
             elif gemini_api_key is None:
                 raise ValueError(
                     "Missing gemini_api_key. Please set `GEMINI_API_KEY` or `GEMINI_OAUTH_TOKEN`."

@@ -1,6 +1,6 @@
 import asyncio
 import httpx
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import litellm
 from litellm._logging import verbose_logger
@@ -175,7 +175,7 @@ class GoogleCodeAssistChat:
             "Content-Type": "application/json",
             "User-Agent": "GeminiCLI/litellm",
         }
-        load_payload = {
+        load_payload: Dict[str, Any] = {
             "metadata": {
                 "ideType": "IDE_UNSPECIFIED",
                 "platform": "PLATFORM_UNSPECIFIED",
@@ -207,7 +207,7 @@ class GoogleCodeAssistChat:
             "Content-Type": "application/json",
             "User-Agent": "GeminiCLI/litellm",
         }
-        load_payload = {
+        load_payload: Dict[str, Any] = {
             "metadata": {
                 "ideType": "IDE_UNSPECIFIED",
                 "platform": "PLATFORM_UNSPECIFIED",
