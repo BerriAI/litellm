@@ -969,11 +969,14 @@ class VertexBase:
                         # Clean up the entry automatically when the task finishes so
                         # that long-running proxies with many credential keys do not
                         # accumulate stale references.
-                        task.add_done_callback(
-                            lambda t, key=credential_cache_key: self._background_refresh_tasks.pop(
-                                key, None
+                        def _drop_background_refresh_task(
+                            _fut: asyncio.Future[Any],
+                        ) -> None:
+                            self._background_refresh_tasks.pop(
+                                credential_cache_key, None
                             )
-                        )
+
+                        task.add_done_callback(_drop_background_refresh_task)
                         self._background_refresh_tasks[credential_cache_key] = task
                     return current_token, resolved_project
 
