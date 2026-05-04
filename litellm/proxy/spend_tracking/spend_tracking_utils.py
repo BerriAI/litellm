@@ -524,8 +524,24 @@ def _get_session_id_for_spend_log(
 def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> Optional[int]:
     """Compute request duration in milliseconds from start and end times."""
     try:
-        return int((end_time - start_time).total_seconds() * 1000)
-    except Exception:
+        verbose_proxy_logger.info(
+            "_get_request_duration_ms: start_time=%s (type=%s, tzinfo=%s), end_time=%s (type=%s, tzinfo=%s)",
+            start_time,
+            type(start_time).__name__,
+            getattr(start_time, 'tzinfo', None),
+            end_time,
+            type(end_time).__name__,
+            getattr(end_time, 'tzinfo', None),
+        )
+        result = int((end_time - start_time).total_seconds() * 1000)
+        verbose_proxy_logger.info("_get_request_duration_ms: SUCCESS result=%s", result)
+        return result
+    except Exception as e:
+        verbose_proxy_logger.info(
+            "_get_request_duration_ms: FAILED error=%s: %s",
+            type(e).__name__,
+            e,
+        )
         return None
 
 
