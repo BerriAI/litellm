@@ -611,6 +611,9 @@ async def acompletion(  # noqa: PLR0915
         # Use a partial function to pass your keyword arguments
         func = partial(completion, **completion_kwargs, **kwargs)
 
+        # Initialise the OpenAI tool-name mapping scope in the *outer* async
+        begin_openai_tool_name_mapping_scope()
+
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)

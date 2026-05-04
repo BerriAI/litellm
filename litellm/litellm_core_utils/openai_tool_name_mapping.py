@@ -50,10 +50,23 @@ def should_sanitize_openai_tool_names(litellm_provider: str) -> bool:
     return litellm_provider in _OPENAI_TOOL_NAME_VALIDATION_PROVIDERS
 
 
-def begin_openai_tool_name_mapping_scope() -> None:
-    """Reset both mappings for this completion (call once at the start of completion())."""
-    _CTX.set({})
-    _CTX_REV.set({})
+def begin_openai_tool_name_mapping_scope(*, force_reset: bool = False) -> None:
+    """Initialise (or reset) both mapping dicts for one completion request.
+
+    Idempotent by default: if the ContextVar already holds a dict this is a
+    no-op.  This matters for async streaming where ``acompletion`` calls this
+    function in the *outer* async context before ``contextvars.copy_context()``
+    so that both the executor and the stream consumer share the same dict
+    objects by reference.  The inner ``completion()`` call then sees a non-None
+    dict and skips the reset, preserving the shared reference.
+
+    Pass ``force_reset=True`` only when you explicitly want a clean slate
+    (e.g. in tests).
+    """
+    if force_reset or _CTX.get() is None:
+        _CTX.set({})
+    if force_reset or _CTX_REV.get() is None:
+        _CTX_REV.set({})
 
 
 def _store(sanitized: str, original: str) -> None:

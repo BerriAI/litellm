@@ -4032,7 +4032,7 @@ def test_openai_tool_name_mapping_per_request_context():
     )
     from litellm.utils import validate_and_fix_openai_tools
 
-    begin_openai_tool_name_mapping_scope()
+    begin_openai_tool_name_mapping_scope(force_reset=True)
     validate_and_fix_openai_tools(
         tools=[
             {
@@ -4049,7 +4049,8 @@ def test_openai_tool_name_mapping_per_request_context():
         restore_openai_tool_name_for_user("invalid_name_at_index_71")
         == "invalid.name.at.index.71"
     )
-    begin_openai_tool_name_mapping_scope()
+    # Simulate a second request: force_reset=True clears the mapping.
+    begin_openai_tool_name_mapping_scope(force_reset=True)
     assert (
         restore_openai_tool_name_for_user("invalid_name_at_index_71")
         == "invalid_name_at_index_71"
@@ -4066,7 +4067,7 @@ def test_convert_to_model_response_restores_openai_tool_call_names_when_mapped()
     from litellm.types.utils import ModelResponse
     from litellm.utils import validate_and_fix_openai_tools
 
-    begin_openai_tool_name_mapping_scope()
+    begin_openai_tool_name_mapping_scope(force_reset=True)
     validate_and_fix_openai_tools(
         tools=[
             {
@@ -4121,7 +4122,7 @@ def test_tool_choice_function_name_sanitized_with_tools():
     )
     from litellm.utils import validate_and_fix_openai_tools
 
-    begin_openai_tool_name_mapping_scope()
+    begin_openai_tool_name_mapping_scope(force_reset=True)
     validate_and_fix_openai_tools(
         tools=[
             {
@@ -4152,7 +4153,7 @@ def test_tool_choice_function_name_uses_collision_suffix():
     )
     from litellm.utils import validate_and_fix_openai_tools
 
-    begin_openai_tool_name_mapping_scope()
+    begin_openai_tool_name_mapping_scope(force_reset=True)
     validate_and_fix_openai_tools(
         tools=[
             {
@@ -4175,3 +4176,41 @@ def test_tool_choice_function_name_uses_collision_suffix():
     # "a.b" → "a_b"; "a/b" also sanitizes to "a_b" but gets suffix → "a_b_1"
     assert get_sanitized_tool_name("a.b") == "a_b"
     assert get_sanitized_tool_name("a/b") == "a_b_1"
+
+
+def test_begin_scope_is_idempotent_shared_reference():
+    """begin_openai_tool_name_mapping_scope must not replace the dict when already set.
+
+    This simulates the async-streaming path: the outer acompletion() call
+    initialises the scope (sets _CTX = {}), copy_context() copies the
+    reference, and then the inner completion() call must not clobber it with a
+    new empty dict — otherwise mutations from the executor are invisible to the
+    stream consumer in the outer context.
+    """
+    import contextvars
+
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
+        _CTX,
+        begin_openai_tool_name_mapping_scope,
+        restore_openai_tool_name_for_user,
+        store_openai_tool_name_mapping,
+    )
+
+    # Outer context initialises the scope (simulates acompletion pre-copy_context).
+    begin_openai_tool_name_mapping_scope(force_reset=True)
+    outer_dict = _CTX.get()
+    assert outer_dict is not None
+
+    # Inner context (executor) calls begin_openai_tool_name_mapping_scope again
+    # and then writes a mapping — simulates what completion() does.
+    def inner():
+        begin_openai_tool_name_mapping_scope()  # must be a no-op (no force_reset)
+        inner_dict = _CTX.get()
+        assert inner_dict is outer_dict, "inner call must not replace the shared dict"
+        store_openai_tool_name_mapping("my_tool", "my.tool")
+
+    ctx = contextvars.copy_context()
+    ctx.run(inner)
+
+    # The outer context must see the mapping written by the inner context.
+    assert restore_openai_tool_name_for_user("my_tool") == "my.tool"
