@@ -1,13 +1,15 @@
-import asyncio
+# conftest.py
+#
+# Wires audio tests into the Redis-backed VCR cache so live provider
+# calls are replayed for 24h. See tests/llm_translation/Readme.md for
+# the design overview.
+
 import os
 import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-import litellm  # noqa: E402,F401
+sys.path.insert(0, os.path.abspath("../.."))
 
 from tests._vcr_conftest_common import (  # noqa: E402
     VerboseReporterState,
@@ -18,16 +20,6 @@ from tests._vcr_conftest_common import (  # noqa: E402
 )
 
 _verbose_state = VerboseReporterState()
-
-
-@pytest.fixture(scope="session")
-def event_loop():
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
 
 
 @pytest.fixture(scope="module")
