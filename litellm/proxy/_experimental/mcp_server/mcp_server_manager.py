@@ -166,8 +166,108 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
         return data
 
 
+def _coerce_optional_float(value: Any) -> Tuple[Optional[float], bool]:
+    """Coerce a value to Optional[float]; return (value, ok).
+
+    PyYAML (YAML 1.1) parses scientific notation without a decimal point (e.g.
+    ``7e-05``) as a string, so callers that expect a float receive a string and
+    crash downstream. Accepts ints/floats/None as-is and tries to cast strings;
+    on failure returns ``(None, False)`` so the caller can warn.
+    """
+    if value is None:
+        return None, True
+    if isinstance(value, bool):
+        return None, False
+    if isinstance(value, (int, float)):
+        return float(value), True
+    if isinstance(value, str):
+        try:
+            return float(value), True
+        except ValueError:
+            return None, False
+    return None, False
+
+
+def _coerce_mcp_cost_info_in_place(
+    mcp_info: Dict[str, Any], server_name: str
+) -> None:
+    """Coerce MCP server cost-info fields to floats, dropping invalid entries.
+
+    Handles the YAML 1.1 footgun where ``default_cost_per_query: 7e-05`` is
+    parsed as a string. Logs a clear warning when coercion fails so users can
+    fix their config; bad values are dropped rather than persisted to the DB.
+    """
+    cost_info = mcp_info.get("mcp_server_cost_info")
+    if not isinstance(cost_info, dict):
+        return
+
+    if "default_cost_per_query" in cost_info:
+        raw = cost_info["default_cost_per_query"]
+        coerced, ok = _coerce_optional_float(raw)
+        if ok:
+            cost_info["default_cost_per_query"] = coerced
+        else:
+            verbose_logger.warning(
+                "MCP server %r: dropping non-numeric default_cost_per_query=%r. "
+                "If using YAML scientific notation, write '7.0e-5' instead of "
+                "'7e-5' (YAML 1.1 requires a decimal point in the mantissa).",
+                server_name,
+                raw,
+            )
+            cost_info.pop("default_cost_per_query", None)
+
+    tool_costs = cost_info.get("tool_name_to_cost_per_query")
+    if isinstance(tool_costs, dict):
+        for tool_name in list(tool_costs.keys()):
+            raw = tool_costs[tool_name]
+            coerced, ok = _coerce_optional_float(raw)
+            if ok:
+                tool_costs[tool_name] = coerced
+            else:
+                verbose_logger.warning(
+                    "MCP server %r: dropping non-numeric "
+                    "tool_name_to_cost_per_query[%r]=%r. If using YAML "
+                    "scientific notation, write e.g. '7.0e-5' instead of '7e-5'.",
+                    server_name,
+                    tool_name,
+                    raw,
+                )
+                tool_costs.pop(tool_name, None)
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
+
+    @staticmethod
+    def _resolve_oauth2_flow(
+        *,
+        auth_type: Optional[MCPAuthType],
+        oauth2_flow: Optional[str],
+        token_url: Optional[str],
+        authorization_url: Optional[str],
+        client_id: Optional[str],
+        client_secret: Optional[str],
+    ) -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """Infer oauth2_flow for legacy records that omit the field.
+
+        DB rows created before oauth2_flow support may have OAuth2 client
+        credentials + token_url but a null oauth2_flow. Treat these as M2M,
+        unless authorization_url is present (interactive OAuth).
+        """
+        if oauth2_flow in ("client_credentials", "authorization_code"):
+            return cast(
+                Literal["client_credentials", "authorization_code"], oauth2_flow
+            )
+        if oauth2_flow:
+            # Ignore unknown/untyped values and continue legacy inference.
+            return None
+        if auth_type != MCPAuth.oauth2:
+            return None
+        if authorization_url:
+            return None
+        if token_url and client_id and client_secret:
+            return "client_credentials"
+        return None
 
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
@@ -234,6 +334,14 @@ class MCPServerManager:
             _mcp_info: Dict[str, Any] = server_config.get("mcp_info", None) or {}
             # Preserve all custom fields from config while setting defaults for core fields
             mcp_info: MCPInfo = _mcp_info.copy()
+            # Coerce cost-info fields that may arrive as strings (YAML 1.1 parses
+            # `7e-05` as str). Without this, the value round-trips into the DB
+            # and crashes the UI on .toFixed(). See issue #27097.
+            if isinstance(mcp_info.get("mcp_server_cost_info"), dict):
+                mcp_info["mcp_server_cost_info"] = dict(
+                    mcp_info["mcp_server_cost_info"]
+                )
+            _coerce_mcp_cost_info_in_place(mcp_info, server_name)
             # Set default values for core fields if not present
             if "server_name" not in mcp_info:
                 mcp_info["server_name"] = server_name
@@ -342,7 +450,14 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
-                oauth2_flow=server_config.get("oauth2_flow", None),
+                oauth2_flow=self._resolve_oauth2_flow(
+                    auth_type=auth_type,
+                    oauth2_flow=server_config.get("oauth2_flow", None),
+                    token_url=resolved_token_url,
+                    authorization_url=resolved_authorization_url,
+                    client_id=server_config.get("client_id", None),
+                    client_secret=server_config.get("client_secret", None),
+                ),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -679,7 +794,17 @@ class MCPServerManager:
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
-            oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
+            oauth2_flow=self._resolve_oauth2_flow(
+                auth_type=auth_type,
+                oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
+                token_url=mcp_server.token_url
+                or getattr(mcp_oauth_metadata, "token_url", None),
+                authorization_url=mcp_server.authorization_url
+                or getattr(mcp_oauth_metadata, "authorization_url", None),
+                client_id=client_id_value or getattr(mcp_server, "client_id", None),
+                client_secret=client_secret_value
+                or getattr(mcp_server, "client_secret", None),
+            ),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url
             or getattr(mcp_oauth_metadata, "authorization_url", None),
@@ -2426,7 +2551,7 @@ class MCPServerManager:
             )
         )
 
-    async def _call_regular_mcp_tool(
+    async def _call_regular_mcp_tool(  # noqa: PLR0915
         self,
         mcp_server: MCPServer,
         original_tool_name: str,
@@ -2489,7 +2614,11 @@ class MCPServerManager:
         # oauth2 headers
         extra_headers: Optional[Dict[str, str]] = None
         if mcp_server.auth_type == MCPAuth.oauth2:
-            extra_headers = oauth2_headers
+            if mcp_server.has_client_credentials:
+                # For M2M OAuth servers, Authorization must come from token fetch.
+                extra_headers = None
+            else:
+                extra_headers = oauth2_headers
 
         if mcp_server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -2500,6 +2629,11 @@ class MCPServerManager:
             }
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
+                    continue
+                if (
+                    mcp_server.has_client_credentials
+                    and header.lower() == "authorization"
+                ):
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
@@ -2535,6 +2669,10 @@ class MCPServerManager:
                         mcp_server.server_name or mcp_server.name,
                     )
             extra_headers.update(hook_extra_headers)
+
+        # Reset to None if no headers were actually added
+        if extra_headers is not None and len(extra_headers) == 0:
+            extra_headers = None
 
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
 
