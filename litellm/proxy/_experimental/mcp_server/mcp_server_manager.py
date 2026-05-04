@@ -188,9 +188,7 @@ def _coerce_optional_float(value: Any) -> Tuple[Optional[float], bool]:
     return None, False
 
 
-def _coerce_mcp_cost_info_in_place(
-    mcp_info: Dict[str, Any], server_name: str
-) -> None:
+def _coerce_mcp_cost_info_in_place(mcp_info: Dict[str, Any], server_name: str) -> None:
     """Coerce MCP server cost-info fields to floats, dropping invalid entries.
 
     Handles the YAML 1.1 footgun where ``default_cost_per_query: 7e-05`` is
