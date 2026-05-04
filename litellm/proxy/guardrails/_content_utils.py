@@ -8,7 +8,31 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
-from typing import Any, Callable, Dict, Iterator, List
+from typing import Any, Callable, Dict, FrozenSet, Iterator, List
+
+
+# Call types whose body carries free-form chat / prompt text that
+# text-content guardrails (banned keywords, content moderation, secret
+# detection, …) should inspect. The proxy ingress passes ``route_type``
+# straight through as ``call_type``, so the literal values here are
+# what the guardrail dispatcher actually receives:
+#
+#   /v1/chat/completions   -> "acompletion"
+#   /v1/responses          -> "aresponses"
+#
+# ``"completion"`` is included for SDK / internal callers that invoke
+# ``pre_call_hook`` directly with the sync name. Embedding, moderation,
+# audio, and transcription endpoints are deliberately excluded — text
+# guardrails on those paths are a separate scope.
+TEXT_CONTENT_CALL_TYPES: FrozenSet[str] = frozenset(
+    {"completion", "acompletion", "aresponses"}
+)
+
+
+def is_text_content_call_type(call_type: str) -> bool:
+    """Return True if ``call_type`` carries free-form text that text
+    guardrails should inspect (Chat Completions or Responses API)."""
+    return call_type in TEXT_CONTENT_CALL_TYPES
 
 
 def _iter_text_parts_in_content(content: Any) -> Iterator[str]:

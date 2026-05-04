@@ -11,7 +11,10 @@ from typing import Literal
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import iter_message_text
+from litellm.proxy.guardrails._content_utils import (
+    is_text_content_call_type,
+    iter_message_text,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
 from fastapi import HTTPException
@@ -74,8 +77,7 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
             - check if user id part of blocked list
             """
             self.print_verbose("Inside Banned Keyword List Pre-Call Hook")
-            if call_type == "completion":
-                # Covers multimodal list content + Responses-API input.
+            if is_text_content_call_type(call_type):
                 for text in iter_message_text(data):
                     self.test_violation(test_str=text)
 

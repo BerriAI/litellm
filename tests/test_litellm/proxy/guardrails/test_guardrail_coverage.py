@@ -433,7 +433,13 @@ async def test_lasso_masking_writes_back_responses_api_input(user_api_key, monke
 
 
 def test_banned_keywords_blocks_multimodal_content(monkeypatch):
-    """VERIA-11: a banned word hidden in a multimodal text part is now caught."""
+    """VERIA-11: a banned word hidden in a multimodal text part is now caught.
+
+    Uses ``acompletion`` — the value the proxy ingress actually passes
+    for ``/v1/chat/completions``. Asserting against the literal sync
+    ``"completion"`` would pass even if the hook's call-type gate were
+    misaligned with the runtime, so the test wouldn't catch regressions.
+    """
     monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
     from enterprise.enterprise_hooks.banned_keywords import _ENTERPRISE_BannedKeywords
     from fastapi import HTTPException
@@ -455,7 +461,7 @@ def test_banned_keywords_blocks_multimodal_content(monkeypatch):
                     }
                 ]
             },
-            call_type="completion",
+            call_type="acompletion",
         )
 
     import asyncio
@@ -477,13 +483,66 @@ def test_banned_keywords_blocks_responses_api_input(monkeypatch):
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed", user_id="u"),
             cache=DualCache(),
             data={"input": "this contains forbidden content"},
-            call_type="completion",
+            call_type="aresponses",
         )
 
     import asyncio
 
     with pytest.raises(HTTPException):
         asyncio.run(_run())
+
+
+@pytest.mark.parametrize("call_type", ["completion", "acompletion", "aresponses"])
+def test_banned_keywords_fires_on_text_content_call_types(monkeypatch, call_type):
+    """Locks the call-type gate to the runtime ``route_type`` values the
+    proxy actually emits — pinning a regression where the hook had
+    ``call_type == "completion"`` and silently no-op'd both
+    ``acompletion`` (chat completions) and ``aresponses`` (Responses API).
+    """
+    monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
+    from enterprise.enterprise_hooks.banned_keywords import _ENTERPRISE_BannedKeywords
+    from fastapi import HTTPException
+
+    guard = _ENTERPRISE_BannedKeywords()
+
+    import asyncio
+
+    with pytest.raises(HTTPException):
+        asyncio.run(
+            guard.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed", user_id="u"),
+                cache=DualCache(),
+                data={
+                    "messages": [{"role": "user", "content": "forbidden text"}],
+                    "input": "forbidden text",
+                },
+                call_type=call_type,
+            )
+        )
+
+
+def test_banned_keywords_skips_non_text_call_types(monkeypatch):
+    """Embedding / moderation / audio paths don't carry chat text and
+    aren't in the text-guardrail scope. They must not trigger the hook
+    even when the request body otherwise looks like a chat payload.
+    """
+    monkeypatch.setattr("litellm.banned_keywords_list", ["forbidden"], raising=False)
+    from enterprise.enterprise_hooks.banned_keywords import _ENTERPRISE_BannedKeywords
+
+    guard = _ENTERPRISE_BannedKeywords()
+
+    import asyncio
+
+    for call_type in ("aembedding", "amoderation", "aspeech", "atranscription"):
+        # Should return without raising, even though the data carries the banned word.
+        asyncio.run(
+            guard.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="hashed", user_id="u"),
+                cache=DualCache(),
+                data={"input": "forbidden text"},
+                call_type=call_type,
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -513,6 +572,53 @@ async def test_banned_keywords_post_call_checks_all_choices(monkeypatch, user_ap
 
 
 # ── Azure Content Safety ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "call_type, data",
+    [
+        (
+            "acompletion",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "scan me"},
+                            {"type": "image_url", "image_url": {"url": "..."}},
+                        ],
+                    }
+                ]
+            },
+        ),
+        ("aresponses", {"input": "scan me"}),
+    ],
+)
+async def test_azure_content_safety_pre_call_fires_on_runtime_call_types(
+    user_api_key, call_type, data
+):
+    """The proxy ingress passes ``route_type`` straight through as
+    ``call_type`` — ``acompletion`` for chat completions and
+    ``aresponses`` for the Responses API. The hook must inspect text
+    fragments under both, not only the literal ``"completion"`` string
+    used by some SDK callers."""
+    from litellm.proxy.hooks.azure_content_safety import _PROXY_AzureContentSafety
+
+    guard = _PROXY_AzureContentSafety.__new__(_PROXY_AzureContentSafety)
+    seen = []
+
+    async def fake_test_violation(content, source=None):
+        seen.append((content, source))
+
+    guard.test_violation = fake_test_violation
+    await guard.async_pre_call_hook(
+        user_api_key_dict=user_api_key,
+        cache=DualCache(),
+        data=data,
+        call_type=call_type,
+    )
+    assert ("scan me", "input") in seen
 
 
 @pytest.mark.asyncio
