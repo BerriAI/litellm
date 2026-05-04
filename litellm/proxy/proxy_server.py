@@ -476,6 +476,7 @@ from litellm.secret_managers.main import (
     get_secret,
     get_secret_bool,
     get_secret_str,
+    normalize_nonempty_secret_str,
     str_to_bool,
 )
 from litellm.types.integrations.slack_alerting import SlackAlertingArgs
@@ -7516,11 +7517,12 @@ class ProxyStartupEvent:
             if env_name:
                 tags["environment"] = env_name
             sample_rate_env = os.getenv("PYROSCOPE_SAMPLE_RATE")
-            grafana_pyroscope_user = get_secret_str(
-                "PYROSCOPE_GRAFANA_USER", default_value=None
+
+            grafana_pyroscope_user = normalize_nonempty_secret_str(
+                get_secret_str("PYROSCOPE_GRAFANA_USER", default_value=None)
             )
-            grafana_api_token = get_secret_str(
-                "PYROSCOPE_GRAFANA_API_TOKEN", default_value=None
+            grafana_api_token = normalize_nonempty_secret_str(
+                get_secret_str("PYROSCOPE_GRAFANA_API_TOKEN", default_value=None)
             )
             if grafana_api_token and not grafana_pyroscope_user:
                 raise ValueError(
