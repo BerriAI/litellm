@@ -63,7 +63,7 @@ async def test_async_streaming_flushes_on_normal_completion():
     call_kwargs = (
         mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     )
-    assert call_kwargs["raw_bytes"] == chunks
+    assert call_kwargs["stream_flush_buffer"].raw_chunks == chunks
     assert call_kwargs["provider_config"] is provider_config
 
 
@@ -101,7 +101,7 @@ async def test_async_streaming_flushes_on_client_disconnect():
     call_kwargs = (
         mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     )
-    assert call_kwargs["raw_bytes"] == [chunks[0]]
+    assert call_kwargs["stream_flush_buffer"].raw_chunks == [chunks[0]]
 
 
 @pytest.mark.asyncio
@@ -180,7 +180,7 @@ async def test_async_streaming_flushes_on_upstream_exception_with_partial_data()
     call_kwargs = (
         mock_logging_obj.async_flush_passthrough_collected_chunks.call_args.kwargs
     )
-    assert call_kwargs["raw_bytes"] == partial_chunks
+    assert call_kwargs["stream_flush_buffer"].raw_chunks == partial_chunks
 
 
 def test_sync_streaming_flushes_on_normal_completion():
@@ -241,4 +241,4 @@ def test_sync_streaming_flushes_on_early_close():
     assert first == chunks[0]
     mock_logging_obj.flush_passthrough_collected_chunks.assert_called_once()
     call_kwargs = mock_logging_obj.flush_passthrough_collected_chunks.call_args.kwargs
-    assert call_kwargs["raw_bytes"] == [chunks[0]]
+    assert call_kwargs["stream_flush_buffer"].raw_chunks == [chunks[0]]

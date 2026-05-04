@@ -11,7 +11,6 @@ from typing import (
     AsyncGenerator,
     Coroutine,
     Generator,
-    List,
     Optional,
     Union,
     cast,
@@ -25,6 +24,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.passthrough.stream_flush_buffer import StreamBuffer
 from litellm.passthrough.utils import CommonUtils
 from litellm.utils import client
 
@@ -391,26 +391,24 @@ def _sync_streaming(
 ):
     from litellm.utils import executor
 
-    raw_bytes: List[bytes] = []
+    stream_flush_buffer: StreamBuffer = provider_config.build_stream_flush_buffer()
     flush_scheduled = False
     try:
         for chunk in response.iter_bytes():  # type: ignore
-            raw_bytes.append(chunk)
+            stream_flush_buffer.feed(chunk)
             yield chunk
     finally:
-        if not flush_scheduled and raw_bytes:
+        if not flush_scheduled and stream_flush_buffer.should_flush():
             flush_scheduled = True
             try:
                 executor.submit(
                     litellm_logging_obj.flush_passthrough_collected_chunks,
-                    raw_bytes=raw_bytes,
+                    stream_flush_buffer=stream_flush_buffer,
                     provider_config=provider_config,
                 )
             except Exception as e:
                 verbose_logger.exception(
-                    "Failed to schedule passthrough spend-tracking flush "
-                    "in _sync_streaming; %d buffered chunks dropped: %s",
-                    len(raw_bytes),
+                    "Failed to schedule passthrough spend-tracking flush in _sync_streaming: %s",
                     e,
                 )
 
@@ -431,11 +429,11 @@ async def _async_streaming(
             pass
         raise
 
-    raw_bytes: List[bytes] = []
+    stream_flush_buffer: StreamBuffer = provider_config.build_stream_flush_buffer()
     flush_scheduled = False
     try:
         async for chunk in iter_response.aiter_bytes():  # type: ignore
-            raw_bytes.append(chunk)
+            stream_flush_buffer.feed(chunk)
             yield chunk
     except Exception:
         try:
@@ -447,19 +445,17 @@ async def _async_streaming(
         # GeneratorExit (raised on client disconnect) is not caught by
         # `except Exception`; the finally block ensures partial usage
         # still gets flushed for spend tracking. See LIT-2642.
-        if not flush_scheduled and raw_bytes:
+        if not flush_scheduled and stream_flush_buffer.should_flush():
             flush_scheduled = True
             try:
                 asyncio.create_task(
                     litellm_logging_obj.async_flush_passthrough_collected_chunks(
-                        raw_bytes=raw_bytes,
+                        stream_flush_buffer=stream_flush_buffer,
                         provider_config=provider_config,
                     )
                 )
             except Exception as e:
                 verbose_logger.exception(
-                    "Failed to schedule passthrough spend-tracking flush "
-                    "in _async_streaming; %d buffered chunks dropped: %s",
-                    len(raw_bytes),
+                    "Failed to schedule passthrough spend-tracking flush in _async_streaming: %s",
                     e,
                 )
