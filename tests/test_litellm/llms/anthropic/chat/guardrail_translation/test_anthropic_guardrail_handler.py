@@ -295,6 +295,58 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert "input_schema" in tools[1]
 
 
+    @pytest.mark.asyncio
+    async def test_process_input_messages_does_not_corrupt_caller_tools(self):
+        """Regression: pre-call guardrail hook must not mutate caller's tools.
+
+        Claude Code sends tools with tool-level ``type: "custom"`` and
+        ``input_schema.type: "object"``. The adapter used to alias
+        ``function_chunk["parameters"]`` directly to ``tool["input_schema"]``
+        and then copy unknown tool keys (including ``"type"``) into it,
+        overwriting the schema type ``"object"`` → ``"custom"`` in place.
+
+        Because ``_translate_to_openai`` only did a shallow ``data.copy()``,
+        that in-place mutation propagated back to the caller's tool dicts.
+        When the primary Bedrock call failed and LiteLLM fell back to Anthropic
+        direct, the corrupted payload was sent to ``api.anthropic.com`` and
+        rejected with::
+
+            tools.0.custom.input_schema.type: Input should be 'object'
+
+        This test asserts the caller's ``data["tools"]`` is untouched after
+        a pre-call pass.
+        """
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+
+        original_schema = {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+            "additionalProperties": False,
+        }
+        data = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "run ls"}],
+            "tools": [
+                {
+                    "name": "Bash",
+                    "type": "custom",
+                    "description": "Execute a shell command",
+                    "input_schema": original_schema,
+                }
+            ],
+        }
+
+        await handler.process_input_messages(
+            data=data, guardrail_to_apply=guardrail, litellm_logging_obj=MagicMock()
+        )
+
+        # The caller's original tool dict (pre-guardrail-rebuild) must not be mutated.
+        assert original_schema["type"] == "object"
+        assert original_schema["properties"] == {"command": {"type": "string"}}
+
+
 if __name__ == "__main__":
     # Run the tests
     pytest.main([__file__, "-v"])

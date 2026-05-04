@@ -802,7 +802,16 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         new_tools: List[ChatCompletionToolParam] = []
         tool_name_mapping: Dict[str, str] = {}
-        mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
+        # "type" is the Anthropic tool-level discriminator ("custom", "computer_*",
+        # etc.) — it must never be copied into parameters, where it would overwrite
+        # the JSON-schema "type" field (which Anthropic requires to be "object").
+        mapped_tool_params = [
+            "name",
+            "input_schema",
+            "description",
+            "cache_control",
+            "type",
+        ]
 
         for idx, tool in enumerate(tools):
             # Check if this is an Anthropic-native tool that should be kept as-is
@@ -829,7 +838,11 @@ class LiteLLMAnthropicMessagesAdapter:
                 name=truncated_name,
             )
             if "input_schema" in tool:
-                function_chunk["parameters"] = tool["input_schema"]  # type: ignore
+                # Shallow-copy the caller's input_schema: subsequent updates to
+                # function_chunk["parameters"] must not mutate the original tool
+                # definition, which is shared with the caller (e.g. the proxy
+                # guardrail pre-call hook that runs on every request).
+                function_chunk["parameters"] = dict(tool["input_schema"] or {})  # type: ignore
             if "description" in tool:
                 function_chunk["description"] = tool["description"]  # type: ignore
 

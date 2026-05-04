@@ -2178,3 +2178,84 @@ def test_translate_anthropic_tool_choice_none():
 
     result = adapter.translate_anthropic_tool_choice_to_openai({"type": "none"})
     assert result == "none"
+
+
+def test_translate_anthropic_tools_to_openai_does_not_mutate_input_schema():
+    """
+    Regression test: tool-level ``type`` ("custom") must not overwrite the
+    JSON-schema ``type`` ("object") of ``input_schema``.
+
+    Claude Code sends tools shaped like::
+
+        {"name": "Bash", "type": "custom",
+         "input_schema": {"type": "object", "properties": {...}}}
+
+    The adapter used to alias ``function_chunk["parameters"]`` directly to
+    ``tool["input_schema"]`` and then iterate ``tool.items()``, writing any key
+    not in ``mapped_tool_params`` back into ``parameters``. ``"type"`` was not
+    in that allowlist, so ``input_schema["type"]`` was rewritten from
+    ``"object"`` to ``"custom"`` in-place on the caller's dict.
+
+    Because the proxy guardrail pre-call hook invokes this adapter on every
+    request (via a shallow ``data.copy()``), the corruption leaked through to
+    the real LLM call. Bedrock has its own normalizer and silently repaired it;
+    Anthropic's ``/v1/messages`` validates strictly and returned
+    ``tools.0.custom.input_schema.type: Input should be 'object'``.
+
+    This test asserts both: (a) the translated OpenAI ``parameters`` has
+    ``type == "object"``, and (b) the caller's original tool dict is untouched.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    original_input_schema = {
+        "type": "object",
+        "properties": {"command": {"type": "string"}},
+        "required": ["command"],
+        "additionalProperties": False,
+    }
+    tool = {
+        "name": "Bash",
+        "type": "custom",
+        "description": "Run a shell command",
+        "input_schema": original_input_schema,
+    }
+    tools = [tool]
+
+    translated, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    assert len(translated) == 1
+    params = translated[0]["function"]["parameters"]
+    assert params["type"] == "object", (
+        f"Tool-level type leaked into JSON schema: got {params['type']!r}"
+    )
+    assert params["properties"] == {"command": {"type": "string"}}
+
+    # Caller's dict must be unchanged — this is the critical invariant.
+    assert tool["input_schema"] is original_input_schema
+    assert tool["input_schema"]["type"] == "object"
+    assert tool["type"] == "custom"
+
+
+def test_translate_anthropic_tools_to_openai_preserves_extra_computer_kwargs():
+    """
+    Unknown tool keys (e.g. ``display_width_px``) must still be copied into
+    ``parameters`` — preserves the original behaviour for computer-use tools
+    that piggy-back extra fields. Only ``type`` is now excluded from that
+    fallback, since it is the Anthropic tool-level discriminator.
+    """
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    tool = {
+        "name": "computer",
+        "description": "Use the computer",
+        "input_schema": {"type": "object", "properties": {}},
+        "display_width_px": 1024,
+        "display_height_px": 768,
+    }
+
+    translated, _ = adapter.translate_anthropic_tools_to_openai(tools=[tool])
+
+    params = translated[0]["function"]["parameters"]
+    assert params["type"] == "object"
+    assert params["display_width_px"] == 1024
+    assert params["display_height_px"] == 768
