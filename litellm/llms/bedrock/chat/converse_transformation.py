@@ -512,33 +512,16 @@ class AmazonConverseConfig(BaseConfig):
                     optional_params["output_config"] = {"effort": mapped_effort}
 
     @staticmethod
-    def _supports_effort_level_on_bedrock(model: str, level: str) -> bool:
-        """Look up ``supports_{level}_reasoning_effort`` for a Bedrock-routed
-        model id directly in ``litellm.model_cost`` so the bedrock provider
-        prefix is irrelevant to the lookup. ``AnthropicConfig._supports_effort_level``
-        hard-codes ``custom_llm_provider="anthropic"`` and returns False for
-        the same effort level on a Bedrock model id.
-        """
-        try:
-            base_model = BedrockModelInfo.get_base_model(model)
-            for key in (model, base_model, f"bedrock/{base_model}"):
-                if key and key in litellm.model_cost:
-                    if (
-                        litellm.model_cost[key].get(
-                            f"supports_{level}_reasoning_effort"
-                        )
-                        is True
-                    ):
-                        return True
-        except Exception:
-            pass
-        return False
-
-    @staticmethod
     def _validate_anthropic_adaptive_effort(model: str, effort: str) -> None:
         """Validate ``output_config.effort`` for adaptive-thinking Claude 4.6/4.7
         on Bedrock. Raises ``BadRequestError`` (clean 400) instead of letting
         a downstream ``ValueError`` surface as 500.
+
+        Per-model gating for ``max``/``xhigh`` is delegated to
+        ``AnthropicConfig._validate_effort_for_model`` so the Bedrock Converse
+        path and the Anthropic chat / ``/v1/messages`` paths can't drift when
+        a new gated effort tier is added. ``_supports_effort_level`` on
+        ``AnthropicConfig`` already handles Bedrock-prefixed model ids.
         """
         valid_efforts = {"high", "medium", "low", "xhigh", "max"}
         if effort not in valid_efforts:
@@ -551,36 +534,10 @@ class AmazonConverseConfig(BaseConfig):
                 model=model,
                 llm_provider="bedrock_converse",
             )
-        # ``max`` is supported on Claude 4.6 (Opus + Sonnet) and Claude 4.7
-        # adaptive-thinking models. Prefer the data-driven
-        # ``supports_max_reasoning_effort`` flag in
-        # ``model_prices_and_context_window.json`` so new variants only
-        # require a model-map update; family-level checks remain a fallback
-        # for Bedrock model ids whose entries don't yet carry the flag.
-        if effort == "max" and not (
-            AnthropicConfig._is_claude_4_6_model(model)
-            or AnthropicConfig._is_claude_4_7_model(model)
-            or AmazonConverseConfig._supports_effort_level_on_bedrock(model, "max")
-        ):
+        error = AnthropicConfig._validate_effort_for_model(model=model, effort=effort)
+        if error is not None:
             raise litellm.exceptions.BadRequestError(
-                message=(
-                    f"effort='max' is not supported by this model. "
-                    f"Got model: {model}"
-                ),
-                model=model,
-                llm_provider="bedrock_converse",
-            )
-        if (
-            effort == "xhigh"
-            and not AmazonConverseConfig._supports_effort_level_on_bedrock(
-                model, "xhigh"
-            )
-        ):
-            raise litellm.exceptions.BadRequestError(
-                message=(
-                    f"effort='xhigh' is not supported by this model. "
-                    f"Got model: {model}"
-                ),
+                message=error,
                 model=model,
                 llm_provider="bedrock_converse",
             )
