@@ -1,22 +1,14 @@
 #!/bin/bash
 set -e
 
-destination_dir="../../litellm/proxy/_experimental/out"
+# This script used to rebuild the UI and commit the resulting Next.js
+# bundle into git so the proxy could ship a pre-built dashboard.
+#
+# The bundle is no longer checked into the repository — it is rebuilt
+# from source by the Dockerfiles and by the PyPI publish workflow. This
+# script now simply triggers a local build (the canonical entry point is
+# `docker/build_admin_ui.sh`) for developers who want to preview the
+# production-flavoured UI without booting a Docker image.
 
-chmod +x ./build_ui.sh
-./build_ui.sh
-
-commit_message="chore: update Next.js build artifacts ($(date -u +"%Y-%m-%d %H:%M UTC"), node $(node -v))"
-
-if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
-  git add -f "$destination_dir"/
-
-  if ! git diff --cached --quiet; then
-    git commit -m "$commit_message"
-    echo "Git commit created."
-  else
-    echo "No changes to commit."
-  fi
-else
-  echo "Not a git repository. Skipping commit."
-fi
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+exec "$repo_root/docker/build_admin_ui.sh"

@@ -121,6 +121,21 @@ jobs:
           version: "0.10.9"
           enable-cache: false
 
+      - name: Set up Node.js for Admin UI build
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+
+      - name: Build Admin UI
+        # The Next.js bundle under litellm/proxy/_experimental/out is no longer
+        # checked into the repository; build it here so it gets packaged into
+        # the published wheel/sdist.
+        run: |
+          chmod +x docker/build_admin_ui.sh
+          ./docker/build_admin_ui.sh
+
       - name: Copy model prices backup
         run: cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
 
