@@ -2101,6 +2101,44 @@ def test_supports_effort_level_handles_provider_prefixes(model, level, expected)
     assert AnthropicConfig._supports_effort_level(model, level) is expected
 
 
+@pytest.mark.parametrize(
+    "model,effort,expect_error",
+    [
+        # ``max`` accepted on 4.6 / 4.7 (family fallback) and rejected on 4.5.
+        ("claude-opus-4-6", "max", False),
+        ("claude-sonnet-4-6", "max", False),
+        ("claude-opus-4-7", "max", False),
+        ("claude-opus-4-5-20251101", "max", True),
+        ("claude-sonnet-4-5", "max", True),
+        # ``xhigh`` data-driven; only 4.7 carries the flag in the model map.
+        ("claude-opus-4-7", "xhigh", False),
+        ("claude-opus-4-6", "xhigh", True),
+        ("claude-sonnet-4-6", "xhigh", True),
+        # Lower efforts and ``None`` always pass the gate.
+        ("claude-opus-4-5-20251101", "high", False),
+        ("claude-haiku-4-5", "low", False),
+        ("claude-opus-4-5-20251101", None, False),
+    ],
+)
+def test_validate_effort_for_model_centralises_per_model_gating(
+    model, effort, expect_error
+):
+    """``_validate_effort_for_model`` is the single source of truth for the
+    per-model ``max`` / ``xhigh`` gating that ``_apply_output_config`` (chat
+    completion path) and ``AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic``
+    (/v1/messages pass-through) both rely on. Both call sites raise their
+    own provider-appropriate exception, but the gating decision must come
+    from one place to prevent drift when a new model tier lands.
+    """
+    err = AnthropicConfig._validate_effort_for_model(model, effort)
+    if expect_error:
+        assert err is not None
+        assert effort in err
+        assert model in err
+    else:
+        assert err is None
+
+
 def test_transform_request_uses_dynamic_max_tokens():
     """
     Test that transform_request uses dynamic max_tokens based on model

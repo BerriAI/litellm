@@ -276,6 +276,41 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return False
 
     @staticmethod
+    def _validate_effort_for_model(model: str, effort: Optional[str]) -> Optional[str]:
+        """Return ``None`` if ``effort`` is allowed on ``model``, else an error message.
+
+        Centralises per-model gating for ``max`` and ``xhigh`` so the chat
+        completion path (``_apply_output_config``) and the /v1/messages
+        pass-through (``AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic``)
+        can't drift when a new model tier is added. Caller raises the
+        provider-appropriate exception type using the returned message.
+
+        ``max`` is supported on Claude 4.6 (Opus + Sonnet) and Claude 4.7
+        adaptive-thinking models per
+        https://platform.claude.com/docs/en/build-with-claude/effort. The
+        data-driven ``supports_max_reasoning_effort`` flag in
+        ``model_prices_and_context_window.json`` is the source of truth;
+        family-level ``_is_claude_4_6_model`` / ``_is_claude_4_7_model``
+        checks remain as a fallback for OpenRouter / GitHub Copilot /
+        Vercel / Bedrock variants whose model-map entries don't yet carry
+        the flag.
+
+        ``xhigh`` is purely data-driven via ``supports_xhigh_reasoning_effort``
+        so enabling it for a new model is a model-map-only change.
+        """
+        if effort == "max" and not (
+            AnthropicConfig._is_claude_4_6_model(model)
+            or AnthropicConfig._is_claude_4_7_model(model)
+            or AnthropicConfig._supports_effort_level(model, "max")
+        ):
+            return f"effort='max' is not supported by this model. Got model: {model}"
+        if effort == "xhigh" and not AnthropicConfig._supports_effort_level(
+            model, "xhigh"
+        ):
+            return f"effort='xhigh' is not supported by this model. Got model: {model}"
+        return None
+
+    @staticmethod
     def _model_supports_effort_param(model: str) -> bool:
         """Whether the model accepts ``output_config.effort`` at all.
 
@@ -1710,36 +1745,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 model=model,
                 llm_provider=self.custom_llm_provider or "anthropic",
             )
-        # ``max`` is supported on Claude 4.6 (Opus + Sonnet) and Claude 4.7
-        # adaptive-thinking models (per
-        # https://platform.claude.com/docs/en/build-with-claude/effort).
-        # Prefer the data-driven ``supports_max_reasoning_effort`` flag in
-        # ``model_prices_and_context_window.json`` so new variants only
-        # require a model-map update. Family-level ``_is_claude_4_6_model``
-        # / ``_is_claude_4_7_model`` checks remain as a fallback for
-        # OpenRouter/GitHub Copilot/Vercel/Bedrock variants whose entries
-        # don't yet carry the flag.
-        if effort == "max" and not (
-            self._is_claude_4_6_model(model)
-            or self._is_claude_4_7_model(model)
-            or self._supports_effort_level(model, "max")
-        ):
+        # Per-model gating for ``max`` / ``xhigh`` is centralised in
+        # ``_validate_effort_for_model`` so the chat path and the
+        # /v1/messages pass-through stay in lock-step when a new model
+        # tier lands.
+        gate_error = self._validate_effort_for_model(model, effort)
+        if gate_error is not None:
             raise litellm.exceptions.BadRequestError(
-                message=(
-                    f"effort='max' is not supported by this model. "
-                    f"Got model: {model}"
-                ),
-                model=model,
-                llm_provider=self.custom_llm_provider or "anthropic",
-            )
-        # ``xhigh`` is data-driven via ``supports_xhigh_reasoning_effort`` so
-        # enabling it for a new model is a pure model-map change.
-        if effort == "xhigh" and not self._supports_effort_level(model, "xhigh"):
-            raise litellm.exceptions.BadRequestError(
-                message=(
-                    f"effort='xhigh' is not supported by this model. "
-                    f"Got model: {model}"
-                ),
+                message=gate_error,
                 model=model,
                 llm_provider=self.custom_llm_provider or "anthropic",
             )

@@ -239,39 +239,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ),
                     status_code=400,
                 )
-            # Per-model gating: ``xhigh`` and ``max`` are only valid on
-            # specific tiers (Opus 4.6/4.7 for max; data-driven for xhigh).
-            # The chat completion path enforces this via
-            # ``_apply_output_config``; mirror it here so /v1/messages
-            # callers see a clean 400 instead of a provider-side error.
-            # ``max`` is supported on Claude 4.6 (Opus + Sonnet) and Claude
-            # 4.7 adaptive-thinking models. Prefer the data-driven
-            # ``supports_max_reasoning_effort`` flag in
-            # ``model_prices_and_context_window.json``; family-level checks
-            # are a fallback for variants whose entries don't yet carry the
-            # flag.
-            if mapped_effort == "max" and not (
-                AnthropicConfig._is_claude_4_6_model(model)
-                or AnthropicConfig._is_claude_4_7_model(model)
-                or AnthropicConfig._supports_effort_level(model, "max")
-            ):
-                raise AnthropicError(
-                    message=(
-                        f"effort='max' is not supported by this model. "
-                        f"Got model: {model}"
-                    ),
-                    status_code=400,
-                )
-            if mapped_effort == "xhigh" and not AnthropicConfig._supports_effort_level(
-                model, "xhigh"
-            ):
-                raise AnthropicError(
-                    message=(
-                        f"effort='xhigh' is not supported by this model. "
-                        f"Got model: {model}"
-                    ),
-                    status_code=400,
-                )
+            # Per-model gating for ``max`` / ``xhigh`` is centralised in
+            # ``AnthropicConfig._validate_effort_for_model`` so the chat
+            # completion path and this /v1/messages pass-through stay in
+            # lock-step when a new model tier lands.
+            gate_error = AnthropicConfig._validate_effort_for_model(
+                model, mapped_effort
+            )
+            if gate_error is not None:
+                raise AnthropicError(message=gate_error, status_code=400)
             existing_output_config = optional_params.get("output_config")
             if not isinstance(existing_output_config, dict):
                 existing_output_config = {}
