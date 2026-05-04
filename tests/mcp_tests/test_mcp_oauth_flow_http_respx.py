@@ -286,12 +286,16 @@ async def test_token_exchange_applies_token_validation_rules(
 
 
 # ---------------------------------------------------------------------------
-# Regression tests: management broker endpoints must not require an API key
+# Regression + security tests: management broker endpoints
 #
-# These tests hit the exact routes modified in mcp_management_endpoints.py
-# (/server/oauth/{server_id}/authorize and /server/oauth/{server_id}/token).
-# A 401 means user_api_key_auth was re-added to the route; any other status
-# (404 = server not found is expected here) means the auth gate is absent.
+# Three cases are verified against the exact routes in mcp_management_endpoints.py:
+#
+#   1. Nonexistent server_id → 404 (not 401, which would mean auth was re-added)
+#   2. Global-registry server + no API key → 403 (unauthenticated callers must
+#      not be able to invoke the OAuth broker for globally configured servers,
+#      as doing so would use the proxy's stored client_secret)
+#   3. Temp-session server + no API key → passes access check (browser OAuth
+#      flow; temp sessions are admin-created and scoped to this flow)
 # ---------------------------------------------------------------------------
 
 
@@ -309,6 +313,7 @@ def management_asgi_app(monkeypatch) -> FastAPI:
 async def test_management_broker_authorize_requires_no_api_key(
     management_asgi_app: FastAPI,
 ) -> None:
+    """Nonexistent server → 404, not 401 (auth gate must not be present)."""
     transport = ASGITransport(app=management_asgi_app)
     async with httpx.AsyncClient(
         transport=transport,
@@ -316,7 +321,7 @@ async def test_management_broker_authorize_requires_no_api_key(
         follow_redirects=False,
     ) as client:
         r = await client.get(
-            "/server/oauth/nonexistent-server-id/authorize",
+            "/v1/mcp/server/oauth/nonexistent-server-id/authorize",
             params={
                 "redirect_uri": "http://127.0.0.1:8080/callback",
                 "state": "regression-test-state",
@@ -336,6 +341,7 @@ async def test_management_broker_authorize_requires_no_api_key(
 async def test_management_broker_token_requires_no_api_key(
     management_asgi_app: FastAPI,
 ) -> None:
+    """Nonexistent server → 404, not 401 (auth gate must not be present)."""
     transport = ASGITransport(app=management_asgi_app)
     async with httpx.AsyncClient(
         transport=transport,
@@ -343,7 +349,7 @@ async def test_management_broker_token_requires_no_api_key(
         follow_redirects=False,
     ) as client:
         r = await client.post(
-            "/server/oauth/nonexistent-server-id/token",
+            "/v1/mcp/server/oauth/nonexistent-server-id/token",
             data={
                 "grant_type": "authorization_code",
                 "code": "test-code",
@@ -355,3 +361,57 @@ async def test_management_broker_token_requires_no_api_key(
         "Got 401 — user_api_key_auth was re-added to /token. " f"Response: {r.text}"
     )
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_management_broker_rejects_unauthenticated_access_to_global_registry_server(
+    management_asgi_app: FastAPI,
+) -> None:
+    """
+    Unauthenticated callers must not reach the OAuth broker for a global-registry
+    server. Allowing it would let anyone invoke the proxy's OAuth broker using the
+    server's stored client_secret, while authenticated non-admins without allowlist
+    access get 403 — an unintended privilege inversion.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.types.mcp import MCPAuth, MCPTransport
+
+    server = MCPServer(
+        server_id="global-oauth-srv",
+        name="global_oauth",
+        server_name="global_oauth",
+        alias="global_oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="client",
+        client_secret="secret",
+        authorization_url="https://idp.example/oauth/authorize",
+        token_url="https://idp.example/oauth/token",
+    )
+    global_mcp_server_manager.registry["global-oauth-srv"] = server
+    try:
+        transport = ASGITransport(app=management_asgi_app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            follow_redirects=False,
+        ) as client:
+            r = await client.get(
+                "/v1/mcp/server/oauth/global-oauth-srv/authorize",
+                params={
+                    "redirect_uri": "http://127.0.0.1:8080/callback",
+                    "state": "test",
+                    "response_type": "code",
+                    "code_challenge": "abc",
+                    "code_challenge_method": "S256",
+                    "client_id": "client",
+                },
+            )
+        assert r.status_code == 403, (
+            f"Expected 403 for unauthenticated access to a global-registry server, "
+            f"got {r.status_code}. Response: {r.text}"
+        )
+    finally:
+        global_mcp_server_manager.registry.pop("global-oauth-srv", None)
