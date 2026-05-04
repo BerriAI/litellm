@@ -1,0 +1,277 @@
+"""
+HTTP-level integration tests for MCP discoverable OAuth (authorize → callback → token).
+
+Uses ASGITransport + httpx and mocks the upstream IdP with respx.
+"""
+
+from __future__ import annotations
+
+import urllib.parse
+from typing import Iterator
+from unittest.mock import patch
+
+import httpx
+import litellm
+import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport
+
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp import MCPAuth
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+@pytest.fixture(autouse=True)
+def mock_mcp_client_ip() -> Iterator[None]:
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
+        return_value=None,
+    ):
+        yield
+
+
+@pytest.fixture
+def oauth_asgi_app(monkeypatch) -> Iterator[FastAPI]:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "integration-test-salt-key-32chars")
+    # Outbound token exchange must use httpx so respx can intercept (not aiohttp).
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        router as discoverable_oauth_router,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    global_mcp_server_manager.registry.clear()
+    server = MCPServer(
+        server_id="mock-oauth-srv",
+        name="mock_oauth",
+        server_name="mock_oauth",
+        alias="mock_oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="upstream-client",
+        client_secret="upstream-secret",
+        authorization_url="https://mock-idp.example/oauth/authorize",
+        token_url="https://mock-idp.example/oauth/token",
+        scopes=["openid"],
+        needs_user_oauth_token=False,
+    )
+    global_mcp_server_manager.registry[server.server_id] = server
+
+    app = FastAPI()
+    app.include_router(discoverable_oauth_router)
+    try:
+        yield app
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx
+async def test_authorize_redirect_uri_to_upstream_is_proxy_callback_not_client_loopback(
+    oauth_asgi_app: FastAPI,
+) -> None:
+    transport = ASGITransport(app=oauth_asgi_app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://proxy.test", follow_redirects=False
+    ) as client:
+        r = await client.get(
+            "/mock_oauth/authorize",
+            params={
+                "client_id": "upstream-client",
+                "redirect_uri": "http://127.0.0.1:60108/ui/mcp/oauth/callback",
+                "state": "plain-client-state",
+                "code_challenge": "challenge",
+                "code_challenge_method": "S256",
+            },
+        )
+    assert r.status_code in (301, 302, 303, 307, 308)
+    loc = r.headers["location"]
+    assert loc.startswith("https://mock-idp.example/oauth/authorize")
+    q = urllib.parse.urlparse(loc).query
+    parsed = urllib.parse.parse_qs(q)
+    upstream_redirect = parsed["redirect_uri"][0]
+    assert upstream_redirect == "http://proxy.test/callback"
+    assert "challenge" == parsed["code_challenge"][0]
+    encrypted_state = parsed["state"][0]
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        decode_state_hash,
+    )
+
+    state_data = decode_state_hash(encrypted_state)
+    assert state_data["original_state"] == "plain-client-state"
+    assert (
+        state_data["client_redirect_uri"]
+        == "http://127.0.0.1:60108/ui/mcp/oauth/callback"
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorize_rejects_non_loopback_client_redirect_uri(
+    oauth_asgi_app: FastAPI,
+) -> None:
+    transport = ASGITransport(app=oauth_asgi_app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://proxy.test", follow_redirects=False
+    ) as client:
+        r = await client.get(
+            "/mock_oauth/authorize",
+            params={
+                "client_id": "upstream-client",
+                "redirect_uri": "https://attacker.example/capture",
+                "state": "x",
+            },
+        )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_callback_redirects_to_client_loopback_with_upstream_code(
+    oauth_asgi_app: FastAPI,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        encode_state_with_base_url,
+    )
+
+    client_cb = "http://127.0.0.1:7777/oauth/callback"
+    base_no_query = "http://127.0.0.1:7777/oauth/callback"
+    state_token = encode_state_with_base_url(
+        base_url=base_no_query,
+        original_state="csrf-token-9",
+        code_challenge="cc",
+        code_challenge_method="S256",
+        client_redirect_uri=client_cb,
+    )
+    transport = ASGITransport(app=oauth_asgi_app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://proxy.test", follow_redirects=False
+    ) as client:
+        r = await client.get(
+            "/callback",
+            params={"code": "upstream-auth-code", "state": state_token},
+        )
+    assert r.status_code in (301, 302, 303, 307, 308)
+    loc = r.headers["location"]
+    assert loc.startswith("http://127.0.0.1:7777/oauth/callback")
+    q = urllib.parse.urlparse(loc).query
+    parsed = urllib.parse.parse_qs(q)
+    assert parsed["code"][0] == "upstream-auth-code"
+    assert parsed["state"][0] == "csrf-token-9"
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_non_loopback_in_decrypted_state(
+    oauth_asgi_app: FastAPI,
+) -> None:
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash",
+        return_value={
+            "original_state": "ok",
+            "client_redirect_uri": "https://evil.com/y",
+            "base_url": "https://evil.com/y",
+        },
+    ):
+        transport = ASGITransport(app=oauth_asgi_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://proxy.test", follow_redirects=False
+        ) as client:
+            r = await client.get(
+                "/callback",
+                params={"code": "c", "state": "opaque"},
+            )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx
+async def test_token_exchange_posts_proxy_callback_redirect_uri_to_upstream(
+    oauth_asgi_app: FastAPI,
+    respx_mock,
+) -> None:
+    captured: dict = {}
+
+    def on_request(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.content.decode()
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "at-upstream",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            },
+        )
+
+    respx_mock.post("https://mock-idp.example/oauth/token").mock(side_effect=on_request)
+
+    transport = ASGITransport(app=oauth_asgi_app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://proxy.test", follow_redirects=False
+    ) as client:
+        r = await client.post(
+            "/mock_oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": "code-from-upstream",
+                "client_id": "upstream-client",
+                "client_secret": "upstream-secret",
+                "code_verifier": "verifier",
+                "redirect_uri": "ignored-by-litellm-for-upstream-exchange",
+            },
+        )
+    assert r.status_code == 200
+    assert r.headers.get("cache-control") == "no-store"
+    assert r.headers.get("pragma") == "no-cache"
+    body = r.json()
+    assert body["access_token"] == "at-upstream"
+
+    parsed = urllib.parse.parse_qs(captured.get("body", ""))
+    assert parsed["grant_type"][0] == "authorization_code"
+    assert parsed["redirect_uri"][0] == "http://proxy.test/callback"
+    assert parsed["code"][0] == "code-from-upstream"
+    assert parsed["code_verifier"][0] == "verifier"
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx
+async def test_token_exchange_applies_token_validation_rules(
+    oauth_asgi_app: FastAPI,
+    respx_mock,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    srv = global_mcp_server_manager.registry["mock-oauth-srv"]
+    prev_validation = getattr(srv, "token_validation", None)
+    srv.token_validation = {"org_id": "expected-org"}
+    try:
+        respx_mock.post("https://mock-idp.example/oauth/token").respond(
+            200,
+            json={
+                "access_token": "tok",
+                "token_type": "Bearer",
+                "expires_in": 60,
+                "org_id": "wrong-org",
+            },
+        )
+        transport = ASGITransport(app=oauth_asgi_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://proxy.test", follow_redirects=False
+        ) as client:
+            r = await client.post(
+                "/mock_oauth/token",
+                data={
+                    "grant_type": "authorization_code",
+                    "code": "c",
+                    "client_id": "upstream-client",
+                    "client_secret": "upstream-secret",
+                    "code_verifier": "v",
+                },
+            )
+        assert r.status_code == 403
+        err = r.json()
+        assert err["detail"]["error"] == "token_validation_failed"
+    finally:
+        srv.token_validation = prev_validation
