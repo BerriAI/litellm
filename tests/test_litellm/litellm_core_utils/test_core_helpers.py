@@ -143,6 +143,15 @@ class TestMapFinishReasonZhipu:
         assert map_finish_reason("sensitive") == "content_filter"
 
 
+class TestMapFinishReasonVLLM:
+    def test_repetition(self):
+        # vLLM emits "repetition" when its server-side
+        # ``RepetitionDetectionParams`` cuts off a request stuck in a
+        # contiguous-token loop. Map to "stop" so consumers don't see the
+        # "Unmapped finish_reason 'repetition'" warning on every such row.
+        assert map_finish_reason("repetition") == "stop"
+
+
 class TestMapFinishReasonOpenAIPassthrough:
     @pytest.mark.parametrize(
         "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
