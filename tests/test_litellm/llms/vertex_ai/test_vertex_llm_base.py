@@ -1626,6 +1626,102 @@ class TestVertexBase:
             assert token == "fresh-token"
 
     @pytest.mark.asyncio
+    async def test_background_refresh_task_removed_after_completion(self):
+        """Completed background-refresh tasks must be evicted from
+        _background_refresh_tasks so the dict does not grow unboundedly."""
+        import asyncio
+
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+
+        mock_creds = MagicMock()
+        mock_creds.token = "near-expiry-token"
+        mock_creds.token_state = TokenState.STALE
+        mock_creds.project_id = "project-1"
+        mock_creds.quota_project_id = "project-1"
+
+        credentials = {"type": "service_account", "project_id": "project-1"}
+
+        with (
+            patch.object(
+                vertex_base, "load_auth", return_value=(mock_creds, "project-1")
+            ),
+            patch.object(vertex_base, "refresh_auth") as mock_refresh,
+        ):
+
+            def mock_refresh_impl(creds):
+                creds.token = "refreshed-token"
+                creds.token_state = TokenState.FRESH
+
+            mock_refresh.side_effect = mock_refresh_impl
+
+            await vertex_base._ensure_access_token_async(
+                credentials=credentials,
+                project_id="project-1",
+                custom_llm_provider="vertex_ai",
+            )
+
+            # Allow the background task to complete.
+            await asyncio.sleep(0.1)
+
+            # After completion the entry should have been removed by the done-callback.
+            assert len(vertex_base._background_refresh_tasks) == 0, (
+                "Completed background refresh task was not removed from "
+                "_background_refresh_tasks"
+            )
+
+    @pytest.mark.asyncio
+    async def test_background_refresh_tasks_no_accumulation_across_many_keys(self):
+        """With many distinct credential keys the dict must not hold completed tasks."""
+        import asyncio
+        import json as _json
+
+        from google.auth.credentials import TokenState
+
+        vertex_base = VertexBase()
+
+        num_keys = 20
+
+        for i in range(num_keys):
+            mock_creds = MagicMock()
+            mock_creds.token = f"token-{i}"
+            mock_creds.token_state = TokenState.STALE
+            mock_creds.project_id = f"project-{i}"
+            mock_creds.quota_project_id = f"project-{i}"
+
+            credentials = {"type": "service_account", "project_id": f"project-{i}"}
+
+            with (
+                patch.object(
+                    vertex_base,
+                    "load_auth",
+                    return_value=(mock_creds, f"project-{i}"),
+                ),
+                patch.object(vertex_base, "refresh_auth") as mock_refresh,
+            ):
+
+                def mock_refresh_impl(creds, idx=i):
+                    creds.token = f"refreshed-{idx}"
+                    creds.token_state = TokenState.FRESH
+
+                mock_refresh.side_effect = mock_refresh_impl
+
+                await vertex_base._ensure_access_token_async(
+                    credentials=credentials,
+                    project_id=f"project-{i}",
+                    custom_llm_provider="vertex_ai",
+                )
+
+        # Let all background tasks finish.
+        await asyncio.sleep(0.1)
+
+        assert len(vertex_base._background_refresh_tasks) == 0, (
+            f"Expected 0 tasks after all refreshes completed, "
+            f"found {len(vertex_base._background_refresh_tasks)}"
+        )
+
+    @pytest.mark.asyncio
     async def test_fast_path_no_lock(self):
         """Cached fresh credentials should return without acquiring the lock."""
         import datetime

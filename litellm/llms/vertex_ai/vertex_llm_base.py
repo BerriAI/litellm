@@ -900,11 +900,22 @@ class VertexBase:
                     # already in flight for this credential key.
                     existing = self._background_refresh_tasks.get(credential_cache_key)
                     if existing is None or existing.done():
+                        # Remove the completed entry before creating a new task so
+                        # that done tasks do not accumulate in the dict indefinitely.
+                        self._background_refresh_tasks.pop(credential_cache_key, None)
                         task = asyncio.create_task(
                             self._background_refresh_credentials(
                                 _credentials,
                                 credential_cache_key,
                                 credential_project_id,
+                            )
+                        )
+                        # Clean up the entry automatically when the task finishes so
+                        # that long-running proxies with many credential keys do not
+                        # accumulate stale references.
+                        task.add_done_callback(
+                            lambda t, key=credential_cache_key: self._background_refresh_tasks.pop(
+                                key, None
                             )
                         )
                         self._background_refresh_tasks[credential_cache_key] = task
