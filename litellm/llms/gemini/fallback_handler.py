@@ -8,7 +8,7 @@ _google_code_assist_chat = get_google_code_assist_chat()
 
 
 async def run_gemini_acompletion_with_code_assist_fallback(
-    primary_call: Awaitable[Any],
+    primary_call: Callable[[], Awaitable[Any]],
     fallback_kwargs: Dict[str, Any],
     auto_fallback_to_google_code_assist: bool = False,
 ) -> Any:
@@ -17,7 +17,7 @@ async def run_gemini_acompletion_with_code_assist_fallback(
     OAuth scope is insufficient.
     """
     try:
-        return await primary_call
+        return await primary_call()
     except Exception as e:
         if not auto_fallback_to_google_code_assist:
             raise e

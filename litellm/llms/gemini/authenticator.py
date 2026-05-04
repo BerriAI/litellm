@@ -257,6 +257,7 @@ class GeminiAuthenticator:
         deadline = time.monotonic() + loopback_timeout_s
         server.timeout = 1.0
         try:
+            # Note: deadline is checked after handle_request() returns, so the loop can overshoot by up to server.timeout (1s) — acceptable for a one-shot CLI login.
             while auth_code is None and error is None:
                 server.handle_request()
                 if time.monotonic() >= deadline:

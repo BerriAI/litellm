@@ -2,6 +2,7 @@
 Transformation for Calling Google models in their native format.
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
@@ -11,6 +12,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.google_genai.transformation import (
     BaseGoogleGenAIGenerateContentConfig,
 )
+from litellm.llms.gemini.common_utils import get_gemini_oauth_token
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.types.router import GenericLiteLLMParams
 
@@ -200,6 +202,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         stream: bool,
         api_base: Optional[str],
         litellm_params: dict,
+        gemini_auth_data: Optional[dict] = None,
     ) -> Tuple[dict, str]:
         """
         Build final headers and API URL from auth components.
@@ -217,6 +220,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             custom_llm_provider=self.custom_llm_provider,
             api_base=api_base,
             should_use_v1beta1_features=True,
+            gemini_auth_data=gemini_auth_data,
         )
 
         headers = self.validate_environment(
@@ -291,6 +295,12 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             custom_llm_provider=self.custom_llm_provider,
         )
 
+        gemini_auth_data: Optional[dict] = None
+        if self.custom_llm_provider == "gemini":
+            gemini_api_key = self._get_google_ai_studio_api_key(dict(litellm_params))
+            if gemini_api_key is None:
+                gemini_auth_data = await asyncio.to_thread(get_gemini_oauth_token)
+
         return self._build_final_headers_and_url(
             model=model,
             auth_header=_auth_header,
@@ -300,6 +310,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             stream=stream,
             api_base=api_base,
             litellm_params=litellm_params,
+            gemini_auth_data=gemini_auth_data,
         )
 
     def transform_generate_content_request(

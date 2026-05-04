@@ -66,7 +66,7 @@ async def test_run_gemini_acompletion_with_code_assist_fallback_enabled():
     ):
         mock_acompletion.return_value = "fallback-ok"
         result = await run_gemini_acompletion_with_code_assist_fallback(
-            primary_call=_raise_scope_error(),
+            primary_call=_raise_scope_error,
             fallback_kwargs={},
             auto_fallback_to_google_code_assist=True,
         )

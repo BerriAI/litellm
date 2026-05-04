@@ -108,6 +108,16 @@ class GoogleCodeAssistConfig(VertexGeminiConfig):
                 )
                 generation_config[key] = value
 
+        # Log unmapped/unrecognized caller keys so users have visibility (do not auto-forward —
+        # they may not be valid Gemini fields).
+        for key in optional_params:
+            if key not in base_params and key not in generation_config:
+                verbose_logger.debug(
+                    "google_code_assist: dropping unrecognized optional_param '%s' "
+                    "(not produced by VertexGeminiConfig.map_openai_params)",
+                    key,
+                )
+
         vertex_request = {
             "contents": contents,
             "session_id": litellm_params.get("session_id", str(uuid.uuid4())),

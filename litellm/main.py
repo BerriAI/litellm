@@ -3447,7 +3447,7 @@ def completion(  # type: ignore # noqa: PLR0915
             new_params = safe_deep_copy(optional_params or {})
             if acompletion is True:
                 response = run_gemini_acompletion_with_code_assist_fallback(
-                    primary_call=vertex_chat_completion.completion(  # type: ignore
+                    primary_call=lambda: vertex_chat_completion.completion(  # type: ignore
                         model=model,
                         messages=messages,
                         model_response=model_response,
