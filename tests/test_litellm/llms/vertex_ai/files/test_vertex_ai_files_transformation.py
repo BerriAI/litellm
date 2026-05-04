@@ -5,6 +5,8 @@ Includes tests for Vertex AI batch output transformation to OpenAI format.
 
 import json
 import urllib.parse
+from types import MappingProxyType
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -29,13 +31,20 @@ class TestParseGcsUri:
     """Tests for the _parse_gcs_uri helper used by retrieve / content / delete."""
 
     def test_should_parse_standard_gs_uri(self, config):
-        bucket, encoded = config._parse_gcs_uri("gs://my-bucket/path/to/object.jsonl")
+        file_id = "gs://my-bucket/litellm-vertex-files/path/to/object.jsonl"
+        bucket, encoded = config._parse_gcs_uri(
+            file_id, litellm_params={"bucket_name": "my-bucket"}
+        )
         assert bucket == "my-bucket"
-        assert encoded == urllib.parse.quote("path/to/object.jsonl", safe="")
+        assert encoded == urllib.parse.quote(
+            "litellm-vertex-files/path/to/object.jsonl", safe=""
+        )
 
     def test_should_parse_uri_with_nested_publisher_path(self, config):
         uri = "gs://litellm-local/litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc-123"
-        bucket, encoded = config._parse_gcs_uri(uri)
+        bucket, encoded = config._parse_gcs_uri(
+            uri, litellm_params={"bucket_name": "litellm-local"}
+        )
         assert bucket == "litellm-local"
         expected_path = (
             "litellm-vertex-files/publishers/google/models/gemini-2.0-flash-001/abc-123"
@@ -43,30 +52,141 @@ class TestParseGcsUri:
         assert encoded == urllib.parse.quote(expected_path, safe="")
 
     def test_should_handle_url_encoded_input(self, config):
-        encoded_uri = urllib.parse.quote("gs://my-bucket/some/path", safe="")
-        bucket, encoded = config._parse_gcs_uri(encoded_uri)
+        encoded_uri = urllib.parse.quote(
+            "gs://my-bucket/litellm-vertex-files/some/path", safe=""
+        )
+        bucket, encoded = config._parse_gcs_uri(
+            encoded_uri, litellm_params={"bucket_name": "my-bucket"}
+        )
         assert bucket == "my-bucket"
-        assert encoded == urllib.parse.quote("some/path", safe="")
+        assert encoded == urllib.parse.quote("litellm-vertex-files/some/path", safe="")
 
-    def test_should_handle_bucket_only(self, config):
-        bucket, encoded = config._parse_gcs_uri("gs://my-bucket")
-        assert bucket == "my-bucket"
-        assert encoded == ""
+    def test_should_reject_bucket_only(self, config):
+        with pytest.raises(ValueError, match="object name"):
+            config._parse_gcs_uri(
+                "gs://my-bucket", litellm_params={"bucket_name": "my-bucket"}
+            )
 
-    def test_should_handle_no_gs_prefix(self, config):
-        bucket, encoded = config._parse_gcs_uri("my-bucket/object.txt")
+    def test_should_reject_no_gs_prefix(self, config):
+        with pytest.raises(ValueError, match="gs://"):
+            config._parse_gcs_uri(
+                "my-bucket/litellm-vertex-files/object.txt",
+                litellm_params={"bucket_name": "my-bucket"},
+            )
+
+    def test_should_reject_unmanaged_object_path(self, config):
+        with pytest.raises(ValueError, match="LiteLLM-managed"):
+            config._parse_gcs_uri(
+                "gs://my-bucket/private/object.txt",
+                litellm_params={"bucket_name": "my-bucket"},
+            )
+
+    def test_should_reject_request_supplied_legacy_flag(self, config):
+        with pytest.raises(ValueError, match="LiteLLM-managed"):
+            config._parse_gcs_uri(
+                "gs://my-bucket/private/object.txt",
+                litellm_params={
+                    "bucket_name": "my-bucket",
+                    "allow_legacy_cloud_file_ids": True,
+                },
+            )
+
+    def test_should_allow_legacy_object_path_with_trusted_server_flag(self, config):
+        trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
+        bucket, encoded = config._parse_gcs_uri(
+            "gs://my-bucket/private/object.txt",
+            litellm_params={
+                "bucket_name": "my-bucket",
+                "_litellm_internal_model_credentials": trusted_credentials,
+            },
+        )
+
         assert bucket == "my-bucket"
-        assert encoded == "object.txt"
+        assert encoded == urllib.parse.quote("private/object.txt", safe="")
+
+    def test_should_reject_user_supplied_legacy_flag_snapshot(self, config):
+        with pytest.raises(ValueError, match="LiteLLM-managed"):
+            config._parse_gcs_uri(
+                "gs://my-bucket/private/object.txt",
+                litellm_params={
+                    "bucket_name": "my-bucket",
+                    "_litellm_internal_model_credentials": {
+                        "allow_legacy_cloud_file_ids": True
+                    },
+                },
+            )
+
+    def test_should_keep_configured_prefix_for_legacy_object_path(self, config):
+        trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
+        bucket, encoded = config._parse_gcs_uri(
+            "gs://my-bucket/team-a/private/object.txt",
+            litellm_params={
+                "bucket_name": "my-bucket/team-a",
+                "_litellm_internal_model_credentials": trusted_credentials,
+            },
+        )
+
+        assert bucket == "my-bucket"
+        assert encoded == urllib.parse.quote("team-a/private/object.txt", safe="")
+
+    def test_should_reject_legacy_object_outside_configured_prefix(self, config):
+        trusted_credentials = MappingProxyType({"allow_legacy_cloud_file_ids": True})
+        with pytest.raises(ValueError, match="configured storage prefix"):
+            config._parse_gcs_uri(
+                "gs://my-bucket/team-b/private/object.txt",
+                litellm_params={
+                    "bucket_name": "my-bucket/team-a",
+                    "_litellm_internal_model_credentials": trusted_credentials,
+                },
+            )
+
+    def test_should_reject_unconfigured_bucket(self, config):
+        with pytest.raises(ValueError, match="configured storage bucket"):
+            config._parse_gcs_uri(
+                "gs://other-bucket/litellm-vertex-files/object.txt",
+                litellm_params={"bucket_name": "my-bucket"},
+            )
+
+
+class TestCreateFileUrl:
+    def test_should_ignore_request_metadata_bucket_and_sanitize_filename(self, config):
+        url = config.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={
+                "bucket_name": "safe-bucket",
+                "litellm_metadata": {"gcs_bucket_name": "attacker-bucket"},
+            },
+            data={
+                "file": ("../../owned.jsonl?alt=media", b"{}", "application/jsonl"),
+                "purpose": "assistants",
+            },
+        )
+
+        parsed_url = urlparse(url)
+        object_name = parse_qs(parsed_url.query)["name"][0]
+        assert "/b/safe-bucket/" in parsed_url.path
+        assert "attacker-bucket" not in url
+        assert object_name.startswith("litellm-vertex-files/uploads/")
+        assert object_name.endswith("-owned.jsonl_alt_media")
+        assert ".." not in object_name
+        assert "?" not in object_name
 
 
 class TestTransformRetrieveFile:
 
     def test_should_build_correct_gcs_metadata_url(self, config):
-        file_id = "gs://my-bucket/path/to/file.jsonl"
+        file_id = "gs://my-bucket/litellm-vertex-files/path/to/file.jsonl"
         url, params = config.transform_retrieve_file_request(
-            file_id=file_id, optional_params={}, litellm_params={}
+            file_id=file_id,
+            optional_params={},
+            litellm_params={"bucket_name": "my-bucket"},
         )
-        expected_encoded = urllib.parse.quote("path/to/file.jsonl", safe="")
+        expected_encoded = urllib.parse.quote(
+            "litellm-vertex-files/path/to/file.jsonl", safe=""
+        )
         assert (
             url
             == f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{expected_encoded}"
@@ -119,13 +239,13 @@ class TestTransformRetrieveFile:
 class TestTransformFileContent:
 
     def test_should_build_gcs_media_download_url(self, config):
-        file_id = "gs://my-bucket/path/to/file.jsonl"
+        file_id = "gs://my-bucket/litellm-vertex-files/path/to/file.jsonl"
         url, params = config.transform_file_content_request(
             file_content_request={"file_id": file_id},
             optional_params={},
-            litellm_params={},
+            litellm_params={"bucket_name": "my-bucket"},
         )
-        encoded = urllib.parse.quote("path/to/file.jsonl", safe="")
+        encoded = urllib.parse.quote("litellm-vertex-files/path/to/file.jsonl", safe="")
         assert (
             url
             == f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{encoded}?alt=media"
@@ -254,11 +374,13 @@ class TestTransformFileContent:
 
 class TestTransformDeleteFile:
     def test_should_build_correct_gcs_delete_url(self, config):
-        file_id = "gs://my-bucket/path/to/file.jsonl"
+        file_id = "gs://my-bucket/litellm-vertex-files/path/to/file.jsonl"
         url, params = config.transform_delete_file_request(
-            file_id=file_id, optional_params={}, litellm_params={}
+            file_id=file_id,
+            optional_params={},
+            litellm_params={"bucket_name": "my-bucket"},
         )
-        encoded = urllib.parse.quote("path/to/file.jsonl", safe="")
+        encoded = urllib.parse.quote("litellm-vertex-files/path/to/file.jsonl", safe="")
         assert (
             url == f"https://storage.googleapis.com/storage/v1/b/my-bucket/o/{encoded}"
         )
