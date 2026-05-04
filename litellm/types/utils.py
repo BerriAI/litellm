@@ -3478,8 +3478,7 @@ class LiteLLMBatch(Batch):
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
-    # List[Any]: strict OpenAIRealtimeEvents union fails on new GA event shapes.
-    results: List[Any]
+    results: OpenAIRealtimeStreamList
     usage: Usage
     _hidden_params: dict = {}
 
