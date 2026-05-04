@@ -2,7 +2,7 @@ import React from "react";
 import { Tooltip, InputNumber, Collapse, Badge } from "antd";
 import { InfoCircleOutlined, DollarOutlined, ToolOutlined } from "@ant-design/icons";
 import { Card, Title, Text } from "@tremor/react";
-import { MCPServerCostInfo } from "./types";
+import { MCPServerCostInfo, toFiniteNumber } from "./types";
 
 interface MCPServerCostConfigProps {
   value?: MCPServerCostInfo;
@@ -60,7 +60,7 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
               step={0.0001}
               precision={4}
               placeholder="0.0000"
-              value={value.default_cost_per_query}
+              value={toFiniteNumber(value.default_cost_per_query)}
               onChange={handleDefaultCostChange}
               disabled={disabled}
               style={{ width: "200px" }}
@@ -112,7 +112,7 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
                                 step={0.0001}
                                 precision={4}
                                 placeholder="Use default"
-                                value={value.tool_name_to_cost_per_query?.[tool.name]}
+                                value={toFiniteNumber(value.tool_name_to_cost_per_query?.[tool.name])}
                                 onChange={(cost) => handleToolCostChange(tool.name, cost)}
                                 disabled={disabled}
                                 style={{ width: "120px" }}
@@ -130,29 +130,30 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
           )}
         </div>
 
-        {(value.default_cost_per_query ||
-          (value.tool_name_to_cost_per_query && Object.keys(value.tool_name_to_cost_per_query).length > 0)) && (
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <Text className="text-blue-800 font-medium">Cost Summary:</Text>
-            <div className="mt-2 space-y-1">
-              {value.default_cost_per_query && (
-                <Text className="text-blue-700">
-                  • Default cost: ${value.default_cost_per_query.toFixed(4)} per query
-                </Text>
-              )}
-              {value.tool_name_to_cost_per_query &&
-                Object.entries(value.tool_name_to_cost_per_query).map(
-                  ([toolName, cost]) =>
-                    cost !== null &&
-                    cost !== undefined && (
-                      <Text key={toolName} className="text-blue-700">
-                        • {toolName}: ${cost.toFixed(4)} per query
-                      </Text>
-                    ),
+        {(() => {
+          const summaryDefault = toFiniteNumber(value.default_cost_per_query);
+          const summaryTools = Object.entries(value.tool_name_to_cost_per_query ?? {})
+            .map(([toolName, raw]) => [toolName, toFiniteNumber(raw)] as const)
+            .filter(([, n]) => n !== null) as Array<readonly [string, number]>;
+          if (summaryDefault === null && summaryTools.length === 0) return null;
+          return (
+            <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <Text className="text-blue-800 font-medium">Cost Summary:</Text>
+              <div className="mt-2 space-y-1">
+                {summaryDefault !== null && (
+                  <Text className="text-blue-700">
+                    • Default cost: ${summaryDefault.toFixed(4)} per query
+                  </Text>
                 )}
+                {summaryTools.map(([toolName, cost]) => (
+                  <Text key={toolName} className="text-blue-700">
+                    • {toolName}: ${cost.toFixed(4)} per query
+                  </Text>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </Card>
   );

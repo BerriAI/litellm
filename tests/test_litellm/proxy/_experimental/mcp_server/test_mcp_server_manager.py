@@ -27,6 +27,8 @@ from mcp.types import Tool as MCPTool
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
+    _coerce_mcp_cost_info_in_place,
+    _coerce_optional_float,
     _deserialize_json_dict,
 )
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
@@ -3309,6 +3311,96 @@ class TestOAuthDiscoverySSRFGuard:
 
         assert result is None
         mock_client.get.assert_not_called()
+
+
+class TestCoerceMcpCostInfo:
+    """Coverage for the YAML 1.1 string-cost coercion helpers (issue #27097)."""
+
+    def test_coerce_optional_float_passthrough(self):
+        assert _coerce_optional_float(None) == (None, True)
+        assert _coerce_optional_float(0.0007) == (0.0007, True)
+        assert _coerce_optional_float(7e-05) == (7e-05, True)
+        assert _coerce_optional_float(5) == (5.0, True)
+
+    def test_coerce_optional_float_string_scientific(self):
+        # PyYAML (YAML 1.1) parses these as strings; we must coerce.
+        for s in ("7e-05", "1e-5", "7E-05", "0.0007", "5"):
+            value, ok = _coerce_optional_float(s)
+            assert ok is True
+            assert value == float(s)
+
+    def test_coerce_optional_float_rejects_non_numeric(self):
+        for bad in ("garbage", "", True, False, [1, 2], {"a": 1}, object()):
+            value, ok = _coerce_optional_float(bad)
+            assert ok is False, f"expected reject for {bad!r}"
+            assert value is None
+
+    def test_coerce_mcp_cost_info_in_place_yaml_repro(self):
+        import yaml
+
+        parsed = yaml.safe_load(
+            "mcp_info:\n"
+            "  mcp_server_cost_info:\n"
+            "    default_cost_per_query: 7e-05\n"
+        )
+        # YAML 1.1 parses scientific notation w/o decimal point as a string.
+        assert isinstance(
+            parsed["mcp_info"]["mcp_server_cost_info"]["default_cost_per_query"],
+            str,
+        )
+
+        _coerce_mcp_cost_info_in_place(parsed["mcp_info"], "google_maps")
+
+        coerced = parsed["mcp_info"]["mcp_server_cost_info"]["default_cost_per_query"]
+        assert isinstance(coerced, float)
+        assert coerced == 7e-05
+
+    def test_coerce_mcp_cost_info_in_place_drops_garbage(self, caplog):
+        mcp_info = {
+            "mcp_server_cost_info": {
+                "default_cost_per_query": "not a number",
+                "tool_name_to_cost_per_query": {
+                    "tool_a": "1.5e-3",  # coerced to float
+                    "tool_b": 0.001,  # already float, kept
+                    "tool_c": None,  # explicit null, kept
+                    "tool_d": "garbage",  # dropped
+                },
+            }
+        }
+        with caplog.at_level(logging.WARNING):
+            _coerce_mcp_cost_info_in_place(mcp_info, "test_server")
+
+        cost_info = mcp_info["mcp_server_cost_info"]
+        # default_cost_per_query was unparseable, dropped entirely
+        assert "default_cost_per_query" not in cost_info
+        tool_costs = cost_info["tool_name_to_cost_per_query"]
+        assert tool_costs == {
+            "tool_a": 0.0015,
+            "tool_b": 0.001,
+            "tool_c": None,
+        }
+
+    def test_coerce_mcp_cost_info_in_place_handles_missing_or_non_dict(self):
+        # No mcp_server_cost_info key at all -> no-op
+        empty: Dict[str, Any] = {}
+        _coerce_mcp_cost_info_in_place(empty, "x")
+        assert empty == {}
+
+        # mcp_server_cost_info is not a dict -> ignored
+        weird: Dict[str, Any] = {"mcp_server_cost_info": "not_a_dict"}
+        _coerce_mcp_cost_info_in_place(weird, "x")
+        assert weird == {"mcp_server_cost_info": "not_a_dict"}
+
+        # tool_name_to_cost_per_query is not a dict -> ignored, default still coerced
+        partial: Dict[str, Any] = {
+            "mcp_server_cost_info": {
+                "default_cost_per_query": "0.0007",
+                "tool_name_to_cost_per_query": "junk",
+            }
+        }
+        _coerce_mcp_cost_info_in_place(partial, "x")
+        assert partial["mcp_server_cost_info"]["default_cost_per_query"] == 0.0007
+        assert partial["mcp_server_cost_info"]["tool_name_to_cost_per_query"] == "junk"
 
 
 if __name__ == "__main__":

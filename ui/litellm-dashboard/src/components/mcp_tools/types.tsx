@@ -99,6 +99,20 @@ export interface MCPServerCostInfo {
   tool_name_to_cost_per_query?: Record<string, number | null>;
 }
 
+/**
+ * Coerce a value of unknown runtime type to a finite number, or null.
+ *
+ * The MCPServerCostInfo TypeScript type declares `number | null`, but a
+ * `config.yaml` value like `default_cost_per_query: 7e-05` is parsed as a
+ * string by PyYAML (YAML 1.1) and round-trips to the UI as a string, where
+ * `.toFixed()` then throws. Use this helper before any numeric formatting.
+ */
+export const toFiniteNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
 // Define MCP provider info
 export interface MCPInfo {
   server_name: string;
