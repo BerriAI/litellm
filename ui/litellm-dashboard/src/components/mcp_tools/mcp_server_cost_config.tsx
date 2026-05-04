@@ -3,6 +3,7 @@ import { Tooltip, InputNumber, Collapse, Badge } from "antd";
 import { InfoCircleOutlined, DollarOutlined, ToolOutlined } from "@ant-design/icons";
 import { Card, Title, Text } from "@tremor/react";
 import { MCPServerCostInfo } from "./types";
+import { toFiniteNumber } from "../../utils/numberUtils";
 
 interface MCPServerCostConfigProps {
   value?: MCPServerCostInfo;
@@ -130,29 +131,32 @@ const MCPServerCostConfig: React.FC<MCPServerCostConfigProps> = ({
           )}
         </div>
 
-        {(value.default_cost_per_query ||
-          (value.tool_name_to_cost_per_query && Object.keys(value.tool_name_to_cost_per_query).length > 0)) && (
-          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <Text className="text-blue-800 font-medium">Cost Summary:</Text>
-            <div className="mt-2 space-y-1">
-              {value.default_cost_per_query && (
-                <Text className="text-blue-700">
-                  • Default cost: ${value.default_cost_per_query.toFixed(4)} per query
-                </Text>
-              )}
-              {value.tool_name_to_cost_per_query &&
-                Object.entries(value.tool_name_to_cost_per_query).map(
-                  ([toolName, cost]) =>
-                    cost !== null &&
-                    cost !== undefined && (
-                      <Text key={toolName} className="text-blue-700">
-                        • {toolName}: ${cost.toFixed(4)} per query
-                      </Text>
-                    ),
+        {(() => {
+          // Coerce defensively: values may arrive as stringified numbers from
+          // JSONB / YAML imports / antd InputNumber emitting strings.
+          const summaryDefaultCost = toFiniteNumber(value.default_cost_per_query);
+          const summaryToolCosts: Array<[string, number]> = Object.entries(
+            value.tool_name_to_cost_per_query ?? {},
+          )
+            .map(([name, raw]): [string, number | null] => [name, toFiniteNumber(raw)])
+            .filter((entry): entry is [string, number] => entry[1] !== null);
+          if (summaryDefaultCost === null && summaryToolCosts.length === 0) return null;
+          return (
+            <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <Text className="text-blue-800 font-medium">Cost Summary:</Text>
+              <div className="mt-2 space-y-1">
+                {summaryDefaultCost !== null && (
+                  <Text className="text-blue-700">• Default cost: ${summaryDefaultCost.toFixed(4)} per query</Text>
                 )}
+                {summaryToolCosts.map(([toolName, cost]) => (
+                  <Text key={toolName} className="text-blue-700">
+                    • {toolName}: ${cost.toFixed(4)} per query
+                  </Text>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </Card>
   );
