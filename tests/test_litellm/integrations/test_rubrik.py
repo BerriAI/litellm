@@ -220,6 +220,22 @@ class TestBatchLogging:
         handler.async_httpx_client.post.assert_called_once()
         assert len(handler.log_queue) == 0
 
+    async def test_flush_queue_preserves_events_added_during_send(self, handler):
+        handler.log_queue = [{"msg": "a"}, {"msg": "b"}]
+
+        async def mock_post(*_args, **_kwargs):
+            handler.log_queue.append({"msg": "c"})
+            mock_response = Mock()
+            mock_response.raise_for_status = Mock()
+            return mock_response
+
+        handler.async_httpx_client = AsyncMock()
+        handler.async_httpx_client.post = mock_post
+
+        await handler.flush_queue()
+
+        assert handler.log_queue == [{"msg": "c"}]
+
     async def test_log_batch_error_does_not_crash(self, handler):
         handler.log_queue = [{"msg": "a"}]
         mock_response = Mock()

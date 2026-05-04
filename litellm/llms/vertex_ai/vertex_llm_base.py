@@ -687,6 +687,62 @@ class VertexBase:
             # Re-raise the original error for better context
             raise error
 
+    async def _handle_reauthentication_async(
+        self,
+        credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        project_id: Optional[str],
+        credential_cache_key: Tuple,
+        error: Exception,
+    ) -> Tuple[str, str]:
+        """
+        Async reauthentication retry that stays within the per-key async lock.
+        """
+        verbose_logger.debug(
+            f"Handling async reauthentication for project_id: {project_id}. "
+            f"Clearing cache and retrying once."
+        )
+
+        self._credentials_project_mapping.pop(credential_cache_key, None)
+
+        try:
+            _credentials, credential_project_id = (
+                await self._load_and_cache_credentials(
+                    credentials=credentials,
+                    project_id=project_id,
+                    credential_cache_key=credential_cache_key,
+                )
+            )
+            if project_id is None and isinstance(credential_project_id, str):
+                project_id = credential_project_id
+                cache_credentials = (
+                    json.dumps(credentials)
+                    if isinstance(credentials, dict)
+                    else credentials
+                )
+                resolved_cache_key = (cache_credentials, project_id)
+                if resolved_cache_key not in self._credentials_project_mapping:
+                    self._credentials_project_mapping[resolved_cache_key] = (
+                        _credentials,
+                        credential_project_id,
+                    )
+
+            if _credentials.token is None or not isinstance(_credentials.token, str):
+                raise ValueError(
+                    "Could not resolve credentials token. Got None or non-string token (type={})".format(
+                        type(_credentials.token).__name__
+                    )
+                )
+            if project_id is None:
+                raise ValueError("Could not resolve project_id")
+
+            return _credentials.token, project_id
+        except Exception as retry_error:
+            verbose_logger.error(
+                f"Async reauthentication retry failed for project_id: {project_id}. "
+                f"Original error: {str(error)}. Retry error: {str(retry_error)}"
+            )
+            raise error
+
     def get_access_token(
         self,
         credentials: Optional[VERTEX_CREDENTIALS_TYPES],
@@ -935,9 +991,7 @@ class VertexBase:
                         verbose_logger.debug(
                             "Reauthentication needed, clearing cache and retrying"
                         )
-                        if credential_cache_key in self._credentials_project_mapping:
-                            del self._credentials_project_mapping[credential_cache_key]
-                        return await asyncify(self._handle_reauthentication)(
+                        return await self._handle_reauthentication_async(
                             credentials=credentials,
                             project_id=project_id,
                             credential_cache_key=credential_cache_key,
