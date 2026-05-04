@@ -129,7 +129,11 @@ class RedisSemanticCache(BaseCache):
         cache_vectorizer: Any,
     ) -> Any:
         def _is_schema_mismatch(exc: ValueError) -> bool:
-            return "schema does not match" in str(exc)
+            error_message = str(exc).lower()
+            return any(
+                phrase in error_message
+                for phrase in ("schema does not match", "index schema")
+            )
 
         try:
             return semantic_cache_cls(
@@ -284,9 +288,7 @@ class RedisSemanticCache(BaseCache):
             ttl = self._get_ttl(**kwargs)
             if ttl is not None:
                 store_kwargs["ttl"] = int(ttl)
-                self.llmcache.store(prompt, value_str, **store_kwargs)
-            else:
-                self.llmcache.store(prompt, value_str, **store_kwargs)
+            self.llmcache.store(prompt, value_str, **store_kwargs)
         except Exception as e:
             print_verbose(
                 f"Error setting {value_str or value} in the Redis semantic cache: {str(e)}"
@@ -439,17 +441,11 @@ class RedisSemanticCache(BaseCache):
             ttl = self._get_ttl(**kwargs)
             if ttl is not None:
                 store_kwargs["ttl"] = ttl
-                await self.llmcache.astore(
-                    prompt,
-                    value_str,
-                    **store_kwargs,
-                )
-            else:
-                await self.llmcache.astore(
-                    prompt,
-                    value_str,
-                    **store_kwargs,
-                )
+            await self.llmcache.astore(
+                prompt,
+                value_str,
+                **store_kwargs,
+            )
         except Exception as e:
             print_verbose(f"Error in async_set_cache: {str(e)}")
 
@@ -489,9 +485,7 @@ class RedisSemanticCache(BaseCache):
 
             # handle results / cache hit
             if not results:
-                kwargs.setdefault("metadata", {})[
-                    "semantic-similarity"
-                ] = 0.0  # TODO why here but not above??
+                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
             cache_hit = results[0]

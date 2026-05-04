@@ -195,7 +195,7 @@ def test_redis_semantic_cache_uses_isolated_index_for_old_schema(monkeypatch):
     fallback_cache_mock = MagicMock()
     semantic_cache_mock = MagicMock(
         side_effect=[
-            ValueError("Existing index schema does not match"),
+            ValueError("stored index schema differs from requested fields"),
             fallback_cache_mock,
         ]
     )
