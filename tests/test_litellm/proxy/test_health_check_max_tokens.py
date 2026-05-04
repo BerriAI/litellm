@@ -86,6 +86,41 @@ async def test_ahealth_check_wildcard_models_respects_max_tokens():
         assert model_params["max_tokens"] == 3
 
 
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "image_generation",
+        "image_edit",
+        "video_generation",
+        "embedding",
+        "rerank",
+        "audio_transcription",
+        "audio_speech",
+        "ocr",
+        "search",
+        "moderation",
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_litellm_params_no_max_tokens_for_non_chat_modes(
+    monkeypatch, mode
+):
+    """
+    Non-chat modes (image_generation, embedding, etc.) must not receive max_tokens
+    because those endpoints reject it with a 400 error.
+    """
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
+    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
+    model_info = {"mode": mode}
+    litellm_params = {"model": "openai/dall-e-3"}
+
+    updated_params = _update_litellm_params_for_health_check(model_info, litellm_params)
+
+    assert (
+        "max_tokens" not in updated_params
+    ), f"max_tokens should not be set for mode={mode!r}, got {updated_params.get('max_tokens')}"
+
+
 @pytest.mark.asyncio
 async def test_background_health_check_max_tokens_env_var(monkeypatch):
     """
