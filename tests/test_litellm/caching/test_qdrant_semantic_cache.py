@@ -241,6 +241,76 @@ def test_qdrant_semantic_cache_payload_index_exception_is_non_blocking():
     qdrant_cache.sync_client.put.assert_called_once()
 
 
+def _mock_qdrant_get_cache_result(qdrant_result):
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    qdrant_cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    qdrant_cache.embedding_model = "text-embedding-ada-002"
+    qdrant_cache.qdrant_api_base = "http://test.qdrant.local"
+    qdrant_cache.collection_name = "test_collection"
+    qdrant_cache.headers = {
+        "Content-Type": "application/json",
+        "api-key": "test_key",
+    }
+    qdrant_cache.similarity_threshold = 0.8
+    qdrant_cache.sync_client = MagicMock()
+
+    mock_search_response = MagicMock()
+    mock_search_response.status_code = 200
+    mock_search_response.json.return_value = {"result": qdrant_result}
+    qdrant_cache.sync_client.post.return_value = mock_search_response
+
+    return qdrant_cache, QdrantSemanticCache
+
+
+@pytest.mark.parametrize("qdrant_result", [None, []])
+def test_qdrant_semantic_cache_get_cache_sets_metadata_on_empty_miss(qdrant_result):
+    qdrant_cache, _ = _mock_qdrant_get_cache_result(qdrant_result)
+    metadata = {}
+
+    with patch(
+        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+    ):
+        result = qdrant_cache.get_cache(
+            key="test_key",
+            messages=[{"content": "What is the capital of Spain?"}],
+            metadata=metadata,
+        )
+
+    assert result is None
+    assert metadata["semantic-similarity"] == 0.0
+
+
+def test_qdrant_semantic_cache_get_cache_sets_metadata_on_below_threshold_miss():
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    qdrant_cache, _ = _mock_qdrant_get_cache_result(
+        [
+            {
+                "payload": {
+                    QdrantSemanticCache.CACHE_KEY_FIELD_NAME: "test_key",
+                    "text": "What is the capital of Spain?",
+                    "response": '{"id": "test-456"}',
+                },
+                "score": 0.7,
+            }
+        ]
+    )
+    metadata = {}
+
+    with patch(
+        "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+    ):
+        result = qdrant_cache.get_cache(
+            key="test_key",
+            messages=[{"content": "What is the capital of Spain?"}],
+            metadata=metadata,
+        )
+
+    assert result is None
+    assert metadata["semantic-similarity"] == 0.7
+
+
 def test_qdrant_semantic_cache_get_cache_miss():
     """
     Test QDRANT semantic cache get method when there's a cache miss.
