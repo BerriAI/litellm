@@ -36,9 +36,6 @@ class RedisSemanticCache(BaseCache):
 
     DEFAULT_REDIS_INDEX_NAME: str = "litellm_semantic_cache_index"
     CACHE_KEY_FIELD_NAME: str = "litellm_cache_key"
-    ALLOW_LEGACY_UNSCOPED_HITS_ENV_VAR: str = (
-        "LITELLM_SEMANTIC_CACHE_ALLOW_LEGACY_UNSCOPED_HITS"
-    )
 
     def __init__(
         self,
@@ -49,7 +46,6 @@ class RedisSemanticCache(BaseCache):
         similarity_threshold: Optional[float] = None,
         embedding_model: str = "text-embedding-ada-002",
         index_name: Optional[str] = None,
-        allow_legacy_unscoped_cache_hits: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -91,10 +87,6 @@ class RedisSemanticCache(BaseCache):
         # While similarity: 1 = most similar, 0 = least similar
         self.distance_threshold = 1 - similarity_threshold
         self.embedding_model = embedding_model
-        self.allow_legacy_unscoped_cache_hits = (
-            self._get_allow_legacy_unscoped_cache_hits(allow_legacy_unscoped_cache_hits)
-        )
-        self._using_legacy_unscoped_index = False
 
         # Set up Redis connection
         if redis_url is None:
@@ -124,14 +116,6 @@ class RedisSemanticCache(BaseCache):
             redis_url=redis_url,
             cache_vectorizer=cache_vectorizer,
         )
-
-    @classmethod
-    def _get_allow_legacy_unscoped_cache_hits(
-        cls, allow_legacy_unscoped_cache_hits: Optional[bool]
-    ) -> bool:
-        if allow_legacy_unscoped_cache_hits is not None:
-            return allow_legacy_unscoped_cache_hits
-        return os.getenv(cls.ALLOW_LEGACY_UNSCOPED_HITS_ENV_VAR, "").lower() == "true"
 
     @classmethod
     def _cache_key_filterable_field(cls) -> Dict[str, str]:
@@ -166,22 +150,6 @@ class RedisSemanticCache(BaseCache):
         except ValueError as exc:
             if not _is_schema_mismatch(exc):
                 raise
-
-            if self.allow_legacy_unscoped_cache_hits:
-                self._using_legacy_unscoped_index = True
-                print_verbose(
-                    "Redis semantic-cache legacy unscoped hits are enabled via "
-                    f"{self.ALLOW_LEGACY_UNSCOPED_HITS_ENV_VAR}; reusing existing "
-                    "index without cache-key isolation. Disable this after warming "
-                    "the isolated semantic cache."
-                )
-                return semantic_cache_cls(
-                    name=index_name,
-                    redis_url=redis_url,
-                    vectorizer=cache_vectorizer,
-                    distance_threshold=self.distance_threshold,
-                    overwrite=False,
-                )
 
             isolated_index_name = f"{index_name}_isolated"
             print_verbose(
@@ -223,11 +191,11 @@ class RedisSemanticCache(BaseCache):
         return Tag(self.CACHE_KEY_FIELD_NAME) == str(key)
 
     def _cache_hit_matches_key(self, cache_hit: Dict[str, Any], key: str) -> bool:
+        # Pre-isolation entries with no ``litellm_cache_key`` field cannot be
+        # safely reassigned to a caller's scope and are treated as misses.
         cached_key = cache_hit.get(self.CACHE_KEY_FIELD_NAME)
         if isinstance(cached_key, bytes):
             cached_key = cached_key.decode("utf-8")
-        if cached_key is None and getattr(self, "_using_legacy_unscoped_index", False):
-            return True
         return cached_key is not None and str(cached_key) == str(key)
 
     def _get_ttl(self, **kwargs) -> Optional[int]:
@@ -319,9 +287,9 @@ class RedisSemanticCache(BaseCache):
             prompt = get_str_from_messages(messages)
             value_str = str(value)
 
-            store_kwargs: Dict[str, Any] = {}
-            if not getattr(self, "_using_legacy_unscoped_index", False):
-                store_kwargs["filters"] = self._get_cache_filters(key)
+            store_kwargs: Dict[str, Any] = {
+                "filters": self._get_cache_filters(key),
+            }
 
             # Get TTL and store in Redis semantic cache
             ttl = self._get_ttl(**kwargs)
@@ -357,11 +325,10 @@ class RedisSemanticCache(BaseCache):
             prompt = get_str_from_messages(messages)
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
-            check_kwargs: Dict[str, Any] = {"prompt": prompt}
-            if not getattr(self, "_using_legacy_unscoped_index", False):
-                check_kwargs["filter_expression"] = (
-                    self._get_cache_key_filter_expression(key)
-                )
+            check_kwargs: Dict[str, Any] = {
+                "prompt": prompt,
+                "filter_expression": self._get_cache_key_filter_expression(key),
+            }
             results = self.llmcache.check(**check_kwargs)
 
             # Return None if no similar prompts found
@@ -475,9 +442,8 @@ class RedisSemanticCache(BaseCache):
 
             store_kwargs: Dict[str, Any] = {
                 "vector": prompt_embedding,
+                "filters": self._get_cache_filters(key),
             }
-            if not getattr(self, "_using_legacy_unscoped_index", False):
-                store_kwargs["filters"] = self._get_cache_filters(key)
 
             # Get TTL and store in Redis semantic cache
             ttl = self._get_ttl(**kwargs)
@@ -522,11 +488,8 @@ class RedisSemanticCache(BaseCache):
             check_kwargs: Dict[str, Any] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
+                "filter_expression": self._get_cache_key_filter_expression(key),
             }
-            if not getattr(self, "_using_legacy_unscoped_index", False):
-                check_kwargs["filter_expression"] = (
-                    self._get_cache_key_filter_expression(key)
-                )
             results = await self.llmcache.acheck(**check_kwargs)
 
             # handle results / cache hit

@@ -232,46 +232,6 @@ def test_redis_semantic_cache_uses_isolated_index_for_old_schema(monkeypatch):
         ]
 
 
-def test_redis_semantic_cache_can_reuse_legacy_unscoped_index(monkeypatch):
-    fallback_cache_mock = MagicMock()
-    semantic_cache_mock = MagicMock(
-        side_effect=[
-            ValueError("Existing index schema does not match"),
-            fallback_cache_mock,
-        ]
-    )
-    custom_vectorizer_mock = MagicMock()
-
-    with patch.dict(
-        "sys.modules",
-        {
-            "redisvl.extensions.llmcache": MagicMock(SemanticCache=semantic_cache_mock),
-            "redisvl.utils.vectorize": MagicMock(
-                CustomTextVectorizer=custom_vectorizer_mock
-            ),
-        },
-    ):
-        from litellm.caching.redis_semantic_cache import RedisSemanticCache
-
-        monkeypatch.setenv("REDIS_HOST", "localhost")
-        monkeypatch.setenv("REDIS_PORT", "6379")
-        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
-        monkeypatch.setenv(
-            RedisSemanticCache.ALLOW_LEGACY_UNSCOPED_HITS_ENV_VAR, "true"
-        )
-
-        redis_semantic_cache = RedisSemanticCache(
-            similarity_threshold=0.8,
-            index_name="existing_index",
-        )
-
-        assert redis_semantic_cache.llmcache is fallback_cache_mock
-        assert redis_semantic_cache._using_legacy_unscoped_index is True
-        assert semantic_cache_mock.call_count == 2
-        assert semantic_cache_mock.call_args_list[1].kwargs["name"] == "existing_index"
-        assert "filterable_fields" not in semantic_cache_mock.call_args_list[1].kwargs
-
-
 def test_redis_semantic_cache_overwrites_stale_isolated_index(monkeypatch):
     fallback_cache_mock = MagicMock()
     semantic_cache_mock = MagicMock(
@@ -372,11 +332,12 @@ def test_redis_semantic_cache_matches_bytes_cache_key():
     )
 
 
-def test_redis_semantic_cache_allows_unscoped_hit_only_in_legacy_mode():
+def test_redis_semantic_cache_rejects_pre_isolation_unscoped_hit():
+    """Pre-isolation entries with no cache-key field cannot be safely
+    reassigned to a caller's scope and are treated as misses."""
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
     redis_semantic_cache = RedisSemanticCache.__new__(RedisSemanticCache)
-    redis_semantic_cache._using_legacy_unscoped_index = False
 
     cache_hit = {
         "prompt": "What is the capital of France?",
@@ -384,12 +345,6 @@ def test_redis_semantic_cache_allows_unscoped_hit_only_in_legacy_mode():
         "vector_distance": 0.1,
     }
     assert not redis_semantic_cache._cache_hit_matches_key(
-        cache_hit=cache_hit,
-        key="test_key",
-    )
-
-    redis_semantic_cache._using_legacy_unscoped_index = True
-    assert redis_semantic_cache._cache_hit_matches_key(
         cache_hit=cache_hit,
         key="test_key",
     )
