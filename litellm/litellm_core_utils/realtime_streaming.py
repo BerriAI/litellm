@@ -260,23 +260,20 @@ class RealTimeStreaming:
             await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
 
     def _make_disable_auto_response_message(self) -> str:
-        """Return a GA-shaped session.update that disables VAD auto-response.
-
-        The guardrail injection sites historically sent a beta-style payload
-        with a flat ``turn_detection`` key.  When the upstream operates in GA
-        mode (no ``OpenAI-Beta: realtime=v1`` header), the backend requires
-        the nested shape ``session.audio.input.turn_detection`` and a required
-        ``session.type`` field.  This helper always produces the correct shape
-        so both injection sites are GA-safe regardless of client protocol.
-        """
-        session: Dict[str, Any] = {
-            "type": "realtime",
-            "audio": {
-                "input": {
-                    "turn_detection": {"create_response": False},
-                }
-            },
-        }
+        """Return a session.update that disables VAD auto-response."""
+        if self._client_wants_beta:
+            session: Dict[str, Any] = {
+                "turn_detection": {"create_response": False},
+            }
+        else:
+            session = {
+                "type": "realtime",
+                "audio": {
+                    "input": {
+                        "turn_detection": {"create_response": False},
+                    }
+                },
+            }
         return json.dumps({"type": "session.update", "session": session})
 
     def _has_realtime_guardrails(self) -> bool:
@@ -813,11 +810,10 @@ class RealTimeStreaming:
                         self._pending_guardrail_message = None
                         continue
 
-                    # GA compatibility: remap beta-style session fields to GA shape.
-                    # Always applied so that beta-format clients work against a GA
-                    # backend.  When _client_wants_beta is True the proxy also
-                    # translates GA events back to beta names on the return path.
-                    if msg_type == "session.update":
+                    # GA compatibility: remap beta-style session fields only when
+                    # the upstream is in GA mode. Beta upstreams expect the flat
+                    # session shape unchanged.
+                    if msg_type == "session.update" and not self._client_wants_beta:
                         session = msg_obj.get("session", {})
                         if isinstance(session, dict):
                             session = self._remap_beta_session_to_ga(session)

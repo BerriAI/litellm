@@ -121,6 +121,59 @@ def test_make_disable_auto_response_message_produces_ga_shape():
     assert session["audio"]["input"]["turn_detection"]["create_response"] is False
 
 
+def test_make_disable_auto_response_message_produces_beta_shape_for_beta_clients():
+    websocket = MagicMock()
+    websocket.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    raw = streaming._make_disable_auto_response_message()
+    msg = json.loads(raw)
+
+    assert msg["type"] == "session.update"
+    session = msg["session"]
+    assert session == {"turn_detection": {"create_response": False}}
+
+
+@pytest.mark.asyncio
+async def test_client_ack_messages_keeps_beta_session_shape_for_beta_clients():
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    session_update = json.dumps(
+        {
+            "type": "session.update",
+            "session": {
+                "modalities": ["audio", "text"],
+                "voice": "alloy",
+                "turn_detection": {"create_response": False},
+            },
+        }
+    )
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            session_update,
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend = json.loads(backend_ws.send.call_args_list[0].args[0])
+    session = sent_to_backend["session"]
+    assert session["modalities"] == ["audio", "text"]
+    assert session["voice"] == "alloy"
+    assert session["turn_detection"] == {"create_response": False}
+    assert "type" not in session
+    assert "output_modalities" not in session
+    assert "audio" not in session
+
+
 def test_translate_event_to_beta_renames_delta_types():
     ev = RealTimeStreaming._translate_event_to_beta(
         {"type": "response.output_audio.delta", "delta": "abc", "event_id": "e1"}
