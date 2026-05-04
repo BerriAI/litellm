@@ -194,6 +194,7 @@ async def make_call(
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
     stream_chunk_size: int = 1024,
+    timeout: Optional[Union[float, httpx.Timeout]] = None,
 ):
     try:
         if client is None:
@@ -214,6 +215,7 @@ async def make_call(
             data=data,
             stream=not fake_stream,
             logging_obj=logging_obj,
+            timeout=timeout,
         )
 
         if response.status_code != 200:
@@ -1363,6 +1365,7 @@ class BedrockLLM(BaseAWSLLM):
                 logging_obj=logging_obj,
                 fake_stream=True if "ai21" in api_base else False,
                 stream_chunk_size=stream_chunk_size,
+                timeout=timeout,
             ),
             model=model,
             custom_llm_provider="bedrock",
