@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import datetime
 from typing import AsyncGenerator
@@ -2156,3 +2157,112 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
+
+
+@pytest.mark.asyncio
+class TestAwaitWithClientDisconnectCheck:
+    """
+    Coverage for `await_with_client_disconnect_check`. When a client disconnects
+    mid-flight, the wrapped awaitable must be cancelled so the upstream LLM
+    provider connection is torn down — otherwise the proxy keeps the request
+    running and the user is billed for tokens they never receive.
+    """
+
+    @staticmethod
+    def _build_request(disconnect_after: float = 0.05) -> Request:
+        """Build a Request whose is_disconnected() flips True after a delay."""
+        request = MagicMock(spec=Request)
+        start = asyncio.get_event_loop().time()
+
+        async def _is_disconnected() -> bool:
+            return (asyncio.get_event_loop().time() - start) >= disconnect_after
+
+        request.is_disconnected = _is_disconnected
+        return request
+
+    async def test_returns_result_when_client_stays_connected(self, monkeypatch):
+        from litellm.proxy.common_request_processing import (
+            await_with_client_disconnect_check,
+        )
+
+        monkeypatch.setenv("LITELLM_PROXY_DISCONNECT_POLL_INTERVAL_SECONDS", "0.05")
+
+        request = MagicMock(spec=Request)
+        request.is_disconnected = AsyncMock(return_value=False)
+
+        async def work() -> str:
+            await asyncio.sleep(0.01)
+            return "ok"
+
+        result = await await_with_client_disconnect_check(work(), request)
+        assert result == "ok"
+
+    async def test_cancels_upstream_and_raises_499_on_client_disconnect(
+        self, monkeypatch
+    ):
+        from litellm.proxy.common_request_processing import (
+            await_with_client_disconnect_check,
+        )
+
+        monkeypatch.setenv("LITELLM_PROXY_DISCONNECT_POLL_INTERVAL_SECONDS", "0.05")
+
+        request = self._build_request(disconnect_after=0.1)
+        cancelled = asyncio.Event()
+
+        async def long_running_upstream_call() -> str:
+            try:
+                await asyncio.sleep(5.0)
+                return "should-not-return"
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        with pytest.raises(HTTPException) as exc_info:
+            await await_with_client_disconnect_check(
+                long_running_upstream_call(), request
+            )
+
+        assert exc_info.value.status_code == 499
+        assert cancelled.is_set(), (
+            "upstream task must receive CancelledError so httpx tears down "
+            "the connection"
+        )
+
+    async def test_propagates_upstream_exception(self, monkeypatch):
+        from litellm.proxy.common_request_processing import (
+            await_with_client_disconnect_check,
+        )
+
+        monkeypatch.setenv("LITELLM_PROXY_DISCONNECT_POLL_INTERVAL_SECONDS", "0.05")
+
+        request = MagicMock(spec=Request)
+        request.is_disconnected = AsyncMock(return_value=False)
+
+        class UpstreamError(Exception):
+            pass
+
+        async def failing_upstream() -> str:
+            await asyncio.sleep(0.01)
+            raise UpstreamError("boom")
+
+        with pytest.raises(UpstreamError, match="boom"):
+            await await_with_client_disconnect_check(failing_upstream(), request)
+
+    async def test_disabled_via_env_falls_back_to_plain_await(self, monkeypatch):
+        from litellm.proxy.common_request_processing import (
+            await_with_client_disconnect_check,
+        )
+
+        monkeypatch.setenv(
+            "LITELLM_PROXY_CANCEL_UPSTREAM_ON_CLIENT_DISCONNECT", "false"
+        )
+
+        # Request that is "disconnected" — yet we should still await to
+        # completion when the feature is disabled.
+        request = MagicMock(spec=Request)
+        request.is_disconnected = AsyncMock(return_value=True)
+
+        async def work() -> str:
+            return "completed"
+
+        assert await await_with_client_disconnect_check(work(), request) == "completed"

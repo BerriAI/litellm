@@ -1,6 +1,8 @@
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import time
 import traceback
 from datetime import datetime
@@ -8,6 +10,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Awaitable,
     Callable,
     Dict,
     Literal,
@@ -64,6 +67,81 @@ else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
+
+
+def _client_disconnect_check_enabled() -> bool:
+    """Read at call time so tests / runtime overrides take effect."""
+    raw = os.getenv("LITELLM_PROXY_CANCEL_UPSTREAM_ON_CLIENT_DISCONNECT", "true")
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _client_disconnect_poll_interval_seconds() -> float:
+    raw = os.getenv("LITELLM_PROXY_DISCONNECT_POLL_INTERVAL_SECONDS", "1.0")
+    try:
+        return max(0.05, float(raw))
+    except ValueError:
+        return 1.0
+
+
+async def await_with_client_disconnect_check(
+    awaitable: Awaitable[Any],
+    request: Request,
+) -> Any:
+    """
+    Await `awaitable` while concurrently polling `request.is_disconnected()`.
+
+    If the client disconnects before the awaitable finishes, the awaitable is
+    cancelled — propagating cancellation through httpx so the upstream LLM
+    provider connection is torn down — and HTTPException(499) is raised. This
+    closes the gap where FastAPI does not detect mid-flight disconnects on
+    non-streaming routes, so the proxy would otherwise keep the upstream
+    request running (and the user still gets billed for tokens they never
+    receive).
+
+    Disabled by setting env LITELLM_PROXY_CANCEL_UPSTREAM_ON_CLIENT_DISCONNECT=false.
+    """
+    if not _client_disconnect_check_enabled():
+        return await awaitable
+
+    main_task = asyncio.ensure_future(awaitable)
+    poll_interval = _client_disconnect_poll_interval_seconds()
+
+    async def _watch_disconnect() -> bool:
+        while True:
+            await asyncio.sleep(poll_interval)
+            try:
+                if await request.is_disconnected():
+                    return True
+            except Exception:
+                # is_disconnected() can raise on broken transports; treat as a
+                # disconnect rather than crash the watcher.
+                return True
+
+    watcher = asyncio.create_task(_watch_disconnect())
+    try:
+        done, _pending = await asyncio.wait(
+            {main_task, watcher},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if main_task in done:
+            return main_task.result()
+        # Client disconnected first — cancel the upstream call.
+        main_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await main_task
+        verbose_proxy_logger.info(
+            "Client disconnected before upstream LLM call completed; "
+            "cancelled upstream request."
+        )
+        raise HTTPException(
+            status_code=499,
+            detail="Client disconnected the request",
+        )
+    finally:
+        if not watcher.done():
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
 
 
 def _serialize_http_exception_detail(
@@ -1190,7 +1268,10 @@ class ProxyBaseLLMRequestProcessing:
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        responses = await llm_responses
+        # Propagate client cancellations to the upstream LLM provider: poll
+        # request.is_disconnected() concurrently and cancel the gather (and
+        # therefore the in-flight httpx call) if the client goes away.
+        responses = await await_with_client_disconnect_check(llm_responses, request)
 
         response = responses[1]
 

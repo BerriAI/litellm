@@ -477,7 +477,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=str(e),
             )
-            raise AzureOpenAIError(status_code=500, message=str(e))
+            # Re-raise CancelledError so cancellation propagates through httpx
+            # to the upstream connection. Swallowing it would keep the socket
+            # alive and leak the upstream request after a client disconnect.
+            raise
         except Exception as e:
             message = getattr(e, "message", str(e))
             body = getattr(e, "body", None)
