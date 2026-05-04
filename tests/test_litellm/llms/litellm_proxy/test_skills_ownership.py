@@ -537,4 +537,5 @@ def test_skill_cache_evicts_when_at_capacity(monkeypatch):
     skills_handler._write_skill_cache("a", Mock())
     skills_handler._write_skill_cache("b", Mock())
     skills_handler._write_skill_cache("c", Mock())
-    assert skills_handler._SKILL_CACHE.keys() == {"c"}
+    # ``a`` was the oldest and is LRU-evicted; ``b`` and ``c`` survive.
+    assert list(skills_handler._SKILL_CACHE.keys()) == ["b", "c"]

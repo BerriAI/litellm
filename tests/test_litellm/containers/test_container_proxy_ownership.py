@@ -1228,10 +1228,24 @@ def test_container_owner_cache_expires_after_ttl(monkeypatch):
 
 
 def test_container_owner_cache_evicts_when_at_capacity(monkeypatch):
-    """The cache must not grow unbounded; reaching capacity clears all entries."""
+    """The cache must not grow unbounded; reaching capacity LRU-evicts the
+    oldest entry, not the entire cache."""
     monkeypatch.setattr(ownership, "_CONTAINER_OWNER_CACHE_MAX_SIZE", 2)
     ownership._write_container_owner_cache("a", "user-a")
     ownership._write_container_owner_cache("b", "user-b")
     ownership._write_container_owner_cache("c", "user-c")
-    # Reaching the cap clears everything — the new write is the only survivor.
-    assert ownership._CONTAINER_OWNER_CACHE.keys() == {"c"}
+    # ``a`` was the oldest and is dropped; ``b`` and ``c`` survive.
+    assert list(ownership._CONTAINER_OWNER_CACHE.keys()) == ["b", "c"]
+
+
+def test_container_owner_cache_read_marks_as_recently_used(monkeypatch):
+    """Reading an entry should reset its position so a subsequent eviction
+    drops a less-recently-used entry instead of the just-touched one."""
+    monkeypatch.setattr(ownership, "_CONTAINER_OWNER_CACHE_MAX_SIZE", 2)
+    ownership._write_container_owner_cache("a", "user-a")
+    ownership._write_container_owner_cache("b", "user-b")
+    # Touch ``a`` so it becomes the most-recently-used.
+    ownership._read_container_owner_cache("a")
+    ownership._write_container_owner_cache("c", "user-c")
+    # ``b`` is the LRU at this point; ``a`` and ``c`` survive.
+    assert list(ownership._CONTAINER_OWNER_CACHE.keys()) == ["a", "c"]

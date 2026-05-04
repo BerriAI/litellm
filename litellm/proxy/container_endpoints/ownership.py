@@ -26,9 +26,10 @@ _IN_MEMORY_CONTAINER_OWNERS: "OrderedDict[str, str]" = OrderedDict()
 # Short-lived cache keeps every container access check from hitting the DB
 # (`_get_container_owner` is invoked on retrieve / delete / list / file-content
 # paths). Mirrors the `_byok_cred_cache` pattern in mcp_server/server.py:
-# (value, monotonic_timestamp) tuples, TTL'd, capped, invalidated by writes.
-# A `None` value caches "untracked" so repeated negative lookups also avoid DB.
-_CONTAINER_OWNER_CACHE: Dict[str, Tuple[Optional[str], float]] = {}
+# (value, monotonic_timestamp) tuples, TTL'd, LRU-evicted at capacity,
+# invalidated by writes. A ``None`` value caches "untracked" so repeated
+# negative lookups also avoid DB.
+_CONTAINER_OWNER_CACHE: "OrderedDict[str, Tuple[Optional[str], float]]" = OrderedDict()
 _CONTAINER_OWNER_CACHE_TTL = 60  # seconds
 _CONTAINER_OWNER_CACHE_MAX_SIZE = 10000
 
@@ -42,13 +43,20 @@ def _read_container_owner_cache(model_object_id: str) -> Tuple[bool, Optional[st
     if time.monotonic() - timestamp > _CONTAINER_OWNER_CACHE_TTL:
         _CONTAINER_OWNER_CACHE.pop(model_object_id, None)
         return False, None
+    _CONTAINER_OWNER_CACHE.move_to_end(model_object_id)
     return True, value
 
 
 def _write_container_owner_cache(model_object_id: str, owner: Optional[str]) -> None:
-    if len(_CONTAINER_OWNER_CACHE) >= _CONTAINER_OWNER_CACHE_MAX_SIZE:
-        _CONTAINER_OWNER_CACHE.clear()
+    # LRU eviction (popitem(last=False)) instead of full ``clear()`` — a
+    # full clear at capacity converts a steady-state cached workload into
+    # a periodic full-DB-load oscillation as the cache repopulates from
+    # zero and clears again.
+    if model_object_id in _CONTAINER_OWNER_CACHE:
+        _CONTAINER_OWNER_CACHE.move_to_end(model_object_id)
     _CONTAINER_OWNER_CACHE[model_object_id] = (owner, time.monotonic())
+    while len(_CONTAINER_OWNER_CACHE) > _CONTAINER_OWNER_CACHE_MAX_SIZE:
+        _CONTAINER_OWNER_CACHE.popitem(last=False)
 
 
 def _invalidate_container_owner_cache(model_object_id: str) -> None:

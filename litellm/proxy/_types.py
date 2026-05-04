@@ -4609,7 +4609,7 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     unified_object_id: str
     model_object_id: str
-    file_purpose: Literal["batch", "fine-tune", "response"]
+    file_purpose: Literal["batch", "fine-tune", "response", "container"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
 
 

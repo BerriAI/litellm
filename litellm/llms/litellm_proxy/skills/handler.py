@@ -8,6 +8,7 @@ Used by the transformation layer and skills injection hook.
 import os
 import time
 import uuid
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger
@@ -28,7 +29,7 @@ ALLOW_UNOWNED_SKILL_ACCESS_ENV = "LITELLM_ALLOW_UNOWNED_SKILL_ACCESS"
 # round-trip per request. Same shape as `_byok_cred_cache` and the container
 # ownership cache: (value, monotonic_timestamp). `None` is cached as a true
 # negative ("skill does not exist") so repeated misses also avoid the DB.
-_SKILL_CACHE: Dict[str, Tuple[Optional[Any], float]] = {}
+_SKILL_CACHE: "OrderedDict[str, Tuple[Optional[Any], float]]" = OrderedDict()
 _SKILL_CACHE_TTL = 60  # seconds
 _SKILL_CACHE_MAX_SIZE = 10000
 
@@ -42,13 +43,18 @@ def _read_skill_cache(skill_id: str) -> Tuple[bool, Optional[Any]]:
     if time.monotonic() - timestamp > _SKILL_CACHE_TTL:
         _SKILL_CACHE.pop(skill_id, None)
         return False, None
+    _SKILL_CACHE.move_to_end(skill_id)
     return True, value
 
 
 def _write_skill_cache(skill_id: str, skill: Optional[Any]) -> None:
-    if len(_SKILL_CACHE) >= _SKILL_CACHE_MAX_SIZE:
-        _SKILL_CACHE.clear()
+    # LRU eviction (popitem(last=False)) instead of full ``clear()`` —
+    # see container ownership cache for rationale.
+    if skill_id in _SKILL_CACHE:
+        _SKILL_CACHE.move_to_end(skill_id)
     _SKILL_CACHE[skill_id] = (skill, time.monotonic())
+    while len(_SKILL_CACHE) > _SKILL_CACHE_MAX_SIZE:
+        _SKILL_CACHE.popitem(last=False)
 
 
 def _invalidate_skill_cache(skill_id: str) -> None:
