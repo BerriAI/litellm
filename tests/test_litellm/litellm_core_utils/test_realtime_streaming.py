@@ -13,7 +13,10 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.realtime_streaming import (
+    RealTimeStreaming,
+    client_sent_openai_beta_realtime_header,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import (
     OpenAIRealtimeStreamResponseBaseObject,
@@ -78,6 +81,39 @@ def test_realtime_streaming_store_message():
     )
     streaming.store_message(other_msg)
     assert len(streaming.messages) == 2  # Should not store the new message
+
+
+def test_remap_beta_session_to_ga_normalizes_modalities_and_audio():
+    out = RealTimeStreaming._remap_beta_session_to_ga(
+        {"modalities": ["audio", "text"], "voice": "alloy"}
+    )
+    assert out["type"] == "realtime"
+    assert out["output_modalities"] == ["audio"]
+    assert out["audio"]["output"]["voice"] == "alloy"
+
+
+def test_translate_event_to_beta_renames_delta_types():
+    ev = RealTimeStreaming._translate_event_to_beta(
+        {"type": "response.output_audio.delta", "delta": "abc", "event_id": "e1"}
+    )
+    assert ev is not None
+    assert ev["type"] == "response.audio.delta"
+
+
+def test_translate_event_to_beta_drops_conversation_item_done():
+    assert (
+        RealTimeStreaming._translate_event_to_beta({"type": "conversation.item.done"})
+        is None
+    )
+
+
+def test_client_sent_openai_beta_realtime_header_detects_header():
+    ws = MagicMock()
+    ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    assert client_sent_openai_beta_realtime_header(ws) is True
+    empty = MagicMock()
+    empty.scope = {"headers": []}
+    assert client_sent_openai_beta_realtime_header(empty) is False
 
 
 def test_collect_user_input_from_text_conversation_item():
