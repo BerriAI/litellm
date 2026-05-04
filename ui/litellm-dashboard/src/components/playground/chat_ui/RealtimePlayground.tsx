@@ -179,12 +179,9 @@ const RealtimePlayground: React.FC<RealtimePlaygroundProps> = ({
               const texts: string[] = [];
               for (const item of output) {
                 for (const c of item.content || []) {
-                  // beta: c.text, c.transcript; GA content types: output_text, output_audio
-                  const t =
-                    c.text ||
-                    c.transcript ||
-                    (c.type === "output_text" ? c.text : undefined) ||
-                    (c.type === "output_audio" ? c.transcript : undefined);
+                  // beta: c.text (type=text), c.transcript (type=audio)
+                  // GA:   c.text (type=output_text), c.transcript (type=output_audio)
+                  const t = c.text || c.transcript;
                   if (t) texts.push(t);
                 }
               }

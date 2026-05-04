@@ -6,7 +6,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 
 from typing import Any, Optional, cast
 
-from litellm._logging import _redact_string
+from litellm._logging import _redact_string, verbose_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
 
@@ -127,6 +127,12 @@ class OpenAIRealtime(OpenAIChatCompletion):
             ssl_config = self._get_ssl_config(url)
 
             openai_beta_realtime = client_sent_openai_beta_realtime_header(websocket)
+            if not openai_beta_realtime:
+                verbose_logger.debug(
+                    "OpenAI Realtime: connecting with GA protocol (no OpenAI-Beta header). "
+                    "If your client expects beta event names, add 'OpenAI-Beta: realtime=v1' "
+                    "to the WebSocket headers sent to the LiteLLM proxy."
+                )
             headers = self._get_additional_headers(
                 api_key, openai_beta_realtime=openai_beta_realtime
             )
