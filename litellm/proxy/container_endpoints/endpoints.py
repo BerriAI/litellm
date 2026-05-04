@@ -241,11 +241,6 @@ async def list_containers(
             user_api_base=user_api_base,
             version=version,
         )
-        return await filter_container_list_response(
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            custom_llm_provider=custom_llm_provider,
-        )
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
@@ -253,6 +248,16 @@ async def list_containers(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+
+    # Ownership filtering runs OUTSIDE the LLM-exception scope: a DB error
+    # in the ownership lookup is not an LLM-API error and shouldn't be
+    # translated to a provider-shaped failure (which would also fire the
+    # post_call_failure_hook for what is in fact a successful upstream call).
+    return await filter_container_list_response(
+        response=response,
+        user_api_key_dict=user_api_key_dict,
+        custom_llm_provider=custom_llm_provider,
+    )
 
 
 @router.get(
