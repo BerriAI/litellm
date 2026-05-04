@@ -224,14 +224,23 @@ def _build_banned_observability_params() -> FrozenSet[str]:
     the extras the canonical allowlist hasn't caught up to yet. New
     integrations added to the canonical allowlist are banned by default,
     which is the safe failure mode.
+
+    ``_request_blocked_callback_params`` (e.g. ``gcs_bucket_name``,
+    ``gcs_path_service_account``) is the GCS-logging-specific deny list
+    that lives alongside the allowlist; fold it in here so a single
+    declaration of "this field must not be caller-supplied" covers both
+    the request-body bouncer and the dynamic callback initializer.
     """
     from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        _request_blocked_callback_params,
         _supported_callback_params,
     )
 
     return (
-        frozenset(_supported_callback_params) - _SAFE_CLIENT_CALLBACK_PARAMS
-    ) | _EXTRA_BANNED_OBSERVABILITY_PARAMS
+        (frozenset(_supported_callback_params) - _SAFE_CLIENT_CALLBACK_PARAMS)
+        | _EXTRA_BANNED_OBSERVABILITY_PARAMS
+        | frozenset(_request_blocked_callback_params)
+    )
 
 
 _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (

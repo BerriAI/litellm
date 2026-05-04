@@ -265,8 +265,6 @@ async def test_should_reject_skill_create_for_identityless_proxy_auth(monkeypatc
     """Identity-less callers cannot create skills — stamping a shared
     sentinel as ``created_by`` would let any two such callers see each
     other's skills via the resulting shared owner scope."""
-    from fastapi import HTTPException
-
     table = AsyncMock()
     prisma_client = type(
         "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
@@ -279,13 +277,11 @@ async def test_should_reject_skill_create_for_identityless_proxy_auth(monkeypatc
 
     auth = UserAPIKeyAuth()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ValueError, match="identity scope"):
         await LiteLLMSkillsHandler.create_skill(
             data=NewSkillRequest(display_title="skill"),
             user_api_key_dict=auth,
         )
-    assert exc.value.status_code == 403
-    assert "identity scope" in str(exc.value.detail)
     table.create.assert_not_awaited()
 
 

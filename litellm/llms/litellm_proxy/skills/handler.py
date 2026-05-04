@@ -137,12 +137,11 @@ class LiteLLMSkillsHandler:
             # Caller has no identity scope (no user_id / team_id / org_id /
             # api_key / token). Stamping a placeholder would let any two
             # identity-less callers see each other's skills via the shared
-            # owner — the cross-tenant primitive we avoid.
-            from fastapi import HTTPException
-
-            raise HTTPException(
-                status_code=403,
-                detail="Unable to record skill ownership: caller has no identity scope.",
+            # owner — the cross-tenant primitive we avoid. ValueError keeps
+            # this module FastAPI-free per the project layering rule
+            # (litellm_proxy provider integrations live outside proxy/).
+            raise ValueError(
+                "Unable to record skill ownership: caller has no identity scope."
             )
 
         skill_data: Dict[str, Any] = {
