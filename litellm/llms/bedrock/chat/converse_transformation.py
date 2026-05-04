@@ -478,14 +478,15 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params.pop("output_config", None)
             else:
                 optional_params["thinking"] = mapped_thinking
-                # Adaptive-thinking models (Claude 4.6 / 4.7) take the tier
-                # via output_config.effort. Mirror the mapping used by
-                # AnthropicConfig.map_openai_params and apply the same
-                # validation rules so unmapped/garbage efforts surface as a
-                # 400 instead of being silently flattened on the wire.
-                if AnthropicConfig._is_claude_4_6_model(
-                    model
-                ) or AnthropicConfig._is_claude_4_7_model(model):
+                # Adaptive-thinking models (Claude 4.6 / 4.7+) take the
+                # tier via ``output_config.effort``. Mirror the mapping
+                # used by ``AnthropicConfig.map_openai_params`` and apply
+                # the same validation rules so unmapped/garbage efforts
+                # surface as a 400 instead of being silently flattened on
+                # the wire. Driven by ``supports_adaptive_thinking`` in
+                # ``model_prices_and_context_window.json`` so a future
+                # adaptive Claude release lands as a model-map change.
+                if AnthropicConfig._is_adaptive_thinking_model(model):
                     # Use ``.get()`` without a fallback so unmapped efforts
                     # (e.g. ``"disabled"``) surface as a clean 400 here
                     # rather than leaking the raw garbage string through to

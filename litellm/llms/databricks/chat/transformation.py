@@ -350,15 +350,17 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 optional_params.pop("output_config", None)
             else:
                 optional_params["thinking"] = mapped_thinking
-                # For Claude 4.6/4.7 adaptive models, ``_map_reasoning_effort``
+                # For Claude 4.6+ adaptive models, ``_map_reasoning_effort``
                 # returns ``type=adaptive`` for ANY non-None / non-"none"
                 # string without validating the value, so reject unmapped
                 # efforts here and set ``output_config.effort`` (matching the
                 # Anthropic native / Bedrock Converse / Bedrock Invoke /
-                # /v1/messages paths).
-                if AnthropicConfig._is_claude_4_6_model(
-                    model
-                ) or AnthropicConfig._is_claude_4_7_model(model):
+                # /v1/messages paths). Driven by ``supports_adaptive_thinking``
+                # in the model map so future adaptive Claudes land via a
+                # model-map update rather than a code release — the
+                # Anthropic-native and Bedrock routes already use the same
+                # helper, so all three paths stay in lock-step.
+                if AnthropicConfig._is_adaptive_thinking_model(model):
                     # ``reasoning_effort_value`` comes from ``non_default_params``
                     # so its static type is ``Any | None``. Narrow to ``str`` for
                     # the mapping lookup; non-strings fall through to the

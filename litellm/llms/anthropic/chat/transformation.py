@@ -920,9 +920,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         if reasoning_effort is None or reasoning_effort == "none":
             return None
-        if AnthropicConfig._is_claude_4_6_model(
-            model
-        ) or AnthropicConfig._is_claude_4_7_model(model):
+        if AnthropicConfig._is_adaptive_thinking_model(model):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
@@ -1262,11 +1260,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     optional_params.pop("output_config", None)
                 else:
                     optional_params["thinking"] = mapped_thinking
-                    # For Claude 4.6+ models, effort is controlled via output_config,
-                    # not thinking budget_tokens. Map reasoning_effort to output_config.
-                    if AnthropicConfig._is_claude_4_6_model(
-                        model
-                    ) or AnthropicConfig._is_claude_4_7_model(model):
+                    # For Claude 4.6+ adaptive-thinking models, effort is
+                    # controlled via ``output_config``, not
+                    # ``thinking.budget_tokens``. Driven by
+                    # ``supports_adaptive_thinking`` in the model map so
+                    # adding a new adaptive Claude is a model-map-only change.
+                    if AnthropicConfig._is_adaptive_thinking_model(model):
                         # ``_map_reasoning_effort`` returns ``type=adaptive``
                         # for any string on adaptive models without checking
                         # the value, so reject unmapped efforts here (matching
