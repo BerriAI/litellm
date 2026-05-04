@@ -18,7 +18,6 @@ from botocore.awsrequest import AWSPreparedRequest, AWSRequest
 from botocore.credentials import Credentials
 
 import litellm
-from litellm.caching.caching import DualCache
 from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
     BaseAWSLLM,
@@ -30,6 +29,37 @@ from litellm.llms.bedrock.base_aws_llm import (
 BASE_AWS_LLM_PATH = os.path.join(
     os.path.dirname(__file__), "../../../../litellm/llms/bedrock/base_aws_llm.py"
 )
+
+
+def test_base_aws_llm_instances_share_process_wide_iam_cache():
+    """Regression LIT-2662: new instances must reuse iam_cache (Bedrock passthrough is per-request)."""
+    first = BaseAWSLLM()
+    second = BaseAWSLLM()
+    assert first.iam_cache is second.iam_cache
+    assert first.iam_cache is BaseAWSLLM._shared_iam_cache
+
+
+def test_static_access_key_credentials_use_iam_cache_across_calls():
+    """Only long-lived static paths should hit iam_cache; LIT-2662 selective caching."""
+    base = BaseAWSLLM()
+    fake_creds = MagicMock()
+
+    with patch.object(
+        base,
+        "_auth_with_access_key_and_secret_key",
+        return_value=(fake_creds, 3600),
+    ) as mock_static_auth:
+        base.get_credentials(
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="secret",
+            aws_region_name="us-east-1",
+        )
+        base.get_credentials(
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="secret",
+            aws_region_name="us-east-1",
+        )
+        mock_static_auth.assert_called_once()
 
 
 def test_boto3_init_tracer_wrapping():
@@ -48,6 +78,8 @@ def test_boto3_init_tracer_wrapping():
     lines = content.split("\n")
     # Check each boto3 initialization is wrapped in tracer.trace
     for line_number, line in enumerate(lines, 1):
+        if line.lstrip().startswith("#"):
+            continue
         for pattern in boto3_init_patterns:
             if pattern in line:
                 # Look back up to 5 lines for decorator or trace block
@@ -544,7 +576,6 @@ def test_role_assumption_without_session_name():
     # Mock the STS response with proper expiration handling
     mock_expiry = MagicMock()
     mock_expiry.tzinfo = timezone.utc
-    current_time = datetime.now(timezone.utc)
     # Create a timedelta object that returns 3600 when total_seconds() is called
     time_diff = MagicMock()
     time_diff.total_seconds.return_value = 3600
@@ -597,24 +628,19 @@ def test_role_assumption_without_session_name():
         call_args = mock_sts_client.assume_role.call_args
         assert call_args[1]["RoleSessionName"] == "my-custom-session"
 
-    # Test case 3: Verify caching works with auto-generated session names
-    # Clear the cache first
-    base_aws_llm.iam_cache = DualCache()
-
+    # Test case 3: Assume-role credentials are not iam_cached (refresh/session semantics).
     mock_sts_client.reset_mock()
     with patch("boto3.client", return_value=mock_sts_client):
-        # First call
         credentials1 = base_aws_llm.get_credentials(
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
         )
 
-        # Second call with same role should use cache (not call assume_role again)
         credentials2 = base_aws_llm.get_credentials(
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
         )
 
-        # Should only be called once due to caching
-        assert mock_sts_client.assume_role.call_count == 1
+        assert mock_sts_client.assume_role.call_count == 2
+        assert credentials1.access_key == credentials2.access_key
 
 
 def test_cache_keys_are_different_for_different_roles():
@@ -828,6 +854,11 @@ def test_partial_credentials_still_use_ambient():
     Test that if only one credential is provided, we still use ambient credentials.
     This handles edge cases where configuration might be incomplete.
     """
+    env_without_aws_region = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")
+    }
     base_aws_llm = BaseAWSLLM()
 
     # Mock the boto3 STS client
@@ -850,37 +881,43 @@ def test_partial_credentials_still_use_ambient():
     }
     mock_sts_client.assume_role.return_value = mock_sts_response
 
-    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+    with patch.dict(os.environ, env_without_aws_region, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
 
-        # Call with only access key (missing secret key)
-        credentials, ttl = base_aws_llm._auth_with_aws_role(
-            aws_access_key_id="AKIAEXAMPLE",
-            aws_secret_access_key=None,
-            aws_session_token=None,
-            aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
-            aws_session_name="test-session",
-        )
+            # Call with only access key (missing secret key)
+            credentials, ttl = base_aws_llm._auth_with_aws_role(
+                aws_access_key_id="AKIAEXAMPLE",
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                aws_session_name="test-session",
+            )
 
-        # Should still pass partial credentials to boto3.client
-        mock_boto3_client.assert_called_once_with(
-            "sts",
-            aws_access_key_id="AKIAEXAMPLE",
-            aws_secret_access_key=None,
-            aws_session_token=None,
-            verify=True,
-        )
+            # Should still pass partial credentials to boto3.client
+            mock_boto3_client.assert_called_once_with(
+                "sts",
+                aws_access_key_id="AKIAEXAMPLE",
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                verify=True,
+            )
 
-        # Should still call assume_role
-        mock_sts_client.assume_role.assert_called_once_with(
-            RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
-            RoleSessionName="test-session",
-        )
+            # Should still call assume_role
+            mock_sts_client.assume_role.assert_called_once_with(
+                RoleArn="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole",
+                RoleSessionName="test-session",
+            )
 
 
 def test_cross_account_role_assumption():
     """
     Test assuming a role in a different AWS account (common in multi-account setups).
     """
+    env_without_aws_region = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AWS_REGION", "AWS_DEFAULT_REGION")
+    }
     base_aws_llm = BaseAWSLLM()
 
     # Mock the boto3 STS client
@@ -903,31 +940,32 @@ def test_cross_account_role_assumption():
     }
     mock_sts_client.assume_role.return_value = mock_sts_response
 
-    with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
+    with patch.dict(os.environ, env_without_aws_region, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client) as mock_boto3_client:
 
-        # Assume role in different account (EKS/IRSA scenario)
-        credentials, ttl = base_aws_llm._auth_with_aws_role(
-            aws_access_key_id=None,
-            aws_secret_access_key=None,
-            aws_session_token=None,
-            aws_role_name="arn:aws:iam::999999999999:role/CrossAccountRole",
-            aws_session_name="cross-account-session",
-        )
+            # Assume role in different account (EKS/IRSA scenario)
+            credentials, ttl = base_aws_llm._auth_with_aws_role(
+                aws_access_key_id=None,
+                aws_secret_access_key=None,
+                aws_session_token=None,
+                aws_role_name="arn:aws:iam::999999999999:role/CrossAccountRole",
+                aws_session_name="cross-account-session",
+            )
 
-        # Should use ambient credentials
-        mock_boto3_client.assert_called_once_with("sts", verify=True)
+            # Should use ambient credentials
+            mock_boto3_client.assert_called_once_with("sts", verify=True)
 
-        # Should call assume_role with cross-account role
-        mock_sts_client.assume_role.assert_called_once_with(
-            RoleArn="arn:aws:iam::999999999999:role/CrossAccountRole",
-            RoleSessionName="cross-account-session",
-        )
+            # Should call assume_role with cross-account role
+            mock_sts_client.assume_role.assert_called_once_with(
+                RoleArn="arn:aws:iam::999999999999:role/CrossAccountRole",
+                RoleSessionName="cross-account-session",
+            )
 
-        # Verify cross-account credentials are returned
-        assert credentials.access_key == "cross-account-access-key"
-        assert credentials.secret_key == "cross-account-secret-key"
-        assert credentials.token == "cross-account-session-token"
-        assert ttl is not None
+            # Verify cross-account credentials are returned
+            assert credentials.access_key == "cross-account-access-key"
+            assert credentials.secret_key == "cross-account-secret-key"
+            assert credentials.token == "cross-account-session-token"
+            assert ttl is not None
 
 
 def test_role_assumption_with_custom_session_name():
