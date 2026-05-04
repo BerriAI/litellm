@@ -5,7 +5,7 @@ import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from pydantic import ValidationError as PydanticValidationError
 from starlette.datastructures import Headers
 
@@ -14,6 +14,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.proxy._types import (
     AddTeamCallback,
     CommonProxyErrors,
@@ -121,6 +122,19 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     "pillar_response_headers",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
+    # Callback-registration fields. ``callbacks``, ``service_callback``,
+    # and ``logger_fn`` are read by ``litellm.utils.function_setup`` and
+    # appended to process-wide ``litellm.{input,success,failure,_async_*,
+    # service}_callback`` lists / ``litellm.user_logger_fn`` — one request
+    # poisons the worker for every subsequent caller.
+    # ``litellm_disabled_callbacks`` is the inverse primitive: the
+    # legitimate path reads it from key/team metadata, the request-body
+    # version silently turns off admin-configured audit/observability
+    # for the caller's request.
+    "callbacks",
+    "service_callback",
+    "logger_fn",
+    "litellm_disabled_callbacks",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS = (
@@ -168,6 +182,45 @@ _CLIENT_PRICING_CONTROL_FIELDS = frozenset(
 # ``use_custom_pricing_for_model``; strip from metadata for the same reason.
 _CLIENT_PRICING_METADATA_FIELDS = frozenset({"model_info"})
 _ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY = "allow_client_pricing_override"
+
+# Request fields whose value, when URL-valued, becomes the outbound destination
+# for a provider call. Letting a proxy caller pin the destination is an SSRF
+# primitive (HuggingFace/Oobabooga `model`, Gemini files `file_id`); guard
+# them centrally so SDK users keep working but proxy users default-deny.
+_URL_DESTINATION_REQUEST_FIELDS = ("model", "file_id")
+
+
+def _reject_url_valued_destinations(data: Dict[str, Any]) -> None:
+    """Reject URL-valued ``model``/``file_id`` unless admin-allowlisted.
+
+    Some providers (HuggingFace, Oobabooga, Gemini files) accept a URL in the
+    identifier field and use it as the outbound destination. On the proxy that
+    is an SSRF primitive — a low-privilege caller can point traffic at any
+    host the proxy can reach, including internal services. Reject here at the
+    proxy boundary so SDK users (who legitimately pass URL-valued identifiers)
+    are unaffected, while admins can opt specific hosts back in via
+    ``litellm.provider_url_destination_allowed_hosts``.
+    """
+    allowed_hosts = getattr(litellm, "provider_url_destination_allowed_hosts", []) or []
+    for field in _URL_DESTINATION_REQUEST_FIELDS:
+        value = data.get(field)
+        if not isinstance(value, str) or not value.startswith(("http://", "https://")):
+            continue
+        if is_url_destination_allowed_by_host(value, allowed_hosts):
+            continue
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_request",
+                "param": field,
+                "message": (
+                    f"URL-valued '{field}' is not allowed. Configure custom "
+                    "endpoints with api_base instead, or add the destination "
+                    "host to `provider_url_destination_allowed_hosts` in "
+                    "litellm_settings."
+                ),
+            },
+        )
 
 
 def _strip_untrusted_request_header_controls(
@@ -1164,6 +1217,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
             continue
         data.pop(_internal_key, None)
+    _reject_url_valued_destinations(data)
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")
     if isinstance(_user_metadata, dict):

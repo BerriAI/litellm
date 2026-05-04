@@ -626,14 +626,16 @@ class TestListMCPServers:
             assert "config_server_allowed" in server_ids
             assert "config_server_not_allowed" not in server_ids
 
-            # Check server details
+            # Check server details — non-admin viewers must not see the
+            # raw `url` (it can carry bearer tokens for many MCP
+            # integrations). Identity fields stay so the UI can list
+            # the server.
             for server in result:
+                assert server.url is None
                 if server.server_id == "db_server_allowed":
                     assert server.alias == "Allowed Gmail MCP"
-                    assert server.url == "https://gmail-mcp.example.com/mcp"
                 elif server.server_id == "config_server_allowed":
                     assert server.alias == "Allowed Zapier MCP"
-                    assert server.url == "https://actions.zapier.com/mcp/sse"
 
     @pytest.mark.asyncio
     async def test_admin_user_with_object_permission_respects_mcp_servers(self):
@@ -2897,3 +2899,170 @@ async def test_list_mcp_user_credentials_batch_server_fetch():
     assert result[0].alias == "My Server"
     # expires_at should always be the raw timestamp (not set to None when expired)
     assert result[0].expires_at == "2099-01-01T00:00:00+00:00"
+
+
+# ---------------------------------------------------------------------------
+# VERIA-8: non-admin viewers must not see the raw MCP server URL
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_servers_non_admin_url_redacted():
+    """A standard authenticated user (no admin role, not a restricted
+    virtual key) used to receive the raw `url` field, which can contain
+    bearer tokens like `https://actions.zapier.com/mcp/<api-key>/sse`.
+    They must now get the credential-bearing fields stripped."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        fetch_all_mcp_servers,
+    )
+
+    user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="alice",
+        api_key="sk-alice",
+        # NOT allowed_routes — a normal authenticated user.
+    )
+
+    server = generate_mock_mcp_server_db_record(
+        server_id="zapier-1",
+        alias="Zapier",
+        url="https://actions.zapier.com/mcp/SUPER-SECRET-TOKEN/sse",
+    )
+    server.static_headers = {"Authorization": "Bearer SUPER-SECRET-TOKEN"}
+    server.env = {"API_KEY": "another-secret"}
+    server.extra_headers = ["Authorization"]
+    server.command = "npx"
+    server.args = ["-y", "@sensitive/mcp"]
+    server.authorization_url = "https://oauth.example.com/authorize?token=foo"
+    server.token_url = "https://oauth.example.com/token"
+    server.registration_url = "https://oauth.example.com/register"
+
+    mock_manager = MagicMock()
+    mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=[server])
+    mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=[server])
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+            return_value="view_all",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+            AsyncMock(return_value=[user]),
+        ),
+    ):
+        result = await fetch_all_mcp_servers(user_api_key_dict=user)
+
+    assert len(result) == 1
+    s = result[0]
+    # Identity fields stay so the UI can list the server.
+    assert s.server_id == "zapier-1"
+    assert s.alias == "Zapier"
+    # Credential-bearing fields must all be cleared.
+    assert s.url is None
+    assert s.static_headers is None
+    assert s.env == {}
+    assert s.extra_headers == []
+    assert s.command is None
+    assert s.args == []
+    assert s.authorization_url is None
+    assert s.token_url is None
+    assert s.registration_url is None
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_servers_admin_keeps_url():
+    """Proxy admins must continue to see the raw URL — the redaction
+    only applies to non-admin viewers."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        fetch_all_mcp_servers,
+    )
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="root",
+        api_key="sk-admin",
+    )
+
+    server = generate_mock_mcp_server_db_record(
+        server_id="zapier-1",
+        alias="Zapier",
+        url="https://actions.zapier.com/mcp/SUPER-SECRET-TOKEN/sse",
+    )
+    server.static_headers = {"Authorization": "Bearer SUPER-SECRET-TOKEN"}
+
+    mock_manager = MagicMock()
+    mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(return_value=[server])
+    mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=[server])
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+            return_value="view_all",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+            AsyncMock(return_value=[admin]),
+        ),
+    ):
+        result = await fetch_all_mcp_servers(user_api_key_dict=admin)
+
+    assert len(result) == 1
+    assert result[0].url == "https://actions.zapier.com/mcp/SUPER-SECRET-TOKEN/sse"
+    assert result[0].static_headers == {"Authorization": "Bearer SUPER-SECRET-TOKEN"}
+
+
+def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
+    """Direct unit test on the helper for fast feedback."""
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        _sanitize_mcp_server_for_non_admin,
+    )
+
+    server = generate_mock_mcp_server_db_record(
+        url="https://example.com/mcp/SUPER-SECRET/sse",
+    )
+    server.credentials = {"auth_value": "secret"}
+    server.static_headers = {"Authorization": "Bearer x"}
+    server.spec_path = "https://example.com/specs/openapi-with-token.yaml"
+    server.env = {"API_KEY": "y"}
+    server.extra_headers = ["Authorization"]
+    server.command = "python"
+    server.args = ["server.py", "--token", "secret"]
+    server.authorization_url = "https://idp/authorize"
+    server.token_url = "https://idp/token"
+    server.registration_url = "https://idp/register"
+
+    sanitized = _sanitize_mcp_server_for_non_admin(server)
+
+    assert sanitized.credentials is None
+    assert sanitized.url is None
+    assert sanitized.spec_path is None
+    assert sanitized.static_headers is None
+    assert sanitized.env == {}
+    assert sanitized.extra_headers == []
+    assert sanitized.command is None
+    assert sanitized.args == []
+    assert sanitized.authorization_url is None
+    assert sanitized.token_url is None
+    assert sanitized.registration_url is None
+
+    # Identity / metadata fields are preserved so the UI can list the
+    # server without exposing secrets.
+    assert sanitized.server_id == server.server_id
+    assert sanitized.alias == server.alias

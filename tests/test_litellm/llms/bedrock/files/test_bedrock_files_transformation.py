@@ -4,9 +4,7 @@ Test bedrock files transformation functionality
 
 import json
 import os
-from typing import Any, Dict, List
-
-import pytest
+from urllib.parse import unquote, urlparse
 
 from litellm.llms.bedrock.files.transformation import BedrockJsonlFilesTransformation
 
@@ -43,19 +41,6 @@ class TestBedrockFilesTransformation:
             )
         )
 
-        # Print the transformation results for validation
-        print("\n=== INPUT (OpenAI format) ===")
-        for i, content in enumerate(openai_jsonl_content):
-            print(f"Record {i+1}:")
-            print(json.dumps(content, indent=2))
-            print()
-
-        print("\n=== OUTPUT (Bedrock format) ===")
-        for i, content in enumerate(bedrock_jsonl_content):
-            print(f"Record {i+1}:")
-            print(json.dumps(content, indent=2))
-            print()
-
         # Basic validation
         assert len(bedrock_jsonl_content) == len(
             openai_jsonl_content
@@ -87,17 +72,6 @@ class TestBedrockFilesTransformation:
                 assert (
                     "max_tokens" in model_input
                 ), f"Record {i+1} should have max_tokens"
-
-        # Write expected output to file for reference
-        expected_output_path = os.path.join(
-            os.path.dirname(__file__), "expected_bedrock_batch_completions.jsonl"
-        )
-
-        with open(expected_output_path, "w") as f:
-            for record in bedrock_jsonl_content:
-                f.write(json.dumps(record) + "\n")
-
-        print(f"\n=== Expected output written to: {expected_output_path} ===")
 
     def test_nova_text_only_uses_converse_format(self):
         """
@@ -326,6 +300,44 @@ class TestBedrockFilesTransformation:
             "us-west-2" not in url
         ), f"us-west-2 must not appear when s3_region_name is set, got: {url}"
         assert "litellm-batch-352026" in url
+
+    def test_get_complete_file_url_sanitizes_untrusted_filename(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+        create_file_data = {
+            "file": ("../../owned.jsonl?acl=public", b"hello", "application/jsonl"),
+            "purpose": "assistants",
+        }
+
+        url = config.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="amazon.nova-pro-v1:0",
+            optional_params={"aws_region_name": "us-west-2"},
+            litellm_params={"s3_bucket_name": "safe-bucket"},
+            data=create_file_data,
+        )
+
+        parsed_url = urlparse(url)
+        object_key = unquote(parsed_url.path).split("/safe-bucket/", 1)[1]
+        assert object_key.startswith("litellm-bedrock-files/")
+        assert object_key.endswith("-owned.jsonl_acl_public")
+        assert ".." not in object_key
+        assert parsed_url.query == ""
+
+    def test_batch_object_name_sanitizes_model_path(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        config = BedrockFilesConfig()
+        object_name = config._get_s3_object_name_from_batch_jsonl(
+            [{"body": {"model": "bedrock/../../secret:model"}}]
+        )
+
+        assert object_name.startswith("litellm-bedrock-files-")
+        assert object_name.endswith(".jsonl")
+        assert "/" not in object_name
+        assert ".." not in object_name
 
     def test_transform_create_file_request_injects_s3_region_for_signing(self):
         """

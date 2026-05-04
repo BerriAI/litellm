@@ -147,7 +147,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                   <Text className="break-all overflow-wrap-anywhere font-mono text-sm">
                     {renderUrlWithToggle(mcpServer.url, showFullUrl)}
                   </Text>
-                  {hasToken && (
+                  {/* Only proxy admins may reveal the raw URL — non-admins
+                      receive a sanitized server object from the backend
+                      with `url=null`, but hide the toggle anyway as
+                      defense-in-depth in case the URL ever leaks back
+                      into the response. */}
+                  {hasToken && isProxyAdmin && (
                     <button onClick={() => setShowFullUrl(!showFullUrl)} className="p-1 hover:bg-gray-100 rounded flex-shrink-0">
                       <Icon icon={showFullUrl ? EyeOffIcon : EyeIcon} size="sm" className="text-gray-500" />
                     </button>

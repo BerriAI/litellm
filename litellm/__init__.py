@@ -280,6 +280,7 @@ ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
+provider_url_destination_allowed_hosts: List[str] = []
 ssl_ecdh_curve: Optional[str] = (
     None  # Set to 'X25519' to disable PQC and improve performance
 )
