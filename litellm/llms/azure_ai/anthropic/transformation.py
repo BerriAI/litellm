@@ -12,6 +12,33 @@ if TYPE_CHECKING:
     pass
 
 
+def _promote_extra_body_to_optional_params(optional_params: dict) -> None:
+    """Promote anthropic-native passthrough keys out of ``extra_body``.
+
+    ``azure_ai`` is registered in ``litellm.openai_compatible_providers``, so
+    ``add_provider_specific_params_to_optional_params`` (litellm/utils.py)
+    auto-stuffs any non-OpenAI kwarg (e.g. ``output_config={"effort": "..."}``)
+    into ``optional_params["extra_body"]``. For the Azure→Anthropic route the
+    user's intent is to forward those params to Anthropic, so promote them to
+    the top level of ``optional_params`` so:
+
+      * ``AnthropicConfig._apply_output_config`` validates ``effort`` values
+        (matching the native ``anthropic`` provider's 400 on bad efforts).
+      * Valid passthroughs (e.g. ``output_config``, ``thinking``) actually
+        reach the request body instead of being silently dropped by the
+        ``data.pop("extra_body", None)`` strip below.
+
+    ``setdefault`` is used so an explicit top-level value is never clobbered
+    by a duplicate inside ``extra_body``.
+    """
+    extra_body = optional_params.get("extra_body")
+    if not isinstance(extra_body, dict) or not extra_body:
+        return
+    for k, v in extra_body.items():
+        optional_params.setdefault(k, v)
+    optional_params.pop("extra_body", None)
+
+
 class AzureAnthropicConfig(AnthropicConfig):
     """
     Azure Anthropic configuration that extends AnthropicConfig.
@@ -39,6 +66,11 @@ class AzureAnthropicConfig(AnthropicConfig):
         1. API key via 'api-key' header
         2. Azure AD token via 'Authorization: Bearer <token>' header
         """
+        # Promote anthropic-native passthrough keys (``output_config``,
+        # ``thinking``, ``mcp_servers``, ...) out of ``extra_body`` so the
+        # flag detection below (``is_mcp_server_used``, etc.) sees them.
+        _promote_extra_body_to_optional_params(optional_params)
+
         # Convert dict to GenericLiteLLMParams if needed
         if isinstance(litellm_params, dict):
             # Ensure api_key is included if provided
@@ -101,6 +133,17 @@ class AzureAnthropicConfig(AnthropicConfig):
         Transform request using parent AnthropicConfig, then remove unsupported params.
         Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
         """
+        # Promote anthropic-native passthrough keys (``output_config``,
+        # ``thinking``, ...) out of ``extra_body`` BEFORE delegating to
+        # ``AnthropicConfig.transform_request``. Without this:
+        #   * ``output_config`` is silently dropped by the ``extra_body`` pop
+        #     below, and
+        #   * ``_apply_output_config`` never validates ``effort`` values, so
+        #     ``effort="invalid"`` quietly reaches the model with default
+        #     behavior instead of returning a clean 400 (as the native
+        #     ``anthropic`` provider does).
+        _promote_extra_body_to_optional_params(optional_params)
+
         # Call parent transform_request
         data = super().transform_request(
             model=model,
