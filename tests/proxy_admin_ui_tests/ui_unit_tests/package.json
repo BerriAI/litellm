@@ -25,7 +25,10 @@
     },
     "overrides": {
         "glob": "13.0.0",
-        "minimatch": "10.1.1",
+        "minimatch": "10.2.5",
+        "picomatch": "2.3.2",
+        "handlebars": "4.7.9",
+        "@tootallnate/once": "3.0.1",
         "@isaacs/brace-expansion": "5.0.0",
         "@babel/traverse": "7.28.5",
         "ws": "8.18.3",
