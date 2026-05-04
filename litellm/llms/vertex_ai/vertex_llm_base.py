@@ -387,6 +387,7 @@ class VertexBase:
         vertex_location: Optional[str] = None,
         vertex_api_version: Optional[Literal["v1", "v1beta1"]] = None,
         use_psc_endpoint_format: bool = False,
+        gemini_auth_data: Optional[dict] = None,
     ) -> Tuple[Optional[str], str]:
         """
         for cloudflare ai gateway - https://github.com/BerriAI/litellm/issues/4317
@@ -413,12 +414,29 @@ class VertexBase:
                         "Model parameter is required for Gemini custom API base URLs"
                     )
                 url = "{}/models/{}:{}".format(api_base, model, endpoint)
-                if gemini_api_key is None:
-                    raise ValueError(
-                        "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
+
+                if gemini_auth_data is None and gemini_api_key is None:
+                    from litellm.llms.gemini.common_utils import (
+                        get_gemini_oauth_token,
                     )
-                if gemini_api_key is not None:
+
+                    gemini_auth_data = get_gemini_oauth_token()
+                gemini_oauth_token = (
+                    gemini_auth_data.get("token") if gemini_auth_data else None
+                )
+
+                if gemini_oauth_token:
+                    auth_header = {"Authorization": f"Bearer {gemini_oauth_token}"}  # type: ignore[assignment]
+                    if gemini_auth_data and gemini_auth_data.get("project_id"):
+                        auth_header["x-goog-user-project"] = gemini_auth_data[  # type: ignore[index]
+                            "project_id"
+                        ]
+                elif gemini_api_key is not None:
                     auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+                else:
+                    raise ValueError(
+                        "Missing gemini_api_key. Please set `GEMINI_API_KEY` or `GEMINI_OAUTH_TOKEN`."
+                    )
             else:
                 # For Vertex AI
                 if use_psc_endpoint_format:
@@ -461,6 +479,7 @@ class VertexBase:
         should_use_v1beta1_features: Optional[bool] = False,
         mode: all_gemini_url_modes = "chat",
         use_psc_endpoint_format: bool = False,
+        gemini_auth_data: Optional[dict] = None,
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -472,16 +491,29 @@ class VertexBase:
         """
         version: Optional[Literal["v1beta1", "v1"]] = None
         if custom_llm_provider == "gemini":
-            if not gemini_api_key:
-                raise ValueError(
-                    "Missing Gemini API key. Set the GEMINI_API_KEY or GOOGLE_API_KEY environment variable."
-                )
+            if gemini_auth_data is None and gemini_api_key is None:
+                from litellm.llms.gemini.common_utils import get_gemini_oauth_token
+
+                gemini_auth_data = get_gemini_oauth_token()
+            gemini_oauth_token = (
+                gemini_auth_data.get("token") if gemini_auth_data else None
+            )
+
             url, endpoint = _get_gemini_url(
                 mode=mode,
                 model=model,
                 stream=stream,
             )
-            auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
+            if gemini_oauth_token:
+                auth_header = {"Authorization": f"Bearer {gemini_oauth_token}"}  # type: ignore[assignment]
+                if gemini_auth_data and gemini_auth_data.get("project_id"):
+                    auth_header["x-goog-user-project"] = gemini_auth_data["project_id"]  # type: ignore[index]
+            elif gemini_api_key is None:
+                raise ValueError(
+                    "Missing gemini_api_key. Please set `GEMINI_API_KEY` or `GEMINI_OAUTH_TOKEN`."
+                )
+            else:
+                auth_header = {"x-goog-api-key": gemini_api_key}  # type: ignore[assignment]
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,
@@ -504,6 +536,7 @@ class VertexBase:
             auth_header=auth_header,
             custom_llm_provider=custom_llm_provider,
             gemini_api_key=gemini_api_key,
+            gemini_auth_data=gemini_auth_data,
             endpoint=endpoint,
             stream=stream,
             url=url,

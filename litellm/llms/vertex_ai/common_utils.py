@@ -413,34 +413,31 @@ def _get_gemini_url(
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
-            url = "https://generativelanguage.googleapis.com/{}/{}:{}?alt=sse".format(
-                api_version, _gemini_model_name, endpoint
-            )
-        else:
-            url = "https://generativelanguage.googleapis.com/{}/{}:{}".format(
-                api_version, _gemini_model_name, endpoint
-            )
     elif mode == "embedding":
         endpoint = "embedContent"
-        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}".format(
-            _gemini_model_name, endpoint
-        )
     elif mode == "batch_embedding":
         endpoint = "batchEmbedContents"
-        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}".format(
-            _gemini_model_name, endpoint
-        )
     elif mode == "count_tokens":
         endpoint = "countTokens"
-        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}".format(
-            _gemini_model_name, endpoint
-        )
     elif mode == "image_generation":
         raise ValueError(
             "LiteLLM's `gemini/` route does not support image generation yet. Let us know if you need this feature by opening an issue at https://github.com/BerriAI/litellm/issues"
         )
     else:
         raise ValueError(f"Unsupported mode: {mode}")
+
+    base_url = "https://generativelanguage.googleapis.com/{}/{}:{}".format(
+        api_version if mode == "chat" else "v1beta", _gemini_model_name, endpoint
+    )
+
+    params = []
+    if mode == "chat" and stream is True:
+        params.append("alt=sse")
+
+    if params:
+        url = f"{base_url}?{'&'.join(params)}"
+    else:
+        url = base_url
 
     return url, endpoint
 

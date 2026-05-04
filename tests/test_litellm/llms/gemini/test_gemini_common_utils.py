@@ -1,8 +1,13 @@
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
-from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
+from litellm.llms.gemini.common_utils import (
+    GeminiModelInfo,
+    GoogleAIStudioTokenCounter,
+    should_fallback_to_google_code_assist,
+)
 
 
 class TestGeminiModelInfo:
@@ -221,3 +226,48 @@ class TestGoogleAIStudioTokenCounter:
 
         # Verify the contents are unchanged
         assert cleaned_contents == contents_without_function_response
+
+
+class TestGeminiFallbackDetection:
+    def test_should_fallback_to_google_code_assist_for_structured_403_scope_error(self):
+        request = httpx.Request(
+            "POST", "https://generativelanguage.googleapis.com/test"
+        )
+        response = httpx.Response(
+            status_code=403,
+            json={
+                "error": {
+                    "code": 403,
+                    "message": "Request had insufficient authentication scopes.",
+                    "status": "PERMISSION_DENIED",
+                    "details": [{"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}],
+                }
+            },
+            request=request,
+        )
+        err = httpx.HTTPStatusError(
+            "403 Client Error: Forbidden for url", request=request, response=response
+        )
+
+        assert should_fallback_to_google_code_assist(err) is True
+
+    def test_should_not_fallback_to_google_code_assist_for_non_403_scope_string(self):
+        request = httpx.Request(
+            "POST", "https://generativelanguage.googleapis.com/test"
+        )
+        response = httpx.Response(
+            status_code=500,
+            json={
+                "error": {
+                    "message": "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+                }
+            },
+            request=request,
+        )
+        err = httpx.HTTPStatusError(
+            "500 Server Error: Internal Server Error for url",
+            request=request,
+            response=response,
+        )
+
+        assert should_fallback_to_google_code_assist(err) is False

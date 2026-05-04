@@ -29,6 +29,18 @@ litellm-proxy --version
 litellm-proxy -v
 ```
 
+## Gemini OAuth Login
+
+Authenticate locally for Gemini OAuth-based providers (for example `google_code_assist/*`):
+
+```bash
+export GEMINI_OAUTH_CLIENT_ID="<your-google-oauth-client-id>"
+export GEMINI_OAUTH_CLIENT_SECRET="<your-google-oauth-client-secret>"
+litellm-proxy gemini login
+```
+
+This starts a browser-based loopback OAuth flow and stores credentials for reuse.
+
 ## Commands
 
 ### Models Management

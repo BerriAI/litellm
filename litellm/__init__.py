@@ -456,6 +456,10 @@ default_fallbacks: Optional[List] = None
 fallbacks: Optional[List] = None
 context_window_fallbacks: Optional[List] = None
 content_policy_fallbacks: Optional[List] = None
+# Backward-compatible default: do not silently reroute gemini/* calls unless explicitly enabled.
+auto_fallback_to_google_code_assist: bool = os.getenv(
+    "LITELLM_AUTO_FALLBACK_TO_GOOGLE_CODE_ASSIST", "false"
+).lower() in ("1", "true", "yes", "on")
 allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
 num_retries_per_request: Optional[int] = (

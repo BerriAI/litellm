@@ -419,7 +419,7 @@ async def test_gemini_custom_api_base_proxy_integration():
     print(f"✅ Custom API base streaming URL test passed: {result_url_streaming}")
 
     # Test case 3: Error handling - missing API key
-    with pytest.raises(ValueError, match="Missing Gemini API key"):
+    with pytest.raises(ValueError, match="Missing gemini_api_key"):
         vertex_base._check_custom_proxy(
             api_base=custom_api_base,
             custom_llm_provider="gemini",
