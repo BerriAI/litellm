@@ -36,6 +36,7 @@ from litellm.proxy._types import (
     SpendLogsMetadata,
     SpendLogsPayload,
 )
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
@@ -3188,6 +3189,8 @@ class PrismaClient:
                             t.organization_id as org_id,
                             p.project_alias AS project_alias,
                             tm.spend AS team_member_spend,
+                            b_tm.tpm_limit AS team_member_tpm_limit,
+                            b_tm.rpm_limit AS team_member_rpm_limit,
                             m.aliases AS team_model_aliases,
                             -- Added comma to separate b.* columns
                             b.max_budget AS litellm_budget_table_max_budget,
@@ -3203,6 +3206,7 @@ class PrismaClient:
                         FROM "LiteLLM_VerificationToken" AS v
                         LEFT JOIN "LiteLLM_TeamTable" AS t ON v.team_id = t.team_id
                         LEFT JOIN "LiteLLM_TeamMembership" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id
+                        LEFT JOIN "LiteLLM_BudgetTable" AS b_tm ON tm.budget_id = b_tm.budget_id
                         LEFT JOIN "LiteLLM_ModelTable" m ON t.model_id = m.id
                         LEFT JOIN "LiteLLM_BudgetTable" AS b ON v.budget_id = b.budget_id
                         LEFT JOIN "LiteLLM_ProjectTable" AS p ON v.project_id = p.project_id
@@ -5103,6 +5107,11 @@ async def update_daily_tag_spend(
                 proxy_logging_obj=proxy_logging_obj,
             )
     except Exception as e:
+        # NOTE: keep this as a plain ``error`` (no traceback) to match the
+        # historical behavior of this site. ``spend_log_error`` would attach
+        # the active exception's traceback whenever the suppression env var
+        # is unset, which would be a regression for operators who never saw
+        # one here before.
         verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 
 
@@ -5235,9 +5244,7 @@ async def _monitor_spend_logs_queue(
 
             await asyncio.sleep(current_interval)
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error in spend logs queue monitor: {str(e)}\n{traceback.format_exc()}"
-            )
+            spend_log_error("Error in spend logs queue monitor: %s", str(e), exc=e)
             # Continue monitoring even if there's an error, with exponential backoff
             current_interval = min(current_interval * backoff_multiplier, max_backoff)
             await asyncio.sleep(current_interval)

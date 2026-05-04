@@ -288,6 +288,28 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
     assert optional_params["tool_choice"] == {"auto": {}}
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0",
+        "bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+    ],
+)
+def test_reasoning_effort_none_omits_thinking_for_anthropic_converse(model):
+    """reasoning_effort="none" must omit thinking from the Bedrock Converse request."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "thinking" not in optional_params
+
+
 def test_get_supported_openai_params():
     config = AmazonConverseConfig()
     supported_params = config.get_supported_openai_params(

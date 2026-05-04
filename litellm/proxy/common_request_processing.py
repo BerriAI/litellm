@@ -97,6 +97,55 @@ def _serialize_http_exception_detail(
     return str(detail), None
 
 
+def _collect_response_file_search_vector_store_ids(data: Dict[str, Any]) -> set[str]:
+    vector_store_ids: set[str] = set()
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        return vector_store_ids
+
+    for tool in tools:
+        if not isinstance(tool, dict) or tool.get("type") != "file_search":
+            continue
+        ids = tool.get("vector_store_ids") or []
+        if not isinstance(ids, list):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "file_search.vector_store_ids must be a list of strings"
+                },
+            )
+        for vector_store_id in ids:
+            if not isinstance(vector_store_id, str) or not vector_store_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "file_search.vector_store_ids must be a list of strings"
+                    },
+                )
+            vector_store_ids.add(vector_store_id)
+
+    return vector_store_ids
+
+
+async def _authorize_response_file_search_vector_stores(
+    data: Dict[str, Any],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    vector_store_ids = _collect_response_file_search_vector_store_ids(data)
+    if not vector_store_ids:
+        return
+
+    from litellm.proxy.vector_store_endpoints.utils import (
+        assert_user_can_access_vector_store_id,
+    )
+
+    for vector_store_id in sorted(vector_store_ids):
+        await assert_user_can_access_vector_store_id(
+            vector_store_id=vector_store_id,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+
 async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional[int]:
     """Parses an event line and returns an error code if present, else None."""
     event_line = (
@@ -791,6 +840,11 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+        if route_type in {"aresponses", "_aresponses_websocket"}:
+            await _authorize_response_file_search_vector_stores(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         # Calculate request queue time after add_litellm_data_to_request
         # which sets arrival_time in proxy_server_request
@@ -1603,6 +1657,12 @@ class ProxyBaseLLMRequestProcessing:
                         # streaming iterator pipeline.  Running them again
                         # here would duplicate the guardrail API call
                         # (e.g. double OpenAI Moderation charges).
+                        continue
+                    if "async_post_call_streaming_iterator_hook" in type(cb).__dict__:
+                        # Skip — the guardrail already scanned the assembled
+                        # response via its own streaming iterator hook in the
+                        # streaming pipeline. re running this function async_post_call_success_hook
+                        # here would duplicate the scan and can spuriously block the guardrail that already passed / failed.
                         continue
                     else:
                         guardrail_result = await cb.async_post_call_success_hook(

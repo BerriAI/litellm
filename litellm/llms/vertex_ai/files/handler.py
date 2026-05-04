@@ -1,4 +1,5 @@
 import asyncio
+import time
 from urllib.parse import unquote
 from typing import Any, Coroutine, Optional, Tuple, Union
 
@@ -21,9 +22,10 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     OpenAIFileObject,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 
-from .transformation import VertexAIJsonlFilesTransformation
+from .transformation import VertexAIFilesConfig, VertexAIJsonlFilesTransformation
 
 vertex_ai_files_transformation = VertexAIJsonlFilesTransformation()
 
@@ -198,11 +200,30 @@ class VertexAIFilesHandler(GCSBucketBase):
         mock_response = httpx.Response(
             status_code=200,
             content=file_content,
-            headers={"content-type": "application/octet-stream"},
+            headers={
+                "content-type": "application/octet-stream",
+                "content-length": str(len(file_content)),
+            },
             request=httpx.Request(method="GET", url=decoded_file_id),
         )
 
-        return HttpxBinaryResponseContent(response=mock_response)
+        # Apply transformation to convert Vertex AI batch outputs to OpenAI format
+        config = VertexAIFilesConfig()
+
+        # Create a logging object for transformation
+        logging_obj = Logging(
+            model="",
+            messages=[],
+            stream=False,
+            call_type="afile_content",
+            start_time=time.time(),
+            litellm_call_id="",
+            function_id="",
+        )
+
+        return config.transform_file_content_response(
+            raw_response=mock_response, logging_obj=logging_obj, litellm_params={}
+        )
 
     def file_content(
         self,

@@ -2567,3 +2567,116 @@ async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise
         assert result["team_membership"] is None
         mock_get_team.assert_called()
         mock_get_membership.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# JWTHandler._build_decode_kwargs — VERIA-27 (audience + issuer verification)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=False)
+def _reset_unscoped_warning_flag():
+    """Reset the once-per-process warning sentinel so each test sees a fresh
+    state."""
+    JWTHandler._unscoped_jwt_warning_emitted = False
+    yield
+    JWTHandler._unscoped_jwt_warning_emitted = False
+
+
+def test_build_decode_kwargs_no_env_disables_both_verifications(
+    monkeypatch, _reset_unscoped_warning_flag
+):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+
+    kwargs = JWTHandler._build_decode_kwargs()
+
+    assert kwargs["audience"] is None
+    assert kwargs["issuer"] is None
+    assert kwargs["options"] == {"verify_aud": False, "verify_iss": False}
+
+
+def test_build_decode_kwargs_audience_only_enables_aud_verification(
+    monkeypatch, _reset_unscoped_warning_flag
+):
+    monkeypatch.setenv("JWT_AUDIENCE", "my-proxy")
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+
+    kwargs = JWTHandler._build_decode_kwargs()
+
+    assert kwargs["audience"] == "my-proxy"
+    assert kwargs["issuer"] is None
+    # verify_aud not in options means PyJWT will verify audience
+    assert kwargs["options"] == {"verify_iss": False}
+
+
+def test_build_decode_kwargs_issuer_only_enables_iss_verification(
+    monkeypatch, _reset_unscoped_warning_flag
+):
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.setenv("JWT_ISSUER", "https://idp.example.com/")
+
+    kwargs = JWTHandler._build_decode_kwargs()
+
+    assert kwargs["audience"] is None
+    assert kwargs["issuer"] == "https://idp.example.com/"
+    assert kwargs["options"] == {"verify_aud": False}
+
+
+def test_build_decode_kwargs_both_set_enables_full_verification(
+    monkeypatch, _reset_unscoped_warning_flag
+):
+    monkeypatch.setenv("JWT_AUDIENCE", "my-proxy")
+    monkeypatch.setenv("JWT_ISSUER", "https://idp.example.com/")
+
+    kwargs = JWTHandler._build_decode_kwargs()
+
+    assert kwargs["audience"] == "my-proxy"
+    assert kwargs["issuer"] == "https://idp.example.com/"
+    # No verification opt-outs — PyJWT verifies both claims by default.
+    assert kwargs["options"] is None
+
+
+def test_build_decode_kwargs_warns_once_when_unscoped(
+    monkeypatch, _reset_unscoped_warning_flag, caplog
+):
+    """The warning about unscoped JWT auth should fire on the first call but
+    not on every subsequent decode."""
+    import logging
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    caplog.set_level(logging.WARNING)
+
+    JWTHandler._build_decode_kwargs()
+    JWTHandler._build_decode_kwargs()
+    JWTHandler._build_decode_kwargs()
+
+    matching = [
+        r
+        for r in caplog.records
+        if "JWT auth is enabled" in r.getMessage()
+        and "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
+    ]
+    assert (
+        len(matching) == 1
+    ), f"Expected exactly one warning across 3 calls, got {len(matching)}"
+
+
+def test_build_decode_kwargs_no_warning_when_scoped(
+    monkeypatch, _reset_unscoped_warning_flag, caplog
+):
+    import logging
+
+    monkeypatch.setenv("JWT_AUDIENCE", "my-proxy")
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+    caplog.set_level(logging.WARNING)
+
+    JWTHandler._build_decode_kwargs()
+
+    matching = [
+        r
+        for r in caplog.records
+        if "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
+    ]
+    assert matching == []
