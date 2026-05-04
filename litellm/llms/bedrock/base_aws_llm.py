@@ -65,10 +65,9 @@ class AwsAuthError(Exception):
 
 
 class BaseAWSLLM:
-    # Process-wide cache for long-lived credential paths only (access key / ambient env).
-    # Assume-role and other session-based flows bypass the cache — see get_credentials.
-    # Bedrock passthrough constructs new instances per request; sharing this cache avoids
-    # empty per-instance caches and redundant boto3.Session setup.
+    # Process-wide IAM credential cache (shared across instances — Bedrock passthrough is per-request).
+    # Static keys / env vars and sts:AssumeRole results are cached with TTL; web identity token
+    # exchange stays uncached at this layer — see get_credentials.
     _shared_iam_cache: ClassVar[DualCache] = DualCache()
 
     def __init__(self) -> None:
@@ -111,17 +110,19 @@ class BaseAWSLLM:
         credential_str = json.dumps(credential_args, sort_keys=True)
         return hashlib.sha256(credential_str.encode()).hexdigest()
 
-    def _get_or_set_cached_static_credentials(
+    def _get_or_set_cached_credentials(
         self,
         credential_args: Dict[str, Optional[str]],
         credential_fetcher: Callable[[], Tuple[Any, Optional[int]]],
     ) -> Any:
         """
-        IAM cache hits only for static-credential flows (long-lived keys / ambient env).
+        Read-through IAM cache on the process-wide DualCache.
 
-        Role assumption, web identity, profiles, and explicit session tokens are not
-        cached — returned Credentials may carry refresh/expiry semantics that must not
-        be shared across logical sessions (see LIT-2662).
+        Used for long-lived static credentials, ambient env credentials when skipping AssumeRole,
+        and sts:AssumeRole results (TTL from STS expiration minus buffer).
+
+        Web identity token exchange, profiles, and explicit session-token tuples are not cached
+        here — see ``get_credentials`` branch comments (LIT-2662).
         """
         cache_key = self.get_cache_key(credential_args)
         _cached = self.iam_cache.get_cache(cache_key)
@@ -225,9 +226,8 @@ class BaseAWSLLM:
         #   Credentials - boto3.Credentials
         #   cache ttl - Optional[int]. If None, the credentials are not cached. Some auth flows have no expiry time.
         #
-        # Only _auth_with_access_key_and_secret_key and _auth_with_env_vars use
-        # iam_cache (see _get_or_set_cached_static_credentials). Do not cache
-        # assume-role / web identity / profile / explicit session-token paths.
+        # iam_cache: static keys, ambient env (when skipping AssumeRole), and AssumeRole (TTL).
+        # Do not cache web identity / profile / explicit session-token paths here.
         #########################################################
         if (
             aws_web_identity_token is not None
@@ -251,25 +251,29 @@ class BaseAWSLLM:
                     "Already running as target role %s, using ambient credentials",
                     aws_role_name,
                 )
-                return self._get_or_set_cached_static_credentials(
+                return self._get_or_set_cached_credentials(
                     args, self._auth_with_env_vars
                 )
             verbose_logger.debug("Using role assumption: calling _auth_with_aws_role")
             # If aws_session_name is not provided, generate a default one
             if aws_session_name is None:
                 aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
-            credentials, _cache_ttl = self._auth_with_aws_role(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_session_token=aws_session_token,
-                aws_role_name=aws_role_name,
-                aws_session_name=aws_session_name,
-                aws_region_name=aws_region_name,
-                aws_sts_endpoint=aws_sts_endpoint,
-                aws_external_id=aws_external_id,
-                ssl_verify=ssl_verify,
+            # Cache key uses ``args`` captured before this mutation; callers without an explicit
+            # session name share one AssumeRole entry until TTL expires (prior per-instance behavior).
+            return self._get_or_set_cached_credentials(
+                args,
+                lambda: self._auth_with_aws_role(
+                    aws_access_key_id=aws_access_key_id,
+                    aws_secret_access_key=aws_secret_access_key,
+                    aws_session_token=aws_session_token,
+                    aws_role_name=aws_role_name,
+                    aws_session_name=aws_session_name,
+                    aws_region_name=aws_region_name,
+                    aws_sts_endpoint=aws_sts_endpoint,
+                    aws_external_id=aws_external_id,
+                    ssl_verify=ssl_verify,
+                ),
             )
-            return credentials
 
         elif aws_profile_name is not None:  ### CHECK SESSION ###
             credentials, _cache_ttl = self._auth_with_aws_profile(aws_profile_name)
@@ -290,7 +294,7 @@ class BaseAWSLLM:
             and aws_secret_access_key is not None
             and aws_region_name is not None
         ):
-            return self._get_or_set_cached_static_credentials(
+            return self._get_or_set_cached_credentials(
                 args,
                 lambda: self._auth_with_access_key_and_secret_key(
                     aws_access_key_id=aws_access_key_id,
@@ -299,9 +303,7 @@ class BaseAWSLLM:
                 ),
             )
         else:
-            return self._get_or_set_cached_static_credentials(
-                args, self._auth_with_env_vars
-            )
+            return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
 
     def _get_aws_region_from_model_arn(self, model: Optional[str]) -> Optional[str]:
         try:

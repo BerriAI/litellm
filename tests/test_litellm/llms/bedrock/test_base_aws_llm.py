@@ -31,6 +31,13 @@ BASE_AWS_LLM_PATH = os.path.join(
 )
 
 
+@pytest.fixture(autouse=True)
+def flush_shared_bedrock_iam_cache():
+    """Process-wide IAM cache must not leak AssumeRole/static entries across tests."""
+    BaseAWSLLM._shared_iam_cache.flush_cache()
+    yield
+
+
 def test_base_aws_llm_instances_share_process_wide_iam_cache():
     """Regression LIT-2662: new instances must reuse iam_cache (Bedrock passthrough is per-request)."""
     first = BaseAWSLLM()
@@ -40,7 +47,7 @@ def test_base_aws_llm_instances_share_process_wide_iam_cache():
 
 
 def test_static_access_key_credentials_use_iam_cache_across_calls():
-    """Only long-lived static paths should hit iam_cache; LIT-2662 selective caching."""
+    """Static access-key path hits shared iam_cache; second identical call does not refetch."""
     base = BaseAWSLLM()
     fake_creds = MagicMock()
 
@@ -628,7 +635,9 @@ def test_role_assumption_without_session_name():
         call_args = mock_sts_client.assume_role.call_args
         assert call_args[1]["RoleSessionName"] == "my-custom-session"
 
-    # Test case 3: Assume-role credentials are not iam_cached (refresh/session semantics).
+    # Test case 3: Repeated AssumeRole with same role shares process-wide iam_cache until TTL.
+    # Flush entries from case 1/2 — same ARN + absent session_name shares one cache key.
+    BaseAWSLLM._shared_iam_cache.flush_cache()
     mock_sts_client.reset_mock()
     with patch("boto3.client", return_value=mock_sts_client):
         credentials1 = base_aws_llm.get_credentials(
@@ -639,7 +648,7 @@ def test_role_assumption_without_session_name():
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
         )
 
-        assert mock_sts_client.assume_role.call_count == 2
+        assert mock_sts_client.assume_role.call_count == 1
         assert credentials1.access_key == credentials2.access_key
 
 
