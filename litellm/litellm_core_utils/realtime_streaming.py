@@ -125,9 +125,10 @@ class RealTimeStreaming:
         if isinstance(message, bytes):
             message = message.decode("utf-8")
         if isinstance(message, dict):
-            message_obj: dict = message
+            # TypedDict union members do not narrow to plain dict for mypy.
+            message_obj: Dict[str, Any] = cast(Dict[str, Any], message)
         else:
-            message_obj = json.loads(message)
+            message_obj = cast(Dict[str, Any], json.loads(cast(str, message)))
         self._collect_tool_calls_from_response_done(cast(dict, message_obj))
         try:
             event_type = message_obj.get("type", "")
