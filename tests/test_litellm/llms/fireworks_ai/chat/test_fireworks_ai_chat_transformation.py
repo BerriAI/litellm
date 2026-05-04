@@ -123,7 +123,7 @@ def test_get_supported_openai_params_reasoning_effort():
 
 
 def test_get_supported_openai_params_parallel_tool_calls():
-    """Test that parallel_tool_calls is included for models that support tool_choice."""
+    """Test that parallel_tool_calls is included for models that support function calling."""
     config = FireworksAIConfig()
 
     supported_params = config.get_supported_openai_params(
@@ -135,6 +135,28 @@ def test_get_supported_openai_params_parallel_tool_calls():
         "fireworks_ai/accounts/fireworks/models/glm-5p1"
     )
     assert "parallel_tool_calls" not in unsupported_params
+
+
+def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
+    monkeypatch,
+):
+    """Test that parallel_tool_calls is gated on tools, not tool_choice."""
+    config = FireworksAIConfig()
+    model = "fireworks_ai/test-tools-without-tool-choice"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "supports_function_calling": True,
+            "supports_tool_choice": False,
+        },
+    )
+
+    supported_params = config.get_supported_openai_params(model)
+
+    assert "tools" in supported_params
+    assert "parallel_tool_calls" in supported_params
+    assert "tool_choice" not in supported_params
 
 
 def test_get_model_info_respects_explicit_fireworks_capabilities():
