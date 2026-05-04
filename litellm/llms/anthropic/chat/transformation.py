@@ -113,6 +113,12 @@ REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT: Dict[str, str] = {
     "max": "max",
 }
 
+DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING = (
+    "Dropping unsupported `output_config` for model=%s "
+    "(drop_params=True). Effort is only supported on Opus 4.5+, "
+    "Sonnet 4.6+, and Mythos Preview."
+)
+
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
@@ -1630,9 +1636,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return
         if litellm.drop_params is True and not self._model_supports_effort_param(model):
             litellm.verbose_logger.warning(
-                "Dropping unsupported `output_config` for model=%s "
-                "(drop_params=True). Effort is only supported on Opus 4.5+, "
-                "Sonnet 4.6+, and Mythos Preview.",
+                DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                 model,
             )
             optional_params.pop("output_config", None)

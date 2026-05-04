@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
 )
 from litellm.llms.anthropic.chat.transformation import (
+    DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
     AnthropicConfig,
 )
@@ -1282,9 +1283,7 @@ class AmazonConverseConfig(BaseConfig):
                     and not AnthropicConfig._model_supports_effort_param(model)
                 ):
                     litellm.verbose_logger.warning(
-                        "Dropping unsupported `output_config` for model=%s "
-                        "(drop_params=True). Effort is only supported on "
-                        "Opus 4.5+, Sonnet 4.6+, and Mythos Preview.",
+                        DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                         model,
                     )
                 else:
