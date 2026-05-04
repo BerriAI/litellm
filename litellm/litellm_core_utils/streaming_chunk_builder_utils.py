@@ -9,9 +9,6 @@ from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
 )
-from litellm.litellm_core_utils.openai_tool_name_mapping import (
-    restore_openai_tool_name_for_user,
-)
 from litellm.types.utils import (
     ChatCompletionAudioResponse,
     ChatCompletionMessageToolCall,

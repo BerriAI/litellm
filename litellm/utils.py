@@ -7918,13 +7918,13 @@ def _maybe_fix_openai_function_tool_name(
     if tool_type is not None and tool_type != "function":
         return
     raw = fn.get("name")
-    raw_original = str(raw) if raw is not None else ""
+    raw_original = str(raw) if raw is not None else None
     base = _sanitize_openai_function_tool_name(
         str(raw) if raw is not None else "", index
     )
     unique = _make_unique_openai_tool_name(base, used_names)
     fn["name"] = unique
-    if unique != raw_original:
+    if raw_original and unique != raw_original:
         store_openai_tool_name_mapping(unique, raw_original)
 
 
