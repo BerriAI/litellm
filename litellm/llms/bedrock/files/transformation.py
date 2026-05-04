@@ -2,6 +2,7 @@ import json
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import unquote
 
 import httpx
 from httpx import Headers, Response
@@ -10,6 +11,14 @@ from openai.types.file_deleted import FileDeleted
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
+from litellm.litellm_core_utils.cloud_storage_security import (
+    BEDROCK_MANAGED_S3_BATCH_PREFIX,
+    BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
+    build_managed_cloud_object_name,
+    encode_s3_object_key_for_url,
+    sanitize_cloud_object_component,
+    split_configured_cloud_bucket_name,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -116,10 +125,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if _model.startswith("bedrock/"):
             _model = _model[8:]
 
-        # Replace colons with hyphens for Bedrock S3 URI compliance
-        _model = _model.replace(":", "-")
+        safe_model = sanitize_cloud_object_component(
+            _model.replace(":", "-"), fallback="model"
+        )
 
-        object_name = f"litellm-bedrock-files-{_model}-{uuid.uuid4()}.jsonl"
+        object_name = (
+            f"{BEDROCK_MANAGED_S3_BATCH_PREFIX}{safe_model}-{uuid.uuid4()}.jsonl"
+        )
         return object_name
 
     def get_object_name(
@@ -146,12 +158,13 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             if len(openai_jsonl_content) > 0:
                 return self._get_s3_object_name_from_batch_jsonl(openai_jsonl_content)
 
-        ## 2. If not jsonl, return the filename
+        ## 2. If not jsonl, store under a server-generated managed object name
         filename = extracted_file_data.get("filename")
-        if filename:
-            return filename
-        ## 3. If no file name, return timestamp
-        return str(int(time.time()))
+        return build_managed_cloud_object_name(
+            prefix=BEDROCK_MANAGED_S3_UPLOAD_PREFIX,
+            filename=filename,
+            fallback_filename="file",
+        )
 
     def get_complete_file_url(
         self,
@@ -172,6 +185,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ValueError(
                 "S3 bucket_name is required. Set 's3_bucket_name' in litellm_params or AWS_S3_BUCKET_NAME env var"
             )
+        bucket_name, object_prefix = split_configured_cloud_bucket_name(bucket_name)
 
         s3_region_name = litellm_params.get("s3_region_name") or optional_params.get(
             "s3_region_name"
@@ -188,14 +202,17 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ValueError("purpose is required")
         extracted_file_data = extract_file_data(file_data)
         object_name = self.get_object_name(extracted_file_data, purpose)
+        if object_prefix:
+            object_name = f"{object_prefix}/{object_name}"
+        encoded_object_name = encode_s3_object_key_for_url(object_name)
 
         # S3 endpoint URL format
         s3_endpoint_url = (
             optional_params.get("s3_endpoint_url")
             or f"https://s3.{aws_region_name}.amazonaws.com"
-        )
+        ).rstrip("/")
 
-        return f"{s3_endpoint_url}/{bucket_name}/{object_name}"
+        return f"{s3_endpoint_url}/{bucket_name}/{encoded_object_name}"
 
     def get_supported_openai_params(
         self, model: str
@@ -532,10 +549,12 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         if match1:
             # Pattern: https://s3.region.amazonaws.com/bucket/key
             region, bucket, key = match1.groups()
+            key = unquote(key)
             s3_uri = f"s3://{bucket}/{key}"
         elif match2:
             # Pattern: https://bucket.s3.region.amazonaws.com/key
             bucket, region, key = match2.groups()
+            key = unquote(key)
             s3_uri = f"s3://{bucket}/{key}"
         else:
             # Fallback: try to extract bucket and key from URL path
@@ -545,6 +564,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             path_parts = parsed.path.lstrip("/").split("/", 1)
             if len(path_parts) >= 2:
                 bucket, key = path_parts[0], path_parts[1]
+                key = unquote(key)
                 s3_uri = f"s3://{bucket}/{key}"
             else:
                 raise ValueError(f"Unable to parse S3 URL: {https_url}")
@@ -722,7 +742,12 @@ class BedrockJsonlFilesTransformation:
         # Remove bedrock/ prefix if present
         if _model.startswith("bedrock/"):
             _model = _model[8:]
-        object_name = f"litellm-bedrock-files-{_model}-{uuid.uuid4()}.jsonl"
+        safe_model = sanitize_cloud_object_component(
+            _model.replace(":", "-"), fallback="model"
+        )
+        object_name = (
+            f"{BEDROCK_MANAGED_S3_BATCH_PREFIX}{safe_model}-{uuid.uuid4()}.jsonl"
+        )
         return object_name
 
     def _get_content_from_openai_file(self, openai_file_content: FileTypes) -> str:

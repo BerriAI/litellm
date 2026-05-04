@@ -476,6 +476,7 @@ from litellm.secret_managers.main import (
     get_secret,
     get_secret_bool,
     get_secret_str,
+    normalize_nonempty_secret_str,
     str_to_bool,
 )
 from litellm.types.integrations.slack_alerting import SlackAlertingArgs
@@ -6249,10 +6250,15 @@ async def initialize(  # noqa: PLR0915
             if litellm_log_setting.upper() == "INFO":
                 import logging
 
-                from litellm._logging import verbose_proxy_logger, verbose_router_logger
+                from litellm._logging import (
+                    verbose_logger,
+                    verbose_proxy_logger,
+                    verbose_router_logger,
+                )
 
                 # this must ALWAYS remain logging.INFO, DO NOT MODIFY THIS
 
+                verbose_logger.setLevel(level=logging.INFO)  # set package log to info
                 verbose_router_logger.setLevel(
                     level=logging.INFO
                 )  # set router logs to info
@@ -7482,6 +7488,7 @@ class ProxyStartupEvent:
         Requires: pip install pyroscope-io (optional dependency).
         When enabled, PYROSCOPE_SERVER_ADDRESS and PYROSCOPE_APP_NAME are required (no defaults).
         Optional: PYROSCOPE_SAMPLE_RATE (parsed as integer) to set the sample rate.
+        Optional: PYROSCOPE_GRAFANA_USER and PYROSCOPE_GRAFANA_API_TOKEN for Grafana Cloud basic auth.
         """
         if not get_secret_bool("LITELLM_ENABLE_PYROSCOPE", False):
             verbose_proxy_logger.debug(
@@ -7510,11 +7517,31 @@ class ProxyStartupEvent:
             if env_name:
                 tags["environment"] = env_name
             sample_rate_env = os.getenv("PYROSCOPE_SAMPLE_RATE")
+
+            grafana_pyroscope_user = normalize_nonempty_secret_str(
+                get_secret_str("PYROSCOPE_GRAFANA_USER", default_value=None)
+            )
+            grafana_api_token = normalize_nonempty_secret_str(
+                get_secret_str("PYROSCOPE_GRAFANA_API_TOKEN", default_value=None)
+            )
+            if grafana_api_token and not grafana_pyroscope_user:
+                raise ValueError(
+                    "PYROSCOPE_GRAFANA_API_TOKEN is set but PYROSCOPE_GRAFANA_USER is not set. "
+                    "Set PYROSCOPE_GRAFANA_USER to the Grafana Cloud Pyroscope user/tenant id."
+                )
+            if grafana_pyroscope_user and not grafana_api_token:
+                raise ValueError(
+                    "PYROSCOPE_GRAFANA_USER is set but PYROSCOPE_GRAFANA_API_TOKEN is not set. "
+                    "Set PYROSCOPE_GRAFANA_API_TOKEN to the Grafana Cloud API/access policy token."
+                )
             configure_kwargs = {
-                "app_name": app_name,
+                "application_name": app_name,
                 "server_address": server_address,
                 "tags": tags if tags else None,
             }
+            if grafana_api_token and grafana_pyroscope_user:
+                configure_kwargs["basic_auth_username"] = grafana_pyroscope_user
+                configure_kwargs["basic_auth_password"] = grafana_api_token
             if sample_rate_env is not None:
                 try:
                     # pyroscope-io expects sample_rate as an integer

@@ -280,6 +280,7 @@ ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
+provider_url_destination_allowed_hosts: List[str] = []
 ssl_ecdh_curve: Optional[str] = (
     None  # Set to 'X25519' to disable PQC and improve performance
 )
@@ -288,6 +289,7 @@ disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 disable_anthropic_gemini_context_caching_transform: bool = False
+disable_vertex_batch_output_transformation: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
@@ -329,6 +331,9 @@ enable_json_schema_validation: bool = False
 enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
+)
+enable_gemini_default_thinking_level_low: bool = (
+    False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
 ####################
 logging: bool = True
