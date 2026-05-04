@@ -2904,9 +2904,9 @@ def test_gemini_embedding_2_ga_in_cost_map():
         assert info.get("input_cost_per_audio_per_second") == 0.00016
         assert info.get("input_cost_per_video_per_second") == 0.00079
         if provider in ("vertex_ai-embedding-models", "vertex_ai"):
-            assert info.get("uses_embed_content") is True, (
-                f"{key} must have uses_embed_content=true for correct Vertex AI routing"
-            )
+            assert (
+                info.get("uses_embed_content") is True
+            ), f"{key} must have uses_embed_content=true for correct Vertex AI routing"
 
 
 def test_gemini_lyria_3_preview_models_in_cost_map():
@@ -3983,3 +3983,123 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_validate_and_fix_openai_tools_sanitizes_invalid_names():
+    from litellm.utils import validate_and_fix_openai_tools
+
+    tools_in = [
+        {
+            "type": "function",
+            "function": {
+                "name": "invalid.name",
+                "description": "x",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    original_name = tools_in[0]["function"]["name"]
+    out = validate_and_fix_openai_tools(tools=tools_in)
+    assert out is not None
+    assert out[0]["function"]["name"] == "invalid_name"
+    assert original_name == "invalid.name"
+
+
+def test_validate_and_fix_openai_tools_dedupes_colliding_names():
+    from litellm.utils import validate_and_fix_openai_tools
+
+    tools_in = [
+        {
+            "type": "function",
+            "function": {
+                "name": "a.b",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "a/b",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+    out = validate_and_fix_openai_tools(tools=tools_in)
+    assert out[0]["function"]["name"] == "a_b"
+    assert out[1]["function"]["name"] == "a_b_1"
+
+
+def test_openai_tool_name_mapping_restore_roundtrip():
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
+        restore_openai_tool_name_for_user,
+    )
+    from litellm.utils import validate_and_fix_openai_tools
+
+    tools_in = [
+        {
+            "type": "function",
+            "function": {
+                "name": "invalid.name.at.index.71",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    out = validate_and_fix_openai_tools(tools=tools_in)
+    assert out[0]["function"]["name"] == "invalid_name_at_index_71"
+    assert (
+        restore_openai_tool_name_for_user("invalid_name_at_index_71")
+        == "invalid.name.at.index.71"
+    )
+
+
+def test_convert_to_model_response_restores_openai_tool_call_names():
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_model_response_object,
+    )
+    from litellm.types.utils import ModelResponse
+    from litellm.utils import validate_and_fix_openai_tools
+
+    validate_and_fix_openai_tools(
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "plugin.subtool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+    )
+    response_object = {
+        "id": "test",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "plugin_subtool",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+    out = convert_to_model_response_object(
+        response_object=response_object,
+        model_response_object=ModelResponse(),
+        response_type="completion",
+    )
+    assert out.choices[0].message.tool_calls is not None
+    assert out.choices[0].message.tool_calls[0].function.name == "plugin.subtool"

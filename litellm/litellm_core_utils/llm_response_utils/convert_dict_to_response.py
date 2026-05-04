@@ -71,6 +71,20 @@ def _normalize_images_for_message(
     return normalized
 
 
+def _map_tool_call_dict_openai_names_to_user(tc: dict) -> dict:
+    """Restore client tool names when LiteLLM sanitized outbound tools for OpenAI."""
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
+        restore_openai_tool_name_for_user,
+    )
+
+    fn = tc.get("function")
+    if isinstance(fn, dict) and fn.get("name"):
+        restored = restore_openai_tool_name_for_user(fn["name"])
+        if restored != fn["name"]:
+            return {**tc, "function": {**fn, "name": restored}}
+    return tc
+
+
 def _safe_convert_created_field(created_value) -> int:
     """
     Safely convert a 'created' field value to an integer.
@@ -546,6 +560,8 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 if tool_calls is not None:
                     _openai_tool_calls = []
                     for _tc in tool_calls:
+                        if isinstance(_tc, dict):
+                            _tc = _map_tool_call_dict_openai_names_to_user(_tc)
                         _openai_tc = ChatCompletionMessageToolCall(**_tc)
                         _openai_tool_calls.append(_openai_tc)
                     fixed_tool_calls = _handle_invalid_parallel_tool_calls(
