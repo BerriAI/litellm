@@ -121,6 +121,19 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     "pillar_response_headers",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
+    # Callback-registration fields. ``callbacks``, ``service_callback``,
+    # and ``logger_fn`` are read by ``litellm.utils.function_setup`` and
+    # appended to process-wide ``litellm.{input,success,failure,_async_*,
+    # service}_callback`` lists / ``litellm.user_logger_fn`` — one request
+    # poisons the worker for every subsequent caller.
+    # ``litellm_disabled_callbacks`` is the inverse primitive: the
+    # legitimate path reads it from key/team metadata, the request-body
+    # version silently turns off admin-configured audit/observability
+    # for the caller's request.
+    "callbacks",
+    "service_callback",
+    "logger_fn",
+    "litellm_disabled_callbacks",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS = (
