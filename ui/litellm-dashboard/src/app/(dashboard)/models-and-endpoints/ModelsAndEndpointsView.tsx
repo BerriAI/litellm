@@ -1,3 +1,4 @@
+import { useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
@@ -92,10 +93,17 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     return Array.from(allModelGroups).sort();
   }, [modelDataResponse?.data]);
 
+  // Unified access groups created via the Access Groups page (stored in
+  // LiteLLM_AccessGroupTable). These are managed independently of legacy
+  // per-deployment model_info.access_groups but should still appear anywhere
+  // the UI offers a "Model Access Group" picker, so admins can attach a
+  // freshly-added model to a unified group on the spot.
+  const { data: unifiedAccessGroupsData } = useAccessGroups();
+
   const availableModelAccessGroups = useMemo(() => {
-    if (!modelDataResponse?.data) return [];
+    if (!modelDataResponse?.data && !unifiedAccessGroupsData) return [];
     const allModelAccessGroups = new Set<string>();
-    for (const model of modelDataResponse.data) {
+    for (const model of modelDataResponse?.data ?? []) {
       const modelInfo = model.model_info;
       if (modelInfo?.access_groups) {
         for (const group of modelInfo.access_groups) {
@@ -103,8 +111,13 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
         }
       }
     }
-    return Array.from(allModelAccessGroups);
-  }, [modelDataResponse?.data]);
+    for (const group of unifiedAccessGroupsData ?? []) {
+      if (group?.access_group_name) {
+        allModelAccessGroups.add(group.access_group_name);
+      }
+    }
+    return Array.from(allModelAccessGroups).sort();
+  }, [modelDataResponse?.data, unifiedAccessGroupsData]);
 
   const allModelsOnProxy = useMemo<string[]>(() => {
     if (!modelDataResponse?.data) return [];
