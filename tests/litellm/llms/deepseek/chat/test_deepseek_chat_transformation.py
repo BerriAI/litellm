@@ -93,8 +93,8 @@ class TestDeepSeekThinkingParams:
 
         assert result["thinking"] == {"type": "enabled"}
 
-    def test_map_reasoning_effort_none_does_not_enable_thinking(self):
-        """Test that reasoning_effort='none' does not enable thinking."""
+    def test_map_reasoning_effort_none_disables_thinking(self):
+        """Test that reasoning_effort='none' sets thinking to disabled."""
         non_default_params = {"reasoning_effort": "none"}
         optional_params = {}
 
@@ -105,7 +105,7 @@ class TestDeepSeekThinkingParams:
             drop_params=False,
         )
 
-        assert "thinking" not in result
+        assert result["thinking"] == {"type": "disabled"}
 
     def test_map_reasoning_effort_null_does_not_enable_thinking(self):
         """Test that reasoning_effort=None does not enable thinking."""
