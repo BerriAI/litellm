@@ -1961,8 +1961,6 @@ if TYPE_CHECKING:
 
     bedrock_tool_name_mappings: InMemoryCache
 
-    openai_tool_name_mappings: InMemoryCache
-
     # Azure exception class (lazy-loaded)
     from litellm.llms.azure.common_utils import AzureOpenAIError
 
@@ -2054,18 +2052,6 @@ def __getattr__(name: str) -> Any:
 
             _globals["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
         return _globals["bedrock_tool_name_mappings"]
-
-    if name == "openai_tool_name_mappings":
-        from ._lazy_imports import _get_litellm_globals
-
-        _globals = _get_litellm_globals()
-        if "openai_tool_name_mappings" not in _globals:
-            from .litellm_core_utils.openai_tool_name_mapping import (
-                openai_tool_name_mappings as _openai_tool_name_mappings,
-            )
-
-            _globals["openai_tool_name_mappings"] = _openai_tool_name_mappings
-        return _globals["openai_tool_name_mappings"]
 
     # Lazy load AzureOpenAIError exception class
     if name == "AzureOpenAIError":

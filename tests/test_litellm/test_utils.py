@@ -4024,7 +4024,11 @@ def test_validate_and_fix_openai_tools_sanitizes_when_enabled():
     assert out[0]["function"]["name"] == "invalid_name"
     assert original_name == "invalid.name"
 
+
+def test_openai_tool_name_mapping_per_request_context():
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
         begin_openai_tool_name_mapping_scope,
+        restore_openai_tool_name_for_user,
     )
     from litellm.utils import validate_and_fix_openai_tools
 
