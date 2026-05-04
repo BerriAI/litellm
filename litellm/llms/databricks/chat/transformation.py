@@ -21,7 +21,6 @@ from typing import (
 import httpx
 from pydantic import BaseModel
 
-import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _handle_invalid_parallel_tool_calls,
