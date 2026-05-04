@@ -1,8 +1,7 @@
 import { isAdminRole } from "@/utils/roles";
 import { LoadingOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
-import { Button, Text, Title } from "@tremor/react";
-import { Form, Input, Modal, Select, Spin, Table } from "antd";
+import { Button, Form, Input, Modal, Select, Spin, Table, Typography } from "antd";
 import React, { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -11,6 +10,8 @@ import CreateFetchTool from "./CreateFetchTool";
 import { fetchToolColumns } from "./FetchToolColumn";
 import { FetchToolView } from "./FetchToolView";
 import { AvailableFetchProvider, FetchTool } from "./types";
+
+const { Text, Title } = Typography;
 
 interface FetchToolsProps {
   accessToken: string | null;
