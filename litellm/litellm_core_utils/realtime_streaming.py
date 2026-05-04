@@ -82,13 +82,6 @@ class RealTimeStreaming:
         self._pending_guardrail_message: Optional[str] = None
 
     _SESSION_EVENT_TYPES = frozenset(["session.created", "session.updated"])
-    _GA_TEXT_DELTA_TYPES = frozenset(
-        (
-            "response.output_text.delta",
-            "response.output_audio_transcript.delta",
-        )
-    )
-    _GA_AUDIO_DELTA_TYPES = frozenset(["response.output_audio.delta"])
     _AUDIO_FORMAT_MAP: Dict[str, Dict[str, Any]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
         "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
