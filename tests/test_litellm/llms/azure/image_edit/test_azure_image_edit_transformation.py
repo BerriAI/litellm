@@ -20,7 +20,8 @@ def test_azure_deployment_image_edit_form_data_keeps_model_non_deployment_url():
     assert out == data
 
 
-def test_azure_transform_image_edit_request_omits_model_for_deployment():
+def test_azure_finalize_image_edit_strips_model_after_openai_transform():
+    """OpenAI transform still includes model; finalize uses the real request URL."""
     config = AzureImageEditConfig()
     model = "gpt-image-2-dep"
     prompt = "add a hat"
@@ -37,7 +38,14 @@ def test_azure_transform_image_edit_request_omits_model_for_deployment():
         litellm_params=litellm_params,
         headers={},
     )
-    assert "model" not in data
-    assert data.get("prompt") == prompt
-    assert data.get("n") == 1
+    assert data.get("model") == model
+    resolved = config.get_complete_url(
+        model=model,
+        api_base=litellm_params.api_base,
+        litellm_params=litellm_params.model_dump(exclude_none=True),
+    )
+    data_out = config.finalize_image_edit_multipart_data(data, resolved)
+    assert "model" not in data_out
+    assert data_out.get("prompt") == prompt
+    assert data_out.get("n") == 1
     assert len(files) >= 1

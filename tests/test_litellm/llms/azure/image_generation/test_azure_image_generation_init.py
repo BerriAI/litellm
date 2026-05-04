@@ -12,6 +12,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.azure import AzureChatCompletion
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.azure.image_generation import (
     AzureDallE3ImageGenerationConfig,
     get_azure_image_generation_config,
@@ -312,26 +313,21 @@ def test_azure_image_generation_base_model_vs_deployment_name():
 
     optional_params = {"n": 1, "size": "1024x1024"}
 
-    # Mock the HTTP request to capture what gets sent
+    mock_http_response = MagicMock()
+    mock_http_response.status_code = 200
+    mock_http_response.json.return_value = {
+        "created": 1234567890,
+        "data": [{"url": "https://example.com/image.png", "revised_prompt": prompt}],
+    }
+
     with patch.object(
-        azure_chat_completion,
-        "make_sync_azure_httpx_request",
-        return_value=MagicMock(
-            json=lambda: {
-                "created": 1234567890,
-                "data": [
-                    {"url": "https://example.com/image.png", "revised_prompt": prompt}
-                ],
-            }
-        ),
-    ) as mock_request:
-        # Mock logging object
+        HTTPHandler, "post", return_value=mock_http_response
+    ) as mock_post:
         logging_obj = MagicMock()
         logging_obj.pre_call = MagicMock()
         logging_obj.post_call = MagicMock()
 
-        # Call the image_generation method
-        response = azure_chat_completion.image_generation(
+        azure_chat_completion.image_generation(
             prompt=prompt,
             timeout=60.0,
             optional_params=optional_params,
@@ -344,34 +340,21 @@ def test_azure_image_generation_base_model_vs_deployment_name():
             litellm_params=litellm_params,
         )
 
-        # Verify the mock was called
-        assert mock_request.called, "HTTP request should have been made"
-
-        # Get the call arguments
-        call_kwargs = mock_request.call_args.kwargs
-
-        # Verify the URL uses the deployment name (not base_model)
-        api_base_used = call_kwargs.get("api_base", "")
-        assert model in api_base_used, (
-            f"URL should contain deployment name '{model}', "
-            f"but got: {api_base_used}"
-        )
-        assert base_model not in api_base_used or base_model == model, (
+        assert mock_post.called, "HTTPHandler.post should be invoked"
+        post_kwargs = mock_post.call_args.kwargs
+        url_used = post_kwargs.get("url", "")
+        assert (
+            model in url_used
+        ), f"URL should contain deployment name '{model}', but got: {url_used}"
+        assert base_model not in url_used or base_model == model, (
             f"URL should NOT contain base_model '{base_model}' when it differs from deployment name, "
-            f"but got: {api_base_used}"
+            f"but got: {url_used}"
         )
 
-        # Verify the HTTP JSON body omits model (deployment is only in the URL)
-        request_data = call_kwargs.get("data", {})
-        wire_json = AzureChatCompletion.azure_deployment_image_generation_json_body(
-            api_base_used, request_data
-        )
+        wire_json = post_kwargs.get("json") or {}
         assert (
             "model" not in wire_json
         ), f"Azure deployment image gen must not send 'model' in JSON body; got keys: {list(wire_json)}"
-        assert request_data.get("model") == base_model  # internal dict unchanged
-
-        # Verify other fields are correct on the wire payload
         assert wire_json.get("prompt") == prompt
         assert wire_json.get("n") == 1
         assert wire_json.get("size") == "1024x1024"
@@ -402,27 +385,24 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
         "api_version": api_version,
     }
 
-    # Mock the HTTP request to capture what gets sent
-    with patch.object(
-        azure_chat_completion,
-        "make_async_azure_httpx_request",
-        new_callable=AsyncMock,
-        return_value=MagicMock(
-            json=lambda: {
-                "created": 1234567890,
-                "data": [
-                    {"url": "https://example.com/image.png", "revised_prompt": prompt}
-                ],
-            }
-        ),
-    ) as mock_request:
-        # Mock logging object
+    mock_http_response = MagicMock()
+    mock_http_response.status_code = 200
+    mock_http_response.json.return_value = {
+        "created": 1234567890,
+        "data": [{"url": "https://example.com/image.png", "revised_prompt": prompt}],
+    }
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_http_response)
+
+    with patch(
+        "litellm.llms.azure.azure.get_async_httpx_client", return_value=mock_client
+    ):
         logging_obj = MagicMock()
         logging_obj.pre_call = MagicMock()
         logging_obj.post_call = MagicMock()
 
-        # Call the aimage_generation method
-        response = await azure_chat_completion.aimage_generation(
+        await azure_chat_completion.aimage_generation(
             data=data,
             model_response=None,
             azure_client_params=azure_client_params,
@@ -430,30 +410,14 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
             input=[],
             logging_obj=logging_obj,
             headers={},
-            model=model,  # Pass the deployment name
+            model=model,
             timeout=60.0,
         )
 
-        # Verify the mock was called
-        assert mock_request.called, "HTTP request should have been made"
-
-        # Get the call arguments
-        call_kwargs = mock_request.call_args.kwargs
-
-        # Verify the URL uses the deployment name (not base_model)
-        api_base_used = call_kwargs.get("api_base", "")
-        assert model in api_base_used, (
-            f"URL should contain deployment name '{model}', "
-            f"but got: {api_base_used}"
-        )
-        assert base_model not in api_base_used or base_model == model, (
-            f"URL should NOT contain base_model '{base_model}' when it differs from deployment name, "
-            f"but got: {api_base_used}"
-        )
-
-        request_data = call_kwargs.get("data", {})
-        wire_json = AzureChatCompletion.azure_deployment_image_generation_json_body(
-            api_base_used, request_data
-        )
+        assert mock_client.post.called
+        post_kwargs = mock_client.post.call_args.kwargs
+        url_used = post_kwargs.get("url", "")
+        assert model in url_used
+        wire_json = post_kwargs.get("json") or {}
         assert "model" not in wire_json
-        assert request_data.get("model") == base_model
+        assert data.get("model") == base_model

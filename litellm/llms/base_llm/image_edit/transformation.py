@@ -102,6 +102,15 @@ class BaseImageEditConfig(ABC):
     ) -> Tuple[Dict, RequestFiles]:
         pass
 
+    def finalize_image_edit_multipart_data(
+        self, data: dict, resolved_request_url: str
+    ) -> dict:
+        """
+        Adjust non-file form fields after ``transform_image_edit_request`` using the
+        exact URL that will be used for the HTTP POST (same string as ``get_complete_url``).
+        """
+        return data
+
     @abstractmethod
     def transform_image_edit_response(
         self,

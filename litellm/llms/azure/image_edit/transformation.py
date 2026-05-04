@@ -1,13 +1,10 @@
-from typing import Dict, Optional, Tuple, cast
+from typing import Dict, Optional, cast
 
 import httpx
-from httpx._types import RequestFiles
 
 import litellm
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import FileTypes
-from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import _add_path_to_api_base
 
 
@@ -100,32 +97,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
         return str(final_url)
 
-    def transform_image_edit_request(
-        self,
-        model: str,
-        prompt: Optional[str],
-        image: Optional[FileTypes],
-        image_edit_optional_request_params: Dict,
-        litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
-        data, files = super().transform_image_edit_request(
-            model=model,
-            prompt=prompt,
-            image=image,
-            image_edit_optional_request_params=image_edit_optional_request_params,
-            litellm_params=litellm_params,
-            headers=headers,
-        )
-        litellm_params_dict = (
-            litellm_params.model_dump(exclude_none=True)
-            if hasattr(litellm_params, "model_dump")
-            else dict(litellm_params)
-        )
-        resolved_url = self.get_complete_url(
-            model=model,
-            api_base=litellm_params_dict.get("api_base"),
-            litellm_params=litellm_params_dict,
-        )
-        data = self.azure_deployment_image_edit_form_data(data, resolved_url)
-        return data, files
+    def finalize_image_edit_multipart_data(
+        self, data: dict, resolved_request_url: str
+    ) -> dict:
+        return self.azure_deployment_image_edit_form_data(data, resolved_request_url)
