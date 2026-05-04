@@ -1471,15 +1471,37 @@ if MCP_AVAILABLE:
                 detail={"error": f"MCP server {server_id} not found"},
             )
 
-        # Per-server access policy mirrors `fetch_mcp_server`: admin-view
-        # callers are unrestricted; non-admins must have the server in their
-        # allowed-servers set. Temporary cached servers come from the
-        # admin-only `/server/oauth/session` setup flow and are not exposed
-        # to non-admins. Unauthenticated OAuth browser flows omit the key and
-        # skip this gate (same as pre-broker-auth behavior on authorize/token).
-        if user_api_key_dict is not None and not _user_has_admin_view(
-            user_api_key_dict
-        ):
+        # Access-control for the OAuth broker endpoints.
+        #
+        # Unauthenticated callers (browser-initiated OAuth, no API key):
+        #   - Temp-cache servers: allowed. These are created by admins via the
+        #     admin-only /server/oauth/session endpoint specifically to drive
+        #     this browser flow. The LiteLLM UI always creates a temp session
+        #     before calling /authorize, so all legitimate browser flows use a
+        #     temp server_id.
+        #   - Global-registry servers: rejected (403). Allowing unauthenticated
+        #     access to global-registry servers would let any caller invoke the
+        #     proxy's OAuth broker with the server's stored client_secret, while
+        #     authenticated non-admins without allowlist access receive 403 —
+        #     an unintended privilege inversion.
+        #
+        # Authenticated callers:
+        #   - Admins: unrestricted.
+        #   - Non-admins: temp servers are always denied (temp sessions are
+        #     admin-internal); global servers require allowlist membership.
+        if user_api_key_dict is None:
+            if not resolved_from_temp_cache:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": (
+                            "Unauthenticated access to global-registry MCP server "
+                            f"{server_id} is not permitted. "
+                            "Pass a valid API key or use a session-scoped server ID."
+                        )
+                    },
+                )
+        elif not _user_has_admin_view(user_api_key_dict):
             if resolved_from_temp_cache:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
