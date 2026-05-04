@@ -11,7 +11,8 @@ Has 4 methods:
 import ast
 import asyncio
 import json
-from typing import Any, cast
+import os
+from typing import Any, Optional, cast
 
 import litellm
 from litellm._logging import print_verbose
@@ -26,6 +27,9 @@ from .base_cache import BaseCache
 
 class QdrantSemanticCache(BaseCache):
     CACHE_KEY_FIELD_NAME = "litellm_cache_key"
+    ALLOW_LEGACY_UNSCOPED_HITS_ENV_VAR = (
+        "LITELLM_SEMANTIC_CACHE_ALLOW_LEGACY_UNSCOPED_HITS"
+    )
 
     def __init__(  # noqa: PLR0915
         self,
@@ -37,9 +41,8 @@ class QdrantSemanticCache(BaseCache):
         embedding_model="text-embedding-ada-002",
         host_type=None,
         vector_size=None,
+        allow_legacy_unscoped_cache_hits: Optional[bool] = None,
     ):
-        import os
-
         from litellm.llms.custom_httpx.http_handler import (
             _get_httpx_client,
             get_async_httpx_client,
@@ -59,6 +62,16 @@ class QdrantSemanticCache(BaseCache):
             raise Exception("similarity_threshold must be provided, passed None")
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
+        self.allow_legacy_unscoped_cache_hits = (
+            self._get_allow_legacy_unscoped_cache_hits(allow_legacy_unscoped_cache_hits)
+        )
+        if self.allow_legacy_unscoped_cache_hits:
+            print_verbose(
+                "Qdrant semantic-cache legacy unscoped hits are enabled via "
+                f"{self.ALLOW_LEGACY_UNSCOPED_HITS_ENV_VAR}; searches may return "
+                "pre-isolation cache entries without cache-key payloads. Disable "
+                "this after warming the key-scoped semantic cache."
+            )
         self.vector_size = (
             vector_size if vector_size is not None else QDRANT_VECTOR_SIZE
         )
@@ -166,6 +179,14 @@ class QdrantSemanticCache(BaseCache):
             else:
                 raise Exception("Error while creating new collection")
 
+    @classmethod
+    def _get_allow_legacy_unscoped_cache_hits(
+        cls, allow_legacy_unscoped_cache_hits: Optional[bool]
+    ) -> bool:
+        if allow_legacy_unscoped_cache_hits is not None:
+            return allow_legacy_unscoped_cache_hits
+        return os.getenv(cls.ALLOW_LEGACY_UNSCOPED_HITS_ENV_VAR, "").lower() == "true"
+
     def _get_cache_logic(self, cached_response: Any):
         if cached_response is None:
             return cached_response
@@ -186,6 +207,11 @@ class QdrantSemanticCache(BaseCache):
                 }
             ]
         }
+
+    def _add_cache_key_filter_to_search_data(self, data: dict, key: str) -> None:
+        if getattr(self, "allow_legacy_unscoped_cache_hits", False):
+            return
+        data["filter"] = self._get_qdrant_cache_key_filter(key)
 
     def _ensure_cache_key_payload_index(self) -> None:
         try:
@@ -211,8 +237,12 @@ class QdrantSemanticCache(BaseCache):
     def _payload_matches_cache_key(self, payload: dict, key: str) -> bool:
         # Legacy Qdrant semantic-cache points stored only prompt text and
         # response. They cannot be reassigned to the generated LiteLLM cache key
-        # without risking cross-scope hits, so they must be treated as misses.
+        # without risking cross-scope hits, so secure mode treats them as misses.
         cached_key = payload.get(self.CACHE_KEY_FIELD_NAME)
+        if cached_key is None and getattr(
+            self, "allow_legacy_unscoped_cache_hits", False
+        ):
+            return True
         return cached_key is not None and str(cached_key) == str(key)
 
     async def _get_async_embedding(self, prompt: str, **kwargs) -> Any:
@@ -329,8 +359,8 @@ class QdrantSemanticCache(BaseCache):
             },
             "limit": 1,
             "with_payload": True,
-            "filter": self._get_qdrant_cache_key_filter(key),
         }
+        self._add_cache_key_filter_to_search_data(data=data, key=key)
 
         search_response = self.sync_client.post(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points/search",
@@ -436,8 +466,8 @@ class QdrantSemanticCache(BaseCache):
             },
             "limit": 1,
             "with_payload": True,
-            "filter": self._get_qdrant_cache_key_filter(key),
         }
+        self._add_cache_key_filter_to_search_data(data=data, key=key)
 
         search_response = await self.async_client.post(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points/search",

@@ -208,6 +208,76 @@ def test_qdrant_semantic_cache_rejects_unscoped_cache_hit():
         assert metadata["semantic-similarity"] == 0.0
 
 
+def test_qdrant_semantic_cache_allows_legacy_unscoped_hit_with_flag(monkeypatch):
+    monkeypatch.setenv("LITELLM_SEMANTIC_CACHE_ALLOW_LEGACY_UNSCOPED_HITS", "true")
+
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
+        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
+    ):
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"result": {"exists": True}}
+
+        mock_sync_client_instance = MagicMock()
+        mock_sync_client_instance.get.return_value = mock_response
+        mock_sync_client.return_value = mock_sync_client_instance
+
+        from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+        qdrant_cache = QdrantSemanticCache(
+            collection_name="test_collection",
+            qdrant_api_base="http://test.qdrant.local",
+            qdrant_api_key="test_key",
+            similarity_threshold=0.8,
+        )
+
+        mock_search_response = MagicMock()
+        mock_search_response.status_code = 200
+        mock_search_response.json.return_value = {
+            "result": [
+                {
+                    "payload": {
+                        "text": "What is the capital of France?",
+                        "response": '{"id": "test-123"}',
+                    },
+                    "score": 0.9,
+                }
+            ]
+        }
+        qdrant_cache.sync_client.post = MagicMock(return_value=mock_search_response)
+
+        with patch(
+            "litellm.embedding", return_value={"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+        ):
+            metadata = {}
+            result = qdrant_cache.get_cache(
+                key="test_key",
+                messages=[{"content": "What is the capital of France?"}],
+                metadata=metadata,
+            )
+
+        assert result == {"id": "test-123"}
+        assert metadata["semantic-similarity"] == 0.9
+        assert "filter" not in qdrant_cache.sync_client.post.call_args.kwargs["json"]
+
+
+def test_qdrant_semantic_cache_legacy_mode_rejects_wrong_key_hit():
+    from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+    qdrant_cache = QdrantSemanticCache.__new__(QdrantSemanticCache)
+    qdrant_cache.allow_legacy_unscoped_cache_hits = True
+
+    assert qdrant_cache._payload_matches_cache_key(payload={}, key="test_key")
+    assert not qdrant_cache._payload_matches_cache_key(
+        payload={QdrantSemanticCache.CACHE_KEY_FIELD_NAME: "other_key"},
+        key="test_key",
+    )
+
+
 def test_qdrant_semantic_cache_payload_index_failure_is_non_blocking():
     from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
 
