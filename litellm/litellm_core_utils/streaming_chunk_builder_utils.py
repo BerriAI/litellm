@@ -2,6 +2,9 @@ import base64
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
+from litellm.litellm_core_utils.openai_tool_name_mapping import (
+    restore_openai_tool_name_for_user,
+)
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
@@ -293,10 +296,12 @@ class ChunkProcessor:
             if tool_call_data["id"] and tool_call_data["name"]:
                 combined_arguments = "".join(tool_call_data["arguments"]) or "{}"
 
+                display_name = restore_openai_tool_name_for_user(tool_call_data["name"])
+
                 # Build function - provider_specific_fields should be on tool_call level, not function level
                 function = Function(
                     arguments=combined_arguments,
-                    name=tool_call_data["name"],
+                    name=display_name,
                 )
 
                 # Prepare params for ChatCompletionMessageToolCall

@@ -7874,18 +7874,93 @@ def validate_and_fix_openai_messages(messages: List):
     return validate_chat_completion_user_messages(messages=new_messages)
 
 
-def validate_and_fix_openai_tools(tools: Optional[List]) -> Optional[List[dict]]:
+_OPENAI_FUNCTION_TOOL_NAME_MAX_LENGTH = 64
+
+
+def _sanitize_openai_function_tool_name(name: str, index: int) -> str:
     """
-    Ensure tools is List[dict] and not List[BaseModel]
+    Normalize function.name to match OpenAI's pattern ^[a-zA-Z0-9_-]+$ and length cap.
     """
-    new_tools = []
+    if name is None or (isinstance(name, str) and not str(name).strip()):
+        return f"litellm_unnamed_tool_{index}"
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "_", str(name).strip())
+    if not cleaned:
+        return f"litellm_unnamed_tool_{index}"
+    return cleaned[:_OPENAI_FUNCTION_TOOL_NAME_MAX_LENGTH]
+
+
+def _make_unique_openai_tool_name(base: str, used_names: set[str]) -> str:
+    candidate = base
+    n = 0
+    while candidate in used_names:
+        n += 1
+        suffix = f"_{n}"
+        room = _OPENAI_FUNCTION_TOOL_NAME_MAX_LENGTH - len(suffix)
+        if room < 1:
+            candidate = suffix[:_OPENAI_FUNCTION_TOOL_NAME_MAX_LENGTH]
+        else:
+            candidate = (base[:room] + suffix)[:_OPENAI_FUNCTION_TOOL_NAME_MAX_LENGTH]
+    used_names.add(candidate)
+    return candidate
+
+
+def _maybe_fix_openai_function_tool_name(
+    tool_dict: dict, index: int, used_names: set[str]
+) -> None:
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
+        store_openai_tool_name_mapping,
+    )
+
+    fn = tool_dict.get("function")
+    if not isinstance(fn, dict):
+        return
+    tool_type = tool_dict.get("type")
+    if tool_type is not None and tool_type != "function":
+        return
+    raw = fn.get("name")
+    raw_original = str(raw) if raw is not None else ""
+    base = _sanitize_openai_function_tool_name(
+        str(raw) if raw is not None else "", index
+    )
+    unique = _make_unique_openai_tool_name(base, used_names)
+    fn["name"] = unique
+    if unique != raw_original:
+        store_openai_tool_name_mapping(unique, raw_original)
+
+
+def validate_and_fix_openai_tools(
+    tools: Optional[List],
+    *,
+    sanitize_openai_function_tool_names: bool = False,
+) -> Optional[List[dict]]:
+    """
+    Ensure tools is List[dict] and not List[BaseModel].
+
+    When ``sanitize_openai_function_tool_names`` is True (OpenAI-compatible
+    providers only), rewrites function names to ``^[a-zA-Z0-9_-]+$`` (max 64 chars).
+    """
     if tools is None:
         return tools
-    for tool in tools:
+    if not sanitize_openai_function_tool_names:
+        new_tools: List[dict] = []
+        for tool in tools:
+            if isinstance(tool, BaseModel):
+                new_tools.append(tool.model_dump())
+            elif isinstance(tool, dict):
+                new_tools.append(tool)
+        return new_tools
+
+    new_tools = []
+    used_names: set[str] = set()
+    for idx, tool in enumerate(tools):
         if isinstance(tool, BaseModel):
-            new_tools.append(tool.model_dump())
+            tool_dict = tool.model_dump()
         elif isinstance(tool, dict):
-            new_tools.append(tool)
+            tool_dict = copy.deepcopy(tool)
+        else:
+            continue
+        _maybe_fix_openai_function_tool_name(tool_dict, idx, used_names)
+        new_tools.append(tool_dict)
     return new_tools
 
 

@@ -160,6 +160,10 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
+from .litellm_core_utils.openai_tool_name_mapping import (
+    begin_openai_tool_name_mapping_scope,
+    should_sanitize_openai_tool_names,
+)
 from .litellm_core_utils.core_helpers import safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
@@ -1160,7 +1164,24 @@ def completion(  # type: ignore # noqa: PLR0915
         raise ValueError("model param not passed in.")
     # validate messages
     messages = validate_and_fix_openai_messages(messages=messages)
-    tools = validate_and_fix_openai_tools(tools=tools)
+    begin_openai_tool_name_mapping_scope()
+    try:
+        _, _litellm_provider_for_tools, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=kwargs.get("custom_llm_provider"),
+            api_base=kwargs.get("api_base") or base_url,
+            api_key=kwargs.get("api_key") or api_key,
+            litellm_params=kwargs.get("litellm_params"),
+        )
+        _sanitize_openai_fn_tool_names = should_sanitize_openai_tool_names(
+            _litellm_provider_for_tools
+        )
+    except Exception:
+        _sanitize_openai_fn_tool_names = False
+    tools = validate_and_fix_openai_tools(
+        tools=tools,
+        sanitize_openai_function_tool_names=_sanitize_openai_fn_tool_names,
+    )
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params

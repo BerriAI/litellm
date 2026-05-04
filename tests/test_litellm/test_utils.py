@@ -2904,9 +2904,9 @@ def test_gemini_embedding_2_ga_in_cost_map():
         assert info.get("input_cost_per_audio_per_second") == 0.00016
         assert info.get("input_cost_per_video_per_second") == 0.00079
         if provider in ("vertex_ai-embedding-models", "vertex_ai"):
-            assert info.get("uses_embed_content") is True, (
-                f"{key} must have uses_embed_content=true for correct Vertex AI routing"
-            )
+            assert (
+                info.get("uses_embed_content") is True
+            ), f"{key} must have uses_embed_content=true for correct Vertex AI routing"
 
 
 def test_gemini_lyria_3_preview_models_in_cost_map():
@@ -3983,3 +3983,132 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_validate_and_fix_openai_tools_skips_name_rewrite_when_disabled():
+    from litellm.utils import validate_and_fix_openai_tools
+
+    tools_in = [
+        {
+            "type": "function",
+            "function": {
+                "name": "a.b",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    out = validate_and_fix_openai_tools(
+        tools=tools_in, sanitize_openai_function_tool_names=False
+    )
+    assert out is not None
+    assert out[0]["function"]["name"] == "a.b"
+
+
+def test_validate_and_fix_openai_tools_sanitizes_when_enabled():
+    from litellm.utils import validate_and_fix_openai_tools
+
+    tools_in = [
+        {
+            "type": "function",
+            "function": {
+                "name": "invalid.name",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    original_name = tools_in[0]["function"]["name"]
+    out = validate_and_fix_openai_tools(
+        tools=tools_in, sanitize_openai_function_tool_names=True
+    )
+    assert out is not None
+    assert out[0]["function"]["name"] == "invalid_name"
+    assert original_name == "invalid.name"
+
+
+def test_openai_tool_name_mapping_per_request_context():
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
+        begin_openai_tool_name_mapping_scope,
+        restore_openai_tool_name_for_user,
+    )
+    from litellm.utils import validate_and_fix_openai_tools
+
+    begin_openai_tool_name_mapping_scope()
+    validate_and_fix_openai_tools(
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "invalid.name.at.index.71",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        sanitize_openai_function_tool_names=True,
+    )
+    assert (
+        restore_openai_tool_name_for_user("invalid_name_at_index_71")
+        == "invalid.name.at.index.71"
+    )
+    begin_openai_tool_name_mapping_scope()
+    assert (
+        restore_openai_tool_name_for_user("invalid_name_at_index_71")
+        == "invalid_name_at_index_71"
+    )
+
+
+def test_convert_to_model_response_restores_openai_tool_call_names_when_mapped():
+    from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+        convert_to_model_response_object,
+    )
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
+        begin_openai_tool_name_mapping_scope,
+    )
+    from litellm.types.utils import ModelResponse
+    from litellm.utils import validate_and_fix_openai_tools
+
+    begin_openai_tool_name_mapping_scope()
+    validate_and_fix_openai_tools(
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "plugin.subtool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        sanitize_openai_function_tool_names=True,
+    )
+    response_object = {
+        "id": "test",
+        "object": "chat.completion",
+        "created": 0,
+        "model": "gpt-4o-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "plugin_subtool",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+    out = convert_to_model_response_object(
+        response_object=response_object,
+        model_response_object=ModelResponse(),
+        response_type="completion",
+    )
+    assert out.choices[0].message.tool_calls is not None
+    assert out.choices[0].message.tool_calls[0].function.name == "plugin.subtool"
