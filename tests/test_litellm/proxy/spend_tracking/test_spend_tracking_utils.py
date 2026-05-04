@@ -32,6 +32,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _is_master_key,
     _sanitize_request_body_for_spend_logs_payload,
     _should_store_prompts_and_responses_in_spend_logs,
+    _transform_anthropic_request_to_openai_format,
     get_logging_payload,
 )
 from litellm.types.utils import (
@@ -1523,3 +1524,44 @@ class TestIsMasterKey:
         master = "sk-master-key-123"
         hashed = hash_token(master)
         assert _is_master_key(api_key=hashed, _master_key=master) is False
+
+
+def test_transform_anthropic_request_to_openai_format():
+    """Test Anthropic to OpenAI format transformation for system messages and tools."""
+    # Test with both system and tools
+    request_body = {
+        "model": "claude-3-opus-20240229",
+        "system": "You are a helpful assistant.",
+        "messages": [{"role": "user", "content": "What's the weather?"}],
+        "tools": [
+            {
+                "name": "get_weather",
+                "description": "Get weather information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            }
+        ],
+    }
+
+    result = _transform_anthropic_request_to_openai_format(request_body)
+
+    # System field should be removed and converted to system message
+    assert "system" not in result
+    assert len(result["messages"]) == 2
+    assert result["messages"][0] == {
+        "role": "system",
+        "content": "You are a helpful assistant.",
+    }
+    assert result["messages"][1] == {"role": "user", "content": "What's the weather?"}
+
+    # Tools should be converted to OpenAI format
+    assert len(result["tools"]) == 1
+    assert result["tools"][0]["type"] == "function"
+    assert result["tools"][0]["function"]["name"] == "get_weather"
+    assert result["tools"][0]["function"]["description"] == "Get weather information"
+    assert result["tools"][0]["function"]["parameters"] == {
+        "type": "object",
+        "properties": {"location": {"type": "string"}},
+    }
