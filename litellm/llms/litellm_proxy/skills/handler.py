@@ -133,6 +133,17 @@ class LiteLLMSkillsHandler:
 
         skill_id = f"litellm_skill_{uuid.uuid4()}"
         owner = get_primary_resource_owner_scope(user_api_key_dict) or user_id
+        if owner is None:
+            # Caller has no identity scope (no user_id / team_id / org_id /
+            # api_key / token). Stamping a placeholder would let any two
+            # identity-less callers see each other's skills via the shared
+            # owner — the cross-tenant primitive we avoid.
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=403,
+                detail="Unable to record skill ownership: caller has no identity scope.",
+            )
 
         skill_data: Dict[str, Any] = {
             "skill_id": skill_id,

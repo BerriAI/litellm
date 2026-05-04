@@ -138,7 +138,12 @@ async def test_should_record_token_owner_for_keys_without_user_team_or_org(monke
 
 
 @pytest.mark.asyncio
-async def test_should_record_unscoped_owner_for_identityless_proxy_auth(monkeypatch):
+async def test_should_reject_record_for_identityless_proxy_auth(monkeypatch):
+    """Identity-less callers (no user_id / team_id / org_id / api_key /
+    token) cannot record ownership — stamping a shared sentinel would let
+    any two such callers see each other's containers."""
+    from fastapi import HTTPException
+
     monkeypatch.setattr(
         ownership,
         "_get_prisma_client",
@@ -146,23 +151,15 @@ async def test_should_record_unscoped_owner_for_identityless_proxy_auth(monkeypa
     )
     auth = UserAPIKeyAuth()
 
-    await ownership.record_container_owner(
-        response=_container("cntr_provider"),
-        user_api_key_dict=auth,
-        custom_llm_provider="openai",
-    )
-
-    assert (
-        ownership._IN_MEMORY_CONTAINER_OWNERS["container:openai:cntr_provider"]
-        == "__litellm_unscoped_proxy__"
-    )
-    original_id, provider = await ownership.assert_user_can_access_container(
-        container_id="cntr_provider",
-        user_api_key_dict=auth,
-        custom_llm_provider="openai",
-    )
-    assert original_id == "cntr_provider"
-    assert provider == "openai"
+    with pytest.raises(HTTPException) as exc:
+        await ownership.record_container_owner(
+            response=_container("cntr_provider"),
+            user_api_key_dict=auth,
+            custom_llm_provider="openai",
+        )
+    assert exc.value.status_code == 403
+    assert "identity scope" in str(exc.value.detail)
+    assert ownership._IN_MEMORY_CONTAINER_OWNERS == {}
 
 
 @pytest.mark.asyncio

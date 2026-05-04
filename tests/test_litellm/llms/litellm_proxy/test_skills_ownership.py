@@ -150,9 +150,11 @@ def test_should_build_resource_owner_scopes_for_auth_context():
     assert resource_ownership.get_resource_owner_scopes(
         UserAPIKeyAuth(token="token-hash")
     ) == ["key:token-hash"]
-    assert resource_ownership.get_resource_owner_scopes(UserAPIKeyAuth()) == [
-        resource_ownership.UNSCOPED_RESOURCE_OWNER_SCOPE
-    ]
+    # Identity-less callers get an empty scope set — sharing a sentinel
+    # would collapse every identity-less caller into the same logical
+    # owner, which is a cross-tenant data-access primitive.
+    assert resource_ownership.get_resource_owner_scopes(UserAPIKeyAuth()) == []
+    assert resource_ownership.get_primary_resource_owner_scope(UserAPIKeyAuth()) is None
 
 
 def test_should_allow_admin_and_anonymous_resource_owner_paths():
@@ -259,9 +261,13 @@ async def test_should_store_token_owner_for_keys_without_user_team_or_org(monkey
 
 
 @pytest.mark.asyncio
-async def test_should_store_unscoped_owner_for_identityless_proxy_auth(monkeypatch):
+async def test_should_reject_skill_create_for_identityless_proxy_auth(monkeypatch):
+    """Identity-less callers cannot create skills — stamping a shared
+    sentinel as ``created_by`` would let any two such callers see each
+    other's skills via the resulting shared owner scope."""
+    from fastapi import HTTPException
+
     table = AsyncMock()
-    table.create.side_effect = lambda data: _skill(data["skill_id"], data["created_by"])
     prisma_client = type(
         "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
     )()
@@ -273,16 +279,14 @@ async def test_should_store_unscoped_owner_for_identityless_proxy_auth(monkeypat
 
     auth = UserAPIKeyAuth()
 
-    skill = await LiteLLMSkillsHandler.create_skill(
-        data=NewSkillRequest(display_title="skill"),
-        user_api_key_dict=auth,
-    )
-
-    assert skill.created_by == "__litellm_unscoped_proxy__"
-    assert (
-        table.create.await_args.kwargs["data"]["updated_by"]
-        == "__litellm_unscoped_proxy__"
-    )
+    with pytest.raises(HTTPException) as exc:
+        await LiteLLMSkillsHandler.create_skill(
+            data=NewSkillRequest(display_title="skill"),
+            user_api_key_dict=auth,
+        )
+    assert exc.value.status_code == 403
+    assert "identity scope" in str(exc.value.detail)
+    table.create.assert_not_awaited()
 
 
 @pytest.mark.asyncio

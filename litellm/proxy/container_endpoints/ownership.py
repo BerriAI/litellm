@@ -147,7 +147,15 @@ async def record_container_owner(
         )
         return response
     if owner is None:
-        raise HTTPException(status_code=500, detail="Unable to track container")
+        # Caller has no identity (no user_id / team_id / org_id / api_key /
+        # token) we can stamp on the row. Recording with a placeholder
+        # would collapse every such caller into a single shared owner —
+        # the cross-tenant data-access primitive we explicitly avoid.
+        # Reject with 403 rather than fall back to a sentinel.
+        raise HTTPException(
+            status_code=403,
+            detail="Unable to record container ownership: caller has no identity scope.",
+        )
 
     original_container_id, resolved_provider = decode_container_id_for_ownership(
         container_id,
