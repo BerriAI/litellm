@@ -1,15 +1,30 @@
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional
+import copy
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Literal, Optional
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
 )
+
+_CALLBACK_VAR_MASKER = SensitiveDataMasker()
+# Compound names that are credential-bearing but don't contain any of the
+# default sensitive segments (so SensitiveDataMasker won't flag them).
+_EXTRA_SENSITIVE_CALLBACK_KEYS = {"gcs_path_service_account"}
+# Sentinel prefix on encrypted callback_var values. Lets us detect
+# already-encrypted input cheaply (no decrypt-attempt round trip) and
+# avoid double-encrypting if `LITELLM_SALT_KEY` is rotated between writes.
+_CALLBACK_VAR_ENCRYPTED_PREFIX = "litellm_enc::"
 
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
@@ -550,3 +565,85 @@ def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
+
+
+def encrypt_callback_vars(metadata: Any) -> Any:
+    """Return a deep copy of metadata with callback_vars values encrypted at rest.
+
+    Idempotent: a value that already decrypts cleanly is left unchanged so
+    round-trips through edit forms don't double-encrypt.
+    """
+    return _transform_callback_vars(metadata, _encrypt_if_plaintext)
+
+
+def decrypt_callback_vars(metadata: Any) -> Any:
+    """Return a deep copy of metadata with callback_vars values decrypted.
+
+    Legacy plaintext rows pass through unchanged (decrypt failure → original).
+    """
+    return _transform_callback_vars(metadata, _decrypt_or_passthrough)
+
+
+def _transform_callback_vars(
+    metadata: Any, transform: Callable[[str, Any], Any]
+) -> Any:
+    if not isinstance(metadata, dict):
+        return metadata
+    out = copy.deepcopy(metadata)
+    logging_entries = out.get("logging")
+    if isinstance(logging_entries, list):
+        for entry in logging_entries:
+            if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
+                entry["callback_vars"] = {
+                    k: transform(k, v) for k, v in entry["callback_vars"].items()
+                }
+    callback_settings = out.get("callback_settings")
+    if isinstance(callback_settings, dict) and isinstance(
+        callback_settings.get("callback_vars"), dict
+    ):
+        callback_settings["callback_vars"] = {
+            k: transform(k, v) for k, v in callback_settings["callback_vars"].items()
+        }
+    return out
+
+
+def _is_sensitive_callback_var(key: str) -> bool:
+    """Match codebase precedent: only credential-bearing fields get encrypted;
+    routing/identifier fields (host, base_url, project, region) stay plain."""
+    if key in _EXTRA_SENSITIVE_CALLBACK_KEYS:
+        return True
+    return _CALLBACK_VAR_MASKER.is_sensitive_key(key)
+
+
+def _encrypt_if_plaintext(key: str, value: Any) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+    if not _is_sensitive_callback_var(key):
+        return value
+    if value.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
+        # Already encrypted — round-tripping ciphertext (e.g. UI Edit Settings
+        # save without changing the field) must not double-encrypt. Cheap
+        # prefix check is robust under salt-key rotation; a decrypt-based
+        # idempotency check would mis-classify K1-encrypted blobs as
+        # plaintext under K2 and wrap them a second time.
+        return value
+    try:
+        return _CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(value)
+    except Exception:
+        # No salt key / master key configured — leave the value as-is rather
+        # than crash the write. Dev environments without LITELLM_SALT_KEY hit
+        # this path; production always has a master key so encryption proceeds.
+        return value
+
+
+def _decrypt_or_passthrough(key: str, value: Any) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+    if not value.startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
+        # Legacy plaintext rows or non-credential fields — return as-is.
+        return value
+    inner = value[len(_CALLBACK_VAR_ENCRYPTED_PREFIX) :]
+    decrypted = decrypt_value_helper(
+        value=inner, key=key, exception_type="debug", return_original_value=False
+    )
+    return decrypted if decrypted is not None else value
