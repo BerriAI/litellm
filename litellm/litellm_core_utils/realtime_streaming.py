@@ -259,6 +259,26 @@ class RealTimeStreaming:
         else:
             await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
 
+    def _make_disable_auto_response_message(self) -> str:
+        """Return a GA-shaped session.update that disables VAD auto-response.
+
+        The guardrail injection sites historically sent a beta-style payload
+        with a flat ``turn_detection`` key.  When the upstream operates in GA
+        mode (no ``OpenAI-Beta: realtime=v1`` header), the backend requires
+        the nested shape ``session.audio.input.turn_detection`` and a required
+        ``session.type`` field.  This helper always produces the correct shape
+        so both injection sites are GA-safe regardless of client protocol.
+        """
+        session: Dict[str, Any] = {
+            "type": "realtime",
+            "audio": {
+                "input": {
+                    "turn_detection": {"create_response": False},
+                }
+            },
+        }
+        return json.dumps({"type": "session.update", "session": session})
+
     def _has_realtime_guardrails(self) -> bool:
         """Return True if any callback is registered for realtime guardrail event types."""
         from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -466,14 +486,7 @@ class RealTimeStreaming:
             ):
                 self.store_message(event_str)
                 await self.websocket.send_text(event_str)
-                await self._send_to_backend(
-                    json.dumps(
-                        {
-                            "type": "session.update",
-                            "session": {"turn_detection": {"create_response": False}},
-                        }
-                    )
-                )
+                await self._send_to_backend(self._make_disable_auto_response_message())
                 continue
             ## GUARDRAIL: run on transcription events in provider_config path too
             if (
@@ -515,14 +528,7 @@ class RealTimeStreaming:
             ):
                 self.store_message(raw_response)
                 await self.websocket.send_text(raw_response)
-                await self._send_to_backend(
-                    json.dumps(
-                        {
-                            "type": "session.update",
-                            "session": {"turn_detection": {"create_response": False}},
-                        }
-                    )
-                )
+                await self._send_to_backend(self._make_disable_auto_response_message())
                 return True
 
             if (

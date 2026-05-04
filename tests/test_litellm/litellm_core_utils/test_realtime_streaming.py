@@ -92,6 +92,35 @@ def test_remap_beta_session_to_ga_normalizes_modalities_and_audio():
     assert out["audio"]["output"]["voice"] == "alloy"
 
 
+def test_make_disable_auto_response_message_produces_ga_shape():
+    """_make_disable_auto_response_message must produce a GA-shaped session.update.
+
+    The GA Realtime API requires:
+      - session.type = "realtime"
+      - turn_detection nested at session.audio.input.turn_detection
+    The old beta-style flat ``session.turn_detection`` is rejected by GA upstreams.
+    """
+    websocket = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(websocket, backend_ws, logging_obj)
+
+    raw = streaming._make_disable_auto_response_message()
+    msg = json.loads(raw)
+
+    assert msg["type"] == "session.update"
+    session = msg["session"]
+    assert (
+        session.get("type") == "realtime"
+    ), "GA session.update must include session.type='realtime'"
+    # turn_detection must NOT be at the flat beta location
+    assert (
+        "turn_detection" not in session
+    ), "turn_detection must not be at the top-level session (beta shape); use audio.input"
+    # turn_detection must be nested under audio.input
+    assert session["audio"]["input"]["turn_detection"]["create_response"] is False
+
+
 def test_translate_event_to_beta_renames_delta_types():
     ev = RealTimeStreaming._translate_event_to_beta(
         {"type": "response.output_audio.delta", "delta": "abc", "event_id": "e1"}
@@ -797,7 +826,14 @@ async def test_realtime_session_created_injects_session_update_for_audio_guardra
     assert (
         len(session_updates) == 1
     ), f"Expected one session.update injected to backend, got: {sent_to_backend}"
-    assert session_updates[0]["session"]["turn_detection"]["create_response"] is False
+    # GA shape: turn_detection must be nested under audio.input, not at top-level session
+    injected_session = session_updates[0]["session"]
+    assert (
+        injected_session["type"] == "realtime"
+    ), "GA session.update must include session.type='realtime'"
+    assert (
+        injected_session["audio"]["input"]["turn_detection"]["create_response"] is False
+    ), "GA session.update must nest turn_detection under audio.input"
 
     litellm.callbacks = []  # cleanup
 
@@ -854,7 +890,14 @@ async def test_realtime_session_created_injects_session_update_for_pre_call_guar
     assert (
         len(session_updates) == 1
     ), f"pre_call guardrail should inject session.update to gate audio responses, got: {sent_to_backend}"
-    assert session_updates[0]["session"]["turn_detection"]["create_response"] is False
+    # GA shape: turn_detection must be nested under audio.input, not at top-level session
+    injected_session = session_updates[0]["session"]
+    assert (
+        injected_session["type"] == "realtime"
+    ), "GA session.update must include session.type='realtime'"
+    assert (
+        injected_session["audio"]["input"]["turn_detection"]["create_response"] is False
+    ), "GA session.update must nest turn_detection under audio.input"
 
     litellm.callbacks = []  # cleanup
 
