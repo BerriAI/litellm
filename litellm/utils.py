@@ -2738,6 +2738,20 @@ def supports_reasoning(model: str, custom_llm_provider: Optional[str] = None) ->
     )
 
 
+def supports_thinking_budget_zero(
+    model: str, custom_llm_provider: Optional[str] = None
+) -> bool:
+    """
+    Check if the model accepts thinkingBudget=0 to disable thinking.
+    Flash-family Gemini 2.x models support this; Pro models reject it with 400.
+    """
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_thinking_budget_zero",
+    )
+
+
 def supports_native_structured_output(
     model: str, custom_llm_provider: Optional[str] = None
 ) -> bool:
@@ -5904,6 +5918,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 supports_max_reasoning_effort=_model_info.get(
                     "supports_max_reasoning_effort", None
+                ),
+                supports_thinking_budget_zero=_model_info.get(
+                    "supports_thinking_budget_zero", None
                 ),
                 supports_computer_use=_model_info.get("supports_computer_use", None),
                 search_context_cost_per_query=_model_info.get(
