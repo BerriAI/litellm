@@ -588,24 +588,21 @@ async def update_project(  # noqa: PLR0915
                 param="project_id",
             )
 
-        # Validate team exists and get team object for limit + permission checks
-        team_id_to_check = data.team_id or existing_project.team_id
-        team_obj_for_checks = None
-        if team_id_to_check is not None:
-            team_obj_for_checks = await _validate_team_exists(
-                team_id=team_id_to_check, prisma_client=prisma_client
+        # Permission to *edit* the project must be evaluated against the
+        # project's CURRENT team. Sourcing the team from `data.team_id`
+        # would let an admin of any team pass the check by supplying their
+        # own team_id, hijacking the project (VERIA-55).
+        target_team_id = data.team_id or existing_project.team_id
+        target_team_obj = None
+        if target_team_id is not None:
+            target_team_obj = await _validate_team_exists(
+                team_id=target_team_id, prisma_client=prisma_client
             )
 
-        # Check if user has permission to update this project
         has_permission = await _check_user_permission_for_project(
             user_api_key_dict=user_api_key_dict,
             team_id=existing_project.team_id,
             prisma_client=prisma_client,
-            team_object=(
-                LiteLLM_TeamTable(**team_obj_for_checks.model_dump())
-                if team_obj_for_checks
-                else None
-            ),
         )
 
         if not has_permission:
@@ -614,10 +611,32 @@ async def update_project(  # noqa: PLR0915
                 detail={"error": "Only admins or team admins can update projects"},
             )
 
+        # Reassigning to a different team also requires admin rights on the
+        # destination team — otherwise a team admin could shed projects into
+        # an unsuspecting team's namespace.
+        if data.team_id is not None and data.team_id != existing_project.team_id:
+            can_assign_to_target = await _check_user_permission_for_project(
+                user_api_key_dict=user_api_key_dict,
+                team_id=data.team_id,
+                prisma_client=prisma_client,
+                team_object=(
+                    LiteLLM_TeamTable(**target_team_obj.model_dump())
+                    if target_team_obj
+                    else None
+                ),
+            )
+            if not can_assign_to_target:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Cannot reassign project to a team you are not an admin of"
+                    },
+                )
+
         # Validate project limits against team limits
-        if team_obj_for_checks is not None:
+        if target_team_obj is not None:
             _check_team_project_limits(
-                team_object=LiteLLM_TeamTable(**team_obj_for_checks.model_dump()),
+                team_object=LiteLLM_TeamTable(**target_team_obj.model_dump()),
                 data=data,
             )
 
@@ -857,10 +876,16 @@ async def project_info(
                 where={"team_id": project.team_id}
             )
             if team:
-                is_team_member = (
-                    user_api_key_dict.user_id in team.admins
-                    or user_api_key_dict.user_id in team.members
-                )
+                caller_user_id = user_api_key_dict.user_id
+                for m in team.members_with_roles or []:
+                    m_user_id = (
+                        m.get("user_id")
+                        if isinstance(m, dict)
+                        else getattr(m, "user_id", None)
+                    )
+                    if m_user_id == caller_user_id:
+                        is_team_member = True
+                        break
 
         if not (is_admin or is_team_member):
             raise HTTPException(
@@ -911,20 +936,20 @@ async def list_projects(
                 include={"litellm_budget_table": True, "object_permission": True}
             )
         else:
-            # Get projects for teams the user belongs to
-            user_teams = await prisma_client.db.litellm_teamtable.find_many(
-                where={
-                    "OR": [
-                        {"members": {"has": user_api_key_dict.user_id}},
-                        {"admins": {"has": user_api_key_dict.user_id}},
-                    ]
-                }
+            # Look up the user's team memberships via the reverse-index on
+            # LiteLLM_UserTable.teams (maintained by team_member_add alongside
+            # members_with_roles). This avoids a full scan of all team rows.
+            user_record = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_api_key_dict.user_id},
+            )
+            user_team_ids = (
+                user_record.teams
+                if user_record is not None and user_record.teams
+                else []
             )
 
-            team_ids = [team.team_id for team in user_teams]
-
             projects = await prisma_client.db.litellm_projecttable.find_many(
-                where={"team_id": {"in": team_ids}},
+                where={"team_id": {"in": user_team_ids}},
                 include={"litellm_budget_table": True, "object_permission": True},
             )
 

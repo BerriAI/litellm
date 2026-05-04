@@ -419,9 +419,6 @@ CACHED_STREAMING_CHUNK_DELAY = float(os.getenv("CACHED_STREAMING_CHUNK_DELAY", 0
 AUDIO_SPEECH_CHUNK_SIZE = int(
     os.getenv("AUDIO_SPEECH_CHUNK_SIZE", 8192)
 )  # chunk_size for audio speech streaming. Balance between latency and memory usage
-MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
-    os.getenv("MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB", 512)
-)
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
 # Sentinel used when `REQUEST_TIMEOUT` is unset: `litellm.request_timeout` keeps this
@@ -1425,6 +1422,7 @@ LITELLM_PROXY_ADMIN_NAME = "default_user_id"
 LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
+CLI_SSO_SESSION_TTL_SECONDS = 600
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
 # Support both CLI_JWT_EXPIRATION_HOURS and LITELLM_CLI_JWT_EXPIRATION_HOURS for backwards compatibility
 CLI_JWT_EXPIRATION_HOURS = int(
