@@ -16,7 +16,10 @@ import litellm
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
-from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.chat.transformation import (
+    DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
+    AnthropicConfig,
+)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -588,9 +591,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             and not AnthropicConfig._model_supports_effort_param(model)
         ):
             verbose_logger.warning(
-                "Dropping unsupported `output_config` for model=%s "
-                "(drop_params=True). Effort is only supported on Opus 4.5+, "
-                "Sonnet 4.6+, and Mythos Preview.",
+                DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                 model,
             )
             anthropic_messages_request.pop("output_config", None)
