@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
 )
+from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
     REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
@@ -90,13 +91,6 @@ BEDROCK_COMPUTER_USE_TOOLS = [
     "text_editor_",
 ]
 
-# Beta header patterns that are not supported by Bedrock Converse API
-# These will be filtered out to prevent errors
-UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
-    "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
-    "prompt-caching",  # Prompt caching not supported in Converse API
-    "compact-2026-01-12",  # The compact beta feature is not currently supported on the Converse and ConverseStream APIs
-]
 
 
 class AmazonConverseConfig(BaseConfig):
@@ -1345,6 +1339,10 @@ class AmazonConverseConfig(BaseConfig):
         # These are LiteLLM internal parameters, not API parameters
         additional_request_params = filter_internal_params(additional_request_params)
 
+        # Remove Anthropic-specific body params that Bedrock doesn't support
+        # (these features are enabled via anthropic-beta headers instead)
+        additional_request_params.pop("context_management", None)
+
         # Filter out non-serializable objects (exceptions, callables, logging objects, etc.)
         # from additional_request_params to prevent JSON serialization errors
         # This filters: Exception objects, callable objects (functions), Logging objects, etc.
@@ -1517,15 +1515,16 @@ class AmazonConverseConfig(BaseConfig):
                 if ANTHROPIC_EFFORT_BETA_HEADER not in anthropic_beta_list:
                     anthropic_beta_list.append(ANTHROPIC_EFFORT_BETA_HEADER)
 
-            # Bedrock Converse: compact_20260112 edits only (+ beta header).
             AmazonConverseConfig._filter_context_management_for_bedrock_converse(
                 additional_request_params, anthropic_beta_list
             )
-
-        # Set anthropic_beta in additional_request_params if we have any beta features
-        # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
         if anthropic_beta_list and base_model.startswith("anthropic"):
-            additional_request_params["anthropic_beta"] = anthropic_beta_list
+            filtered_betas = filter_and_transform_beta_headers(
+                beta_headers=anthropic_beta_list,
+                provider="bedrock",
+            )
+            if filtered_betas:
+                additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 
