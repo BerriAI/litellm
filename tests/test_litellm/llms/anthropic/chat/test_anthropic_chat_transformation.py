@@ -2098,6 +2098,27 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert result["output_config"]["effort"] == effort_map[effort]
 
 
+def test_reasoning_effort_rejects_unmapped_value_for_claude_4_6_models():
+    """
+    Unmapped reasoning_effort values must raise BadRequestError on Claude 4.6+
+    instead of leaking through to ``output_config.effort`` as garbage strings.
+    """
+    import litellm
+
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "ultra"},
+            optional_params={},
+            model="claude-sonnet-4-6-20260219",
+            drop_params=False,
+        )
+
+    assert "Invalid reasoning_effort" in str(exc_info.value)
+    assert "'ultra'" in str(exc_info.value)
+
+
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
     """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
     config = AnthropicConfig()

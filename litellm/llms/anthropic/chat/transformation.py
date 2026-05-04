@@ -92,6 +92,16 @@ else:
     LoggingClass = Any
 
 
+REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT: Dict[str, str] = {
+    "low": "low",
+    "minimal": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
+}
+
+
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     """
     Reference: https://docs.anthropic.com/claude/reference/messages_post
@@ -1101,15 +1111,19 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     if AnthropicConfig._is_claude_4_6_model(
                         model
                     ) or AnthropicConfig._is_claude_4_7_model(model):
-                        effort_map = {
-                            "low": "low",
-                            "minimal": "low",
-                            "medium": "medium",
-                            "high": "high",
-                            "xhigh": "xhigh",
-                            "max": "max",
-                        }
-                        mapped_effort = effort_map.get(value, value)
+                        mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                            value
+                        )
+                        if mapped_effort is None:
+                            raise litellm.exceptions.BadRequestError(
+                                message=(
+                                    f"Invalid reasoning_effort: {value!r}. "
+                                    f"Must be one of: 'minimal', 'low', "
+                                    f"'medium', 'high', 'xhigh', 'max', 'none'"
+                                ),
+                                model=model,
+                                llm_provider=self.custom_llm_provider or "anthropic",
+                            )
                         optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
