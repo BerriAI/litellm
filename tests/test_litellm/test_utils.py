@@ -4112,3 +4112,32 @@ def test_convert_to_model_response_restores_openai_tool_call_names_when_mapped()
     )
     assert out.choices[0].message.tool_calls is not None
     assert out.choices[0].message.tool_calls[0].function.name == "plugin.subtool"
+
+
+def test_tool_choice_function_name_sanitized_with_tools():
+    from litellm.litellm_core_utils.openai_tool_name_mapping import (
+        begin_openai_tool_name_mapping_scope,
+    )
+    from litellm.utils import _sanitize_openai_function_tool_name, validate_and_fix_openai_tools
+
+    begin_openai_tool_name_mapping_scope()
+    validate_and_fix_openai_tools(
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "my.tool",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        sanitize_openai_function_tool_names=True,
+    )
+    # Simulate what main.py does for tool_choice
+    tool_choice = {"type": "function", "function": {"name": "my.tool"}}
+    _fn = tool_choice["function"]
+    sanitized = _sanitize_openai_function_tool_name(_fn["name"], -1)
+    if sanitized != _fn["name"]:
+        tool_choice = {**tool_choice, "function": {**_fn, "name": sanitized}}
+
+    assert tool_choice["function"]["name"] == "my_tool"

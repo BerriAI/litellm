@@ -1182,6 +1182,21 @@ def completion(  # type: ignore # noqa: PLR0915
         tools=tools,
         sanitize_openai_function_tool_names=_sanitize_openai_fn_tool_names,
     )
+    if (
+        _sanitize_openai_fn_tool_names
+        and isinstance(tool_choice, dict)
+        and tool_choice.get("type") == "function"
+    ):
+        _fn = tool_choice.get("function")
+        if isinstance(_fn, dict) and isinstance(_fn.get("name"), str):
+            from litellm.utils import _sanitize_openai_function_tool_name as _san_name
+
+            _sanitized_tc_name = _san_name(_fn["name"], -1)
+            if _sanitized_tc_name != _fn["name"]:
+                tool_choice = {
+                    **tool_choice,
+                    "function": {**_fn, "name": _sanitized_tc_name},
+                }
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
     # validate optional params
