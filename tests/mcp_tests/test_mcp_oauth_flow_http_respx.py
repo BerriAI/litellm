@@ -64,7 +64,7 @@ def oauth_asgi_app(monkeypatch) -> Iterator[FastAPI]:
         authorization_url="https://mock-idp.example/oauth/authorize",
         token_url="https://mock-idp.example/oauth/token",
         scopes=["openid"],
-        needs_user_oauth_token=False,
+        oauth2_flow="client_credentials",
     )
     global_mcp_server_manager.registry[server.server_id] = server
 
