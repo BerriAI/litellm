@@ -1,0 +1,128 @@
+"""
+Firecrawl Fetch API module.
+
+Calls Firecrawl's /scrape endpoint to fetch and scrape web content.
+Supports both Firecrawl Cloud and self-hosted instances.
+"""
+
+from typing import Any, Dict, Optional
+
+from litellm.llms.base_llm.fetch.transformation import BaseFetchConfig, WebFetchResponse
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
+from litellm.secret_managers.main import get_secret_str
+
+
+class FirecrawlFetchConfig(BaseFetchConfig):
+    """
+    Firecrawl fetch configuration.
+    Uses the /scrape endpoint to fetch and scrape web content.
+    Supports both Firecrawl Cloud and self-hosted instances.
+    """
+
+    FIRECRAWL_API_BASE = "https://api.firecrawl.dev/v1"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._api_base: Optional[str] = None
+
+    @staticmethod
+    def ui_friendly_name() -> str:
+        return "Firecrawl"
+
+    def validate_environment(
+        self,
+        headers: Dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        **kwargs,
+    ) -> Dict:
+        """
+        Validate environment and return headers.
+        """
+        api_key = api_key or get_secret_str("FIRECRAWL_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "FIRECRAWL_API_KEY is not set. Set `FIRECRAWL_API_KEY` environment variable."
+            )
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["Content-Type"] = "application/json"
+
+        # Store api_base for later use in get_complete_url
+        if api_base:
+            self._api_base = api_base
+
+        return headers
+
+    def get_complete_url(self, api_base: Optional[str] = None) -> str:
+        """Get complete URL for Fetch endpoint."""
+        # Priority: explicit argument > stored > env var > default
+        effective_api_base = (
+            api_base
+            or self._api_base
+            or get_secret_str("FIRECRAWL_API_BASE")
+            or self.FIRECRAWL_API_BASE
+        )
+
+        # Append "/scrape" to the api base if it's not already there
+        if not effective_api_base.endswith("/scrape"):
+            effective_api_base = f"{effective_api_base}/scrape"
+
+        return effective_api_base
+
+    async def afetch_url(
+        self,
+        url: str,
+        headers: Dict[str, str],
+        optional_params: Dict[str, Any],
+    ) -> WebFetchResponse:
+        """
+        Fetch content from a URL using Firecrawl's /scrape endpoint.
+
+        Supports self-hosted Firecrawl via api_base configuration.
+        """
+        request_data = {
+            "url": url,
+            "formats": optional_params.get("formats", ["markdown"]),
+            "onlyMainContent": optional_params.get("onlyMainContent", True),
+        }
+
+        # Add optional parameters
+        for key in ["includeTags", "excludeTags", "headers", "waitFor", "timeout"]:
+            if key in optional_params:
+                request_data[key] = optional_params[key]
+
+        # Allow passing api_base via optional_params for dynamic override
+        api_base = optional_params.get("api_base")
+
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Fetch)
+        response = await client.post(
+            self.get_complete_url(api_base=api_base),
+            headers=headers,
+            json=request_data,
+            timeout=30.0,
+        )
+
+        if response.status_code != 200:
+            raise self.get_error_class(
+                error_message=f"Firecrawl fetch failed: {response.status_code} - {response.text}",
+                status_code=response.status_code,
+                headers=dict(response.headers),
+            )
+
+        data = response.json()
+
+        # Firecrawl response format: {"data": {"markdown": "...", "metadata": {...}}}
+        response_data = data.get("data", {})
+        content = response_data.get("markdown") or response_data.get("content", "")
+        metadata = response_data.get("metadata", {})
+        title = metadata.get("title") if isinstance(metadata, dict) else None
+
+        return WebFetchResponse(
+            url=url,
+            title=title,
+            content=content,
+            metadata=metadata if isinstance(metadata, dict) else None,
+        )

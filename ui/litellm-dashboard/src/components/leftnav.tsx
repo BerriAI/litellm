@@ -13,6 +13,7 @@ import {
   BookOutlined,
   CreditCardOutlined,
   DatabaseOutlined,
+  DownloadOutlined,
   ExperimentOutlined,
   ExportOutlined,
   FileTextOutlined,
@@ -32,7 +33,13 @@ import {
 import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
-import { all_admin_roles, internalUserRoles, isAdminRole, isUserTeamAdminForAnyTeam, rolesWithWriteAccess } from "../utils/roles";
+import {
+  all_admin_roles,
+  internalUserRoles,
+  isAdminRole,
+  isUserTeamAdminForAnyTeam,
+  rolesWithWriteAccess,
+} from "../utils/roles";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
@@ -169,11 +176,7 @@ const menuGroups: MenuGroup[] = [
       {
         key: "policies",
         page: "policies",
-        label: (
-          <span className="flex items-center gap-4">
-            Policies
-          </span>
-        ),
+        label: <span className="flex items-center gap-4">Policies</span>,
         icon: <AuditOutlined />,
         roles: all_admin_roles,
       },
@@ -188,6 +191,12 @@ const menuGroups: MenuGroup[] = [
             page: "search-tools",
             label: "Search Tools",
             icon: <SearchOutlined />,
+          },
+          {
+            key: "fetch-tools",
+            page: "fetch-tools",
+            label: "Fetch Tools",
+            icon: <DownloadOutlined />,
           },
           {
             key: "vector-stores",
@@ -342,7 +351,7 @@ const menuGroups: MenuGroup[] = [
             page: "usage",
             label: "Old Usage",
             icon: <BarChartOutlined />,
-          }
+          },
         ],
       },
     ],
@@ -381,7 +390,10 @@ const menuGroups: MenuGroup[] = [
             page: "admin-panel",
             label: (
               <span className="flex items-center gap-2">
-                Admin Settings <NewBadge dot><span /></NewBadge>
+                Admin Settings{" "}
+                <NewBadge dot>
+                  <span />
+                </NewBadge>
               </span>
             ),
             icon: <SettingOutlined />,
@@ -407,7 +419,17 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers, enableProjectsUI, disableAgentsForInternalUsers, allowAgentsForTeamAdmins, disableVectorStoresForInternalUsers, allowVectorStoresForTeamAdmins }) => {
+const Sidebar: React.FC<SidebarProps> = ({
+  setPage,
+  defaultSelectedKey,
+  collapsed = false,
+  enabledPagesInternalUsers,
+  enableProjectsUI,
+  disableAgentsForInternalUsers,
+  allowAgentsForTeamAdmins,
+  disableVectorStoresForInternalUsers,
+  allowVectorStoresForTeamAdmins,
+}) => {
   const { userId, accessToken, userRole } = useAuthorized();
   const { data: organizations } = useOrganizations();
   const { data: teams } = useTeams();
@@ -438,11 +460,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
   // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
   // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
-  const renderNavLink = (
-    label: React.ReactNode,
-    page: string,
-    externalUrl?: string,
-  ): React.ReactNode => {
+  const renderNavLink = (label: React.ReactNode, page: string, externalUrl?: string): React.ReactNode => {
     if (externalUrl) {
       return (
         <a
@@ -460,7 +478,11 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
     const migratedRoute = MIGRATED_PAGES[page];
     const href = migratedRoute
       ? migratedHref(migratedRoute)
-      : (() => { const params = new URLSearchParams(window.location.search); params.set("page", page); return `?${params.toString()}`; })();
+      : (() => {
+          const params = new URLSearchParams(window.location.search);
+          params.set("page", page);
+          return `?${params.toString()}`;
+        })();
     return (
       <a
         href={href}
@@ -516,8 +538,20 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
         // Hide agents and vector-stores pages for non-admin users when disabled,
         // unless allow_*_for_team_admins is on and the user is a team admin.
-        if (!isAdmin && item.key === "agents" && disableAgentsForInternalUsers && !(allowAgentsForTeamAdmins && isTeamAdmin)) return false;
-        if (!isAdmin && item.key === "vector-stores" && disableVectorStoresForInternalUsers && !(allowVectorStoresForTeamAdmins && isTeamAdmin)) return false;
+        if (
+          !isAdmin &&
+          item.key === "agents" &&
+          disableAgentsForInternalUsers &&
+          !(allowAgentsForTeamAdmins && isTeamAdmin)
+        )
+          return false;
+        if (
+          !isAdmin &&
+          item.key === "vector-stores" &&
+          disableVectorStoresForInternalUsers &&
+          !(allowVectorStoresForTeamAdmins && isTeamAdmin)
+        )
+          return false;
 
         // Existing role check
         if (item.roles && !item.roles.includes(userRole)) return false;
@@ -526,9 +560,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
           // If item has children, check if any children are visible
           if (item.children && item.children.length > 0) {
-            const hasVisibleChildren = item.children.some((child) =>
-              enabledPagesInternalUsers.includes(child.page)
-            );
+            const hasVisibleChildren = item.children.some((child) => enabledPagesInternalUsers.includes(child.page));
             if (hasVisibleChildren) {
               console.log(`[LeftNav] Parent "${item.page}" (${item.key}): VISIBLE (has visible children)`);
               return true;
@@ -593,12 +625,12 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           })),
           onClick: !item.children
             ? () => {
-              if (item.external_url) {
-                window.open(item.external_url, "_blank");
-              } else {
-                navigateToPage(item.page);
+                if (item.external_url) {
+                  window.open(item.external_url, "_blank");
+                } else {
+                  navigateToPage(item.page);
+                }
               }
-            }
             : undefined,
         })),
       });

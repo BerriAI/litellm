@@ -48,6 +48,7 @@ from tokenizers import Tokenizer
 
 import litellm
 import litellm.litellm_core_utils
+from litellm.llms.base_llm.fetch.transformation import BaseFetchConfig
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
@@ -9186,6 +9187,23 @@ class ProviderConfigManager:
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
             SearchProviders.SEARCHAPI: SearchAPIConfig,
             SearchProviders.SERPER: SerperSearchConfig,
+        }
+        config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
+        if config_class is None:
+            return None
+        return config_class()
+
+    @staticmethod
+    def get_provider_fetch_config(
+        provider: str,
+    ) -> Optional["BaseFetchConfig"]:
+        """
+        Get Fetch configuration for a given provider.
+        """
+        from litellm.llms.firecrawl.fetch.transformation import FirecrawlFetchConfig
+
+        PROVIDER_TO_CONFIG_MAP = {
+            "firecrawl": FirecrawlFetchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

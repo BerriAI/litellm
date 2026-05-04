@@ -1065,6 +1065,16 @@ model LiteLLM_SearchToolsTable {
   updated_at DateTime @updatedAt
 }
 
+// Fetch Tools table for storing fetch tool configurations
+model LiteLLM_FetchToolsTable {
+  fetch_tool_id String @id @default(uuid())
+  fetch_tool_name String @unique
+  litellm_params Json
+  fetch_tool_info Json?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
 // SSO configuration table
 model LiteLLM_SSOConfig {
   id String @id @default("sso_config")

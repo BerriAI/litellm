@@ -7067,6 +7067,160 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
   }
 };
 
+// Fetch Tools API calls
+export const fetchFetchTools = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/fetch_tools/list` : `/fetch_tools/list`;
+    console.log("Fetching fetch tools from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched fetch tools:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch fetch tools:", error);
+    throw error;
+  }
+};
+
+export const createFetchTool = async (accessToken: string, formValues: Record<string, any>) => {
+  try {
+    console.log("Creating fetch tool with values:", formValues);
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/fetch_tools` : `/fetch_tools`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.POST,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fetch_tool: formValues,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Created fetch tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to create fetch tool:", error);
+    throw error;
+  }
+};
+
+export const updateFetchTool = async (accessToken: string, fetchToolId: string, formValues: Record<string, any>) => {
+  try {
+    console.log("Updating fetch tool with ID:", fetchToolId, "values:", formValues);
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/fetch_tools/${fetchToolId}` : `/fetch_tools/${fetchToolId}`;
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.PUT,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fetch_tool: formValues,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Updated fetch tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update fetch tool:", error);
+    throw error;
+  }
+};
+
+export const deleteFetchTool = async (accessToken: string, fetchToolId: string) => {
+  try {
+    const url = (proxyBaseUrl ? `${proxyBaseUrl}` : "") + `/fetch_tools/${fetchToolId}`;
+    console.log("Deleting fetch tool:", fetchToolId);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.DELETE,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Deleted fetch tool:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to delete fetch tool:", error);
+    throw error;
+  }
+};
+
+export const fetchAvailableFetchProviders = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/fetch_tools/ui/available_providers`
+      : `/fetch_tools/ui/available_providers`;
+    console.log("Fetching available fetch providers from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched available fetch providers:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch available fetch providers:", error);
+    throw error;
+  }
+};
+
 export const listMCPTools = async (
   accessToken: string, 
   serverId: string,
