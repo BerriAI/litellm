@@ -107,10 +107,11 @@ class TestXAICostCalculator:
 
     def test_grok_4_cost_calculation(self):
         """Test cost calculation for grok-4 model."""
+        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=10,
             completion_tokens=200,
-            total_tokens=210,
+            total_tokens=360,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -133,10 +134,11 @@ class TestXAICostCalculator:
 
     def test_grok_3_fast_beta_cost_calculation(self):
         """Test cost calculation for grok-3-fast-beta model."""
+        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=20,
             completion_tokens=300,
-            total_tokens=320,
+            total_tokens=520,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -174,10 +176,11 @@ class TestXAICostCalculator:
 
     def test_edge_case_large_reasoning_tokens(self):
         """Test cost calculation when reasoning_tokens is larger than completion_tokens."""
+        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=12,
             completion_tokens=50,  # Less than reasoning_tokens
-            total_tokens=62,
+            total_tokens=162,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -201,10 +204,11 @@ class TestXAICostCalculator:
     def test_tiered_pricing_above_128k_tokens(self):
         """Test tiered pricing for tokens above 128k."""
         # Test with grok-4-fast-reasoning which has tiered pricing
+        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=150000,  # Above 128k threshold
             completion_tokens=100000,  # Above 128k threshold
-            total_tokens=250000,
+            total_tokens=300000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -230,10 +234,11 @@ class TestXAICostCalculator:
     def test_tiered_pricing_below_128k_tokens(self):
         """Test that regular pricing is used for tokens below 128k threshold."""
         # Test with grok-4-fast-reasoning which has tiered pricing
+        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=100000,  # Below 128k threshold
             completion_tokens=50000,
-            total_tokens=150000,
+            total_tokens=160000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -258,10 +263,11 @@ class TestXAICostCalculator:
 
     def test_tiered_pricing_grok_4_latest(self):
         """Test tiered pricing for grok-4-latest model."""
+        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=200000,  # Above 128k threshold
             completion_tokens=100000,
-            total_tokens=300000,
+            total_tokens=350000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -286,10 +292,11 @@ class TestXAICostCalculator:
 
     def test_tiered_pricing_output_tokens_below_128k(self):
         """Test that output tokens get tiered rate when input tokens > 128k, even if output tokens < 128k."""
+        # xAI raw API shape: total_tokens = prompt + visible completion + reasoning
         usage = Usage(
             prompt_tokens=150000,  # Above 128k threshold
             completion_tokens=50000,  # Below 128k threshold
-            total_tokens=200000,
+            total_tokens=210000,
             completion_tokens_details=CompletionTokensDetailsWrapper(
                 accepted_prediction_tokens=0,
                 audio_tokens=0,
@@ -327,6 +334,39 @@ class TestXAICostCalculator:
         # Completion: 50000 tokens * $5e-7 (regular rate) = $0.025
         expected_prompt_cost = 150000 * 3e-7
         expected_completion_cost = 50000 * 5e-7
+
+        assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
+        assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
+
+    def test_already_normalised_usage_does_not_double_count_reasoning(self):
+        """Cost calc receives Usage post-transformation (OpenAI invariant).
+
+        After XAIChatConfig.transform_response folds reasoning_tokens into
+        completion_tokens, the Usage block satisfies
+        ``total_tokens == prompt_tokens + completion_tokens``. Cost calc must
+        detect this and skip the reasoning_tokens add-on, otherwise it
+        double-bills the reasoning tokens.
+        """
+        # OpenAI-normalised shape: completion_tokens already includes the
+        # 100 reasoning tokens (so 100 visible + 100 reasoning -> 200).
+        usage = Usage(
+            prompt_tokens=12,
+            completion_tokens=200,
+            total_tokens=212,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                accepted_prediction_tokens=0,
+                audio_tokens=0,
+                reasoning_tokens=100,
+                rejected_prediction_tokens=0,
+                text_tokens=None,
+            ),
+        )
+
+        prompt_cost, completion_cost = cost_per_token(model="grok-3-mini", usage=usage)
+
+        # Bill exactly what completion_tokens reports — no double-add.
+        expected_prompt_cost = 12 * 3e-7
+        expected_completion_cost = 200 * 5e-7
 
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)

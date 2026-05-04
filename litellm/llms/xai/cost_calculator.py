@@ -26,15 +26,27 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     # XAI-specific completion cost calculation
-    # For XAI models, completion is billed as (visible completion tokens + reasoning tokens)
+    # For XAI models, completion is billed as (visible completion tokens + reasoning tokens).
+    # The transformation layer normalises Usage to the OpenAI invariant
+    # (completion_tokens includes reasoning_tokens), so detect that and avoid
+    # double-counting. Fall back to the raw xAI shape (visible-only completion +
+    # reasoning kept in completion_tokens_details) for callers that bypass the
+    # transformation, e.g. proxy logs replayed straight into cost calc.
+    prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
     completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
     reasoning_tokens = 0
     if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
         reasoning_tokens = int(
             getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0
         )
 
-    total_completion_tokens = completion_tokens + reasoning_tokens
+    already_normalised = total_tokens == prompt_tokens + completion_tokens
+    total_completion_tokens = (
+        completion_tokens
+        if already_normalised
+        else completion_tokens + reasoning_tokens
+    )
 
     modified_usage = Usage(
         prompt_tokens=usage.prompt_tokens,

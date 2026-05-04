@@ -223,7 +223,56 @@ class XAIChatConfig(OpenAIGPTConfig):
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
             verbose_logger.debug(f"Error extracting X.AI web search usage: {e}")
+
+        # X.AI excludes reasoning_tokens from completion_tokens, breaking the
+        # OpenAI invariant total_tokens == prompt_tokens + completion_tokens.
+        # OpenAI o1/o3 fold reasoning into completion_tokens; align X.AI to
+        # match so downstream consumers (including litellm's own usage tests)
+        # see a self-consistent Usage object. Cost calc already accounts for
+        # reasoning tokens separately in xai.cost_calculator.
+        self._fold_reasoning_tokens_into_completion(response)
         return response
+
+    @staticmethod
+    def _fold_reasoning_tokens_into_completion(model_response: ModelResponse) -> None:
+        """Reconcile xAI Usage to the OpenAI invariant.
+
+        xAI returns ``completion_tokens`` covering only visible output and
+        accounts ``reasoning_tokens`` separately, while still rolling them
+        into ``total_tokens``. OpenAI's published contract (o1/o3) includes
+        reasoning in ``completion_tokens``. Tests that assert
+        ``total_tokens == prompt_tokens + completion_tokens`` (e.g.
+        ``_usage_format_tests``) fail on the raw xAI shape.
+
+        This helper is idempotent: if ``completion_tokens`` already covers
+        the gap, no change is made.
+        """
+        usage = getattr(model_response, "usage", None)
+        if usage is None:
+            return
+
+        details = getattr(usage, "completion_tokens_details", None)
+        reasoning_tokens = (
+            int(getattr(details, "reasoning_tokens", 0) or 0) if details else 0
+        )
+        if reasoning_tokens <= 0:
+            return
+
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+
+        # Already consistent — nothing to do.
+        if total_tokens == prompt_tokens + completion_tokens:
+            return
+
+        # Only fold when xAI's accounting (total = prompt + completion +
+        # reasoning) explains the gap. This guards against double-counting
+        # if xAI ever changes their semantics.
+        if total_tokens != prompt_tokens + completion_tokens + reasoning_tokens:
+            return
+
+        usage.completion_tokens = completion_tokens + reasoning_tokens
 
     def _enhance_usage_with_xai_web_search_fields(
         self, model_response: ModelResponse, raw_response_json: dict
