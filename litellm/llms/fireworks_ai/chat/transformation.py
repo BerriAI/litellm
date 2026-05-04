@@ -112,11 +112,11 @@ class FireworksAIConfig(OpenAIGPTConfig):
         # Only add tools for models that support function calling
         if supports_function_calling(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tools")
+            supported_params.append("parallel_tool_calls")
 
         # Only add tool_choice for models that explicitly support it
         if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
-            supported_params.append("parallel_tool_calls")
 
         # Only add reasoning_effort for models that support it
         if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):

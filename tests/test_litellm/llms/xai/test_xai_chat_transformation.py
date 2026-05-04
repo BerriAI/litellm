@@ -6,6 +6,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.llms.xai.chat.transformation import XAIChatConfig
+from litellm.types.utils import Usage
 
 
 class TestXAIParallelToolCalls:
@@ -14,9 +15,7 @@ class TestXAIParallelToolCalls:
     def test_get_supported_openai_params_includes_parallel_tool_calls(self):
         """Test that parallel_tool_calls is in supported parameters."""
         config = XAIChatConfig()
-        supported_params = config.get_supported_openai_params(
-            "xai/grok-4.20"
-        )
+        supported_params = config.get_supported_openai_params("xai/grok-4.20")
         assert "parallel_tool_calls" in supported_params
 
     def test_transform_request_preserves_parallel_tool_calls(self):
@@ -37,3 +36,19 @@ class TestXAIParallelToolCalls:
         assert result.get("parallel_tool_calls") is True
         assert len(result["messages"]) == 1
         assert result["messages"][0]["role"] == "user"
+
+
+class TestXAIUsageNormalization:
+    def test_preserves_reasoning_tokens_in_total_usage(self):
+        usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=200)
+
+        XAIChatConfig._normalize_openai_compatible_usage_totals(usage)
+
+        assert usage.total_tokens == 200
+
+    def test_preserves_reasoning_tokens_in_streaming_usage(self):
+        usage = {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 200}
+
+        XAIChatConfig._normalize_openai_compatible_usage_totals(usage)
+
+        assert usage["total_tokens"] == 200

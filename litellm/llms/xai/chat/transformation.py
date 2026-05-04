@@ -262,13 +262,13 @@ class XAIChatConfig(OpenAIGPTConfig):
             prompt_tokens = int(usage.get("prompt_tokens") or 0)
             completion_tokens = int(usage.get("completion_tokens") or 0)
             expected_total = prompt_tokens + completion_tokens
-            if int(usage.get("total_tokens") or 0) != expected_total:
+            if int(usage.get("total_tokens") or 0) < expected_total:
                 usage["total_tokens"] = expected_total
             return
         prompt_tokens = int(usage.prompt_tokens or 0)
         completion_tokens = int(usage.completion_tokens or 0)
         expected_total = prompt_tokens + completion_tokens
-        if int(usage.total_tokens or 0) != expected_total:
+        if int(usage.total_tokens or 0) < expected_total:
             usage.total_tokens = expected_total
 
 
