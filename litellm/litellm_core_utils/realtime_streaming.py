@@ -177,7 +177,7 @@ class RealTimeStreaming:
                 if tools and isinstance(tools, list):
                     self.session_tools = tools
                 # GA: session.type is required; log it for traceability but no action needed
-                _ = session.get("type")  # "realtime" | "transcription"
+                verbose_logger.debug(f"Realtime session.type: {session.get('type')}")
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
