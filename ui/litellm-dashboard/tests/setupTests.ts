@@ -3,6 +3,77 @@ import { cleanup } from "@testing-library/react";
 import React from "react";
 import { afterEach, vi } from "vitest";
 
+const ensureTestLocalStorage = () => {
+  if (typeof window === "undefined" || typeof window.Storage === "undefined") {
+    return;
+  }
+
+  if (typeof window.localStorage?.getItem === "function" && typeof window.localStorage?.clear === "function") {
+    return;
+  }
+
+  const store = new Map<string, string>();
+  const storagePrototype = window.Storage.prototype;
+
+  Object.defineProperties(storagePrototype, {
+    getItem: {
+      configurable: true,
+      writable: true,
+      value(key: string) {
+        const normalizedKey = String(key);
+        return store.has(normalizedKey) ? store.get(normalizedKey)! : null;
+      },
+    },
+    setItem: {
+      configurable: true,
+      writable: true,
+      value(key: string, value: string) {
+        store.set(String(key), String(value));
+      },
+    },
+    removeItem: {
+      configurable: true,
+      writable: true,
+      value(key: string) {
+        store.delete(String(key));
+      },
+    },
+    clear: {
+      configurable: true,
+      writable: true,
+      value() {
+        store.clear();
+      },
+    },
+    key: {
+      configurable: true,
+      writable: true,
+      value(index: number) {
+        return Array.from(store.keys())[index] ?? null;
+      },
+    },
+  });
+
+  const localStorage = Object.create(storagePrototype);
+  Object.defineProperty(localStorage, "length", {
+    configurable: true,
+    get() {
+      return store.size;
+    },
+  });
+
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: localStorage,
+  });
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: localStorage,
+  });
+};
+
+ensureTestLocalStorage();
+
 // Global mock for NotificationManager to prevent React rendering issues in tests
 // This avoids "window is not defined" errors when notifications try to render
 // after test environment is torn down
