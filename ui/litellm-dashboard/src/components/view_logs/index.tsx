@@ -64,8 +64,8 @@ export default function SpendLogsTable({
   const quickSelectRef = useRef<HTMLDivElement>(null);
 
   // New state variables for Start and End Time
-  const [startTime, setStartTime] = useState<string>(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
-  const [endTime, setEndTime] = useState<string>(moment().format("YYYY-MM-DDTHH:mm"));
+  const [startTime, setStartTime] = useState<string>(moment().utc().subtract(24, "hours").format("YYYY-MM-DDTHH:mm") + "Z");
+  const [endTime, setEndTime] = useState<string>(moment().utc().format("YYYY-MM-DDTHH:mm") + "Z");
 
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
@@ -186,9 +186,9 @@ export default function SpendLogsTable({
         };
       }
 
-      const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
+      const formattedStartTime = moment.utc(startTime).format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate
-        ? moment(endTime).utc().format("YYYY-MM-DD HH:mm:ss")
+        ? moment.utc(endTime).format("YYYY-MM-DD HH:mm:ss")
         : moment().utc().format("YYYY-MM-DD HH:mm:ss");
 
       // Get base response from API
@@ -260,8 +260,8 @@ export default function SpendLogsTable({
   const handleFilterReset = useCallback(() => {
     handleFilterResetFromHook();
     // Reset custom time range to default (last 24 hours)
-    setStartTime(moment().subtract(24, "hours").format("YYYY-MM-DDTHH:mm"));
-    setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+    setStartTime(moment().utc().subtract(24, "hours").format("YYYY-MM-DDTHH:mm") + "Z");
+    setEndTime(moment().utc().format("YYYY-MM-DDTHH:mm") + "Z");
     setIsCustomDate(false);
     setSelectedTimeInterval({ value: 24, unit: "hours" });
     setCurrentPage(1);
@@ -563,11 +563,12 @@ export default function SpendLogsTable({
                                         }`}
                                       onClick={() => {
                                         setCurrentPage(1);
-                                        setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
+                                        setEndTime(moment().utc().format("YYYY-MM-DDTHH:mm") + "Z");
                                         setStartTime(
-                                          moment()
+                                        moment()
+                                          .utc()
                                             .subtract(option.value, option.unit as any)
-                                            .format("YYYY-MM-DDTHH:mm"),
+                                            .format("YYYY-MM-DDTHH:mm") + "Z",
                                         );
                                         setSelectedTimeInterval({ value: option.value, unit: option.unit });
                                         setIsCustomDate(false);
