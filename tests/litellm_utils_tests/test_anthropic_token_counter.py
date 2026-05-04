@@ -26,7 +26,7 @@ class TestAnthropicTokenCounter(BaseTokenCounterTest):
         return AnthropicTokenCounter()
 
     def get_test_model(self) -> str:
-        return "claude-sonnet-4-20250514"
+        return "claude-haiku-4-5-20251001"
 
     def get_test_messages(self) -> List[Dict[str, Any]]:
         return [{"role": "user", "content": "Hello, how are you today?"}]

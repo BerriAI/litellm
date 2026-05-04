@@ -432,9 +432,10 @@ class Cache:
             str: The final hashed cache key with the redis namespace.
         """
         dynamic_cache_control: DynamicCacheControl = kwargs.get("cache", {})
+        metadata = kwargs.get("metadata") or {}
         namespace = (
             dynamic_cache_control.get("namespace")
-            or kwargs.get("metadata", {}).get("redis_namespace")
+            or metadata.get("redis_namespace")
             or self.namespace
         )
         if namespace:

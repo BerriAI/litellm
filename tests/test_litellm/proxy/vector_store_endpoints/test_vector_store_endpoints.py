@@ -156,8 +156,11 @@ async def test_update_request_data_with_litellm_managed_vector_store_registry():
             vector_store_id="test_store_id"
         )
 
-    # Test with no vector store registry
-    with patch.object(litellm, "vector_store_registry", None):
+    # Test with no vector store registry or DB fallback
+    with (
+        patch.object(litellm, "vector_store_registry", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
         original_data = {"existing_key": "existing_value"}
         result = await _update_request_data_with_litellm_managed_vector_store_registry(
             data=original_data, vector_store_id=vector_store_id

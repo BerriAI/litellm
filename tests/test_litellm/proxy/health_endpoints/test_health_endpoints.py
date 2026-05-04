@@ -778,3 +778,797 @@ def test_get_callback_identifier_custom_logger_registry_and_fallback():
     result = get_callback_identifier(my_callback_function)
     # Should fall back to callback_name() which returns __name__
     assert result == "my_callback_function"
+
+
+# ---------------------------------------------------------------------------
+# /health response shape: model-access scoping and display-field allowlist
+# ---------------------------------------------------------------------------
+# These tests pin the contract that the /health response (a) only includes
+# deployments the calling key is allowed to see, and (b) does not return
+# provider routing fields like api_base / api_version. They guard against
+# regressions that would widen the response shape.
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_filters_model_list_by_user_access():
+    """
+    health_endpoint() should restrict _llm_model_list to deployments whose
+    model_name appears in user_api_key_dict.models before running the health
+    check. A key scoped to ["model-a"] should only see model-a in the result,
+    not other deployments configured on the proxy.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-b.test",
+                "api_version": "2024-10-21",
+            },
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=["model-a"],
+    )
+
+    captured: dict = {}
+
+    async def fake_perform(**kwargs):
+        captured["model_list"] = kwargs["model_list"]
+        return {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [],
+            "healthy_count": 0,
+            "unhealthy_count": 0,
+        }
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", False),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", {}),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        from fastapi import Response
+
+        await health_endpoint(response=Response(), user_api_key_dict=user_api_key_dict)
+
+    assert (
+        "model_list" in captured
+    ), "health_endpoint did not call _perform_health_check_and_save"
+    returned_names = {m["model_name"] for m in captured["model_list"]}
+    assert returned_names == {
+        "model-a"
+    }, f"health_endpoint did not scope model_list to caller access: {returned_names}"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_filters_background_cache_by_user_access():
+    """
+    When background_health_checks is enabled, health_endpoint() should also
+    scope the cached result to the caller's allowed models rather than
+    returning the cache verbatim.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-b.test",
+            },
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    cached_results = {
+        "healthy_endpoints": [
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-a",
+                "api_base": "https://example-a.test",
+            },
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-b",
+                "api_base": "https://example-b.test",
+            },
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 2,
+        "unhealthy_count": 0,
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        models=["model-a"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ):
+        from fastapi import Response
+
+        # Pass model=None, model_id=None explicitly: direct calls to the
+        # handler skip FastAPI's Query() resolution, so unspecified params
+        # would otherwise carry the Query() sentinel (which is truthy).
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=user_api_key_dict,
+            model=None,
+            model_id=None,
+        )
+
+    # Sanity: the source cache had two entries before scoping; the scoping
+    # step is what reduces it to one. (This guards against the test passing
+    # vacuously when the cache filter drops everything because cached
+    # entries lack the model_id key — both entries carry model_id above.)
+    assert len(cached_results["healthy_endpoints"]) == 2
+    assert all(
+        ep.get("model_id") for ep in cached_results["healthy_endpoints"]
+    ), "test fixture invariant: every cached entry must carry a model_id"
+
+    # The non-admin caller must not see api_base on the returned cache entries.
+    returned = result.get("healthy_endpoints", [])
+    assert (
+        len(returned) == 1
+    ), f"expected exactly one cached entry after scoping, got {len(returned)}"
+    assert returned[0]["model_id"] == "id-a"
+    assert "api_base" not in returned[0]
+    assert result["healthy_count"] == 1
+    assert result["unhealthy_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
+    """
+    A proxy admin should still see ``api_base`` and ``api_version`` in the
+    /health response so they can tell which Vertex region / Azure resource
+    + API version is healthy. A non-admin caller must not — both fields
+    should be stripped, and the response should carry a notice header so
+    non-admin clients can detect the change programmatically.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+    ]
+    cached_results = {
+        "healthy_endpoints": [
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-a",
+                "api_base": "https://us-central1-aiplatform.googleapis.com/v1/projects/p",
+                "api_version": "2024-10-21",
+            },
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+
+    admin_key = UserAPIKeyAuth(
+        api_key="hashed-admin-key",
+        models=["model-a"],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    non_admin_key = UserAPIKeyAuth(
+        api_key="hashed-user-key",
+        models=["model-a"],
+    )
+
+    common_patches = [
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ]
+
+    for p in common_patches:
+        p.start()
+    try:
+        admin_response = Response()
+        non_admin_response = Response()
+        admin_result = await health_endpoint(
+            response=admin_response,
+            user_api_key_dict=admin_key,
+            model=None,
+            model_id=None,
+        )
+        non_admin_result = await health_endpoint(
+            response=non_admin_response,
+            user_api_key_dict=non_admin_key,
+            model=None,
+            model_id=None,
+        )
+    finally:
+        for p in common_patches:
+            p.stop()
+
+    admin_eps = admin_result.get("healthy_endpoints", [])
+    non_admin_eps = non_admin_result.get("healthy_endpoints", [])
+
+    assert len(admin_eps) == 1
+    assert (
+        admin_eps[0]["api_base"]
+        == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
+    ), "admin must see the full api_base so they can identify the region"
+    assert (
+        admin_eps[0]["api_version"] == "2024-10-21"
+    ), "admin must see api_version so they can distinguish provider deployments"
+
+    assert len(non_admin_eps) == 1
+    assert "api_base" not in non_admin_eps[0]
+    assert "api_version" not in non_admin_eps[0]
+
+    # Non-admin response must advertise that api_base/api_version were
+    # withheld so clients that previously parsed them can detect the change.
+    assert (
+        non_admin_response.headers.get("Litellm-Health-Field-Notice")
+        == "api_base and api_version are admin-only on this endpoint"
+    )
+    assert "Litellm-Health-Field-Notice" not in admin_response.headers
+
+    # Stripping must produce a copy — the shared cache must still carry the
+    # routing fields so the next admin caller can read them.
+    cached_first = cached_results["healthy_endpoints"][0]
+    assert (
+        cached_first["api_base"]
+        == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
+    )
+    assert cached_first["api_version"] == "2024-10-21"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_warns_when_scoped_models_lack_model_id():
+    """
+    When a scoped key's accessible models exist on the proxy but none of the
+    matching deployments expose a ``model_info.id``, the cache filter drops
+    everything. The response should include a structured ``warnings`` field
+    so the caller can distinguish "no deployments configured" from
+    "deployments excluded due to missing model_info.id".
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            # Intentionally no model_info.id — this is the misconfiguration
+            # the warnings field is meant to flag.
+            "model_info": {},
+        },
+    ]
+    cached_results = {
+        "healthy_endpoints": [
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-a",
+                "api_base": "https://example-a.test",
+            },
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-user-key",
+        models=["model-a"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ):
+        result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=user_api_key_dict,
+            model=None,
+            model_id=None,
+        )
+
+    assert result["healthy_count"] == 0
+    assert result["unhealthy_count"] == 0
+    assert "warnings" in result, (
+        "empty cache result must surface a warnings field so the caller "
+        "can distinguish 'no deployments' from 'deployments excluded'"
+    )
+    assert any("model_info.id" in w for w in result["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_blocks_cross_scope_model_id_under_background_cache():
+    """
+    A non-admin scoped to model-a must not be able to read model-b's cached
+    health entry by guessing its model_id. Before the fix,
+    _resolve_targeted_model_ids returned {model_id} unconditionally, so the
+    cache filter was driven by an unvalidated ID and the global cache
+    leaked id-b's entry to the caller.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",  # caller has no access
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    cached_results = {
+        "healthy_endpoints": [
+            {
+                "model": "openai/gpt-4o",
+                "model_id": "id-b",
+                "api_base": "https://leaky-internal.test",
+            },
+        ],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-scoped",
+        models=["model-a"],
+    )
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        # llm_router None here means the model_id 404 lookup short-circuits;
+        # we patch _llm_model_list directly instead to drive the cache path.
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ):
+        # Calling with model="model-b" rather than model_id="id-b" because
+        # the model_id branch raises 404 when llm_router is None. The bug
+        # being verified is the same: targeted resolver must drop entries
+        # not in the caller's scoped model_list. With the fix, the result
+        # has no leaked endpoints and the targeted-503 path fires.
+        result = await health_endpoint(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            model="model-b",
+            model_id=None,
+        )
+
+    leaked_ids = {ep.get("model_id") for ep in result.get("healthy_endpoints", [])}
+    leaked_ids |= {ep.get("model_id") for ep in result.get("unhealthy_endpoints", [])}
+    assert (
+        "id-b" not in leaked_ids
+    ), "background cache leaked an out-of-scope deployment to a scoped caller"
+    assert result["healthy_count"] == 0
+    assert response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_503_for_targeted_unhealthy_model_under_background_cache_admin():
+    """
+    With background_health_checks enabled, an admin calling /health?model=foo
+    must get 503 when foo specifically has zero healthy endpoints — even if
+    other unrelated models in the cache are healthy. Without the cache-path
+    filter, the global healthy_count would mask the targeted failure.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",  # the unhealthy target
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-a"},
+        },
+        {
+            "model_name": "model-b",  # an unrelated healthy model
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-b"},
+        },
+    ]
+
+    cached_results = {
+        "healthy_endpoints": [
+            {"model": "openai/gpt-4o", "model_id": "id-b"},
+        ],
+        "unhealthy_endpoints": [
+            {"model": "openai/gpt-4o", "model_id": "id-a", "error": "boom"},
+        ],
+        "healthy_count": 1,
+        "unhealthy_count": 1,
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", True),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", cached_results),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+    ):
+        result = await health_endpoint(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            model="model-a",
+            model_id=None,
+        )
+
+    assert response.status_code == 503
+    # Body must be scoped to the targeted model — not the global cache.
+    assert result["healthy_count"] == 0
+    assert result["unhealthy_count"] == 1
+    returned_ids = {ep["model_id"] for ep in result.get("unhealthy_endpoints", [])}
+    assert returned_ids == {"id-a"}
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_503_when_requested_model_has_no_healthy_endpoints():
+    """
+    /health?model=foo must return 503 when the targeted model resolves but
+    has zero healthy endpoints. Body shape stays the same so existing
+    parsers still work; only the HTTP status changes.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_base": "https://example-a.test",
+            },
+            "model_info": {"id": "id-a"},
+        },
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    async def fake_perform(**kwargs):
+        return {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [
+                {
+                    "model": "openai/gpt-4o",
+                    "model_id": "id-a",
+                    "error": "boom",
+                }
+            ],
+            "healthy_count": 0,
+            "unhealthy_count": 1,
+        }
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", False),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", {}),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        result = await health_endpoint(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            model="model-a",
+        )
+
+    assert response.status_code == 503
+    assert result["healthy_count"] == 0
+    assert result["unhealthy_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_returns_200_when_requested_model_has_healthy_endpoints():
+    """
+    /health?model=foo with a healthy endpoint must keep returning the
+    default 200. Verifies the 503 path doesn't fire when healthy_count > 0.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-a"},
+        },
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    async def fake_perform(**kwargs):
+        return {
+            "healthy_endpoints": [{"model": "openai/gpt-4o", "model_id": "id-a"}],
+            "unhealthy_endpoints": [],
+            "healthy_count": 1,
+            "unhealthy_count": 0,
+        }
+
+    response = Response()
+    # Default Response() exposes status_code as None; the endpoint should
+    # leave it alone for the healthy path.
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", False),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", {}),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        await health_endpoint(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            model="model-a",
+        )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_no_model_param_returns_200_even_when_zero_healthy():
+    """
+    The non-targeted /health (no model / model_id query) preserves the
+    legacy 200 behavior even when healthy_count == 0. Existing K8s probes
+    and dashboards depend on this; only the targeted call became 5xx-aware.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "openai/gpt-4o"},
+            "model_info": {"id": "id-a"},
+        },
+    ]
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-test-key",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    async def fake_perform(**kwargs):
+        return {
+            "healthy_endpoints": [],
+            "unhealthy_endpoints": [
+                {"model": "openai/gpt-4o", "model_id": "id-a", "error": "boom"}
+            ],
+            "healthy_count": 0,
+            "unhealthy_count": 1,
+        }
+
+    response = Response()
+    with (
+        patch("litellm.proxy.proxy_server.llm_model_list", full_model_list),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.use_background_health_checks", False),
+        patch("litellm.proxy.proxy_server.user_model", None),
+        patch("litellm.proxy.proxy_server.health_check_results", {}),
+        patch("litellm.proxy.proxy_server.health_check_details", True),
+        patch("litellm.proxy.proxy_server.health_check_concurrency", 1),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._perform_health_check_and_save",
+            side_effect=fake_perform,
+        ),
+    ):
+        # Pass model=None, model_id=None explicitly: when invoked through
+        # FastAPI, the Query(None) defaults resolve to None, but direct
+        # function calls in unit tests receive Query() sentinel objects
+        # (which are truthy). The explicit None mirrors production routing.
+        await health_endpoint(
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            model=None,
+            model_id=None,
+        )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_returns_503_when_db_disconnected():
+    """
+    When a Prisma client is configured but its health_check fails, the
+    readiness probe should mark the worker as unhealthy via the HTTP
+    status — not just a body field — so K8s removes the pod from the
+    Service endpoints.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock(side_effect=PrismaError("nope"))
+    mock_prisma.attempt_db_reconnect = AsyncMock(side_effect=Exception("still nope"))
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 503
+    assert result["db"] == "disconnected"
+    assert result["status"] == "healthy"  # body shape unchanged for back-compat
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_returns_200_when_db_connected():
+    """Happy path: connected DB keeps the legacy 200."""
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    mock_prisma = MagicMock()
+    mock_prisma.health_check = AsyncMock()
+
+    _health_endpoints_module.db_health_cache = {
+        "status": "unknown",
+        "last_updated": datetime.now() - timedelta(seconds=60),
+    }
+
+    response = Response()
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result["db"] == "connected"
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_returns_200_when_no_db_configured():
+    """
+    `prisma_client is None` means the operator chose not to use a DB. That
+    is a valid configuration — the worker should still report ready. We
+    only flip to 503 when a DB *was* configured but is unreachable.
+    """
+    from fastapi import Response
+
+    from litellm.proxy.health_endpoints._health_endpoints import health_readiness
+
+    response = Response()
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        result = await health_readiness(response=response)
+
+    assert response.status_code == 200
+    assert result["db"] == "Not connected"
+
+
+def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
+    """
+    _clean_endpoint_data() drops credentials but leaves api_base /
+    api_version intact — the per-caller hide/show happens in the endpoint
+    layer based on user role, not in the cleaning helper. This guarantees
+    proxy admins continue to see those fields in the /health response.
+    """
+    from litellm.proxy.health_check import _clean_endpoint_data
+
+    raw = {
+        "model": "openai/gpt-4o",
+        "api_key": "sk-test",
+        "api_base": "https://example.test/v1",
+        "api_version": "2024-10-21",
+        "aws_access_key_id": "AKIAEXAMPLE",
+    }
+
+    cleaned = _clean_endpoint_data(raw, details=True)
+
+    assert "api_key" not in cleaned
+    assert "aws_access_key_id" not in cleaned
+    assert cleaned.get("api_base") == "https://example.test/v1"
+    assert cleaned.get("api_version") == "2024-10-21"

@@ -28,6 +28,28 @@ def test_transform_search_request():
     assert body["retrievalQuery"].get("text") == "hello"
 
 
+def test_transform_search_request_encodes_vector_store_id():
+    config = BedrockVectorStoreConfig()
+    mock_log = MagicMock()
+    mock_log.model_call_details = {}
+
+    url, body = config.transform_search_vector_store_request(
+        vector_store_id="../../knowledgebases/other?x=1#frag",
+        query="hello",
+        vector_store_search_optional_params={},
+        api_base="https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases",
+        litellm_logging_obj=mock_log,
+        litellm_params={},
+        extra_body=None,
+    )
+
+    assert (
+        url
+        == "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/..%2F..%2Fknowledgebases%2Fother%3Fx%3D1%23frag/retrieve"
+    )
+    assert body["retrievalQuery"].get("text") == "hello"
+
+
 def test_transform_search_request_uses_only_retrieval_config_from_extra_body():
     config = BedrockVectorStoreConfig()
     mock_log = MagicMock()
