@@ -400,8 +400,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             programmatic_tool_calling_used or input_examples_used
         ):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if self._supports_tool_search_on_bedrock(model):
-                beta_set.add("tool-search-tool-2025-10-19")
+            # Both headers must be sent together; centralized filter handles model restriction
+            beta_set.add("tool-search-tool-2025-10-19")
+            beta_set.add("tool-examples-2025-10-29")
 
     def _convert_output_format_to_inline_schema(
         self,
@@ -553,9 +554,6 @@ class AmazonAnthropicClaudeMessagesConfig(
             input_examples_used=input_examples_used,
             beta_set=beta_set,
         )
-
-        if "tool-search-tool-2025-10-19" in beta_set:
-            beta_set.add("tool-examples-2025-10-29")
 
         filtered_betas = sorted(
             filter_and_transform_beta_headers(
