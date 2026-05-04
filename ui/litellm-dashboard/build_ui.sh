@@ -42,18 +42,24 @@ npm run build
 if [ $? -eq 0 ]; then
   echo "Build successful. Copying files..."
 
-  # echo current dir
   echo
   pwd
 
-  # Specify the destination directory
   destination_dir="../../litellm/proxy/_experimental/out"
 
-  # Remove existing files in the destination directory
+  # The pre-built bundle is no longer checked into the repository, so the
+  # destination may not exist on a fresh checkout. Create it before copying.
+  mkdir -p "$destination_dir"
   rm -rf "$destination_dir"/*
 
-  # Copy the contents of the output directory to the specified destination
-  cp -r ./out/* "$destination_dir"
+  cp -r ./out/. "$destination_dir"/
+
+  # Restructure HTML so extensionless routes work (login.html -> login/index.html)
+  find "$destination_dir" -name '*.html' ! -name 'index.html' | while read -r htmlfile; do
+    target_dir="${htmlfile%.html}"
+    mkdir -p "$target_dir"
+    mv "$htmlfile" "$target_dir/index.html"
+  done
 
   rm -rf ./out
 
