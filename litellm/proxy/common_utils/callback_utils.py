@@ -14,6 +14,8 @@ from litellm.types.utils import (
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
 
+TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY = "_pillar_response_headers_trusted"
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
@@ -37,6 +39,20 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     if isinstance(value, list):
         imported_list: List[Any] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
+            if isinstance(callback, str) and callback == "compression_interception":
+                from litellm.integrations.compression_interception.handler import (
+                    CompressionInterceptionLogger,
+                )
+
+                compression_interception_obj = (
+                    CompressionInterceptionLogger.initialize_from_proxy_config(
+                        litellm_settings=litellm_settings,
+                        callback_specific_params=callback_specific_params,
+                    )
+                )
+                imported_list.append(compression_interception_obj)
+                continue
+
             # check if callback is a custom logger compatible callback
             if isinstance(callback, str):
                 callback = LoggingCallbackManager._add_custom_callback_generic_api_str(
@@ -362,17 +378,17 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
     remaining_requests_variable_name = f"litellm-key-remaining-requests-{model_group}"
     remaining_requests = _metadata.get(remaining_requests_variable_name, None)
     if remaining_requests:
-        headers[
-            f"x-litellm-key-remaining-requests-{h11_model_group_name}"
-        ] = remaining_requests
+        headers[f"x-litellm-key-remaining-requests-{h11_model_group_name}"] = (
+            remaining_requests
+        )
 
     # Remaining Tokens
     remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
     remaining_tokens = _metadata.get(remaining_tokens_variable_name, None)
     if remaining_tokens:
-        headers[
-            f"x-litellm-key-remaining-tokens-{h11_model_group_name}"
-        ] = remaining_tokens
+        headers[f"x-litellm-key-remaining-tokens-{h11_model_group_name}"] = (
+            remaining_tokens
+        )
 
     return headers
 
@@ -403,10 +419,19 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
     if "semantic-similarity" in _metadata:
         headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
 
+    is_trusted_pillar_metadata = (
+        _metadata.get(TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY) is True
+    )
     pillar_headers = _metadata.get("pillar_response_headers")
-    if isinstance(pillar_headers, dict):
-        headers.update(pillar_headers)
-    elif "pillar_flagged" in _metadata:
+    if is_trusted_pillar_metadata and isinstance(pillar_headers, dict):
+        headers.update(
+            {
+                key: str(value)
+                for key, value in pillar_headers.items()
+                if isinstance(key, str) and key.lower().startswith("x-pillar-")
+            }
+        )
+    elif is_trusted_pillar_metadata and "pillar_flagged" in _metadata:
         headers["x-pillar-flagged"] = str(_metadata["pillar_flagged"]).lower()
 
     return headers
@@ -419,7 +444,8 @@ def add_guardrail_to_applied_guardrails_header(
         return
     _metadata = request_data.get("metadata", None) or {}
     if "applied_guardrails" in _metadata:
-        _metadata["applied_guardrails"].append(guardrail_name)
+        if guardrail_name not in _metadata["applied_guardrails"]:
+            _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
     # Ensure metadata is set back to request_data (important when metadata didn't exist)
@@ -472,9 +498,9 @@ def add_guardrail_response_to_standard_logging_object(
 ):
     if litellm_logging_obj is None:
         return
-    standard_logging_object: Optional[
-        StandardLoggingPayload
-    ] = litellm_logging_obj.model_call_details.get("standard_logging_object")
+    standard_logging_object: Optional[StandardLoggingPayload] = (
+        litellm_logging_obj.model_call_details.get("standard_logging_object")
+    )
     if standard_logging_object is None:
         return
     guardrail_information = standard_logging_object.get("guardrail_information", [])

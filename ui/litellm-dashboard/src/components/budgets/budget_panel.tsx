@@ -19,12 +19,12 @@ import {
   TabPanels,
   Text,
 } from "@tremor/react";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import NotificationsManager from "../molecules/notifications_manager";
-import { budgetDeleteCall, getBudgetList } from "../networking";
+import { useBudgets, useDeleteBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import BudgetModal from "./budget_modal";
 import EditBudgetModal from "./edit_budget_modal";
 import { CREATE_END_USER_CURL_COMMAND, CHAT_COMPLETIONS_CURL_COMMAND, OPENAI_SDK_PYTHON_CODE } from "./constants";
@@ -35,7 +35,7 @@ interface BudgetSettingsPageProps {
 
 export interface budgetItem {
   budget_id: string;
-  max_budget: string | null;
+  max_budget: number | null;
   rpm_limit: number | null;
   tpm_limit: number | null;
   updated_at: string;
@@ -45,17 +45,10 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   const [isCreateModelVisible, setIsCreateModelVisible] = useState(false);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<budgetItem | null>(null);
-  const [budgetList, setBudgetList] = useState<budgetItem[]>([]);
-  const [isDeleting, setIsDeleting] = useState(false);
   const [isDeleteModalVisible, setIsDeleteModalVisible] = useState(false);
-  useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
-    getBudgetList(accessToken).then((data) => {
-      setBudgetList(data);
-    });
-  }, [accessToken]);
+
+  const { data: budgetList = [] } = useBudgets();
+  const deleteBudget = useDeleteBudget();
 
   const handleEditCall = async (budget: budgetItem) => {
     if (accessToken == null) {
@@ -74,11 +67,9 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
     if (!selectedBudget || accessToken == null) {
       return;
     }
-    setIsDeleting(true);
     try {
-      await budgetDeleteCall(accessToken, selectedBudget.budget_id);
+      await deleteBudget.mutateAsync(selectedBudget.budget_id);
       NotificationsManager.success("Budget deleted.");
-      await handleUpdateCall();
     } catch (error) {
       console.error("Error deleting budget:", error);
       if (typeof NotificationsManager.fromBackend === "function") {
@@ -87,7 +78,6 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
         NotificationsManager.info("Failed to delete budget");
       }
     } finally {
-      setIsDeleting(false);
       setIsDeleteModalVisible(false);
       setSelectedBudget(null);
     }
@@ -95,15 +85,6 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
   const handleDeleteCancel = () => {
     setIsDeleteModalVisible(false);
-  };
-
-  const handleUpdateCall = async () => {
-    if (accessToken == null) {
-      return;
-    }
-    getBudgetList(accessToken).then((data) => {
-      setBudgetList(data);
-    });
   };
 
   return (
@@ -120,19 +101,14 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
           <TabPanel>
             <div className="mt-6">
               <BudgetModal
-                accessToken={accessToken}
                 isModalVisible={isCreateModelVisible}
                 setIsModalVisible={setIsCreateModelVisible}
-                setBudgetList={setBudgetList}
               />
               {selectedBudget && (
                 <EditBudgetModal
-                  accessToken={accessToken}
                   isModalVisible={isEditModalVisible}
                   setIsModalVisible={setIsEditModalVisible}
-                  setBudgetList={setBudgetList}
                   existingBudget={selectedBudget}
-                  handleUpdateCall={handleUpdateCall}
                 />
               )}
               <Card>
@@ -149,10 +125,10 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
 
                   <TableBody>
                     {budgetList
-                      .slice() // Creates a shallow copy to avoid mutating the original array
-                      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()) // Sort by updated_at in descending order
-                      .map((value: budgetItem, index: number) => (
-                        <TableRow key={index}>
+                      .slice()
+                      .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+                      .map((value: budgetItem) => (
+                        <TableRow key={value.budget_id}>
                           <TableCell>{value.budget_id}</TableCell>
                           <TableCell>{value.max_budget ? value.max_budget : "n/a"}</TableCell>
                           <TableCell>{value.tpm_limit ? value.tpm_limit : "n/a"}</TableCell>
@@ -187,7 +163,7 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                 ]}
                 onCancel={handleDeleteCancel}
                 onOk={handleDeleteConfirm}
-                confirmLoading={isDeleting}
+                confirmLoading={deleteBudget.isPending}
               />
             </div>
           </TabPanel>

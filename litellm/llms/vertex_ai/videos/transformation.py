@@ -344,7 +344,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         We return this as a VideoObject with:
         - id: operation name (used for polling)
         - status: "processing"
-        - usage: includes duration_seconds for cost calculation
+        - usage: includes duration_seconds and optional video_resolution for cost calculation
         """
         response_data = raw_response.json()
 
@@ -363,7 +363,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
             id=video_id, object="video", status="processing", model=model
         )
 
-        usage_data = {}
+        usage_data: Dict[str, Any] = {}
         if request_data:
             parameters = request_data.get("parameters", {})
             duration = (
@@ -375,6 +375,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
                     usage_data["duration_seconds"] = float(duration)
                 except (ValueError, TypeError):
                     pass
+            res = parameters.get("resolution")
+            if res is not None and str(res).strip() != "":
+                usage_data["video_resolution"] = str(res).strip().lower()
 
         video_obj.usage = usage_data
         return video_obj
@@ -624,28 +627,51 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         """Video delete is not supported."""
         raise NotImplementedError("Video delete is not supported by Vertex AI Veo.")
 
-    def transform_video_create_character_request(self, name, video, api_base, litellm_params, headers):
-        raise NotImplementedError("video create character is not supported for Vertex AI")
+    def transform_video_create_character_request(
+        self, name, video, api_base, litellm_params, headers
+    ):
+        raise NotImplementedError(
+            "video create character is not supported for Vertex AI"
+        )
 
     def transform_video_create_character_response(self, raw_response, logging_obj):
-        raise NotImplementedError("video create character is not supported for Vertex AI")
+        raise NotImplementedError(
+            "video create character is not supported for Vertex AI"
+        )
 
-    def transform_video_get_character_request(self, character_id, api_base, litellm_params, headers):
+    def transform_video_get_character_request(
+        self, character_id, api_base, litellm_params, headers
+    ):
         raise NotImplementedError("video get character is not supported for Vertex AI")
 
     def transform_video_get_character_response(self, raw_response, logging_obj):
         raise NotImplementedError("video get character is not supported for Vertex AI")
 
-    def transform_video_edit_request(self, prompt, video_id, api_base, litellm_params, headers, extra_body=None):
+    def transform_video_edit_request(
+        self, prompt, video_id, api_base, litellm_params, headers, extra_body=None
+    ):
         raise NotImplementedError("video edit is not supported for Vertex AI")
 
-    def transform_video_edit_response(self, raw_response, logging_obj, custom_llm_provider=None):
+    def transform_video_edit_response(
+        self, raw_response, logging_obj, custom_llm_provider=None
+    ):
         raise NotImplementedError("video edit is not supported for Vertex AI")
 
-    def transform_video_extension_request(self, prompt, video_id, seconds, api_base, litellm_params, headers, extra_body=None):
+    def transform_video_extension_request(
+        self,
+        prompt,
+        video_id,
+        seconds,
+        api_base,
+        litellm_params,
+        headers,
+        extra_body=None,
+    ):
         raise NotImplementedError("video extension is not supported for Vertex AI")
 
-    def transform_video_extension_response(self, raw_response, logging_obj, custom_llm_provider=None):
+    def transform_video_extension_response(
+        self, raw_response, logging_obj, custom_llm_provider=None
+    ):
         raise NotImplementedError("video extension is not supported for Vertex AI")
 
     def get_error_class(

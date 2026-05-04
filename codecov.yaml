@@ -17,6 +17,9 @@ component_management:
     - component_id: "Proxy_Authentication"
       paths:
         - "*/proxy/auth/**"
+    - component_id: "Enterprise"
+      paths:
+        - "enterprise/**"
 comment:
   layout: "header, diff, flags, components"  # show component info in the PR comment
 

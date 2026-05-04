@@ -93,11 +93,11 @@ async def test_openai_client_reuse(function_name, is_async, args):
     )
 
     # Create the appropriate patches
-    with patch(client_path) as mock_client_class, patch.object(
-        BaseOpenAILLM, "set_cached_openai_client"
-    ) as mock_set_cache, patch.object(
-        BaseOpenAILLM, "get_cached_openai_client"
-    ) as mock_get_cache:
+    with (
+        patch(client_path) as mock_client_class,
+        patch.object(BaseOpenAILLM, "set_cached_openai_client") as mock_set_cache,
+        patch.object(BaseOpenAILLM, "get_cached_openai_client") as mock_get_cache,
+    ):
         # Setup the mock to return None first time (cache miss) then a client for subsequent calls
         mock_client = MagicMock()
         mock_get_cache.side_effect = [None] + [

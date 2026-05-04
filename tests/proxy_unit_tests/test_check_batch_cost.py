@@ -32,7 +32,9 @@ class TestCheckBatchCost:
     def check_batch_cost_instance(
         self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
-        from litellm_enterprise.proxy.common_utils.check_batch_cost import CheckBatchCost
+        from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+            CheckBatchCost,
+        )
 
         return CheckBatchCost(
             proxy_logging_obj=mock_proxy_logging_obj,
@@ -55,7 +57,9 @@ class TestCheckBatchCost:
 
         await check_batch_cost_instance.check_batch_cost()
 
-        calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
         stale_call = calls[0]
         assert stale_call[1]["data"] == {"status": "stale_expired"}
         where = stale_call[1]["where"]
@@ -110,7 +114,9 @@ class TestCheckBatchCost:
 
         await check_batch_cost_instance.check_batch_cost()
 
-        calls = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args_list
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args_list
+        )
         assert len(calls) == 2
         fallback_where = calls[1][1]["where"]
         assert "batch_processed" not in fallback_where
@@ -138,8 +144,14 @@ class TestCheckBatchCost:
         await check_batch_cost_instance.check_batch_cost()
 
         # Only one find_many call — the fallback directly, no primary query attempt
-        assert mock_prisma_client.db.litellm_managedobjecttable.find_many.call_count == 1
-        fallback_where = mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args[1]["where"]
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.find_many.call_count == 1
+        )
+        fallback_where = (
+            mock_prisma_client.db.litellm_managedobjecttable.find_many.call_args[1][
+                "where"
+            ]
+        )
         assert "batch_processed" not in fallback_where
 
     @pytest.mark.asyncio
@@ -176,7 +188,9 @@ class TestCheckBatchCost:
         mock_response = MagicMock()
         mock_response.status = "completed"
         mock_response.output_file_id = "file-output-123"
-        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+        mock_response.model_dump_json.return_value = (
+            '{"id":"batch-1","status":"completed"}'
+        )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
         mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
@@ -219,7 +233,11 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
+                return_value=(
+                    0.01,
+                    {"prompt_tokens": 10, "completion_tokens": 5},
+                    ["gpt-4"],
+                ),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -236,13 +254,15 @@ class TestCheckBatchCost:
             await check_batch_cost_instance.check_batch_cost()
 
         # The update must have been called — this is the core assertion.
-        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
-            "Expected update() to be called exactly once for the completed job"
-        )
-        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[1]["data"]
-        assert "batch_processed" not in update_data, (
-            "update() must NOT include batch_processed when column is absent"
-        )
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        ), "Expected update() to be called exactly once for the completed job"
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert (
+            "batch_processed" not in update_data
+        ), "update() must NOT include batch_processed when column is absent"
         assert update_data["status"] == "complete"
 
     @pytest.mark.asyncio
@@ -277,7 +297,9 @@ class TestCheckBatchCost:
         mock_response = MagicMock()
         mock_response.status = "completed"
         mock_response.output_file_id = "file-output-123"
-        mock_response.model_dump_json.return_value = '{"id":"batch-1","status":"completed"}'
+        mock_response.model_dump_json.return_value = (
+            '{"id":"batch-1","status":"completed"}'
+        )
 
         mock_llm_router.aretrieve_batch = AsyncMock(return_value=mock_response)
         mock_llm_router.get_deployment_credentials_with_provider = MagicMock(
@@ -320,7 +342,11 @@ class TestCheckBatchCost:
             patch(
                 "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
                 new_callable=AsyncMock,
-                return_value=(0.01, {"prompt_tokens": 10, "completion_tokens": 5}, ["gpt-4"]),
+                return_value=(
+                    0.01,
+                    {"prompt_tokens": 10, "completion_tokens": 5},
+                    ["gpt-4"],
+                ),
             ),
             patch(
                 "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
@@ -336,11 +362,13 @@ class TestCheckBatchCost:
 
             await check_batch_cost_instance.check_batch_cost()
 
-        assert mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1, (
-            "Expected update() to be called exactly once for the completed job"
-        )
-        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[1]["data"]
-        assert update_data["batch_processed"] is True, (
-            "update() must include batch_processed=True when column is present"
-        )
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        ), "Expected update() to be called exactly once for the completed job"
+        update_data = mock_prisma_client.db.litellm_managedobjecttable.update.call_args[
+            1
+        ]["data"]
+        assert (
+            update_data["batch_processed"] is True
+        ), "update() must include batch_processed=True when column is present"
         assert update_data["status"] == "complete"

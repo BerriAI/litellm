@@ -100,6 +100,11 @@ if (!document.getAnimations) {
   document.getAnimations = () => [];
 }
 
+// Stub URL.revokeObjectURL so vi.spyOn can intercept it in tests
+if (!URL.revokeObjectURL) {
+  URL.revokeObjectURL = () => {};
+}
+
 // Mock ResizeObserver for components that use it (e.g., Tremor UI components)
 // This prevents "ResizeObserver is not defined" errors in JSDOM
 global.ResizeObserver = class ResizeObserver {

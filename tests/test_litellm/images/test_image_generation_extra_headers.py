@@ -33,9 +33,7 @@ class TestImageGenerationExtraHeaders:
             created=1234567890,
             data=[{"url": "https://example.com/image.png"}],
         )
-        mock_openai_chat_completions.image_generation.return_value = (
-            mock_image_response
-        )
+        mock_openai_chat_completions.image_generation.return_value = mock_image_response
 
         extra_headers = {"traceparent": "00-abc123-def456-01", "X-Custom": "value"}
 
@@ -55,9 +53,7 @@ class TestImageGenerationExtraHeaders:
         assert optional_params["extra_headers"] == extra_headers
 
     @patch("litellm.images.main.openai_chat_completions")
-    def test_no_extra_headers_when_not_provided(
-        self, mock_openai_chat_completions
-    ):
+    def test_no_extra_headers_when_not_provided(self, mock_openai_chat_completions):
         """
         When extra_headers is not passed, optional_params should not
         contain extra_headers.
@@ -66,9 +62,7 @@ class TestImageGenerationExtraHeaders:
             created=1234567890,
             data=[{"url": "https://example.com/image.png"}],
         )
-        mock_openai_chat_completions.image_generation.return_value = (
-            mock_image_response
-        )
+        mock_openai_chat_completions.image_generation.return_value = mock_image_response
 
         image_generation(
             model="openai/dall-e-3",

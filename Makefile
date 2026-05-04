@@ -15,7 +15,7 @@ help:
 	@echo "  make install-proxy-dev  - Install proxy development dependencies"
 	@echo "  make install-dev-ci     - Install dev dependencies (CI-compatible, pins OpenAI)"
 	@echo "  make install-proxy-dev-ci - Install proxy dev dependencies (CI-compatible)"
-	@echo "  make install-test-deps  - Install test dependencies"
+	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
@@ -40,49 +40,44 @@ help:
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 
-# Keep PIP simple for edge cases:
-PIP := $(shell command -v pip > /dev/null 2>&1 && echo "pip" || echo "python3 -m pip")
+UV := uv
+UV_RUN := $(UV) run --no-sync
 
 # Show info
 info:
-	@echo "PIP: $(PIP)"
+	@echo "UV: $(UV)"
 
 # Installation targets
 install-dev:
-	poetry install --with dev
+	$(UV) sync --frozen
 
 install-proxy-dev:
-	poetry install --with dev,proxy-dev --extras proxy
+	$(UV) sync --frozen --group proxy-dev --extra proxy
 
 # CI-compatible installations (matches GitHub workflows exactly)
 install-dev-ci:
-	$(PIP) install openai==2.8.0
-	poetry install --with dev
-	$(PIP) install openai==2.8.0
+	$(UV) sync --frozen
 
 install-proxy-dev-ci:
-	poetry install --with dev,proxy-dev --extras proxy
-	$(PIP) install openai==2.8.0
+	$(UV) sync --frozen --group proxy-dev --extra proxy
 
 install-test-deps: install-proxy-dev
-	poetry run $(PIP) install "pytest-retry==1.6.3"
-	poetry run $(PIP) install pytest-xdist
-	poetry run $(PIP) install openapi-core
-	cd enterprise && poetry run $(PIP) install -e . && cd ..
+	$(UV) sync --frozen --all-groups --all-extras
+	$(UV_RUN) prisma generate --schema litellm/proxy/schema.prisma
 
 install-helm-unittest:
 	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
 
 # Formatting
 format: install-dev
-	cd litellm && poetry run black . && cd ..
+	cd litellm && $(UV_RUN) black . && cd ..
 
 format-check: install-dev
-	cd litellm && poetry run black --check . && cd ..
+	cd litellm && $(UV_RUN) black --check . && cd ..
 
 # Linting targets
 lint-ruff: install-dev
-	cd litellm && poetry run ruff check . && cd ..
+	cd litellm && $(UV_RUN) ruff check . && cd ..
 
 # faster linter for developing ...
 # inspiration from:
@@ -96,37 +91,36 @@ lint-format-changed: install-dev
 			$$start = $$1; $$count = $$2 || 1; $$end = $$start + $$count - 1; \
 			print "$$file:$$start:1-$$end:999\n"; \
 		}' | \
-	while read range; do \
-		file="$${range%%:*}"; \
-		lines="$${range#*:}"; \
-		echo "Formatting $$file (lines $$lines)"; \
-		poetry run ruff format --range "$$lines" "$$file"; \
-	done
+		while read range; do \
+			file="$${range%%:*}"; \
+			lines="$${range#*:}"; \
+			echo "Formatting $$file (lines $$lines)"; \
+			$(UV_RUN) ruff format --range "$$lines" "$$file"; \
+		done
 
 lint-ruff-dev: install-dev
 	@tmpfile=$$(mktemp /tmp/ruff-dev.XXXXXX) && \
 	cd litellm && \
-	(poetry run ruff check . --output-format=pylint || true) > "$$tmpfile" && \
-	poetry run diff-quality --violations=pylint "$$tmpfile" --compare-branch=origin/main && \
+	($(UV_RUN) ruff check . --output-format=pylint || true) > "$$tmpfile" && \
+	$(UV_RUN) diff-quality --violations=pylint "$$tmpfile" --compare-branch=origin/main && \
 	cd .. ; \
 	rm -f "$$tmpfile"
 
 lint-ruff-FULL-dev: install-dev
 	@files=$$(git diff --name-only origin/main -- '*.py'); \
-	if [ -n "$$files" ]; then echo "$$files" | xargs poetry run ruff check; \
+	if [ -n "$$files" ]; then echo "$$files" | xargs $(UV_RUN) ruff check; \
 	else echo "No changed .py files to check."; fi
 
 lint-mypy: install-dev
-	poetry run $(PIP) install types-requests types-setuptools types-redis types-PyYAML
-	cd litellm && poetry run mypy . --ignore-missing-imports && cd ..
+	cd litellm && $(UV_RUN) mypy . --ignore-missing-imports && cd ..
 
 lint-black: format-check
 
 check-circular-imports: install-dev
-	cd litellm && poetry run python ../tests/documentation_tests/test_circular_imports.py && cd ..
+	cd litellm && $(UV_RUN) python ../tests/documentation_tests/test_circular_imports.py && cd ..
 
 check-import-safety: install-dev
-	@poetry run python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
+	@$(UV_RUN) python -c "from litellm import *; print('[from litellm import *] OK! no issues!');" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
 
 # Combined linting (matches test-linting.yml workflow)
 lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safety
@@ -135,46 +129,46 @@ lint: format-check lint-ruff lint-mypy check-circular-imports check-import-safet
 lint-dev: lint-format-changed lint-mypy check-circular-imports check-import-safety
 
 # Testing targets
-test:
-	poetry run pytest tests/
+test: install-test-deps
+	$(UV_RUN) pytest tests/
 
 test-unit: install-test-deps
-	poetry run pytest tests/test_litellm -x -vv -n 4
+	$(UV_RUN) pytest tests/test_litellm -x -vv -n 4
 
 # Matrix test targets (matching CI workflow groups)
 test-unit-llms: install-test-deps
-	poetry run pytest tests/test_litellm/llms --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/test_litellm/llms --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-guardrails: install-test-deps
-	poetry run pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-core: install-test-deps
-	poetry run pytest tests/test_litellm/proxy/auth tests/test_litellm/proxy/client tests/test_litellm/proxy/db tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/test_litellm/proxy/auth tests/test_litellm/proxy/client tests/test_litellm/proxy/db tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-misc: install-test-deps
-	poetry run pytest tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py --tb=short -vv -n 4 --durations=20
 
 test-unit-integrations: install-test-deps
-	poetry run pytest tests/test_litellm/integrations --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/test_litellm/integrations --tb=short -vv -n 4 --durations=20
 
 test-unit-core-utils: install-test-deps
-	poetry run pytest tests/test_litellm/litellm_core_utils --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/test_litellm/litellm_core_utils --tb=short -vv -n 2 --durations=20
 
 test-unit-other: install-test-deps
-	poetry run pytest tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/enterprise tests/test_litellm/experimental_mcp_client tests/test_litellm/google_genai tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/router_strategy tests/test_litellm/router_utils tests/test_litellm/types --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/enterprise tests/test_litellm/experimental_mcp_client tests/test_litellm/google_genai tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/router_strategy tests/test_litellm/router_utils tests/test_litellm/types --tb=short -vv -n 4 --durations=20
 
 test-unit-root: install-test-deps
-	poetry run pytest tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
 
 # Proxy unit tests (tests/proxy_unit_tests split alphabetically)
 test-proxy-unit-a: install-test-deps
-	poetry run pytest tests/proxy_unit_tests/test_[a-o]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/proxy_unit_tests/test_[a-o]*.py --tb=short -vv -n 2 --durations=20
 
 test-proxy-unit-b: install-test-deps
-	poetry run pytest tests/proxy_unit_tests/test_[p-z]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/proxy_unit_tests/test_[p-z]*.py --tb=short -vv -n 2 --durations=20
 
-test-integration:
-	poetry run pytest tests/ -k "not test_litellm"
+test-integration: install-test-deps
+	$(UV_RUN) pytest tests/ -k "not test_litellm"
 
 test-unit-helm: install-helm-unittest
 	helm unittest -f 'tests/*.yaml' deploy/charts/litellm-helm
@@ -188,6 +182,6 @@ test-llm-translation-single: install-test-deps
 	@echo "Running single LLM translation test file..."
 	@if [ -z "$(FILE)" ]; then echo "Usage: make test-llm-translation-single FILE=test_filename.py"; exit 1; fi
 	@mkdir -p test-results
-	poetry run pytest tests/llm_translation/$(FILE) \
+	$(UV_RUN) pytest tests/llm_translation/$(FILE) \
 		--junitxml=test-results/junit.xml \
 		-v --tb=short --maxfail=100 --timeout=300

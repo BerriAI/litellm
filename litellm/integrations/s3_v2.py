@@ -7,6 +7,7 @@ NOTE 1: S3 does not provide a BATCH PUT API endpoint, so we create tasks to uplo
 """
 
 import asyncio
+import time
 from datetime import datetime
 from typing import List, Optional, cast
 
@@ -22,7 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
 
@@ -248,6 +249,38 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         )
         pass
 
+    async def async_log_audit_log_event(
+        self, audit_log: StandardAuditLogPayload
+    ) -> None:
+        """Batch audit logs and upload to S3 under audit_logs/ prefix."""
+        try:
+            from datetime import timezone
+
+            now = datetime.now(timezone.utc)
+            audit_log_id = audit_log.get("id", "unknown")
+
+            s3_path = cast(Optional[str], self.s3_path) or ""
+            s3_path = s3_path.rstrip("/") + "/" if s3_path else ""
+
+            s3_object_key = (
+                f"{s3_path}audit_logs/"
+                f"{now.strftime('%Y-%m-%d')}/"
+                f"{now.strftime('%H-%M-%S')}_{audit_log_id}.json"
+            )
+
+            element = s3BatchLoggingElement(
+                payload=dict(audit_log),
+                s3_object_key=s3_object_key,
+                s3_object_download_filename=f"audit-{audit_log_id}.json",
+            )
+
+            self.log_queue.append(element)
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.flush_queue()
+        except Exception as e:
+            verbose_logger.exception("S3 audit log error: %s", e)
+
     async def _async_log_event_base(self, kwargs, response_obj, start_time, end_time):
         try:
             verbose_logger.debug(
@@ -371,11 +404,26 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            # Make the request
-            response = await self.async_httpx_client.put(
-                url, data=json_string, headers=signed_headers
-            )
-            response.raise_for_status()
+            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
+            request_url = prepped.url or url
+
+            # Make the request with retry for transient S3 errors (500/503)
+            max_retries = 3
+            for attempt in range(max_retries):
+                response = await self.async_httpx_client.put(
+                    request_url, data=json_string, headers=signed_headers
+                )
+                if response.status_code in (500, 503) and attempt < max_retries - 1:
+                    wait_time = 2**attempt  # 1s, 2s
+                    verbose_logger.warning(
+                        f"S3 upload returned {response.status_code}, retrying in {wait_time}s "
+                        f"(attempt {attempt + 1}/{max_retries}) "
+                        f"key={batch_logging_element.s3_object_key}"
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+                response.raise_for_status()
+                break
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
             self.handle_callback_failure(callback_name="S3Logger")
@@ -545,14 +593,33 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
+            # Use prepared URL so path segments match SigV4 canonical request (e.g. %20 for spaces).
+            request_url = prepped.url or url
+
             httpx_client = _get_httpx_client(
-                params={"ssl_verify": self.s3_verify}
-                if self.s3_verify is not None
-                else None
+                params=(
+                    {"ssl_verify": self.s3_verify}
+                    if self.s3_verify is not None
+                    else None
+                )
             )
-            # Make the request
-            response = httpx_client.put(url, data=json_string, headers=signed_headers)
-            response.raise_for_status()
+            # Make the request with retry for transient S3 errors (500/503)
+            max_retries = 3
+            for attempt in range(max_retries):
+                response = httpx_client.put(
+                    request_url, data=json_string, headers=signed_headers
+                )
+                if response.status_code in (500, 503) and attempt < max_retries - 1:
+                    wait_time = 2**attempt  # 1s, 2s
+                    verbose_logger.warning(
+                        f"S3 upload returned {response.status_code}, retrying in {wait_time}s "
+                        f"(attempt {attempt + 1}/{max_retries}) "
+                        f"key={batch_logging_element.s3_object_key}"
+                    )
+                    time.sleep(wait_time)
+                    continue
+                response.raise_for_status()
+                break
         except Exception as e:
             verbose_logger.exception(f"Error uploading to s3: {str(e)}")
             self.handle_callback_failure(callback_name="S3Logger")
@@ -642,8 +709,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             # Prepare the signed headers
             signed_headers = dict(aws_request.headers.items())
 
-            # Make the request
-            response = await self.async_httpx_client.get(url, headers=signed_headers)
+            request_url = prepped.url or url
+            response = await self.async_httpx_client.get(
+                request_url, headers=signed_headers
+            )
 
             if response.status_code != 200:
                 verbose_logger.exception(

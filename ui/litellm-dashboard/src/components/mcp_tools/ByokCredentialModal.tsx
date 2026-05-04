@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
-import { Modal, Input, Switch, message } from "antd";
+import { Modal, Input, Switch } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import {
   KeyOutlined,
   LockOutlined,
@@ -46,7 +47,7 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
 
   const handleAuthorize = async () => {
     if (!apiKey.trim()) {
-      message.error("Please enter your API key");
+      MessageManager.error("Please enter your API key");
       return;
     }
     setLoading(true);
@@ -63,11 +64,11 @@ export const ByokCredentialModal: React.FC<ByokCredentialModalProps> = ({
         const err = await response.json();
         throw new Error(err?.detail?.error || "Failed to save credential");
       }
-      message.success(`Connected to ${serverDisplayName}`);
+      MessageManager.success(`Connected to ${serverDisplayName}`);
       onSuccess(server.server_id);
       handleClose();
     } catch (e: any) {
-      message.error(e.message || "Failed to connect");
+      MessageManager.error(e.message || "Failed to connect");
     } finally {
       setLoading(false);
     }

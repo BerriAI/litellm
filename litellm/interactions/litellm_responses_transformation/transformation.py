@@ -45,10 +45,10 @@ class LiteLLMResponsesInteractionsConfig:
 
         # Transform input
         if input is not None:
-            responses_request[
-                "input"
-            ] = LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
-                input
+            responses_request["input"] = (
+                LiteLLMResponsesInteractionsConfig._transform_interactions_input_to_responses_input(
+                    input
+                )
             )
 
         # Transform system_instruction -> instructions

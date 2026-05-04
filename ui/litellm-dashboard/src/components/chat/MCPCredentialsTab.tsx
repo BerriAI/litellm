@@ -8,7 +8,8 @@
  */
 
 import React, { useCallback, useEffect, useState } from "react";
-import { Spin, message } from "antd";
+import { Spin } from "antd";
+import MessageManager from "@/components/molecules/message_manager";
 import { DeleteOutlined, LinkOutlined } from "@ant-design/icons";
 import { Badge, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import {
@@ -77,7 +78,7 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
       await deleteMCPOAuthUserCredential(accessToken, serverId);
       setCredentials((prev) => prev.filter((c) => c.server_id !== serverId));
     } catch {
-      message.error("Failed to revoke connection. Please try again.");
+      MessageManager.error("Failed to revoke connection. Please try again.");
     } finally {
       setRevoking((prev) => { const n = new Set(prev); n.delete(serverId); return n; });
     }

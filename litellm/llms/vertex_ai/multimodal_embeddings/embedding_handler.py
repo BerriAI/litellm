@@ -15,6 +15,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexAIError,
     VertexLLM,
 )
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import EmbeddingResponse
 
 from .transformation import VertexAIMultimodalEmbeddingConfig

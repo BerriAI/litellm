@@ -77,18 +77,6 @@ def test_map_response_format():
     }
 
 
-@pytest.mark.skip(reason="fireworks is having an active outage")
-class TestFireworksAIChatCompletion(BaseLLMChatTest):
-    def get_base_completion_call_args(self) -> dict:
-        return {
-            "model": "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
-        }
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
-
 class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):
     def get_base_audio_transcription_call_args(self) -> dict:
         return {
@@ -160,6 +148,24 @@ def test_document_inlining_example(disable_add_transform_inline_image_block):
             {"image_url": "http://example.com/image.png"},
             "vision-gpt",
             "http://example.com/image.png",
+        ),
+        # data: URLs must never have #transform=inline appended — doing so
+        # corrupts the base64 payload (fixes #23583).
+        # URI schemes are case-insensitive (RFC 3986) so check all variants.
+        (
+            {"image_url": "data:image/png;base64,iVBORw0KGgo="},
+            "gpt-4",
+            "data:image/png;base64,iVBORw0KGgo=",
+        ),
+        (
+            {"image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ=="}},
+            "gpt-4",
+            {"url": "data:image/jpeg;base64,/9j/4AAQ=="},
+        ),
+        (
+            {"image_url": "Data:image/png;base64,iVBORw0KGgo="},
+            "gpt-4",
+            "Data:image/png;base64,iVBORw0KGgo=",
         ),
     ],
 )
@@ -234,7 +240,5 @@ def test_global_disable_flag_with_transform_messages_helper(monkeypatch):
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert (
             "#transform=inline"
-            not in json_data["messages"][0]["content"][1]["image_url"][
-                "url"
-            ]
+            not in json_data["messages"][0]["content"][1]["image_url"]["url"]
         )
