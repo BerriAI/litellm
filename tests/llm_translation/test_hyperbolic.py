@@ -57,7 +57,9 @@ def test_hyperbolic_get_openai_compatible_provider_info():
 
     # Test custom API base
     custom_base = "https://custom.hyperbolic.com/v1"
-    api_base, api_key = config._get_openai_compatible_provider_info(custom_base, "test-key")
+    api_base, api_key = config._get_openai_compatible_provider_info(
+        custom_base, "test-key"
+    )
     assert api_base == custom_base
     assert api_key == "test-key"
 
@@ -79,12 +81,14 @@ def test_hyperbolic_models_configuration():
     """Test that Hyperbolic models are properly configured"""
     import json
     import os
-    
+
     # Load model configuration directly from the JSON file
-    json_path = os.path.join(os.path.dirname(__file__), "../../model_prices_and_context_window.json")
-    with open(json_path, 'r') as f:
+    json_path = os.path.join(
+        os.path.dirname(__file__), "../../model_prices_and_context_window.json"
+    )
+    with open(json_path, "r") as f:
         model_data = json.load(f)
-    
+
     # Test a few key models
     test_models = [
         "hyperbolic/deepseek-ai/DeepSeek-V3",

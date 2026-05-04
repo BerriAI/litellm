@@ -1,0 +1,27 @@
+name: "Unit Tests: Responses, Caching & Types"
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  responses-caching-types:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: "tests/test_litellm/responses tests/test_litellm/caching tests/test_litellm/types"
+      workers: 2
+      reruns: 2
+      artifact-name: responses-caching-types

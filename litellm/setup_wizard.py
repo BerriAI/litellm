@@ -52,11 +52,16 @@ PROVIDERS: List[Dict] = [
     {
         "id": "anthropic",
         "name": "Anthropic",
-        "description": "Claude Opus 4.6, Sonnet 4.6, Haiku 4.5",
+        "description": "Claude Opus 4.7, Opus 4.6, Sonnet 4.6, Haiku 4.5",
         "env_key": "ANTHROPIC_API_KEY",
         "key_hint": "sk-ant-...",
         "test_model": "claude-haiku-4-5-20251001",
-        "models": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+        "models": [
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+        ],
     },
     {
         "id": "gemini",
@@ -71,7 +76,7 @@ PROVIDERS: List[Dict] = [
         "id": "azure",
         "name": "Azure OpenAI",
         "description": "GPT-4o via Azure",
-        "env_key": "AZURE_API_KEY",
+        "env_key": "AZURE_AI_API_KEY",
         "key_hint": "your-azure-key",
         "test_model": None,  # needs deployment name — skip validation
         "models": [],
@@ -86,7 +91,7 @@ PROVIDERS: List[Dict] = [
         "env_key": "AWS_ACCESS_KEY_ID",
         "key_hint": "AKIA...",
         "test_model": None,  # multi-key auth — skip validation
-        "models": ["bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"],
+        "models": ["bedrock/anthropic.claude-haiku-4-5-20251001-v1:0"],
         "extra_keys": ["AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME"],
         "extra_hints": ["your-secret-key", "us-east-1"],
     },
@@ -428,14 +433,14 @@ class SetupWizard:
                     f"  {blue('❯')} Azure endpoint URL {grey(p.get('api_base_hint', ''))}: "
                 )
                 if api_base:
-                    env_vars[f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"] = api_base
+                    env_vars[f"_LITELLM_AZURE_AI_API_BASE_{p['id'].upper()}"] = api_base
                 deployment = _styled_input(
                     f"  {blue('❯')} Azure deployment name {grey('(e.g. my-gpt4o)')}: "
                 )
                 if deployment:
-                    env_vars[
-                        f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}"
-                    ] = deployment
+                    env_vars[f"_LITELLM_AZURE_DEPLOYMENT_{p['id'].upper()}"] = (
+                        deployment
+                    )
 
             # Store the key returned by validation — may be a re-entered replacement
             env_vars[p["env_key"]] = SetupWizard._validate_and_report(p, key)
@@ -557,7 +562,7 @@ class SetupWizard:
                         f'      api_base: "{_yaml_escape(str(p["api_base"]))}"'
                     )
                 elif p.get("needs_api_base"):
-                    azure_base_key = f"_LITELLM_AZURE_API_BASE_{p['id'].upper()}"
+                    azure_base_key = f"_LITELLM_AZURE_AI_API_BASE_{p['id'].upper()}"
                     if azure_base_key in env_copy:
                         lines.append(
                             f'      api_base: "{_yaml_escape(env_copy.pop(azure_base_key))}"'

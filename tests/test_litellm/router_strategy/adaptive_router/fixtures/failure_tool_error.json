@@ -1,0 +1,13 @@
+[
+  {
+    "user_content": "read the config file",
+    "assistant_content": "Let me try.",
+    "tool_calls": [
+      {"id": "call_1", "name": "read_file", "arguments": {"path": "/etc/missing.conf"}}
+    ],
+    "tool_results": [
+      {"tool_call_id": "call_1", "content": "ENOENT: no such file or directory", "is_error": true}
+    ],
+    "response_status": 200
+  }
+]

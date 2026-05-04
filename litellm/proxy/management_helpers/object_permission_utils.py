@@ -208,10 +208,10 @@ async def _resolve_team_allowed_mcp_servers(
     )
 
     direct_servers: List[str] = team_object_permission.mcp_servers or []
-    access_group_servers: List[
-        str
-    ] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-        team_object_permission.mcp_access_groups or []
+    access_group_servers: List[str] = (
+        await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            team_object_permission.mcp_access_groups or []
+        )
     )
     raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
     if isinstance(raw_tool_perms, str):
@@ -286,6 +286,19 @@ def _extract_requested_mcp_access_groups(
     return set()
 
 
+def _extract_requested_mcp_toolsets(
+    object_permission: Optional[dict],
+) -> Set[str]:
+    """Extract MCP toolset IDs from a key's object_permission dict."""
+    if not object_permission or not isinstance(object_permission, dict):
+        return set()
+
+    toolsets = object_permission.get("mcp_toolsets")
+    if isinstance(toolsets, list):
+        return set(toolsets)
+    return set()
+
+
 async def validate_key_mcp_servers_against_team(
     object_permission: Optional[dict],
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
@@ -305,8 +318,10 @@ async def validate_key_mcp_servers_against_team(
     requested_servers = _extract_requested_mcp_server_ids(object_permission)
     requested_access_groups = _extract_requested_mcp_access_groups(object_permission)
 
+    requested_toolsets = _extract_requested_mcp_toolsets(object_permission)
+
     # Nothing to validate
-    if not requested_servers and not requested_access_groups:
+    if not requested_servers and not requested_access_groups and not requested_toolsets:
         return
 
     allow_all_keys_servers = _get_allow_all_keys_server_ids()
@@ -320,8 +335,9 @@ async def validate_key_mcp_servers_against_team(
         disallowed_servers = requested_servers - all_allowed_servers
         if disallowed_servers:
             if team_obj is not None:
+                team_id = team_obj.team_id
                 detail = (
-                    f"Key requests MCP servers not allowed by team '{team_obj.team_id}': "
+                    f"Key requests MCP servers not allowed by team '{team_id}': "
                     f"{sorted(disallowed_servers)}. "
                     f"Team allows: {sorted(team_allowed_servers)}. "
                     f"Global (allow_all_keys) servers: {sorted(allow_all_keys_servers)}."
@@ -350,8 +366,9 @@ async def validate_key_mcp_servers_against_team(
         disallowed_groups = requested_access_groups - team_access_groups
         if disallowed_groups:
             if team_obj is not None:
+                team_id = team_obj.team_id
                 detail = (
-                    f"Key requests MCP access groups not allowed by team '{team_obj.team_id}': "
+                    f"Key requests MCP access groups not allowed by team '{team_id}': "
                     f"{sorted(disallowed_groups)}. "
                     f"Team allows: {sorted(team_access_groups)}."
                 )
@@ -364,3 +381,71 @@ async def validate_key_mcp_servers_against_team(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"error": detail},
             )
+
+    # Validate requested toolsets against team's allowed toolsets.
+    # Only enforce the team-based restriction when a team is present — standalone
+    # keys (no team) can freely be granted any toolset by an admin.
+    if requested_toolsets and team_obj is not None:
+        team_op = team_obj.object_permission
+        team_mcp_toolsets = team_op.mcp_toolsets if team_op is not None else None
+        # None or [] means the team has no toolset restriction — allow any toolsets.
+        if team_mcp_toolsets:
+            disallowed_toolsets = requested_toolsets - set(team_mcp_toolsets)
+            if disallowed_toolsets:
+                team_id = team_obj.team_id
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": (
+                            f"Key requests MCP toolsets not allowed by team '{team_id}': "
+                            f"{sorted(disallowed_toolsets)}. "
+                            f"Team allows: {sorted(team_mcp_toolsets)}."
+                        )
+                    },
+                )
+
+
+def _extract_requested_search_tools(object_permission: Optional[dict]) -> List[str]:
+    """Return search_tool_name values from a key's object_permission dict."""
+    if not object_permission or not isinstance(object_permission, dict):
+        return []
+    raw = object_permission.get("search_tools")
+    if not isinstance(raw, list):
+        return []
+    return [str(x) for x in raw if x]
+
+
+async def validate_key_search_tools_against_team(
+    object_permission: Optional[dict],
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+) -> None:
+    """
+    Validate key object_permission.search_tools is a subset of the team's allowlist.
+
+    Empty team allowlist means no restriction at team layer (skip).
+    """
+    requested = _extract_requested_search_tools(object_permission)
+    if not requested:
+        return
+
+    team_tools: List[str] = []
+    if team_obj is not None and team_obj.object_permission is not None:
+        st = team_obj.object_permission.search_tools
+        if st:
+            team_tools = list(st)
+
+    if not team_tools:
+        return
+
+    disallowed = set(requested) - set(team_tools)
+    if disallowed:
+        team_id = team_obj.team_id if team_obj is not None else "unknown"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"Key requests search tools not allowed by team '{team_id}': "
+                    f"{sorted(disallowed)}. Team allows: {sorted(team_tools)}."
+                )
+            },
+        )

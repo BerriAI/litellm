@@ -54,12 +54,12 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self._service_client_timeout: Optional[float] = None
 
             # Internal variables used for Token based authentication
-            self.azure_auth_token: Optional[
-                str
-            ] = None  # the Azure AD token to use for Azure Storage API requests
-            self.token_expiry: Optional[
-                datetime
-            ] = None  # the expiry time of the currentAzure AD token
+            self.azure_auth_token: Optional[str] = (
+                None  # the Azure AD token to use for Azure Storage API requests
+            )
+            self.token_expiry: Optional[datetime] = (
+                None  # the expiry time of the currentAzure AD token
+            )
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
@@ -275,12 +275,11 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         """
         Gets Azure AD token to use for Azure Storage API requests
         """
-        verbose_logger.debug("Getting Azure AD Token from Azure Storage")
         verbose_logger.debug(
-            "tenant_id %s, client_id %s, client_secret %s",
+            "Getting Azure AD Token from Azure Storage, tenant_id=%s, client_id=%s, client_secret=[set=%s]",
             tenant_id,
             client_id,
-            client_secret,
+            client_secret is not None,
         )
         if tenant_id is None:
             raise ValueError(

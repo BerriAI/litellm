@@ -4,6 +4,8 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export interface CostBreakdown {
   input_cost?: number;
+  cache_read_cost?: number;
+  cache_creation_cost?: number;
   output_cost?: number;
   total_cost?: number;
   tool_usage_cost?: number;
@@ -22,6 +24,9 @@ interface CostBreakdownViewerProps {
   promptTokens?: number;
   completionTokens?: number;
   cacheHit?: string;
+  rawInputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
 }
 
 const formatCost = (cost: number | undefined): string => {
@@ -40,6 +45,9 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   promptTokens,
   completionTokens,
   cacheHit,
+  rawInputTokens,
+  cacheReadTokens,
+  cacheCreationTokens,
 }) => {
   const isCached = cacheHit?.toLowerCase() === "true";
   const hasTokenCounts = promptTokens !== undefined || completionTokens !== undefined;
@@ -105,17 +113,63 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
               <div className="p-6 space-y-4">
             {/* Step 1: Base Token Costs */}
             <div className="space-y-2 max-w-2xl">
-              <div className="flex text-sm">
-                <span className="text-gray-600 font-medium w-1/3">Input Cost:</span>
-                <span className="text-gray-900">
-                  {formatCost(inputCost)}
-                  {promptTokens !== undefined && (
-                    <span className="text-gray-500 font-normal ml-1">
-                      ({promptTokens.toLocaleString()} prompt tokens)
+              {(() => {
+                const hasCacheBreakdown =
+                  costBreakdown?.cache_read_cost !== undefined ||
+                  costBreakdown?.cache_creation_cost !== undefined;
+                if (hasCacheBreakdown) {
+                  // Separate line items: Input / Cache Read / Cache Write
+                  const rawCost = isCached ? 0 : (inputCost ?? 0) - (costBreakdown?.cache_read_cost ?? 0) - (costBreakdown?.cache_creation_cost ?? 0);
+                  return (
+                    <>
+                      <div className="flex text-sm">
+                        <span className="text-gray-600 font-medium w-1/3">Input Cost:</span>
+                        <span className="text-gray-900">
+                          {formatCost(rawCost)}
+                          {rawInputTokens !== undefined && rawInputTokens !== null && (
+                            <span className="text-gray-500 font-normal ml-1">({rawInputTokens.toLocaleString()} tokens)</span>
+                          )}
+                        </span>
+                      </div>
+                      {(costBreakdown?.cache_read_cost ?? 0) > 0 && (
+                        <div className="flex text-sm">
+                          <span className="text-gray-600 font-medium w-1/3">Cache Read Cost:</span>
+                          <span className="text-gray-900">
+                            {formatCost(isCached ? 0 : costBreakdown?.cache_read_cost)}
+                            {(cacheReadTokens ?? 0) > 0 && (
+                              <span className="text-gray-500 font-normal ml-1">({(cacheReadTokens ?? 0).toLocaleString()} tokens)</span>
+                            )}
+                          </span>
+                        </div>
+                      )}
+                      {(costBreakdown?.cache_creation_cost ?? 0) > 0 && (
+                        <div className="flex text-sm">
+                          <span className="text-gray-600 font-medium w-1/3">Cache Write Cost:</span>
+                          <span className="text-gray-900">
+                            {formatCost(isCached ? 0 : costBreakdown?.cache_creation_cost)}
+                            {(cacheCreationTokens ?? 0) > 0 && (
+                              <span className="text-gray-500 font-normal ml-1">({(cacheCreationTokens ?? 0).toLocaleString()} tokens)</span>
+                            )}
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  );
+                }
+                return (
+                  <div className="flex text-sm">
+                    <span className="text-gray-600 font-medium w-1/3">Input Cost:</span>
+                    <span className="text-gray-900">
+                      {formatCost(inputCost)}
+                      {promptTokens !== undefined && (
+                        <span className="text-gray-500 font-normal ml-1">
+                          ({promptTokens.toLocaleString()} prompt tokens)
+                        </span>
+                      )}
                     </span>
-                  )}
-                </span>
-              </div>
+                  </div>
+                );
+              })()}
               <div className="flex text-sm">
                 <span className="text-gray-600 font-medium w-1/3">Output Cost:</span>
                 <span className="text-gray-900">

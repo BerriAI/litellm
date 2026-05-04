@@ -110,7 +110,9 @@ class TestPollingEndpointPreCallGuard:
     async def test_rate_limit_error_prevents_polling_id_creation(self):
         """responses_api() must raise 429 and never call generate_polling_id when rate-limited"""
         from litellm.proxy.response_api_endpoints.endpoints import responses_api
-        from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
+        from litellm.proxy.response_polling.polling_handler import (
+            ResponsePollingHandler,
+        )
 
         rate_limit_exc = litellm.RateLimitError(
             message="TPM limit exceeded",
@@ -141,9 +143,10 @@ class TestPollingEndpointPreCallGuard:
         }
 
         with (
-            patch.multiple("litellm.proxy.proxy_server", **{
-                k.split(".")[-1]: v for k, v in proxy_server_patches.items()
-            }),
+            patch.multiple(
+                "litellm.proxy.proxy_server",
+                **{k.split(".")[-1]: v for k, v in proxy_server_patches.items()},
+            ),
             patch(
                 "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
                 return_value=True,
@@ -158,9 +161,13 @@ class TestPollingEndpointPreCallGuard:
                 ProxyBaseLLMRequestProcessing,
                 "_handle_llm_api_exception",
                 new_callable=AsyncMock,
-                return_value=HTTPException(status_code=429, detail="Rate limit exceeded"),
+                return_value=HTTPException(
+                    status_code=429, detail="Rate limit exceeded"
+                ),
             ),
-            patch.object(ResponsePollingHandler, "generate_polling_id", generate_polling_id_mock),
+            patch.object(
+                ResponsePollingHandler, "generate_polling_id", generate_polling_id_mock
+            ),
             # Prevent background task from running (avoids noise from incomplete mocks)
             patch("asyncio.create_task"),
             patch.object(
@@ -179,4 +186,3 @@ class TestPollingEndpointPreCallGuard:
 
         assert exc_info.value.status_code == 429
         generate_polling_id_mock.assert_not_called()
-

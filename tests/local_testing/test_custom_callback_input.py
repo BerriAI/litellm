@@ -1410,15 +1410,13 @@ def test_logging_key_masking_gemini():
 
         mock_client.assert_called()
 
-        print(f"mock_client.call_args.kwargs: {mock_client.call_args.kwargs}")
-        assert (
-            "LEAVE_ONLY_LAST_4_CHAR_UNMASKED_THIS_PART"
-            not in mock_client.call_args.kwargs["kwargs"]["litellm_params"]["api_base"]
-        )
-        key = mock_client.call_args.kwargs["kwargs"]["litellm_params"]["api_base"]
-        trimmed_key = key.split("key=")[1]
-        trimmed_key = trimmed_key.replace("*", "")
-        assert "PART" == trimmed_key
+        # Gemini API keys are now transmitted via the x-goog-api-key header
+        # instead of the legacy ?key=... URL query parameter (security commit
+        # 25f93bed91). Verify the key never appears in api_base.
+        api_base = mock_client.call_args.kwargs["kwargs"]["litellm_params"]["api_base"]
+        assert "LEAVE_ONLY_LAST_4_CHAR_UNMASKED_THIS_PART" not in api_base
+        assert "?key=" not in api_base
+        assert "&key=" not in api_base
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

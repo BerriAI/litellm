@@ -160,9 +160,11 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         mock_logger.async_log_audit_log_event = AsyncMock()
         litellm.audit_log_callbacks = [mock_logger]
 
-        with patch("litellm.proxy.proxy_server.premium_user", True), patch(
-            "litellm.store_audit_logs", True
-        ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.store_audit_logs", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        ):
             mock_prisma.db.litellm_auditlog.create = AsyncMock()
 
             audit_log = _make_audit_log()
@@ -180,8 +182,9 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         mock_logger.async_log_audit_log_event = AsyncMock()
         litellm.audit_log_callbacks = [mock_logger]
 
-        with patch("litellm.proxy.proxy_server.premium_user", False), patch(
-            "litellm.store_audit_logs", True
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch("litellm.store_audit_logs", True),
         ):
             audit_log = _make_audit_log()
             await create_audit_log_for_update(audit_log)
@@ -209,9 +212,11 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         mock_logger.async_log_audit_log_event = AsyncMock()
         litellm.audit_log_callbacks = [mock_logger]
 
-        with patch("litellm.proxy.proxy_server.premium_user", True), patch(
-            "litellm.store_audit_logs", True
-        ), patch("litellm.proxy.proxy_server.prisma_client", None):
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.store_audit_logs", True),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+        ):
             audit_log = _make_audit_log()
             await create_audit_log_for_update(audit_log)
             await asyncio.sleep(0.1)
@@ -226,9 +231,11 @@ class TestCreateAuditLogForUpdateWithCallbacks:
         mock_logger.async_log_audit_log_event = AsyncMock()
         litellm.audit_log_callbacks = [mock_logger]
 
-        with patch("litellm.proxy.proxy_server.premium_user", True), patch(
-            "litellm.store_audit_logs", True
-        ), patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        with (
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.store_audit_logs", True),
+            patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        ):
             mock_prisma.db.litellm_auditlog.create = AsyncMock(
                 side_effect=RuntimeError("DB connection lost")
             )
@@ -280,9 +287,7 @@ class TestAuditLogTaskDoneCallback:
 class TestS3LoggerAuditLogEvent:
     @pytest.mark.asyncio
     async def test_queues_audit_log_with_correct_s3_key(self):
-        with patch(
-            "litellm.integrations.s3_v2.S3Logger.__init__", return_value=None
-        ):
+        with patch("litellm.integrations.s3_v2.S3Logger.__init__", return_value=None):
             from litellm.integrations.s3_v2 import S3Logger
 
             logger = S3Logger()
@@ -315,9 +320,7 @@ class TestS3LoggerAuditLogEvent:
 
     @pytest.mark.asyncio
     async def test_s3_key_format_no_path(self):
-        with patch(
-            "litellm.integrations.s3_v2.S3Logger.__init__", return_value=None
-        ):
+        with patch("litellm.integrations.s3_v2.S3Logger.__init__", return_value=None):
             from litellm.integrations.s3_v2 import S3Logger
 
             logger = S3Logger()

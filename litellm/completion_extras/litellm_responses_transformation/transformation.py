@@ -32,6 +32,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
 )
 from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
+    ChatCompletionReasoningItem,
     ChatCompletionToolParamFunctionChunk,
     Reasoning,
     ResponsesAPIOptionalRequestParams,
@@ -53,6 +54,61 @@ if TYPE_CHECKING:
         ChatCompletionThinkingBlock,
         OpenAIMessageContentListBlock,
     )
+
+
+def _get_reasoning_items(
+    msg: "AllMessageValues",
+) -> List[ChatCompletionReasoningItem]:
+    """Extract reasoning_items from a message dict with proper typing."""
+    items = msg.get("reasoning_items")  # type: ignore[union-attr]
+    if items:
+        return items  # type: ignore[return-value]
+    return []
+
+
+def _build_reasoning_item(
+    item_id: str,
+    encrypted_content: Optional[str],
+    summary_raw: Any,
+) -> Dict[str, Any]:
+    """Build a ChatCompletionReasoningItem-shaped dict from raw response data.
+
+    Handles both pydantic objects (attribute access) and plain dicts.
+    """
+    summary: List[Dict[str, Any]] = []
+    for s in summary_raw or []:
+        if isinstance(s, dict):
+            summary.append(
+                {"type": s.get("type", "summary_text"), "text": s.get("text", "")}
+            )
+        else:
+            summary.append(
+                {
+                    "type": getattr(s, "type", "summary_text"),
+                    "text": getattr(s, "text", ""),
+                }
+            )
+    return {
+        "id": item_id,
+        "type": "reasoning",
+        "encrypted_content": encrypted_content,
+        "summary": summary,
+    }
+
+
+def _reasoning_item_to_response_input(
+    r_item: Union[ChatCompletionReasoningItem, Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Convert a stored ChatCompletionReasoningItem back to a Responses API input item."""
+    r_input: Dict[str, Any] = {
+        "type": "reasoning",
+        "id": r_item.get("id") or f"rs_{id(r_item)}",
+        # summary is always required by the Responses API, even when empty
+        "summary": r_item.get("summary") or [],
+    }
+    if r_item.get("encrypted_content"):
+        r_input["encrypted_content"] = r_item["encrypted_content"]
+    return r_input
 
 
 class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
@@ -202,10 +258,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
+                for r_item in _get_reasoning_items(msg):
+                    input_items.append(_reasoning_item_to_response_input(r_item))
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     if function:
-                        input_tool_call = {
+                        input_tool_call: Dict[str, Any] = {
                             "type": "function_call",
                             "call_id": tool_call["id"],
                         }
@@ -217,7 +275,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     else:
                         raise ValueError(f"tool call not supported: {tool_call}")
             elif content is not None:
-                # Regular user/assistant message
+                if role == "assistant":
+                    for r_item in _get_reasoning_items(msg):
+                        input_items.append(_reasoning_item_to_response_input(r_item))
                 input_items.append(
                     {
                         "type": "message",
@@ -240,10 +300,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if key in ("max_tokens", "max_completion_tokens"):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
-                responses_api_request[
-                    "tools"
-                ] = self._convert_tools_to_responses_format(
-                    cast(List[Dict[str, Any]], value)
+                responses_api_request["tools"] = (
+                    self._convert_tools_to_responses_format(
+                        cast(List[Dict[str, Any]], value)
+                    )
                 )
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
@@ -411,6 +471,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         choices: List[Choices] = []
         index = 0
         reasoning_content: Optional[str] = None
+        pending_reasoning_item: Optional[Dict[str, Any]] = None
 
         # Collect all tool calls to put them in a single choice
         # (Chat Completions API expects all tool calls in one message)
@@ -419,9 +480,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
-                for summary_item in item.summary:
-                    response_text = getattr(summary_item, "text", "")
-                    reasoning_content = response_text if response_text else ""
+                pending_reasoning_item = _build_reasoning_item(
+                    item_id=item.id,
+                    encrypted_content=getattr(item, "encrypted_content", None),
+                    summary_raw=item.summary,
+                )
+                reasoning_content = " ".join(
+                    s["text"]
+                    for s in pending_reasoning_item["summary"]
+                    if s.get("text")
+                )
 
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
@@ -436,6 +504,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
                         annotations=annotations,
+                        reasoning_items=cast(
+                            Optional[List[ChatCompletionReasoningItem]],
+                            (
+                                [pending_reasoning_item]
+                                if pending_reasoning_item is not None
+                                else None
+                            ),
+                        ),
                     )
 
                     choices.append(
@@ -446,7 +522,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         )
                     )
 
-                    reasoning_content = None  # flush reasoning content
+                    reasoning_content = None  # flush
+                    pending_reasoning_item = None  # flush
                     index += 1
 
             elif isinstance(item, ResponseFunctionToolCall):
@@ -489,11 +566,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 content=None,
                 tool_calls=accumulated_tool_calls,
                 reasoning_content=reasoning_content,
+                reasoning_items=cast(
+                    Optional[List[ChatCompletionReasoningItem]],
+                    (
+                        [pending_reasoning_item]
+                        if pending_reasoning_item is not None
+                        else None
+                    ),
+                ),
             )
             choices.append(
                 Choices(message=msg, finish_reason="tool_calls", index=index)
             )
             reasoning_content = None
+            pending_reasoning_item = None
 
         return choices
 
@@ -1072,9 +1158,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
 
                 if provider_specific_fields:
-                    function_chunk[
-                        "provider_specific_fields"
-                    ] = provider_specific_fields
+                    function_chunk["provider_specific_fields"] = (
+                        provider_specific_fields
+                    )
 
                 tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
@@ -1147,9 +1233,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
                 # Add provider_specific_fields to function if present
                 if provider_specific_fields:
-                    function_chunk[
-                        "provider_specific_fields"
-                    ] = provider_specific_fields
+                    function_chunk["provider_specific_fields"] = (
+                        provider_specific_fields
+                    )
 
                 tool_call_index = parsed_chunk.get("output_index", 0)
                 tool_call_chunk = ChatCompletionToolCallChunk(
@@ -1232,6 +1318,25 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
             finish_reason = "tool_calls" if has_function_calls else "stop"
 
+            # Extract reasoning items with encrypted_content for round-tripping
+            completed_reasoning_items: Optional[List[Dict[str, Any]]] = None
+            for item in output_items:
+                if not isinstance(item, dict) or item.get("type") != "reasoning":
+                    continue
+                if completed_reasoning_items is None:
+                    completed_reasoning_items = []
+                completed_reasoning_items.append(
+                    _build_reasoning_item(
+                        item_id=item.get("id", ""),
+                        encrypted_content=item.get("encrypted_content"),
+                        summary_raw=item.get("summary"),
+                    )
+                )
+            completed_reasoning_items_typed = cast(
+                Optional[List[ChatCompletionReasoningItem]],
+                completed_reasoning_items,
+            )
+
             usage = None
             if response_data.get("usage"):
                 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -1245,7 +1350,10 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 choices=[
                     StreamingChoices(
                         index=0,
-                        delta=Delta(content=""),
+                        delta=Delta(
+                            content="",
+                            reasoning_items=completed_reasoning_items_typed,
+                        ),
                         finish_reason=finish_reason,
                     )
                 ],

@@ -1,5 +1,5 @@
 # Use the provided base image
-FROM ghcr.io/berriai/litellm:main-latest
+FROM ghcr.io/berriai/litellm:main-latest@sha256:7c311546c25e7bb6e8cafede9fcd3d0d622ac636b5c9418befaa32e85dfb0186
 
 # Set the working directory to /app
 WORKDIR /app

@@ -74,7 +74,7 @@ describe("useGuardrails", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(expectedGuardrailNames);
+    expect(result.current.data?.guardrails.map((g) => g.guardrail_name)).toEqual(expectedGuardrailNames);
     expect(result.current.error).toBeNull();
     expect(getGuardrailsList).toHaveBeenCalledWith("test-access-token");
     expect(getGuardrailsList).toHaveBeenCalledTimes(1);
@@ -228,7 +228,7 @@ describe("useGuardrails", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual([]);
+    expect(result.current.data?.guardrails).toEqual([]);
     expect(getGuardrailsList).toHaveBeenCalledWith("test-access-token");
   });
 
@@ -265,9 +265,35 @@ describe("useGuardrails", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(expectedNames);
-    expect(result.current.data).toHaveLength(2);
-    expect(result.current.data).toContain("custom-guardrail-1");
-    expect(result.current.data).toContain("custom-guardrail-2");
+    const names = result.current.data?.guardrails.map((g) => g.guardrail_name);
+    expect(names).toEqual(expectedNames);
+    expect(names).toHaveLength(2);
+    expect(names).toContain("custom-guardrail-1");
+    expect(names).toContain("custom-guardrail-2");
+  });
+
+  it("should partition guardrails into global and optional sets based on default_on", async () => {
+    const mockMixedResponse = {
+      guardrails: [
+        { guardrail_name: "global-guard-a", litellm_params: { default_on: true } },
+        { guardrail_name: "global-guard-b", litellm_params: { default_on: true } },
+        { guardrail_name: "optional-guard-a", litellm_params: { default_on: false } },
+        { guardrail_name: "optional-guard-b" },
+      ],
+    };
+    (getGuardrailsList as any).mockResolvedValue(mockMixedResponse);
+
+    const { result } = renderHook(() => useGuardrails(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(result.current.data?.globalGuardrailNames).toEqual(
+      new Set(["global-guard-a", "global-guard-b"]),
+    );
+    expect(result.current.data?.optionalGuardrailNames).toEqual(
+      new Set(["optional-guard-a", "optional-guard-b"]),
+    );
   });
 });

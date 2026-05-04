@@ -33,6 +33,9 @@ export function EditProjectModal({
       const metadataObj = (project.metadata ?? {}) as Record<string, unknown>;
       const rpmLimits = (metadataObj.model_rpm_limit ?? {}) as Record<string, number>;
       const tpmLimits = (metadataObj.model_tpm_limit ?? {}) as Record<string, number>;
+      const guardrails = (Array.isArray(metadataObj.guardrails)
+        ? metadataObj.guardrails
+        : []) as string[];
 
       const modelLimits: ProjectFormValues["modelLimits"] = [];
       const allLimitModels = new Set([
@@ -48,7 +51,7 @@ export function EditProjectModal({
       }
 
       // Filter out internal keys from user-facing metadata
-      const internalKeys = new Set(["model_rpm_limit", "model_tpm_limit"]);
+      const internalKeys = new Set(["model_rpm_limit", "model_tpm_limit", "guardrails"]);
       const metadata: ProjectFormValues["metadata"] = [];
       for (const [key, value] of Object.entries(metadataObj)) {
         if (!internalKeys.has(key)) {
@@ -63,6 +66,7 @@ export function EditProjectModal({
         models: project.models ?? [],
         max_budget: project.litellm_budget_table?.max_budget ?? undefined,
         isBlocked: project.blocked,
+        guardrails: guardrails.length > 0 ? guardrails : undefined,
         modelLimits: modelLimits.length > 0 ? modelLimits : undefined,
         metadata: metadata.length > 0 ? metadata : undefined,
       });

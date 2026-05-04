@@ -7,10 +7,12 @@ This implementation transforms between Mistral OCR format and Azure Document Int
 Note: Azure Document Intelligence API is async - POST returns 202 Accepted with Operation-Location header.
 The operation location must be polled until the analysis completes.
 """
+
 import asyncio
 import re
 import time
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -54,10 +56,87 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
         """
         Get supported OCR parameters for Azure Document Intelligence.
 
-        Azure DI has minimal optional parameters compared to Mistral OCR.
-        Most Mistral-specific params are ignored during transformation.
+        Azure DI exposes a `pages` query parameter on the analyze endpoint
+        (1-based, e.g. "1-3,5,7-9"). To keep the public request shape
+        aligned with Mistral OCR, callers pass `pages` using Mistral
+        semantics — a list of 0-based integers — or a pre-formatted
+        Azure-style string. Other Mistral-specific params (e.g.
+        `include_image_base64`) are not supported by Azure DI and are
+        ignored during transformation.
         """
-        return []
+        return ["pages"]
+
+    def map_ocr_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+    ) -> dict:
+        """
+        Map OCR params to Azure DI format.
+
+        Translates Mistral-style `pages` (list[int], 0-based) into Azure's
+        `pages` query string (1-based, e.g. "1,2,3" or "1-3,5"). A raw
+        string that already matches Azure's format is passed through
+        unchanged.
+        """
+        pages = non_default_params.get("pages")
+        if pages is None:
+            return optional_params
+
+        normalized = self._normalize_pages_param(pages)
+        if normalized:
+            optional_params["pages"] = normalized
+        return optional_params
+
+    @staticmethod
+    def _normalize_pages_param(pages: Any) -> str:
+        """
+        Convert a caller-provided `pages` value to Azure DI's query-string
+        form. Azure expects 1-based page numbers, grammar: `^(\\d+(-\\d+)?)(,\\s*(\\d+(-\\d+)?))*$`.
+
+        Accepted inputs:
+          - list[int]: Mistral-style 0-based indices. Converted to 1-based
+            and joined (e.g. [0,1,2] -> "1,2,3").
+          - list[str]: tokens like "1" or "3-5". Validated, joined as-is
+            (treated as Azure-native, i.e. 1-based).
+          - str: already in Azure format. Validated and whitespace-stripped.
+        """
+        pages_pattern = re.compile(r"^\s*\d+(-\d+)?(\s*,\s*\d+(-\d+)?)*\s*$")
+
+        if isinstance(pages, str):
+            if not pages_pattern.match(pages):
+                raise ValueError(
+                    f"Invalid `pages` string for Azure Document Intelligence: "
+                    f"{pages!r}. Expected format like '1-3,5,7-9'."
+                )
+            return pages.replace(" ", "")
+
+        if isinstance(pages, list):
+            if len(pages) == 0:
+                return ""
+            if any(isinstance(p, bool) for p in pages):
+                raise ValueError("`pages` must be integers, not booleans")
+            if all(isinstance(p, int) for p in pages):
+                if any(p < 0 for p in pages):
+                    raise ValueError(
+                        "`pages` integers must be >= 0 (Mistral 0-based indices)"
+                    )
+                # Mistral 0-based -> Azure 1-based.
+                return ",".join(str(p + 1) for p in sorted(set(pages)))
+            if all(isinstance(p, str) for p in pages):
+                joined = ",".join(p.strip() for p in pages)
+                if not pages_pattern.match(joined):
+                    raise ValueError(
+                        f"Invalid `pages` list for Azure Document Intelligence: "
+                        f"{pages!r}. Expected tokens like '1' or '3-5'."
+                    )
+                return joined
+
+        raise ValueError(
+            "`pages` must be a list[int] (0-based, Mistral-style) or a "
+            "string like '1-3,5,7-9'."
+        )
 
     def validate_environment(
         self,
@@ -141,7 +220,18 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
         # Azure Document Intelligence analyze endpoint
         # Note: API version 2024-11-30+ uses /documentintelligence/ (not /formrecognizer/)
-        return f"{api_base}/documentintelligence/documentModels/{model_id}:analyze?api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}"
+        url = (
+            f"{api_base}/documentintelligence/documentModels/{model_id}:analyze"
+            f"?api-version={AZURE_DOCUMENT_INTELLIGENCE_API_VERSION}"
+        )
+
+        # Azure DI accepts `pages` as a query param (1-based, e.g. "1-3,5").
+        # `optional_params` has already been normalized in `map_ocr_params`.
+        pages = optional_params.get("pages") if optional_params else None
+        if pages:
+            url += f"&pages={quote(str(pages), safe=',-')}"
+
+        return url
 
     def _extract_base64_from_data_uri(self, data_uri: str) -> str:
         """
@@ -233,8 +323,9 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             data["urlSource"] = document_url
             verbose_logger.debug("Using urlSource for Azure Document Intelligence")
 
-        # Azure DI doesn't support most Mistral-specific params
-        # Ignore pages, include_image_base64, etc.
+        # Azure DI: `pages` is a query param (wired in get_complete_url),
+        # not a body field. Other Mistral-specific params (e.g.
+        # include_image_base64, image_limit) are unsupported and ignored.
 
         return OCRRequestData(data=data, files=None)
 

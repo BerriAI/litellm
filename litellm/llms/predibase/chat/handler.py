@@ -2,27 +2,17 @@
 ## Controller file for Predibase Integration - https://predibase.com/
 
 import json
-import os
-import time
 from functools import partial
 from typing import Callable, Optional, Union
 
 import httpx  # type: ignore
 
 import litellm
-import litellm.litellm_core_utils
-import litellm.litellm_core_utils.litellm_logging
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
-from litellm.litellm_core_utils.prompt_templates.factory import (
-    custom_prompt,
-    prompt_factory,
-)
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
 )
-from litellm.types.utils import LiteLLMLoggingBaseClass
-from litellm.utils import Choices, CustomStreamWrapper, Message, ModelResponse, Usage
+from litellm.utils import CustomStreamWrapper, ModelResponse
 
 from ..common_utils import PredibaseError
 
@@ -60,162 +50,6 @@ class PredibaseChatCompletion:
     def __init__(self) -> None:
         super().__init__()
 
-    def output_parser(self, generated_text: str):
-        """
-        Parse the output text to remove any special characters. In our current approach we just check for ChatML tokens.
-
-        Initial issue that prompted this - https://github.com/BerriAI/litellm/issues/763
-        """
-        chat_template_tokens = [
-            "<|assistant|>",
-            "<|system|>",
-            "<|user|>",
-            "<s>",
-            "</s>",
-        ]
-        for token in chat_template_tokens:
-            if generated_text.strip().startswith(token):
-                generated_text = generated_text.replace(token, "", 1)
-            if generated_text.endswith(token):
-                generated_text = generated_text[::-1].replace(token[::-1], "", 1)[::-1]
-        return generated_text
-
-    def process_response(  # noqa: PLR0915
-        self,
-        model: str,
-        response: httpx.Response,
-        model_response: ModelResponse,
-        stream: bool,
-        logging_obj: LiteLLMLoggingBaseClass,
-        optional_params: dict,
-        api_key: str,
-        data: Union[dict, str],
-        messages: list,
-        print_verbose,
-        encoding,
-    ) -> ModelResponse:
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
-        )
-        print_verbose(f"raw model_response: {response.text}")
-        ## RESPONSE OBJECT
-        try:
-            completion_response = response.json()
-        except Exception:
-            raise PredibaseError(message=response.text, status_code=422)
-        if "error" in completion_response:
-            raise PredibaseError(
-                message=str(completion_response["error"]),
-                status_code=response.status_code,
-            )
-        else:
-            if not isinstance(completion_response, dict):
-                raise PredibaseError(
-                    status_code=422,
-                    message=f"'completion_response' is not a dictionary - {completion_response}",
-                )
-            elif "generated_text" not in completion_response:
-                raise PredibaseError(
-                    status_code=422,
-                    message=f"'generated_text' is not a key response dictionary - {completion_response}",
-                )
-            if len(completion_response["generated_text"]) > 0:
-                model_response.choices[0].message.content = self.output_parser(  # type: ignore
-                    completion_response["generated_text"]
-                )
-            ## GETTING LOGPROBS + FINISH REASON
-            if (
-                "details" in completion_response
-                and "tokens" in completion_response["details"]
-            ):
-                model_response.choices[0].finish_reason = map_finish_reason(
-                    completion_response["details"]["finish_reason"]
-                )
-                sum_logprob = 0
-                for token in completion_response["details"]["tokens"]:
-                    if token["logprob"] is not None:
-                        sum_logprob += token["logprob"]
-                setattr(
-                    model_response.choices[0].message,  # type: ignore
-                    "_logprob",
-                    sum_logprob,  # [TODO] move this to using the actual logprobs
-                )
-            if "best_of" in optional_params and optional_params["best_of"] > 1:
-                if (
-                    "details" in completion_response
-                    and "best_of_sequences" in completion_response["details"]
-                ):
-                    choices_list = []
-                    for idx, item in enumerate(
-                        completion_response["details"]["best_of_sequences"]
-                    ):
-                        sum_logprob = 0
-                        for token in item["tokens"]:
-                            if token["logprob"] is not None:
-                                sum_logprob += token["logprob"]
-                        if len(item["generated_text"]) > 0:
-                            message_obj = Message(
-                                content=self.output_parser(item["generated_text"]),
-                                logprobs=sum_logprob,
-                            )
-                        else:
-                            message_obj = Message(content=None)
-                        choice_obj = Choices(
-                            finish_reason=map_finish_reason(item["finish_reason"]),
-                            index=idx + 1,
-                            message=message_obj,
-                        )
-                        choices_list.append(choice_obj)
-                    model_response.choices.extend(choices_list)
-
-        ## CALCULATING USAGE
-        prompt_tokens = 0
-        try:
-            prompt_tokens = litellm.token_counter(messages=messages)
-        except Exception:
-            # this should remain non blocking we should not block a response returning if calculating usage fails
-            pass
-        output_text = model_response["choices"][0]["message"].get("content", "")
-        if output_text is not None and len(output_text) > 0:
-            completion_tokens = 0
-            try:
-                completion_tokens = len(
-                    encoding.encode(
-                        model_response["choices"][0]["message"].get("content", "")
-                    )
-                )  ##[TODO] use a model-specific tokenizer
-            except Exception:
-                # this should remain non blocking we should not block a response returning if calculating usage fails
-                pass
-        else:
-            completion_tokens = 0
-
-        total_tokens = prompt_tokens + completion_tokens
-
-        model_response.created = int(time.time())
-        model_response.model = model
-        usage = Usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-        )
-        model_response.usage = usage  # type: ignore
-
-        ## RESPONSE HEADERS
-        predibase_headers = response.headers
-        response_headers = {}
-        for k, v in predibase_headers.items():
-            if k.startswith("x-"):
-                response_headers["llm_provider-{}".format(k)] = v
-
-        model_response._hidden_params["additional_headers"] = response_headers
-
-        return model_response
-
     def completion(
         self,
         model: str,
@@ -235,7 +69,8 @@ class PredibaseChatCompletion:
         logger_fn=None,
         headers: dict = {},
     ) -> Union[ModelResponse, CustomStreamWrapper]:
-        headers = litellm.PredibaseConfig().validate_environment(
+        predibase_config = litellm.PredibaseConfig()
+        headers = predibase_config.validate_environment(
             api_key=api_key,
             headers=headers,
             messages=messages,
@@ -243,54 +78,32 @@ class PredibaseChatCompletion:
             model=model,
             litellm_params=litellm_params,
         )
-        completion_url = ""
-        input_text = ""
-        base_url = "https://serving.app.predibase.com"
-
-        if "https" in model:
-            completion_url = model
-        elif api_base:
-            base_url = api_base
-        elif "PREDIBASE_API_BASE" in os.environ:
-            base_url = os.getenv("PREDIBASE_API_BASE", "")
-
-        completion_url = f"{base_url}/{tenant_id}/deployments/v2/llms/{model}"
-
-        if optional_params.get("stream", False) is True:
-            completion_url += "/generate_stream"
-        else:
-            completion_url += "/generate"
-
-        if model in custom_prompt_dict:
-            # check if the model has a registered custom prompt
-            model_prompt_details = custom_prompt_dict[model]
-            prompt = custom_prompt(
-                role_dict=model_prompt_details["roles"],
-                initial_prompt_value=model_prompt_details["initial_prompt_value"],
-                final_prompt_value=model_prompt_details["final_prompt_value"],
-                messages=messages,
-            )
-        else:
-            prompt = prompt_factory(model=model, messages=messages)
-
-        ## Load Config
-        config = litellm.PredibaseConfig.get_config()
-        for k, v in config.items():
-            if (
-                k not in optional_params
-            ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
-                optional_params[k] = v
-
-        stream = optional_params.pop("stream", False)
-
-        data = {
-            "inputs": prompt,
-            "parameters": optional_params,
+        request_optional_params = {**optional_params}
+        stream = request_optional_params.get("stream", False)
+        request_litellm_params = {
+            **litellm_params,
+            "custom_prompt_dict": custom_prompt_dict,
+            "predibase_tenant_id": tenant_id,
         }
-        input_text = prompt
+        completion_url = predibase_config.get_complete_url(
+            api_base=api_base,
+            api_key=api_key,
+            model=model,
+            optional_params=request_optional_params,
+            litellm_params=request_litellm_params,
+            stream=stream,
+        )
+        data = predibase_config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=request_optional_params,
+            litellm_params=request_litellm_params,
+            headers=headers,
+        )
+
         ## LOGGING
         logging_obj.pre_call(
-            input=input_text,
+            input=data.get("inputs", ""),
             api_key=api_key,
             additional_args={
                 "complete_input_dict": data,
@@ -313,8 +126,8 @@ class PredibaseChatCompletion:
                     encoding=encoding,
                     api_key=api_key,
                     logging_obj=logging_obj,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
+                    optional_params=request_optional_params,
+                    litellm_params=request_litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
@@ -331,12 +144,13 @@ class PredibaseChatCompletion:
                     encoding=encoding,
                     api_key=api_key,
                     logging_obj=logging_obj,
-                    optional_params=optional_params,
+                    optional_params=request_optional_params,
                     stream=False,
-                    litellm_params=litellm_params,
+                    litellm_params=request_litellm_params,
                     logger_fn=logger_fn,
                     headers=headers,
                     timeout=timeout,
+                    predibase_config=predibase_config,
                 )  # type: ignore
 
         ### SYNC STREAMING
@@ -363,17 +177,16 @@ class PredibaseChatCompletion:
                 data=json.dumps(data),
                 timeout=timeout,  # type: ignore
             )
-        return self.process_response(
+        return predibase_config.transform_response(
             model=model,
-            response=response,
+            raw_response=response,
             model_response=model_response,
-            stream=optional_params.get("stream", False),
             logging_obj=logging_obj,  # type: ignore
-            optional_params=optional_params,
+            optional_params=request_optional_params,
             api_key=api_key,
-            data=data,
+            request_data=data,
             messages=messages,
-            print_verbose=print_verbose,
+            litellm_params=request_litellm_params,
             encoding=encoding,
         )
 
@@ -394,7 +207,10 @@ class PredibaseChatCompletion:
         litellm_params=None,
         logger_fn=None,
         headers={},
+        predibase_config=None,
     ) -> ModelResponse:
+        if predibase_config is None:
+            predibase_config = litellm.PredibaseConfig()
         async_handler = get_async_httpx_client(
             llm_provider=litellm.LlmProviders.PREDIBASE,
             params={"timeout": timeout},
@@ -417,17 +233,16 @@ class PredibaseChatCompletion:
             raise PredibaseError(
                 status_code=500, message="{}".format(str(e))
             )  # don't use verbose_logger.exception, if exception is raised
-        return self.process_response(
+        return predibase_config.transform_response(
             model=model,
-            response=response,
+            raw_response=response,
             model_response=model_response,
-            stream=stream,
             logging_obj=logging_obj,
             api_key=api_key,
-            data=data,
+            request_data=data,
             messages=messages,
-            print_verbose=print_verbose,
             optional_params=optional_params,
+            litellm_params=litellm_params or {},
             encoding=encoding,
         )
 

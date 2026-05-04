@@ -111,6 +111,12 @@ class MCPCredentials(TypedDict, total=False):
     aws_service_name: Optional[str]
     """AWS service name for SigV4 signing (e.g., 'bedrock-agentcore'). Not a secret — stored unencrypted."""
 
+    aws_role_name: Optional[str]
+    """IAM role ARN for STS AssumeRole (e.g., 'arn:aws:iam::123456789012:role/MyRole'). Not a secret — stored unencrypted."""
+
+    aws_session_name: Optional[str]
+    """Session name for STS AssumeRole (used in CloudTrail). Not a secret — stored unencrypted."""
+
 
 class MCPServerCostInfo(TypedDict, total=False):
     default_cost_per_query: Optional[float]
