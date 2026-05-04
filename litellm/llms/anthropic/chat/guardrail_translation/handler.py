@@ -12,6 +12,7 @@ Pattern Overview:
 4. Apply guardrail responses back to the original structure
 """
 
+import copy
 import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
@@ -69,12 +70,20 @@ class AnthropicMessagesHandler(BaseTranslation):
         self.adapter = LiteLLMAnthropicMessagesAdapter()
 
     def _translate_to_openai(self, data: dict) -> ChatCompletionRequest:
-        """Translate Anthropic request to OpenAI chat completion format."""
+        """Translate Anthropic request to OpenAI chat completion format.
+
+        Uses ``copy.deepcopy`` rather than ``data.copy()``: the adapter's tool
+        translation can mutate nested dicts (tools[i]["input_schema"]), so a
+        shallow copy would corrupt the caller's payload before the real LLM
+        call runs. This path is invoked by every pre-/post-call guardrail hook.
+        """
         (
             chat_completion_compatible_request,
             _tool_name_mapping,
         ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
+            anthropic_message_request=cast(
+                AnthropicMessagesRequest, copy.deepcopy(data)
+            )
         )
         return chat_completion_compatible_request
 
