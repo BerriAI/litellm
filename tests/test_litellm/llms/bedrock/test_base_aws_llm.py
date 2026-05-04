@@ -33,7 +33,7 @@ BASE_AWS_LLM_PATH = os.path.join(
 
 @pytest.fixture(autouse=True)
 def flush_shared_bedrock_iam_cache():
-    """Process-wide IAM cache must not leak AssumeRole/static entries across tests."""
+    """Process-wide IAM cache must not leak static/env credential entries across tests."""
     BaseAWSLLM._shared_iam_cache.flush_cache()
     yield
 
@@ -635,8 +635,7 @@ def test_role_assumption_without_session_name():
         call_args = mock_sts_client.assume_role.call_args
         assert call_args[1]["RoleSessionName"] == "my-custom-session"
 
-    # Test case 3: Repeated AssumeRole with same role shares process-wide iam_cache until TTL.
-    # Flush entries from case 1/2 — same ARN + absent session_name shares one cache key.
+    # Test case 3: AssumeRole is not stored in iam_cache; identical calls each invoke STS.
     BaseAWSLLM._shared_iam_cache.flush_cache()
     mock_sts_client.reset_mock()
     with patch("boto3.client", return_value=mock_sts_client):
@@ -648,8 +647,49 @@ def test_role_assumption_without_session_name():
             aws_role_name="arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
         )
 
-        assert mock_sts_client.assume_role.call_count == 1
+        assert mock_sts_client.assume_role.call_count == 2
         assert credentials1.access_key == credentials2.access_key
+
+
+def test_assume_role_path_does_not_use_process_iam_cache():
+    """AssumeRole credentials are not cached; each get_credentials repeats STS AssumeRole."""
+    base_aws_llm = BaseAWSLLM()
+
+    mock_sts_client = MagicMock()
+    mock_expiry = MagicMock()
+    mock_expiry.tzinfo = timezone.utc
+    time_diff = MagicMock()
+    time_diff.total_seconds.return_value = 3600
+    mock_expiry.__sub__ = MagicMock(return_value=time_diff)
+
+    mock_sts_client.assume_role.return_value = {
+        "Credentials": {
+            "AccessKeyId": "assumed-access-key",
+            "SecretAccessKey": "assumed-secret-key",
+            "SessionToken": "assumed-session-token",
+            "Expiration": mock_expiry,
+        }
+    }
+    mock_sts_client.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::111111111111:assumed-role/SomeOtherRole/session-name",
+    }
+
+    role_arn = "arn:aws:iam::2222222222222:role/LitellmEvalBedrockRole"
+    env_without_irsa = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE")
+    }
+
+    with patch.dict(os.environ, env_without_irsa, clear=True):
+        with patch("boto3.client", return_value=mock_sts_client):
+            base_aws_llm.get_credentials(aws_role_name=role_arn)
+            mock_sts_client.get_caller_identity.reset_mock()
+
+            base_aws_llm.get_credentials(aws_role_name=role_arn)
+
+            mock_sts_client.get_caller_identity.assert_called()
+            assert mock_sts_client.assume_role.call_count == 2
 
 
 def test_cache_keys_are_different_for_different_roles():

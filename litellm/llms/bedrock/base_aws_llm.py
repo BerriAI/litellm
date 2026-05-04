@@ -118,11 +118,12 @@ class BaseAWSLLM:
         """
         Read-through IAM cache on the process-wide DualCache.
 
-        Used for long-lived static credentials, ambient env credentials when skipping AssumeRole,
-        and sts:AssumeRole results (TTL from STS expiration minus buffer).
+        Used only for static access-key credentials and ambient credentials from
+        ``_auth_with_env_vars`` (including when skipping AssumeRole because the runtime identity
+        already matches ``aws_role_name``).
 
-        Web identity token exchange, profiles, and explicit session-token tuples are not cached
-        here — see ``get_credentials`` branch comments (LIT-2662).
+        AssumeRole, web identity exchange, profiles, and explicit session-token tuples are not
+        cached here — shared ``Credentials`` / refresh state must not span logical sessions.
         """
         cache_key = self.get_cache_key(credential_args)
         _cached = self.iam_cache.get_cache(cache_key)
@@ -226,8 +227,8 @@ class BaseAWSLLM:
         #   Credentials - boto3.Credentials
         #   cache ttl - Optional[int]. If None, the credentials are not cached. Some auth flows have no expiry time.
         #
-        # iam_cache: static keys, ambient env (when skipping AssumeRole), and AssumeRole (TTL).
-        # Do not cache web identity / profile / explicit session-token paths here.
+        # iam_cache: static keys and ambient env only (including skip-AssumeRole path).
+        # Do not cache AssumeRole / web identity / profile / explicit session-token paths here.
         #########################################################
         if (
             aws_web_identity_token is not None
@@ -244,6 +245,14 @@ class BaseAWSLLM:
             )
             return credentials
         elif aws_role_name is not None:
+            # Peek only for ambient-env credentials cached under ``args`` (already-running-as-role
+            # path uses ``_auth_with_env_vars``). AssumeRole results are never cached — see
+            # ``_get_or_set_cached_credentials`` docstring.
+            role_branch_cache_key = self.get_cache_key(args)
+            _cached_role_branch = self.iam_cache.get_cache(role_branch_cache_key)
+            if _cached_role_branch:
+                return _cached_role_branch
+
             # Check if we're already running as the target role and can skip assumption
             # This handles IRSA (EKS), ECS task roles, and EC2 instance profiles
             if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
@@ -258,22 +267,18 @@ class BaseAWSLLM:
             # If aws_session_name is not provided, generate a default one
             if aws_session_name is None:
                 aws_session_name = f"litellm-session-{int(datetime.now().timestamp())}"
-            # Cache key uses ``args`` captured before this mutation; callers without an explicit
-            # session name share one AssumeRole entry until TTL expires (prior per-instance behavior).
-            return self._get_or_set_cached_credentials(
-                args,
-                lambda: self._auth_with_aws_role(
-                    aws_access_key_id=aws_access_key_id,
-                    aws_secret_access_key=aws_secret_access_key,
-                    aws_session_token=aws_session_token,
-                    aws_role_name=aws_role_name,
-                    aws_session_name=aws_session_name,
-                    aws_region_name=aws_region_name,
-                    aws_sts_endpoint=aws_sts_endpoint,
-                    aws_external_id=aws_external_id,
-                    ssl_verify=ssl_verify,
-                ),
+            credentials, _assume_ttl = self._auth_with_aws_role(
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                aws_session_token=aws_session_token,
+                aws_role_name=aws_role_name,
+                aws_session_name=aws_session_name,
+                aws_region_name=aws_region_name,
+                aws_sts_endpoint=aws_sts_endpoint,
+                aws_external_id=aws_external_id,
+                ssl_verify=ssl_verify,
             )
+            return credentials
 
         elif aws_profile_name is not None:  ### CHECK SESSION ###
             credentials, _cache_ttl = self._auth_with_aws_profile(aws_profile_name)
