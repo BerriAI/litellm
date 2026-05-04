@@ -309,7 +309,7 @@ class MCPServerManager:
         """
         return self.config_mcp_servers | self.registry
 
-    async def load_servers_from_config(
+    async def load_servers_from_config(  # noqa: PLR0915
         self,
         mcp_servers_config: Dict[str, Any],
         mcp_aliases: Optional[Dict[str, str]] = None,
