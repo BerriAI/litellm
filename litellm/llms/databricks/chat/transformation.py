@@ -359,9 +359,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 if AnthropicConfig._is_claude_4_6_model(
                     model
                 ) or AnthropicConfig._is_claude_4_7_model(model):
-                    mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
-                        reasoning_effort_value
-                    )
+                    # ``reasoning_effort_value`` comes from ``non_default_params``
+                    # so its static type is ``Any | None``. Narrow to ``str`` for
+                    # the mapping lookup; non-strings fall through to the
+                    # ``BadRequestError`` below with a clean validation message.
+                    mapped_effort: Optional[str] = None
+                    if isinstance(reasoning_effort_value, str):
+                        mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                            reasoning_effort_value
+                        )
                     if mapped_effort is None:
                         raise litellm.exceptions.BadRequestError(
                             message=(
