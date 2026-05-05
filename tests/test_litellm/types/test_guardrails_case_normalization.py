@@ -1,6 +1,7 @@
 """
 Test case normalization in LitellmParams for all guardrail types
 """
+
 import pytest
 from litellm.types.guardrails import LitellmParams
 
@@ -64,7 +65,7 @@ class TestLitellmParamsCaseNormalization:
             ("lakera_v2", "allow"),  # Already lowercase - should still work
             ("bedrock", "Deny"),
         ]
-        
+
         for guardrail_type, default_action_input in test_cases:
             params = LitellmParams(
                 guardrail=guardrail_type,
@@ -79,7 +80,7 @@ class TestLitellmParamsCaseNormalization:
     def test_on_disallowed_action_all_cases(self):
         """Test on_disallowed_action normalization across all cases"""
         test_cases = ["block", "Block", "BLOCK", "rewrite", "Rewrite", "REWRITE"]
-        
+
         for action in test_cases:
             params = LitellmParams(
                 guardrail="tool_permission",

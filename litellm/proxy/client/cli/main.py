@@ -45,14 +45,16 @@ def print_version(base_url: str, api_key: Optional[str]):
     expose_value=False,
     help="Show the LiteLLM Proxy CLI and server version and exit.",
     callback=lambda ctx, param, value: (
-        print_version(
-            ctx.params.get("base_url") or "http://localhost:4000",
-            ctx.params.get("api_key"),
+        (
+            print_version(
+                ctx.params.get("base_url") or "http://localhost:4000",
+                ctx.params.get("api_key"),
+            )
+            or ctx.exit()
         )
-        or ctx.exit()
-    )
-    if value and not ctx.resilient_parsing
-    else None,
+        if value and not ctx.resilient_parsing
+        else None
+    ),
 )
 @click.option(
     "--base-url",

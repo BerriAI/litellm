@@ -381,6 +381,33 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     logo: `${ASSET_PREFIX}akto.svg`,
     tags: ["Security", "Safety", "Monitoring"],
   },
+  {
+    id: "promptguard",
+    name: "PromptGuard",
+    description:
+      "AI security gateway with prompt injection detection, PII redaction, topic filtering, entity blocklists, and hallucination detection. Self-hostable with drop-in proxy integration.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}promptguard.svg`,
+    tags: ["Security", "Prompt Injection", "PII"],
+    providerKey: "Promptguard",
+    eval: {
+      f1: 94.9,
+      precision: 100.0,
+      recall: 90.4,
+      testCases: 5384,
+      latency: "~150ms",
+    },
+  },
+  {
+    id: "xecguard",
+    name: "XecGuard",
+    description:
+      "CyCraft XecGuard AI security gateway. Multi-policy scanning (prompt injection, harmful content, PII, system-prompt enforcement) plus RAG context grounding.",
+    category: "partner",
+    logo: `${ASSET_PREFIX}xecguard.svg`,
+    tags: ["Security", "Policy", "Grounding", "RAG"],
+    providerKey: "Xecguard",
+  },
 ];
 
 export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];

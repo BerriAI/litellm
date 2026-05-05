@@ -69,4 +69,3 @@ async def test_manus_files_api_e2e_all_methods():
     assert deleted_file.deleted is True
 
     print("\n✅ All Manus Files API methods working!")
-

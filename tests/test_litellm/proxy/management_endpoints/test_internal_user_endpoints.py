@@ -1878,6 +1878,121 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
         assert condition[field] == {"in": ["admin-creator"]}
 
 
+@pytest.mark.asyncio
+async def test_delete_user_rejects_org_admin_deleting_outside_scope(mocker):
+    """Regression: an org admin of org-A must not be able to delete a user
+    whose org memberships include org-B.
+
+    Route-level gate accepts the request when the caller supplies an
+    `organization_id` they administer; without per-user org authorization
+    the handler would cascade-delete the victim's keys, memberships, and
+    user row regardless of where the victim actually belongs.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import DeleteUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import delete_user
+
+    mock_prisma_client = mocker.MagicMock()
+
+    # Target user exists and is a member of org-B only.
+    mock_target_user = mocker.MagicMock()
+    mock_target_user.user_id = "victim"
+    mock_target_user.user_email = "victim@example.com"
+    mock_target_user.teams = []
+    mock_target_user.json.return_value = "{}"
+
+    async def mock_find_unique(*args, **kwargs):
+        return mock_target_user
+
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(
+        side_effect=mock_find_unique
+    )
+
+    # Caller (org_admin_user) administers org-A.
+    caller_membership = mocker.MagicMock()
+    caller_membership.organization_id = "org-A"
+
+    # Target user is a member of org-B (outside caller's scope).
+    target_membership = mocker.MagicMock()
+    target_membership.organization_id = "org-B"
+
+    async def mock_find_memberships(*args, **kwargs):
+        where = kwargs.get("where") or (args[0] if args else {})
+        user_id_filter = where.get("user_id")
+        # Batched lookup: {"user_id": {"in": [...]}} returns target memberships.
+        # Caller role lookup: {"user_id": "<caller>", "user_role": ...}.
+        if isinstance(user_id_filter, dict) and "in" in user_id_filter:
+            if "victim" in user_id_filter["in"]:
+                # Attach user_id on the mock so the caller can build its
+                # per-user dict from the batch result.
+                target_membership.user_id = "victim"
+                return [target_membership]
+            return []
+        if user_id_filter == "org_admin_user":
+            return [caller_membership]
+        return []
+
+    mock_prisma_client.db.litellm_organizationmembership.find_many = mocker.AsyncMock(
+        side_effect=mock_find_memberships
+    )
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    data = DeleteUserRequest(user_ids=["victim"])
+    user_api_key_dict = UserAPIKeyAuth(
+        user_id="org_admin_user", user_role=LitellmUserRoles.ORG_ADMIN
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await delete_user(data=data, user_api_key_dict=user_api_key_dict)
+    assert exc.value.status_code == 403
+
+    # Critical: no delete_many calls should have executed.
+    assert not hasattr(
+        mock_prisma_client.db.litellm_verificationtoken.delete_many, "mock_calls"
+    ) or len(
+        mock_prisma_client.db.litellm_verificationtoken.delete_many.mock_calls
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_user_update_rejects_silent_create_for_non_proxy_admin(mocker):
+    """Regression: `/user/update` with an unknown user_email used to fall
+    through to an INSERT, silently creating a new user with caller-supplied
+    budget, models, and metadata. An org admin could use this to spawn
+    arbitrary users outside the /user/new authorization flow."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UpdateUserRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    # user_email lookup yields None → would silently create pre-fix.
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(
+        return_value=None
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    user_request = UpdateUserRequest(
+        user_email="newcomer@example.com",
+        max_budget=1_000_000,
+        models=["gpt-4"],
+    )
+    org_admin = UserAPIKeyAuth(
+        user_id="org-admin",
+        user_role=LitellmUserRoles.ORG_ADMIN,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _update_single_user_helper(
+            user_request=user_request, user_api_key_dict=org_admin
+        )
+    assert exc.value.status_code == 404
+
+
 # =====================================================================
 # /v2/user/info endpoint tests
 # =====================================================================

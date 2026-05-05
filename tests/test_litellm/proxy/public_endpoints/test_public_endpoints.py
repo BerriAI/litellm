@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)
+sys.path.insert(0, os.path.abspath("../../.."))
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -56,10 +54,13 @@ def test_get_provider_create_fields():
     assert isinstance(first_provider["credential_fields"], list)
 
     has_detailed_fields = any(
-        provider.get("credential_fields") and len(provider.get("credential_fields", [])) > 0
+        provider.get("credential_fields")
+        and len(provider.get("credential_fields", [])) > 0
         for provider in response_data
     )
-    assert has_detailed_fields, "Expected at least one provider to have detailed credential fields"
+    assert (
+        has_detailed_fields
+    ), "Expected at least one provider to have detailed credential fields"
 
 
 def test_get_litellm_model_cost_map_returns_cost_map():
@@ -84,7 +85,10 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     sample_model_data = payload[sample_model]
     assert isinstance(sample_model_data, dict)
     # Check for common cost fields that should be present
-    assert "input_cost_per_token" in sample_model_data or "output_cost_per_token" in sample_model_data
+    assert (
+        "input_cost_per_token" in sample_model_data
+        or "output_cost_per_token" in sample_model_data
+    )
 
 
 def test_watsonx_provider_fields():
@@ -112,7 +116,8 @@ def test_watsonx_provider_fields():
 
 def test_azure_provider_fields_include_entra_id():
     """Azure provider must expose Entra ID (Service Principal) credential fields so
-    the UI can input tenant_id / client_id / client_secret as an alternative to api_key."""
+    the UI can input tenant_id / client_id / client_secret as an alternative to api_key.
+    """
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
@@ -136,6 +141,51 @@ def test_azure_provider_fields_include_entra_id():
     assert fields_by_key["tenant_id"]["required"] is False
     assert fields_by_key["client_id"]["required"] is False
     assert fields_by_key["client_secret"]["required"] is False
+
+
+def test_anthropic_provider_fields_support_byok():
+    """
+    The Anthropic provider form must allow BYOK:
+    - api_key is optional (not required) so admins can create models without a key
+    - api_key has a non-null tooltip explaining the BYOK use case
+    """
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    response = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    anthropic = next((p for p in providers if p["provider"] == "Anthropic"), None)
+    assert anthropic is not None, "Anthropic provider entry not found"
+
+    fields_by_key = {f["key"]: f for f in anthropic["credential_fields"]}
+    assert "api_key" in fields_by_key
+    assert fields_by_key["api_key"]["required"] is False, (
+        "Anthropic api_key must be optional so admins can configure BYOK models "
+        "without entering a key. See BYOK tutorial."
+    )
+    assert fields_by_key["api_key"].get("tooltip"), (
+        "Anthropic api_key must have a tooltip explaining the BYOK use case."
+    )
+    assert "api_base" in fields_by_key, (
+        "Anthropic provider form must expose api_base so cloud customers "
+        "can override the upstream URL without env var access."
+    )
+    api_base_field = fields_by_key["api_base"]
+    assert api_base_field["required"] is False
+    assert api_base_field["field_type"] == "text"
+    assert api_base_field.get("tooltip"), (
+        "api_base should have a tooltip explaining it is optional."
+    )
+
+    # UI forms render fields in credential_fields order; api_base should come first
+    # so an admin sees the URL override before the key field.
+    field_order = [f["key"] for f in anthropic["credential_fields"]]
+    assert field_order.index("api_base") < field_order.index("api_key"), (
+        "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
+    )
 
 
 def test_public_model_hub_with_healthy_model():
@@ -167,12 +217,16 @@ def test_public_model_hub_with_healthy_model():
         return_value=[mock_health_check]
     )
 
-    with patch("litellm.public_model_groups", ["gpt-3.5-turbo"]), \
-         patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info, \
-         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), \
-         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), \
-         patch("litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict") as mock_convert:
-        
+    with (
+        patch("litellm.public_model_groups", ["gpt-3.5-turbo"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+        ) as mock_convert,
+    ):
+
         mock_get_info.return_value = [mock_model_group]
         mock_convert.return_value = {
             "status": "healthy",
@@ -221,12 +275,16 @@ def test_public_model_hub_with_unhealthy_model():
         return_value=[mock_health_check]
     )
 
-    with patch("litellm.public_model_groups", ["gpt-4"]), \
-         patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info, \
-         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), \
-         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), \
-         patch("litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict") as mock_convert:
-        
+    with (
+        patch("litellm.public_model_groups", ["gpt-4"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+        ) as mock_convert,
+    ):
+
         mock_get_info.return_value = [mock_model_group]
         mock_convert.return_value = {
             "status": "unhealthy",
@@ -266,11 +324,13 @@ def test_public_model_hub_without_health_check():
     mock_prisma = MagicMock()
     mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[])
 
-    with patch("litellm.public_model_groups", ["claude-3"]), \
-         patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info, \
-         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), \
-         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
-        
+    with (
+        patch("litellm.public_model_groups", ["claude-3"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+
         mock_get_info.return_value = [mock_model_group]
 
         response = client.get(
@@ -346,12 +406,16 @@ def test_public_model_hub_mixed_health_statuses():
             }
         return {}
 
-    with patch("litellm.public_model_groups", ["gpt-3.5-turbo", "gpt-4", "claude-3"]), \
-         patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info, \
-         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router), \
-         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), \
-         patch("litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict") as mock_convert:
-        
+    with (
+        patch("litellm.public_model_groups", ["gpt-3.5-turbo", "gpt-4", "claude-3"]),
+        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+        ) as mock_convert,
+    ):
+
         mock_get_info.return_value = [
             healthy_model,
             unhealthy_model,
@@ -391,7 +455,10 @@ def test_public_model_hub_mixed_health_statuses():
 # ---------------------------------------------------------------------------
 
 import litellm.proxy.public_endpoints.public_endpoints as _pe_module
-from litellm.proxy.public_endpoints.public_endpoints import _build_endpoints, _clean_display_name
+from litellm.proxy.public_endpoints.public_endpoints import (
+    _build_endpoints,
+    _clean_display_name,
+)
 
 
 @pytest.fixture(autouse=False)
@@ -442,7 +509,9 @@ def test_get_supported_endpoints_provider_fields(reset_endpoints_cache):
 def test_get_supported_endpoints_paths_start_with_slash(reset_endpoints_cache):
     endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
     for item in endpoints:
-        assert item["endpoint"].startswith("/"), f"Expected path starting with /, got: {item['endpoint']}"
+        assert item["endpoint"].startswith(
+            "/"
+        ), f"Expected path starting with /, got: {item['endpoint']}"
 
 
 def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache):
@@ -456,16 +525,19 @@ def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache)
     assert len(chat["providers"]) > 0
 
 
-def test_get_supported_endpoints_display_names_have_no_slug_suffix(reset_endpoints_cache):
+def test_get_supported_endpoints_display_names_have_no_slug_suffix(
+    reset_endpoints_cache,
+):
     """Provider display_names must not contain the raw `` (`slug`) `` suffix."""
     import re
+
     suffix_re = re.compile(r"\(`[^`]+`\)")
     endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
     for item in endpoints:
         for provider in item["providers"]:
-            assert not suffix_re.search(provider["display_name"]), (
-                f"display_name still contains slug suffix: {provider['display_name']!r}"
-            )
+            assert not suffix_re.search(
+                provider["display_name"]
+            ), f"display_name still contains slug suffix: {provider['display_name']!r}"
 
 
 def test_get_supported_endpoints_is_cached(reset_endpoints_cache):
@@ -491,12 +563,20 @@ _MINIMAL_RAW = {
         "openai": {
             "display_name": "OpenAI (`openai`)",
             "url": "https://example.com",
-            "endpoints": {"chat_completions": True, "embeddings": True, "images": False},
+            "endpoints": {
+                "chat_completions": True,
+                "embeddings": True,
+                "images": False,
+            },
         },
         "anthropic": {
             "display_name": "Anthropic (`anthropic`)",
             "url": "https://example.com",
-            "endpoints": {"chat_completions": True, "embeddings": False, "images": False},
+            "endpoints": {
+                "chat_completions": True,
+                "embeddings": False,
+                "images": False,
+            },
         },
     }
 }

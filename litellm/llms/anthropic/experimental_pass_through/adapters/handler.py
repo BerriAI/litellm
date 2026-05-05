@@ -107,6 +107,44 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                     completion_kwargs["reasoning_effort"] = updated_reasoning_effort
 
     @staticmethod
+    def _normalize_reasoning_effort(
+        completion_kwargs: Dict[str, Any],
+    ) -> None:
+        """
+        Normalize reasoning_effort values based on target model capabilities.
+
+        Handles both string ("max") and dict ({"effort": "max", "summary": ...})
+        formats. Uses model registry to check supports_xhigh/supports_minimal.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.utils import (
+            normalize_reasoning_effort_value,
+        )
+
+        reasoning_effort = completion_kwargs.get("reasoning_effort")
+        if reasoning_effort is None:
+            return
+
+        model = cast(str, completion_kwargs.get("model", ""))
+        custom_llm_provider = completion_kwargs.get("custom_llm_provider")
+
+        if isinstance(reasoning_effort, str):
+            normalized = normalize_reasoning_effort_value(
+                reasoning_effort, model=model, custom_llm_provider=custom_llm_provider
+            )
+            if normalized != reasoning_effort:
+                completion_kwargs["reasoning_effort"] = normalized
+        elif isinstance(reasoning_effort, dict) and "effort" in reasoning_effort:
+            effort = reasoning_effort["effort"]
+            normalized = normalize_reasoning_effort_value(
+                effort, model=model, custom_llm_provider=custom_llm_provider
+            )
+            if normalized != effort:
+                completion_kwargs["reasoning_effort"] = {
+                    **reasoning_effort,
+                    "effort": normalized,
+                }
+
+    @staticmethod
     def _prepare_completion_kwargs(
         *,
         max_tokens: int,
@@ -163,6 +201,12 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if output_format:
             request_data["output_format"] = output_format
 
+        # Extract output_config from extra_kwargs so the translator can use it
+        # (e.g. output_config.effort for adaptive thinking → reasoning_effort)
+        extra_kwargs = extra_kwargs or {}
+        if "output_config" in extra_kwargs:
+            request_data["output_config"] = extra_kwargs["output_config"]
+
         (
             openai_request,
             tool_name_mapping,
@@ -191,7 +235,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             ):
                 from litellm.types.utils import CallTypes
 
-                setattr(value, "call_type", CallTypes.completion.value)
+                setattr(value, "call_type", CallTypes.anthropic_messages.value)
                 setattr(
                     value, "stream_options", completion_kwargs.get("stream_options")
                 )
@@ -201,6 +245,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 and value is not None
             ):
                 completion_kwargs[key] = value
+
+        # Normalize reasoning_effort based on model capabilities
+        # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
+        # Must run BEFORE _route_openai_thinking, which prepends "responses/"
+        # to the model name and would break get_model_info() lookups.
+        LiteLLMMessagesToCompletionTransformationHandler._normalize_reasoning_effort(
+            completion_kwargs
+        )
 
         LiteLLMMessagesToCompletionTransformationHandler._route_openai_thinking_to_responses_api_if_needed(
             completion_kwargs,

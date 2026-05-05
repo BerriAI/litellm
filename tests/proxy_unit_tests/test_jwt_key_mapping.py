@@ -196,7 +196,9 @@ async def test_virtual_key_mapping_oidc_enabled_opaque_token_uses_oidc_userinfo(
     assert jwt_handler.is_jwt(token=api_key) is False
 
     auth_jwt_mock = AsyncMock(return_value={"email": "user@example.com"})
-    oidc_userinfo_mock = AsyncMock(return_value={"email": "user@example.com", "sub": "123"})
+    oidc_userinfo_mock = AsyncMock(
+        return_value={"email": "user@example.com", "sub": "123"}
+    )
 
     if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(
         token=api_key
@@ -305,14 +307,19 @@ async def test_create_returns_409_on_unique_violation():
     mock_cache = AsyncMock()
 
     data = CreateJWTKeyMappingRequest(
-        jwt_claim_name="email", jwt_claim_value="user@example.com", key="sk-test-key",
+        jwt_claim_name="email",
+        jwt_claim_value="user@example.com",
+        key="sk-test-key",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-        "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await create_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
+            await create_jwt_key_mapping(
+                data=data, user_api_key_dict=_make_admin_auth()
+            )
         assert exc_info.value.status_code == 409
         assert "already exists" in exc_info.value.detail
 
@@ -329,14 +336,19 @@ async def test_create_returns_400_on_foreign_key_violation():
     mock_cache = AsyncMock()
 
     data = CreateJWTKeyMappingRequest(
-        jwt_claim_name="sub", jwt_claim_value="user-999", key="sk-nonexistent",
+        jwt_claim_name="sub",
+        jwt_claim_value="user-999",
+        key="sk-nonexistent",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-        "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await create_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
+            await create_jwt_key_mapping(
+                data=data, user_api_key_dict=_make_admin_auth()
+            )
         assert exc_info.value.status_code == 400
         assert "does not match" in exc_info.value.detail
 
@@ -347,11 +359,15 @@ async def test_create_non_admin_returns_403():
     from litellm.proxy._types import CreateJWTKeyMappingRequest
 
     data = CreateJWTKeyMappingRequest(
-        jwt_claim_name="email", jwt_claim_value="user@example.com", key="sk-test",
+        jwt_claim_name="email",
+        jwt_claim_value="user@example.com",
+        key="sk-test",
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await create_jwt_key_mapping(data=data, user_api_key_dict=_make_non_admin_auth())
+        await create_jwt_key_mapping(
+            data=data, user_api_key_dict=_make_non_admin_auth()
+        )
     assert exc_info.value.status_code == 403
 
 
@@ -366,11 +382,14 @@ async def test_delete_returns_404_when_not_found():
 
     data = DeleteJWTKeyMappingRequest(id="nonexistent-id")
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-        "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await delete_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
+            await delete_jwt_key_mapping(
+                data=data, user_api_key_dict=_make_admin_auth()
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -385,11 +404,14 @@ async def test_update_returns_404_when_not_found():
 
     data = UpdateJWTKeyMappingRequest(id="nonexistent-id", description="test")
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-        "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
         with pytest.raises(HTTPException) as exc_info:
-            await update_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
+            await update_jwt_key_mapping(
+                data=data, user_api_key_dict=_make_admin_auth()
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -401,7 +423,9 @@ async def test_info_returns_404_when_not_found():
 
     with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
         with pytest.raises(HTTPException) as exc_info:
-            await info_jwt_key_mapping(id="nonexistent-id", user_api_key_dict=_make_admin_auth())
+            await info_jwt_key_mapping(
+                id="nonexistent-id", user_api_key_dict=_make_admin_auth()
+            )
         assert exc_info.value.status_code == 404
 
 
@@ -415,13 +439,18 @@ async def test_create_success_returns_response_without_token():
     mock_cache = AsyncMock()
 
     data = CreateJWTKeyMappingRequest(
-        jwt_claim_name="email", jwt_claim_value="user@example.com", key="sk-test-key",
+        jwt_claim_name="email",
+        jwt_claim_value="user@example.com",
+        key="sk-test-key",
     )
 
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma), patch(
-        "litellm.proxy.proxy_server.user_api_key_cache", mock_cache
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
     ):
-        result = await create_jwt_key_mapping(data=data, user_api_key_dict=_make_admin_auth())
+        result = await create_jwt_key_mapping(
+            data=data, user_api_key_dict=_make_admin_auth()
+        )
         assert isinstance(result, JWTKeyMappingResponse)
         assert "token" not in result.model_fields
         assert result.jwt_claim_name == "email"

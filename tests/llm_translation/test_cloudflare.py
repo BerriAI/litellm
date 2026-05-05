@@ -9,7 +9,9 @@ import pytest
 from litellm import acompletion, completion
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
-FAKE_API_BASE = "https://fake-cloudflare.example.com/client/v4/accounts/fake-acct/ai/run/"
+FAKE_API_BASE = (
+    "https://fake-cloudflare.example.com/client/v4/accounts/fake-acct/ai/run/"
+)
 FAKE_API_KEY = "fake-cf-api-key"
 
 

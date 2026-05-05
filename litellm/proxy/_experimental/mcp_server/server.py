@@ -7,6 +7,7 @@ LiteLLM MCP Server Routes
 import asyncio
 import contextlib
 import time
+import types
 import traceback
 import uuid
 from datetime import datetime
@@ -37,7 +38,10 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
-from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_active_toolset_id
+from litellm.proxy._experimental.mcp_server.mcp_context import (
+    _mcp_active_toolset_id,
+    _mcp_gateway_initialize_instructions,
+)
 from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
@@ -45,6 +49,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_VERSION,
     add_server_prefix_to_name,
     get_server_prefix,
+    iter_known_server_prefixes,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -122,6 +127,8 @@ _INITIALIZATION_LOCK = asyncio.Lock()
 
 if MCP_AVAILABLE:
     from mcp.server import Server
+    from mcp.server.lowlevel.server import NotificationOptions
+    from mcp.server.models import InitializationOptions
 
     # Import auth context variables and middleware
     from mcp.server.auth.middleware.auth_context import (
@@ -200,12 +207,30 @@ if MCP_AVAILABLE:
                 )
         return normalized
 
+    def _gateway_create_initialization_options(
+        self,
+        notification_options: Optional[NotificationOptions] = None,
+        experimental_capabilities: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> InitializationOptions:
+        opts = Server.create_initialization_options(
+            self,
+            notification_options=notification_options,
+            experimental_capabilities=experimental_capabilities or {},
+        )
+        merged = _mcp_gateway_initialize_instructions.get()
+        if merged is not None:
+            return opts.model_copy(update={"instructions": merged})
+        return opts
+
     ########################################################
     ############ Initialize the MCP Server #################
     ########################################################
     server: Server = Server(
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
+    )
+    server.create_initialization_options = types.MethodType(  # type: ignore[method-assign]
+        _gateway_create_initialization_options, server
     )
     sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
 
@@ -687,13 +712,7 @@ if MCP_AVAILABLE:
                 for server in allowed_mcp_servers:
                     if server:
                         match_list = [
-                            s.lower()
-                            for s in [
-                                server.alias,
-                                server.server_name,
-                                server.server_id,
-                            ]
-                            if s is not None
+                            s.lower() for s in iter_known_server_prefixes(server) if s
                         ]
 
                         if server_or_group.lower() in match_list:
@@ -1021,7 +1040,9 @@ if MCP_AVAILABLE:
                     except (ValueError, TypeError):
                         pass
                 ttl = _compute_per_user_token_ttl(server, raw_expires)
-                await mcp_per_user_token_cache.set(user_id, server_id, access_token, ttl)
+                await mcp_per_user_token_cache.set(
+                    user_id, server_id, access_token, ttl
+                )
 
             return {"Authorization": f"Bearer {access_token}"}
         except Exception as e:
@@ -1102,6 +1123,57 @@ if MCP_AVAILABLE:
             server_auth_header = mcp_auth_header
 
         return server_auth_header, extra_headers
+
+    def _merge_gateway_initialize_instructions(
+        allowed_mcp_servers: List[MCPServer],
+    ) -> Optional[str]:
+        """YAML/DB override, else in-memory upstream text from list_tools / health_check / call_tool."""
+        if not allowed_mcp_servers:
+            return None
+
+        texts: List[Tuple[str, str]] = []
+        for server in allowed_mcp_servers:
+            label = (
+                server.alias
+                or server.server_name
+                or server.name
+                or server.server_id
+                or "mcp"
+            )
+            if server.instructions and server.instructions.strip():
+                texts.append((label, server.instructions.strip()))
+                continue
+            if server.spec_path:
+                continue
+            cached = global_mcp_server_manager._upstream_initialize_instructions_by_server_id.get(
+                server.server_id
+            )
+            if cached and cached.strip():
+                texts.append((label, cached.strip()))
+
+        if not texts:
+            return None
+        if len(texts) == 1:
+            return texts[0][1]
+        return "\n\n---\n\n".join(f"[{lbl}]\n{txt}" for lbl, txt in texts)
+
+    @contextlib.asynccontextmanager
+    async def _gateway_initialize_instructions_request_scope(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_servers: Optional[List[str]],
+        client_ip: Optional[str],
+    ) -> AsyncIterator[None]:
+        allowed = await _get_allowed_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_servers=mcp_servers,
+            client_ip=client_ip,
+        )
+        merged = _merge_gateway_initialize_instructions(allowed_mcp_servers=allowed)
+        tok = _mcp_gateway_initialize_instructions.set(merged)
+        try:
+            yield
+        finally:
+            _mcp_gateway_initialize_instructions.reset(tok)
 
     async def _get_tools_from_mcp_servers(  # noqa: PLR0915
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -1875,7 +1947,18 @@ if MCP_AVAILABLE:
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
-            return
+            # Fail closed on DB unavailability: returning here previously
+            # bypassed the ownership check and let any proxy-authenticated
+            # caller invoke BYOK tools during outage windows.
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "byok_auth_unavailable",
+                    "server_id": mcp_server.server_id,
+                    "server_name": mcp_server.server_name or mcp_server.name,
+                    "message": "BYOK credential check requires a database connection.",
+                },
+            )
 
         credential = await get_user_credential(
             prisma_client=prisma_client,
@@ -1943,11 +2026,13 @@ if MCP_AVAILABLE:
         # Remove prefix from tool name for logging and processing
         original_tool_name, server_name = split_server_prefix_from_name(name)
 
-        # If tool name is unprefixed, resolve its server so we can enforce permissions
-        if not server_name:
-            mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
-            if mcp_server:
-                server_name = mcp_server.name
+        # Resolve the actual MCP server up-front so the permission check uses
+        # the canonical server.name even when the tool name is prefixed with a
+        # short ID (LITELLM_USE_SHORT_MCP_TOOL_PREFIX) that doesn't match the
+        # server's display name directly.
+        mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        if mcp_server is not None:
+            server_name = mcp_server.name
 
         # Only enforce server-level permissions when we can resolve a server
         if server_name:
@@ -2594,13 +2679,19 @@ if MCP_AVAILABLE:
                     server_name, client_ip=_client_ip
                 )
                 if server and server.auth_type == MCPAuth.oauth2 and not oauth2_headers:
-                    # For servers that store per-user tokens server-side, skip the
-                    # pre-emptive 401 — the call_tool / list_tools dispatch will look
-                    # up the stored token from Redis / DB and only fail at the MCP
-                    # protocol level if none is found, giving the client a proper
-                    # tool-execution error rather than an HTTP 401.
+                    # For per-user OAuth servers, only skip the pre-emptive 401 when
+                    # a stored token actually exists for this user+server pair.
+                    # If no stored token exists, fail fast with 401 so clients can
+                    # kick off PKCE/interactive OAuth flow immediately.
                     if server.needs_user_oauth_token:
-                        continue
+                        stored_oauth_headers = (
+                            await _get_user_oauth_extra_headers_from_db(
+                                server=server,
+                                user_api_key_auth=user_api_key_auth,
+                            )
+                        )
+                        if stored_oauth_headers:
+                            continue
 
                     request = StarletteRequest(scope)
                     base_url = get_request_base_url(request)
@@ -2670,7 +2761,12 @@ if MCP_AVAILABLE:
                 # Request was fully handled (e.g., DELETE on non-existent session)
                 return
 
-            await session_manager.handle_request(scope, receive, send)
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth,
+                mcp_servers,
+                _client_ip,
+            ):
+                await session_manager.handle_request(scope, receive, send)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -2729,7 +2825,12 @@ if MCP_AVAILABLE:
                 await initialize_session_managers()
                 await asyncio.sleep(0.1)
 
-            await sse_session_manager.handle_request(scope, receive, send)
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth,
+                mcp_servers,
+                _sse_client_ip,
+            ):
+                await sse_session_manager.handle_request(scope, receive, send)
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response

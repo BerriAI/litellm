@@ -1,6 +1,7 @@
 """
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
+
 from typing import Any, Dict, List
 
 from pydantic import BaseModel

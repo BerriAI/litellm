@@ -499,9 +499,7 @@ def _streaming_chunks() -> List[str]:
             json.dumps(
                 {
                     **base,
-                    "choices": [
-                        {"index": 0, "delta": delta, "finish_reason": finish}
-                    ],
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
                 }
             )
         )
@@ -590,7 +588,10 @@ class TestSnowflakeChatCompletion:
 
             async def _run():
                 with patch.object(
-                    AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=mock_resp
+                    AsyncHTTPHandler,
+                    "post",
+                    new_callable=AsyncMock,
+                    return_value=mock_resp,
                 ) as mock_post:
                     resp = await acompletion(
                         model="snowflake/mistral-7b",
@@ -611,5 +612,7 @@ class TestSnowflakeChatCompletion:
 
         assert len(chunks_received) > 0
         content = "".join(
-            c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content
+            c.choices[0].delta.content
+            for c in chunks_received
+            if c.choices[0].delta.content
         )

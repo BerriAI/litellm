@@ -123,12 +123,17 @@ class TestApplyPoliciesEarlyReturn:
         mock_registry.is_initialized.return_value = True
         mock_registry.get_all_policies.return_value = {}
 
-        with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
-            return_value=mock_registry,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-            return_value=ResolvedPolicy(policy_name="p", guardrails=[], inheritance_chain=[]),
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
+                return_value=mock_registry,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                return_value=ResolvedPolicy(
+                    policy_name="p", guardrails=[], inheritance_chain=[]
+                ),
+            ),
         ):
             result = await apply_policies(
                 policy_names=["empty-policy"],
@@ -155,26 +160,34 @@ class TestApplyPoliciesWithGuardrails:
         mock_registry.is_initialized.return_value = True
         mock_registry.get_all_policies.return_value = {}
 
-        modified_inputs: GenericGuardrailAPIInputs = {"texts": ["modified by guardrail"]}
+        modified_inputs: GenericGuardrailAPIInputs = {
+            "texts": ["modified by guardrail"]
+        }
         callback = _FakeGuardrailWithApply(guardrail_name="my_guardrail")
         callback.set_return(modified_inputs)
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = (
+            callback
+        )
 
-        with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
-            return_value=mock_registry,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-            return_value=ResolvedPolicy(
-                policy_name="p",
-                guardrails=["my_guardrail"],
-                inheritance_chain=["p"],
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
+                return_value=mock_registry,
             ),
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
-            return_value=mock_guardrail_registry,
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                return_value=ResolvedPolicy(
+                    policy_name="p",
+                    guardrails=["my_guardrail"],
+                    inheritance_chain=["p"],
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
+                return_value=mock_guardrail_registry,
+            ),
         ):
             result = await apply_policies(
                 policy_names=["my-policy"],
@@ -213,21 +226,27 @@ class TestApplyPoliciesWithGuardrails:
             return None
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = get_callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = (
+            get_callback
+        )
 
-        with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
-            return_value=mock_registry,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-            return_value=ResolvedPolicy(
-                policy_name="p",
-                guardrails=["guardrail_a", "guardrail_b"],
-                inheritance_chain=["p"],
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
+                return_value=mock_registry,
             ),
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
-            return_value=mock_guardrail_registry,
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                return_value=ResolvedPolicy(
+                    policy_name="p",
+                    guardrails=["guardrail_a", "guardrail_b"],
+                    inheritance_chain=["p"],
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
+                return_value=mock_guardrail_registry,
+            ),
         ):
             result = await apply_policies(
                 policy_names=["my-policy"],
@@ -253,19 +272,23 @@ class TestApplyPoliciesWithGuardrails:
         mock_guardrail_registry = MagicMock()
         mock_guardrail_registry.get_initialized_guardrail_callback.return_value = None
 
-        with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
-            return_value=mock_registry,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-            return_value=ResolvedPolicy(
-                policy_name="p",
-                guardrails=["missing_guardrail"],
-                inheritance_chain=["p"],
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
+                return_value=mock_registry,
             ),
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
-            return_value=mock_guardrail_registry,
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                return_value=ResolvedPolicy(
+                    policy_name="p",
+                    guardrails=["missing_guardrail"],
+                    inheritance_chain=["p"],
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
+                return_value=mock_guardrail_registry,
+            ),
         ):
             result = await apply_policies(
                 policy_names=["my-policy"],
@@ -301,19 +324,23 @@ class TestApplyPoliciesWithGuardrails:
             callback
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
-            return_value=mock_registry,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-            return_value=ResolvedPolicy(
-                policy_name="p",
-                guardrails=["failing_guardrail"],
-                inheritance_chain=["p"],
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
+                return_value=mock_registry,
             ),
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
-            return_value=mock_guardrail_registry,
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                return_value=ResolvedPolicy(
+                    policy_name="p",
+                    guardrails=["failing_guardrail"],
+                    inheritance_chain=["p"],
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
+                return_value=mock_guardrail_registry,
+            ),
         ):
             result = await apply_policies(
                 policy_names=["my-policy"],
@@ -325,7 +352,10 @@ class TestApplyPoliciesWithGuardrails:
 
         assert result["inputs"] == sample_inputs
         assert result["guardrail_errors"] == [
-            {"guardrail_name": "failing_guardrail", "message": "Content blocked: PII detected"}
+            {
+                "guardrail_name": "failing_guardrail",
+                "message": "Content blocked: PII detected",
+            }
         ]
 
     @pytest.mark.asyncio
@@ -337,6 +367,7 @@ class TestApplyPoliciesWithGuardrails:
 
         class GuardrailWithoutApply(CustomGuardrail):
             """Subclass that does not override apply_guardrail (not in type(x).__dict__)."""
+
             pass
 
         callback_no_apply = GuardrailWithoutApply(guardrail_name="no_apply")
@@ -351,19 +382,23 @@ class TestApplyPoliciesWithGuardrails:
             callback_no_apply
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
-            return_value=mock_registry,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-            return_value=ResolvedPolicy(
-                policy_name="p",
-                guardrails=["no_apply_guardrail"],
-                inheritance_chain=["p"],
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
+                return_value=mock_registry,
             ),
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
-            return_value=mock_guardrail_registry,
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                return_value=ResolvedPolicy(
+                    policy_name="p",
+                    guardrails=["no_apply_guardrail"],
+                    inheritance_chain=["p"],
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
+                return_value=mock_guardrail_registry,
+            ),
         ):
             result = await apply_policies(
                 policy_names=["my-policy"],
@@ -413,19 +448,23 @@ class TestApplyPoliciesWithGuardrails:
             get_callback
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
-            return_value=mock_registry,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-            return_value=ResolvedPolicy(
-                policy_name="p",
-                guardrails=["guardrail_a", "guardrail_b"],
-                inheritance_chain=["p"],
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
+                return_value=mock_registry,
             ),
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
-            return_value=mock_guardrail_registry,
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                return_value=ResolvedPolicy(
+                    policy_name="p",
+                    guardrails=["guardrail_a", "guardrail_b"],
+                    inheritance_chain=["p"],
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
+                return_value=mock_guardrail_registry,
+            ),
         ):
             result = await apply_policies(
                 policy_names=["my-policy"],
@@ -437,7 +476,9 @@ class TestApplyPoliciesWithGuardrails:
 
         assert result["inputs"] == sample_inputs
         assert len(result["guardrail_errors"]) == 2
-        by_name = {e["guardrail_name"]: e["message"] for e in result["guardrail_errors"]}
+        by_name = {
+            e["guardrail_name"]: e["message"] for e in result["guardrail_errors"]
+        }
         assert by_name["guardrail_a"] == "PII detected"
         assert by_name["guardrail_b"] == "Toxicity detected"
 
@@ -460,7 +501,9 @@ class TestApplyPoliciesMultiplePolicies:
         callback.set_return(final_inputs)
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = (
+            callback
+        )
 
         resolve_returns = [
             ResolvedPolicy(
@@ -475,15 +518,19 @@ class TestApplyPoliciesMultiplePolicies:
             ),
         ]
 
-        with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
-            return_value=mock_registry,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-            side_effect=resolve_returns,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
-            return_value=mock_guardrail_registry,
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
+                return_value=mock_registry,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                side_effect=resolve_returns,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
+                return_value=mock_guardrail_registry,
+            ),
         ):
             result = await apply_policies(
                 policy_names=["policy_a", "policy_b"],
@@ -505,12 +552,16 @@ class TestApplyPoliciesDirectGuardrailNames:
         self, sample_inputs, request_data, proxy_logging_obj
     ):
         """When only guardrail_names is passed, policy registry is not used."""
-        modified_inputs: GenericGuardrailAPIInputs = {"texts": ["from direct guardrail"]}
+        modified_inputs: GenericGuardrailAPIInputs = {
+            "texts": ["from direct guardrail"]
+        }
         callback = _FakeGuardrailWithApply(guardrail_name="my_guardrail")
         callback.set_return(modified_inputs)
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = (
+            callback
+        )
 
         with patch(
             "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
@@ -561,19 +612,23 @@ class TestApplyPoliciesDirectGuardrailNames:
             get_callback
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
-            return_value=mock_registry,
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-            return_value=ResolvedPolicy(
-                policy_name="p",
-                guardrails=["from_policy"],
-                inheritance_chain=["p"],
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.get_policy_registry",
+                return_value=mock_registry,
             ),
-        ), patch(
-            "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
-            return_value=mock_guardrail_registry,
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
+                return_value=ResolvedPolicy(
+                    policy_name="p",
+                    guardrails=["from_policy"],
+                    inheritance_chain=["p"],
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
+                return_value=mock_guardrail_registry,
+            ),
         ):
             result = await apply_policies(
                 policy_names=["my-policy"],
@@ -763,7 +818,9 @@ class TestBuildComparisonBlockedWords:
 
     def test_generates_brand_comparisons_once(self):
         all_names = {"Delta": ["Delta"], "United": ["United"]}
-        result = _build_comparison_blocked_words(["Delta", "United"], all_names, "Emirates")
+        result = _build_comparison_blocked_words(
+            ["Delta", "United"], all_names, "Emirates"
+        )
         keywords = [r["keyword"] for r in result]
         # Brand-level entries should appear exactly once
         assert keywords.count("better than Emirates") == 1
@@ -794,11 +851,17 @@ class TestBuildCompetitorGuardrailDefinitions:
             definitions, ["Delta"], "Emirates", {"Delta": ["DL"]}
         )
         # Name blocker should have entries
-        name_blocker = next(d for d in result if d["guardrail_name"] == "competitor-name-blocker")
+        name_blocker = next(
+            d for d in result if d["guardrail_name"] == "competitor-name-blocker"
+        )
         assert len(name_blocker["litellm_params"]["blocked_words"]) > 0
 
         # Recommendation filter should have entries
-        rec_filter = next(d for d in result if d["guardrail_name"] == "competitor-recommendation-filter")
+        rec_filter = next(
+            d
+            for d in result
+            if d["guardrail_name"] == "competitor-recommendation-filter"
+        )
         assert len(rec_filter["litellm_params"]["blocked_words"]) > 0
 
     def test_does_not_modify_unknown_guardrail_names(self):

@@ -27,8 +27,16 @@ async def test_file_operations():
 
     get_file_content = await openai_client.files.content(file_id=uploaded_file.id)
     print("get_file_content=", get_file_content.content)
+    response = get_file_content.response
 
     assert get_file_content.content == file_content
+    assert response.status_code == 200
+    assert response.headers.get("content-type") == "application/octet-stream"
+    assert response.headers.get("content-length") is not None
+    assert int(response.headers["content-length"]) == len(get_file_content.content)
+    assert response.headers.get("content-disposition") is not None
+    assert uploaded_file.filename in response.headers["content-disposition"]
+    assert response.headers.get("x-request-id") is not None
     # try get_file_content.write_to_file
     get_file_content.write_to_file("get_file_content.jsonl")
 

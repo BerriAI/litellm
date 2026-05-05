@@ -82,7 +82,7 @@ class SpendLogCleanup:
                 break
             # Step 1: Find logs and delete them in one go without fetching to application
             # Delete in batches, limited by self.batch_size
-            deleted_count = await prisma_client.db.execute_raw(
+            deleted_result = await prisma_client.db.execute_raw(
                 """
                 DELETE FROM "LiteLLM_SpendLogs"
                 WHERE "request_id" IN (
@@ -94,6 +94,17 @@ class SpendLogCleanup:
                 cutoff_date,
                 self.batch_size,
             )
+
+            deleted_count = 0
+            if isinstance(deleted_result, int):
+                deleted_count = deleted_result
+            else:
+                verbose_proxy_logger.error(
+                    f"Unexpected execute_raw return type for spend log cleanup: {type(deleted_result)}; "
+                    "aborting cleanup to avoid infinite loop"
+                )
+                break
+
             verbose_proxy_logger.info(f"Deleted {deleted_count} logs in this batch")
 
             if deleted_count == 0:
