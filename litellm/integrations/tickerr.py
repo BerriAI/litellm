@@ -57,12 +57,13 @@ _PROVIDER_MAP: Dict[str, str] = {
     "nlp_cloud":    "nlp_cloud",
 }
 
-# Only map codes that unambiguously indicate the specific error type
+# Only map codes that unambiguously indicate the specific error type.
+# 500 is intentionally excluded: it is a generic "Internal Server Error" that
+# indicates a crash or bug, not a capacity/overload condition.
 _ERROR_TYPE_MAP: Dict[int, str] = {
     429: "rate_limit",
     529: "overloaded",
     503: "overloaded",
-    500: "overloaded",
     408: "timeout",
     524: "timeout",
     401: "auth",
@@ -149,7 +150,12 @@ def _fire_and_forget(payload: Dict[str, Any]) -> None:
             _inflight.release()
 
     t = threading.Thread(target=_send, daemon=True)
-    t.start()
+    try:
+        t.start()
+    except Exception:
+        # Thread could not be started (e.g. OS thread limit).
+        # Release the slot so future reports are not permanently blocked.
+        _inflight.release()
 
 
 class TickerrLogger(CustomLogger):

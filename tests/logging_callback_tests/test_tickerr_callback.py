@@ -119,8 +119,9 @@ def test_error_type_known_codes():
 
 
 def test_error_type_no_default_for_unknown_codes():
-    # Unknown codes (400, 404, 502) must NOT map to "overloaded" or any value
-    for code in (400, 404, 502, 422, 301):
+    # 500 is a generic server error (crash/bug), not definitively "overloaded".
+    # Unknown codes must NOT map to any value.
+    for code in (400, 404, 500, 502, 422, 301):
         assert code not in _ERROR_TYPE_MAP, f"code {code} should not be in _ERROR_TYPE_MAP"
 
 
@@ -215,28 +216,33 @@ def test_report_omits_error_type_for_unknown_code():
 
 
 def test_fire_and_forget_respects_semaphore_cap():
-    """Reports beyond _MAX_INFLIGHT are dropped silently."""
-    sent = []
-
-    def slow_send(payload):
-        sent.append(payload)
-        # simulate slow network
-        import time
-        time.sleep(0.1)
-
-    # Exhaust the semaphore
+    """Reports beyond _MAX_INFLIGHT are dropped silently without blocking."""
+    # Exhaust the semaphore by acquiring all slots directly
     for _ in range(_MAX_INFLIGHT):
-        _inflight.acquire()
+        acquired = _inflight.acquire(blocking=False)
+        assert acquired, "semaphore should have slots available at test start"
 
     try:
-        # This call should be dropped (semaphore exhausted)
-        with patch("litellm.integrations.tickerr._fire_and_forget"):
+        # With semaphore exhausted, _fire_and_forget must return immediately
+        # without starting a thread (non-blocking acquire fails → early return)
+        with patch("threading.Thread") as mock_thread:
             _fire_and_forget({"provider": "openai"})
-            # Since semaphore is exhausted, the thread should not be started
+            mock_thread.assert_not_called()
     finally:
-        # Restore semaphore
         for _ in range(_MAX_INFLIGHT):
             _inflight.release()
+
+
+def test_semaphore_released_on_thread_start_failure():
+    """If t.start() raises, the semaphore slot must be released so future reports work."""
+    before = _inflight._value
+
+    with patch("threading.Thread") as mock_thread:
+        mock_thread.return_value.start.side_effect = RuntimeError("OS thread limit")
+        _fire_and_forget({"provider": "openai"})
+
+    # Slot must be back to its original value after the exception
+    assert _inflight._value == before
 
 
 # ── Network failure is silent ─────────────────────────────────────────────────
