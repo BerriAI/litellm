@@ -39,19 +39,23 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
                 last_message.get("content", ""),
             )
 
-            # LLM_INPUT_MESSAGES shows up under `input_messages` tab on the span page.
-            for idx, msg in enumerate(messages):
-                prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{idx}"
-                # Set the role per message.
-                safe_set_attribute(
-                    span, f"{prefix}.{MessageAttributes.MESSAGE_ROLE}", msg.get("role")
-                )
-                # Set the content per message.
-                safe_set_attribute(
-                    span,
-                    f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
-                    msg.get("content", ""),
-                )
+            # ENG2-1036: emit only the LAST message as an llm.input_messages.* attribute.
+            # Previously every span attached all N prior messages, producing O(L²)
+            # bytes per session. The most recent turn is sufficient for span-page
+            # detail; full history reconstruction belongs in DAL post-ingest, not
+            # on every span.
+            last_idx = len(messages) - 1
+            prefix = f"{SpanAttributes.LLM_INPUT_MESSAGES}.{last_idx}"
+            safe_set_attribute(
+                span,
+                f"{prefix}.{MessageAttributes.MESSAGE_ROLE}",
+                last_message.get("role"),
+            )
+            safe_set_attribute(
+                span,
+                f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
+                last_message.get("content", ""),
+            )
 
     @staticmethod
     @override
