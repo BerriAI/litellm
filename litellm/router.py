@@ -6809,7 +6809,7 @@ class Router:
                 # Multiple aliases can point at the same provider/model backend,
                 # but their deployment-level overrides should not downgrade the
                 # backend from responses -> chat via last-write-wins registration.
-                _shared_model_info.pop("mode", None)
+                _shared_model_info["mode"] = _existing_shared_mode
             litellm.register_model(
                 model_cost={
                     _model_name: _shared_model_info,

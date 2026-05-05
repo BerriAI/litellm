@@ -335,6 +335,7 @@ def test_should_not_downgrade_chatgpt_shared_key_mode_with_alias_override():
             )
 
         assert litellm.model_cost[backend_model]["mode"] == "responses"
+        assert "mode" in litellm.model_cost[backend_model]
 
         bridge_model_info, bridge_model = responses_api_bridge_check(
             model="gpt-5.4",
