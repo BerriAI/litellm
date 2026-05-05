@@ -16,7 +16,7 @@ from litellm.proxy._types import (
     NewProjectRequest,
     UpdateProjectRequest,
     UserAPIKeyAuth,
-    user_api_key_has_admin_view as _user_has_admin_view,
+    user_api_key_has_admin_view as _user_has_admin_view,  # noqa: F401  re-exported
 )
 from litellm.proxy.utils import _premium_user_check
 
