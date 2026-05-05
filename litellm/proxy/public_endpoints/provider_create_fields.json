@@ -2571,6 +2571,34 @@
     "default_model_placeholder": "snowflake/mistral-7b"
   },
   {
+    "provider": "TencentCloud",
+    "provider_display_name": "Tencent Cloud",
+    "litellm_provider": "tencent_cloud",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Tencent Cloud API Key",
+        "placeholder": null,
+        "tooltip": "Your Tencent Cloud TokenHub API key (sk-...).",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://tokenhub.tencentmaas.com/v1",
+        "tooltip": "TokenHub endpoint. Defaults to domestic; use https://tokenhub-intl.tencentmaas.com/v1 for international.",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://tokenhub.tencentmaas.com/v1"
+      }
+    ],
+    "default_model_placeholder": "tencent_cloud/deepseek-v3.2"
+  },
+  {
     "provider": "TEXT_COMPLETION_CODESTRAL",
     "provider_display_name": "Text-Completion-Codestral",
     "litellm_provider": "text-completion-codestral",
