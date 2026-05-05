@@ -32,29 +32,29 @@ _inflight = threading.Semaphore(_MAX_INFLIGHT)
 
 # Map litellm custom_llm_provider → Tickerr provider slug
 _PROVIDER_MAP: Dict[str, str] = {
-    "openai":       "openai",
-    "anthropic":    "anthropic",
-    "google":       "google",
-    "vertex_ai":    "google",
-    "gemini":       "google",
-    "cohere":       "cohere",
-    "mistral":      "mistral",
-    "groq":         "groq",
-    "together_ai":  "together",
-    "huggingface":  "huggingface",
-    "replicate":    "replicate",
-    "deepinfra":    "deepinfra",
-    "perplexity":   "perplexity",
+    "openai": "openai",
+    "anthropic": "anthropic",
+    "google": "google",
+    "vertex_ai": "google",
+    "gemini": "google",
+    "cohere": "cohere",
+    "mistral": "mistral",
+    "groq": "groq",
+    "together_ai": "together",
+    "huggingface": "huggingface",
+    "replicate": "replicate",
+    "deepinfra": "deepinfra",
+    "perplexity": "perplexity",
     "fireworks_ai": "fireworks",
-    "openrouter":   "openrouter",
-    "azure":        "azure",
-    "bedrock":      "aws",
-    "ai21":         "ai21",
-    "cerebras":     "cerebras",
-    "xai":          "xai",
-    "deepseek":     "deepseek",
-    "ollama":       "ollama",
-    "nlp_cloud":    "nlp_cloud",
+    "openrouter": "openrouter",
+    "azure": "azure",
+    "bedrock": "aws",
+    "ai21": "ai21",
+    "cerebras": "cerebras",
+    "xai": "xai",
+    "deepseek": "deepseek",
+    "ollama": "ollama",
+    "nlp_cloud": "nlp_cloud",
 }
 
 # Only map codes that unambiguously indicate the specific error type.
@@ -211,7 +211,9 @@ class TickerrLogger(CustomLogger):
         provider = _normalize_provider(model, kwargs)
         status_code = _extract_status_code(exception)
         # Only set error_type for codes we can classify with confidence
-        error_type: Optional[str] = _ERROR_TYPE_MAP.get(status_code) if status_code is not None else None
+        error_type: Optional[str] = (
+            _ERROR_TYPE_MAP.get(status_code) if status_code is not None else None
+        )
 
         # Strip provider prefix: "anthropic/claude-3-5-haiku" → "claude-3-5-haiku"
         model_clean = model.split("/", 1)[-1] if "/" in model else model
