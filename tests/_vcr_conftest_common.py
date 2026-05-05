@@ -22,12 +22,16 @@ Each consuming ``conftest.py`` should:
 
 from __future__ import annotations
 
+import atexit
 import os
-from typing import Iterable, Optional
+import sys
+from typing import Iterable
 
 import pytest
 
 from tests._vcr_redis_persister import (
+    cassette_cache_capacity_snapshot,
+    cassette_cache_health,
     filter_non_2xx_response,
     format_vcr_verdict,
     make_redis_persister,
@@ -35,6 +39,11 @@ from tests._vcr_redis_persister import (
     patch_vcrpy_aiohttp_record_path,
     vcr_verbose_enabled,
 )
+
+# Surface a warning when used memory exceeds this fraction of the cap,
+# even if no SET has failed yet. Gives early notice before tests start
+# failing on teardown.
+CASSETTE_CACHE_HIGH_WATER_FRACTION = 0.85
 
 
 SAFE_BODY_MATCHER_NAME = "safe_body"
@@ -160,6 +169,52 @@ def vcr_disabled() -> bool:
     return not os.environ.get("CASSETTE_REDIS_URL")
 
 
+_atexit_banner_registered = False
+
+
+def _print_atexit_banner() -> None:
+    """Stderr fallback banner — fires even when no consuming conftest
+    wires up ``pytest_terminal_summary``. Skipped on xdist workers so
+    the controller is the only emitter.
+    """
+    if vcr_disabled():
+        return
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    health = cassette_cache_health()
+    save_failures = int(health.get("save_failures", 0) or 0)
+    load_failures = int(health.get("load_failures", 0) or 0)
+    snapshot = cassette_cache_capacity_snapshot()
+
+    def _emit(line: str) -> None:
+        sys.stderr.write(f"{line}\n")
+
+    if save_failures or load_failures:
+        bar = "=" * 60
+        _emit(bar)
+        _emit("VCR CASSETTE CACHE DEGRADED")
+        if save_failures:
+            _emit(
+                f"  {save_failures} cassette save failure(s); last error: "
+                f"{health.get('save_failure_last_error', '')}"
+            )
+        if load_failures:
+            _emit(
+                f"  {load_failures} cassette load failure(s); last error: "
+                f"{health.get('load_failure_last_error', '')}"
+            )
+        if snapshot:
+            _emit(_format_capacity_line(snapshot))
+        _emit(bar)
+        return
+    if snapshot and snapshot["used_pct"] >= CASSETTE_CACHE_HIGH_WATER_FRACTION * 100:
+        bar = "=" * 60
+        _emit(bar)
+        _emit("VCR CASSETTE CACHE NEAR CAPACITY")
+        _emit(_format_capacity_line(snapshot))
+        _emit(bar)
+
+
 def register_persister_if_enabled(vcr) -> None:
     """Wire the Redis persister and custom matchers into vcrpy if VCR is
     enabled.
@@ -171,6 +226,10 @@ def register_persister_if_enabled(vcr) -> None:
     vcr.register_persister(make_redis_persister())
     vcr.register_matcher(SAFE_BODY_MATCHER_NAME, _safe_body_matcher)
     patch_vcrpy_aiohttp_record_path()
+    global _atexit_banner_registered
+    if not _atexit_banner_registered:
+        atexit.register(_print_atexit_banner)
+        _atexit_banner_registered = True
 
 
 def apply_vcr_auto_marker_to_items(
@@ -221,6 +280,80 @@ def record_vcr_outcome(request, vcr) -> None:
         return
     verdict = format_vcr_verdict(cassette)
     request.node.user_properties.append(("vcr_verdict", verdict))
+
+
+def _format_capacity_line(snapshot: dict) -> str:
+    used = int(snapshot.get("used_memory_bytes", 0) or 0)
+    cap = int(snapshot.get("maxmemory_bytes", 0) or 0)
+    pct = float(snapshot.get("used_pct", 0.0) or 0.0)
+    used_mb = used / (1024 * 1024)
+    cap_mb = cap / (1024 * 1024)
+    return (
+        f"  Cassette Redis usage: {used_mb:.1f} MiB / {cap_mb:.1f} MiB "
+        f"({pct:.1f}% of maxmemory)"
+    )
+
+
+def emit_cassette_cache_session_banner(terminalreporter) -> None:
+    """Write a session-end banner about cassette-cache health.
+
+    - If any save/load failed during the session, prints a loud red banner
+      with the failure counts and last error.
+    - Otherwise, if Redis is at ≥ ``CASSETTE_CACHE_HIGH_WATER_FRACTION``
+      of its maxmemory, prints an orange warning so the next CI run
+      knows the cache is close to OOM.
+    - No-op when VCR is disabled, no failures occurred, and capacity is
+      healthy.
+
+    Call this from ``pytest_terminal_summary(terminalreporter, ...)`` in
+    consuming conftests. Safe to call from an xdist controller; xdist
+    workers will skip emitting (they'd duplicate output).
+    """
+    if vcr_disabled():
+        return
+    if os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+
+    health = cassette_cache_health()
+    save_failures = int(health.get("save_failures", 0) or 0)
+    load_failures = int(health.get("load_failures", 0) or 0)
+    snapshot = cassette_cache_capacity_snapshot()
+
+    if save_failures or load_failures:
+        terminalreporter.write_sep(
+            "=", "VCR CASSETTE CACHE DEGRADED", red=True, bold=True
+        )
+        if save_failures:
+            terminalreporter.write_line(
+                f"  {save_failures} cassette save failure(s); last error: "
+                f"{health.get('save_failure_last_error', '')}"
+            )
+        if load_failures:
+            terminalreporter.write_line(
+                f"  {load_failures} cassette load failure(s); last error: "
+                f"{health.get('load_failure_last_error', '')}"
+            )
+        terminalreporter.write_line(
+            "  Tests still passed because cassette persistence is best-effort, "
+            "but the Redis cache may be degraded (e.g. at maxmemory cap, "
+            "unreachable, or read-only)."
+        )
+        if snapshot:
+            terminalreporter.write_line(_format_capacity_line(snapshot))
+        terminalreporter.write_sep("=", red=True, bold=True)
+        return
+
+    if snapshot and snapshot["used_pct"] >= CASSETTE_CACHE_HIGH_WATER_FRACTION * 100:
+        terminalreporter.write_sep(
+            "=", "VCR CASSETTE CACHE NEAR CAPACITY", yellow=True, bold=True
+        )
+        terminalreporter.write_line(_format_capacity_line(snapshot))
+        terminalreporter.write_line(
+            "  No save failures yet, but Redis is approaching maxmemory. "
+            "Consider running tests/_flush_vcr_cache.py or letting more "
+            "keys age out before the next session."
+        )
+        terminalreporter.write_sep("=", yellow=True, bold=True)
 
 
 # ---------------------------------------------------------------------------

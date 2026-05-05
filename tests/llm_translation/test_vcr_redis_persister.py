@@ -17,10 +17,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 from tests._vcr_redis_persister import (  # noqa: E402
     CASSETTE_TTL_SECONDS,
     MAX_EPISODES_PER_CASSETTE,
+    VCRCassetteCacheWarning,
+    cassette_cache_capacity_snapshot,
+    cassette_cache_health,
     filter_non_2xx_response,
     make_redis_persister,
     mark_test_outcome_for_cassette,
     redis_key_for,
+    reset_cassette_cache_health,
 )
 
 
@@ -296,3 +300,130 @@ def test_only_2xx_responses_are_cached(status_code, expect_dropped):
     assert (result is None) == expect_dropped
     if not expect_dropped:
         assert result is response
+
+
+# ---------------------------------------------------------------------------
+# Cache-health observability
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def reset_health():
+    reset_cassette_cache_health()
+    yield
+    reset_cassette_cache_health()
+
+
+def test_save_failure_increments_health_counter_and_emits_warning(reset_health):
+    flaky = _FlakyRedis(
+        fakeredis.FakeStrictRedis(),
+        fail_on="set",
+        exc=RedisOutOfMemoryError(
+            "command not allowed when used memory > 'maxmemory'."
+        ),
+    )
+    persister = make_redis_persister(client=flaky)
+
+    with pytest.warns(VCRCassetteCacheWarning, match="OutOfMemoryError"):
+        persister.save_cassette(
+            "tests/llm_translation/test_x/test_save_outage",
+            _sample_cassette_dict(),
+            yamlserializer,
+        )
+
+    health = cassette_cache_health()
+    assert health["save_failures"] == 1
+    assert "OutOfMemoryError" in health["save_failure_last_error"]
+    assert health["load_failures"] == 0
+
+
+def test_load_failure_increments_health_counter_and_emits_warning(reset_health):
+    flaky = _FlakyRedis(
+        fakeredis.FakeStrictRedis(),
+        fail_on="get",
+        exc=RedisConnectionError("simulated outage"),
+    )
+    persister = make_redis_persister(client=flaky)
+
+    with pytest.warns(VCRCassetteCacheWarning, match="ConnectionError"):
+        with pytest.raises(CassetteNotFoundError):
+            persister.load_cassette(
+                "tests/llm_translation/test_x/test_load_outage", yamlserializer
+            )
+
+    health = cassette_cache_health()
+    assert health["load_failures"] == 1
+    assert "ConnectionError" in health["load_failure_last_error"]
+    assert health["save_failures"] == 0
+
+
+def test_health_counters_accumulate_across_failures(reset_health):
+    flaky = _FlakyRedis(
+        fakeredis.FakeStrictRedis(),
+        fail_on="set",
+        exc=RedisConnectionError("simulated outage"),
+    )
+    persister = make_redis_persister(client=flaky)
+
+    for i in range(3):
+        with pytest.warns(VCRCassetteCacheWarning):
+            persister.save_cassette(
+                f"tests/llm_translation/test_x/test_outage_{i}",
+                _sample_cassette_dict(),
+                yamlserializer,
+            )
+
+    assert cassette_cache_health()["save_failures"] == 3
+
+
+def test_successful_save_does_not_emit_warning_or_increment_counter(reset_health):
+    _, persister = _persister_with_fake_redis()
+
+    import warnings as _warnings
+
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("error", VCRCassetteCacheWarning)
+        persister.save_cassette(
+            "tests/llm_translation/test_x/test_happy",
+            _sample_cassette_dict(),
+            yamlserializer,
+        )
+
+    assert cassette_cache_health()["save_failures"] == 0
+
+
+class _FakeRedisWithInfo:
+    def __init__(self, used: int, maxmem: int):
+        self._used = used
+        self._maxmem = maxmem
+
+    def info(self, section=None):
+        return {"used_memory": self._used, "maxmemory": self._maxmem}
+
+
+def test_capacity_snapshot_returns_used_max_and_pct():
+    client = _FakeRedisWithInfo(used=900, maxmem=1000)
+    snap = cassette_cache_capacity_snapshot(client=client)
+    assert snap == {
+        "used_memory_bytes": 900,
+        "maxmemory_bytes": 1000,
+        "used_pct": 90.0,
+    }
+
+
+def test_capacity_snapshot_returns_none_when_uncapped():
+    client = _FakeRedisWithInfo(used=900, maxmem=0)
+    assert cassette_cache_capacity_snapshot(client=client) is None
+
+
+def test_capacity_snapshot_returns_none_when_used_unknown():
+    client = _FakeRedisWithInfo(used=0, maxmem=1000)
+    assert cassette_cache_capacity_snapshot(client=client) is None
+
+
+def test_capacity_snapshot_swallows_exceptions():
+    class _Boom:
+        def info(self, section=None):
+            raise RuntimeError("redis offline")
+
+    assert cassette_cache_capacity_snapshot(client=_Boom()) is None
