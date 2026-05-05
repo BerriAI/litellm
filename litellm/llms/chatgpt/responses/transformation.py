@@ -189,7 +189,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return completed_response, error_message
 
     def _parse_sse_json_chunk(self, chunk: str) -> Optional[Any]:
-        stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
+        # Strip outer whitespace before removing the SSE `data:` prefix.
+        # `_strip_sse_data_from_chunk` only matches the prefix at position 0,
+        # so chunks with leading whitespace (e.g. `  data: {...}`) would
+        # otherwise be returned unchanged and fail JSON parsing silently.
+        stripped_chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk.strip())
         if not stripped_chunk:
             return None
         stripped_chunk = stripped_chunk.strip()
