@@ -124,7 +124,9 @@ async def test_update_daily_spend_with_null_entity_id():
         "user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint"
     ]
     assert where_clause["user_id"] is None
-    assert where_clause["date"] == "2024-01-01"
+    # `date` is converted from the in-memory YYYY-MM-DD string to a UTC-midnight
+    # datetime at the Prisma boundary (DB column is `DateTime @db.Date`).
+    assert where_clause["date"] == datetime(2024, 1, 1, tzinfo=timezone.utc)
     assert where_clause["api_key"] == "test-api-key"
     assert where_clause["model"] == "gpt-4"
     assert where_clause["custom_llm_provider"] == "openai"
@@ -134,7 +136,7 @@ async def test_update_daily_spend_with_null_entity_id():
     # Verify the create data contains null entity_id
     create_data = call_args["data"]["create"]
     assert create_data["user_id"] is None
-    assert create_data["date"] == "2024-01-01"
+    assert create_data["date"] == datetime(2024, 1, 1, tzinfo=timezone.utc)
     assert create_data["api_key"] == "test-api-key"
     assert create_data["model"] == "gpt-4"
     assert create_data["custom_llm_provider"] == "openai"
@@ -180,12 +182,13 @@ async def test_update_daily_spend_sorting():
             "successful_requests": 1,
             "failed_requests": 0,
         }
+        expected_db_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
         upsert_calls.append(
             call(
                 where={
                     "user_id_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint": {
                         "user_id": f"user{i+11}",  # user11 ... user60, sorted order
-                        "date": "2024-01-01",
+                        "date": expected_db_date,
                         "api_key": "test-api-key",
                         "model": "gpt-4",
                         "custom_llm_provider": "openai",
@@ -196,7 +199,7 @@ async def test_update_daily_spend_sorting():
                 data={
                     "create": {
                         "user_id": f"user{i+11}",
-                        "date": "2024-01-01",
+                        "date": expected_db_date,
                         "api_key": "test-api-key",
                         "model": "gpt-4",
                         "model_group": None,
