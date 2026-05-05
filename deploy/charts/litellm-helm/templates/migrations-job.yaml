@@ -88,7 +88,7 @@ spec:
             - name: DATABASE_NAME
               value: {{ .Values.postgresql.auth.database | default "litellm" }}
             - name: DATABASE_URL
-              value: {{ .Values.db.url | quote }}
+              value: postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_HOST)/$(DATABASE_NAME)
             {{- end }}
             {{- if .Values.envVars }}
             {{- range $key, $val := .Values.envVars }}
