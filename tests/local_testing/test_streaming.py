@@ -3640,7 +3640,7 @@ def test_mock_response_iterator_tool_use():
     [
         # "deepseek/deepseek-reasoner",
         # "anthropic/claude-3-7-sonnet-20250219",
-        "openrouter/anthropic/claude-3.7-sonnet",
+        "openrouter/anthropic/claude-sonnet-4.5",
     ],
 )
 def test_reasoning_content_completion(model):

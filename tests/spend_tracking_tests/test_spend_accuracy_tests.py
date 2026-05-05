@@ -128,8 +128,8 @@ async def get_spend_info(session, entity_type: str, entity_id: str):
 
 
 async def get_proxy_readiness(session):
-    """Fetch /health/readiness. Used both as a fail-fast gate and as a diagnostic on poll timeout."""
-    url = "http://0.0.0.0:4000/health/readiness"
+    """Fetch authenticated readiness details. Used both as a fail-fast gate and as a diagnostic on poll timeout."""
+    url = "http://0.0.0.0:4000/health/readiness/details"
     headers = {"Authorization": "Bearer sk-1234"}
     async with session.get(url, headers=headers) as response:
         return response.status, await response.json()
@@ -140,7 +140,7 @@ async def assert_proxy_healthy(session):
     status, body = await get_proxy_readiness(session)
     if status != 200 or body.get("db") != "connected":
         pytest.fail(
-            f"Proxy /health/readiness unhealthy (status={status}). "
+            f"Proxy /health/readiness/details unhealthy (status={status}). "
             f"Cannot run spend accuracy test. Response: {body}"
         )
     print(f"Proxy readiness OK: {body}")
