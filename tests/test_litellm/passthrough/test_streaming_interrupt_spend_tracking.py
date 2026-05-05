@@ -7,6 +7,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from litellm.passthrough.stream_flush_buffer import RawBytesStreamBuffer
+
+
+def _provider_config_with_raw_buffer():
+    pc = MagicMock()
+    pc.build_stream_flush_buffer.return_value = RawBytesStreamBuffer()
+    return pc
+
 
 def _make_streaming_response(chunks: List[bytes]):
     mock = MagicMock(spec=httpx.Response)
