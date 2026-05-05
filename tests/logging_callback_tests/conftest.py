@@ -36,6 +36,26 @@ _RESPX_CONFLICTING_FILES = frozenset(
     }
 )
 
+# Files where VCR replay actively breaks the test:
+# - ``test_amazing_s3_logs.py`` exercises the S3 success callback using
+#   ``mock_response`` (so there is no upstream LLM call worth caching) and
+#   asserts on a per-run ``response_id`` round-tripped through a real S3
+#   PUT/LIST. vcrpy's boto3 stub intercepts the PUT and replays a stale LIST,
+#   so the freshly-generated id is never found in the cached keys.
+_VCR_INCOMPATIBLE_FILES = frozenset(
+    {
+        "test_amazing_s3_logs.py",
+    }
+)
+
+# Specific tests where VCR replay actively breaks the test:
+# - The "failure" branches of these callback tests deliberately pass a bad
+#   API key to assert that the ``async_failure`` / ``failure`` callback fires.
+#   We scrub auth headers from cassettes (so the bad-key request matches the
+#   prior good-key request), and vcrpy replays the recorded 200 — so the
+#   failure callback never fires and the assertion flips.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES = ("::test_async_embedding_azure",)
+
 
 _verbose_state = VerboseReporterState()
 
@@ -189,7 +209,8 @@ def setup_and_teardown():
 def pytest_collection_modifyitems(config, items):
     apply_vcr_auto_marker_to_items(
         items,
-        skip_files=_RESPX_CONFLICTING_FILES,
+        skip_files=_RESPX_CONFLICTING_FILES | _VCR_INCOMPATIBLE_FILES,
+        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
     )
 
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests

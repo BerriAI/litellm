@@ -40,6 +40,29 @@ _RESPX_CONFLICTING_FILES = frozenset(
     }
 )
 
+# Files where VCR replay actively breaks the test:
+# - ``test_assistants.py`` exercises the OpenAI Assistants polling APIs
+#   which mint fresh thread/run/message IDs every recording session and
+#   then poll until ``status == "completed"``. Replays of those polled
+#   GETs would have to match the new run id (impossible) or be played
+#   back in lockstep with a freshly recorded creation, neither of which
+#   ``record_mode="new_episodes"`` does well. The result in CI is that
+#   every run effectively re-records, blowing past the 15-minute step
+#   timeout for ``litellm_assistants_api_testing``.
+_VCR_INCOMPATIBLE_FILES = frozenset(
+    {
+        "test_assistants.py",
+    }
+)
+
+# Specific tests where VCR replay actively breaks the test:
+# - ``test_amazing_sync_embedding`` deliberately calls the embedding API
+#   with ``api_key="my-bad-key"`` to assert the failure callback fires.
+#   We scrub auth headers from cassettes (so the bad-key request matches
+#   the prior good-key request), and vcrpy replays the recorded 200 — so
+#   the failure callback never fires and the assertion flips.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES = ("::test_amazing_sync_embedding",)
+
 
 _verbose_state = VerboseReporterState()
 
@@ -201,7 +224,8 @@ def setup_and_teardown():
 def pytest_collection_modifyitems(config, items):
     apply_vcr_auto_marker_to_items(
         items,
-        skip_files=_RESPX_CONFLICTING_FILES,
+        skip_files=_RESPX_CONFLICTING_FILES | _VCR_INCOMPATIBLE_FILES,
+        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
     )
 
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
