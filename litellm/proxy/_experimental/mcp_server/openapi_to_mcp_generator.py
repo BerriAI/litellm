@@ -280,6 +280,21 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _get_effective_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    """Merge static, hook-injected, and auth override headers for this request."""
+    effective_headers = dict(headers)
+
+    request_extra = _request_extra_headers.get()
+    if request_extra:
+        effective_headers.update(request_extra)
+
+    override_auth = _request_auth_header.get()
+    if override_auth:
+        effective_headers["Authorization"] = override_auth
+
+    return effective_headers
+
+
 def create_tool_function(
     path: str,
     method: str,
@@ -317,19 +332,8 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
-        # Allow per-request auth override (e.g. BYOK credential set via ContextVar).
-        # The ContextVar holds the full Authorization header value, including the
-        # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
-        # server.py based on the server's configured auth_type.
-        effective_headers = dict(headers)
-
-        request_extra = _request_extra_headers.get()
-        if request_extra:
-            effective_headers.update(request_extra)
-
-        override_auth = _request_auth_header.get()
-        if override_auth:
-            effective_headers["Authorization"] = override_auth
+        # Allow per-request headers from hooks and BYOK auth ContextVars.
+        effective_headers = _get_effective_headers(headers)
 
         # Build URL from base_url and path
         url = base_url + path
