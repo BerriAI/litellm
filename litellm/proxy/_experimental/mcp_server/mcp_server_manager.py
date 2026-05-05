@@ -2084,9 +2084,7 @@ class MCPServerManager:
         extra_headers_dict: Optional[Dict[str, str]] = None
         if server.extra_headers and raw_headers:
             normalized = {
-                str(k).lower(): v
-                for k, v in raw_headers.items()
-                if isinstance(k, str)
+                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
             }
             extra_headers_dict = {}
             for header in server.extra_headers:
@@ -2351,9 +2349,7 @@ class MCPServerManager:
                 extra_headers = {}
 
             normalized_raw_headers = {
-                str(k).lower(): v
-                for k, v in raw_headers.items()
-                if isinstance(k, str)
+                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
             }
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
