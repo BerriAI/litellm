@@ -597,6 +597,59 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "control_field",
+    ["callbacks", "service_callback", "logger_fn", "litellm_disabled_callbacks"],
+)
+async def test_add_litellm_data_to_request_strips_callback_control_fields(
+    control_field,
+):
+    """``callbacks`` / ``service_callback`` / ``logger_fn`` get appended to
+    the worker-wide ``litellm.{input,success,failure,_async_*,service}_callback``
+    lists and ``litellm.user_logger_fn`` from inside ``function_setup`` —
+    one request poisons every subsequent caller in that worker.
+    ``litellm_disabled_callbacks`` is the inverse: a request-body value
+    silently disables admin-configured audit/observability for the call.
+    None has a documented per-request use, so all four are stripped at
+    the proxy boundary alongside the existing internal-only fields."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    sample_value = (
+        ["langfuse"]
+        if control_field
+        in ("callbacks", "service_callback", "litellm_disabled_callbacks")
+        else "module.func"
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hi"}],
+            control_field: sample_value,
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert control_field not in updated
+    # The post-strip body snapshot used by audit/spend logging must also
+    # not retain the attacker-injected control field.
+    snapshot_body = updated["proxy_server_request"]["body"]
+    assert control_field not in snapshot_body
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_allows_client_mock_response_with_admin_opt_in():
     request_mock = MagicMock(spec=Request)
     request_mock.url.path = "/v1/chat/completions"

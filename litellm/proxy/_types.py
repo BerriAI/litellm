@@ -190,6 +190,8 @@ class LitellmTableNames(str, enum.Enum):
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
     MANAGED_FILE_TABLE_NAME = "LiteLLM_ManagedFileTable"
     TOOL_TABLE_NAME = "LiteLLM_ToolTable"
+    CACHE_CONFIG_TABLE_NAME = "LiteLLM_CacheConfig"
+    CONFIG_OVERRIDES_TABLE_NAME = "LiteLLM_ConfigOverrides"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -565,6 +567,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/available",
             "/team/permissions_list",
             "/team/permissions_update",
+            "/team/permissions_bulk_update",
             "/team/daily/activity",
             # model
             "/model/new",
@@ -614,13 +617,12 @@ class LiteLLMRoutes(enum.Enum):
             "/",
             "/health/liveliness",
             "/health/liveness",
-            "/health/readiness",
             "/test",
             "/config/yaml",
-            "/metrics",
             "/litellm/.well-known/litellm-ui-config",
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
+            "/public/model_hub/info",
             "/public/agent_hub",
             "/public/mcp_hub",
             "/public/skill_hub",

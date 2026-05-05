@@ -10,9 +10,11 @@ sys.path.insert(
 
 import pytest
 
+import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
+    LiteLLMRoutes,
     LiteLLM_JWTAuth,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -27,6 +29,7 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
+    _route_requires_auth_despite_public,
     _reserve_budget_after_common_checks,
     _run_centralized_common_checks,
     _run_post_custom_auth_checks,
@@ -57,6 +60,29 @@ def test_get_api_key():
         route="",
         request=MagicMock(),
     ) == (api_key, passed_in_key)
+
+
+def test_route_requires_auth_despite_public_for_metrics(monkeypatch):
+    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
+
+    assert _route_requires_auth_despite_public("/metrics", {}) is True
+    assert _route_requires_auth_despite_public("/metrics/", {}) is True
+
+    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", False)
+
+    assert _route_requires_auth_despite_public("/metrics", {}) is False
+
+
+def test_public_ai_hub_routes_remain_public():
+    for route in (
+        "/public/model_hub",
+        "/public/model_hub/info",
+        "/public/agent_hub",
+        "/public/mcp_hub",
+        "/public/skill_hub",
+    ):
+        assert route in LiteLLMRoutes.public_routes.value
+        assert _route_requires_auth_despite_public(route, {}) is False
 
 
 @pytest.mark.asyncio
@@ -2352,18 +2378,18 @@ async def test_centralized_common_checks_short_circuits_when_master_key_unset():
 
 @pytest.mark.asyncio
 async def test_centralized_common_checks_skips_public_routes():
-    """Regression: public routes (e.g. /health/readiness) are exempted
+    """Regression: public routes (e.g. /health/liveness) are exempted
     by the builder fast-path. The wrapper must not retroactively run
     common_checks on top — the synthetic INTERNAL_USER_VIEW_ONLY token
     has no user_id, so common_checks would reject the request as
-    admin-only. Breaks k8s readiness probes when master_key is set."""
+    admin-only."""
     import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
 
     token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
     request = Request(scope={"type": "http"})
-    request._url = URL(url="/health/readiness")
+    request._url = URL(url="/health/liveness")
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
@@ -2378,7 +2404,7 @@ async def test_centralized_common_checks_skips_public_routes():
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
-                route="/health/readiness",
+                route="/health/liveness",
             )
             mock_checks.assert_not_awaited()
     finally:

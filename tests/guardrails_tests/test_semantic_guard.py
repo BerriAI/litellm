@@ -171,6 +171,25 @@ class TestHelperFunctions:
         mock_response.choices[0].message.content = "Hello from LLM"
         assert _extract_response_text(mock_response) == "Hello from LLM"
 
+    def test_extract_response_text_combines_all_choices(self):
+        from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.semantic_guard import (
+            _extract_response_text,
+        )
+
+        first_choice = MagicMock()
+        first_choice.message.content = "first response"
+        second_choice = MagicMock()
+        second_choice.message.content = [
+            {"type": "text", "text": "second"},
+            {"type": "text", "text": "response"},
+        ]
+        mock_response = MagicMock()
+        mock_response.choices = [first_choice, second_choice]
+
+        assert (
+            _extract_response_text(mock_response) == "first response\nsecond response"
+        )
+
     def test_extract_response_text_empty(self):
         from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.semantic_guard import (
             _extract_response_text,

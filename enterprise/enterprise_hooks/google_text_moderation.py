@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.utils import CallTypesLiteral
 
 
@@ -94,11 +95,9 @@ class _ENTERPRISE_GoogleTextModeration(CustomLogger):
         - Calls Google's Text Moderation API
         - Rejects request if it fails safety check
         """
-        if "messages" in data and isinstance(data["messages"], list):
-            text = ""
-            for m in data["messages"]:  # assume messages is a list
-                if "content" in m and isinstance(m["content"], str):
-                    text += m["content"]
+        # Covers multimodal list content + Responses-API input.
+        text = "".join(iter_message_text(data))
+        if text:
             document = self.language_document(content=text, type_=self.document_type)
 
             request = self.moderate_text_request(
