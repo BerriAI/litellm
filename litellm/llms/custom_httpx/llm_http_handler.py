@@ -5578,6 +5578,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = image_edit_provider_config.finalize_image_edit_request_data(
+            data, api_base
+        )
 
         ## LOGGING
         logging_obj.pre_call(
@@ -5675,6 +5678,9 @@ class BaseLLMHTTPHandler:
             image_edit_optional_request_params=image_edit_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+        data = image_edit_provider_config.finalize_image_edit_request_data(
+            data, api_base
         )
 
         ## LOGGING
