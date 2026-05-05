@@ -39763,5 +39763,180 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
+    },
+    "tencent_cloud/deepseek-v4-pro": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/deepseek-v4-flash": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/deepseek-v3.2": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/deepseek-v3.1-terminus": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/deepseek-v3-0324": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/deepseek-r1-0528": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_reasoning": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/hy3-preview": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/hunyuan-2.0-thinking-20251109": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_reasoning": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/hunyuan-2.0-instruct-20251111": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/hunyuan-role-latest": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/glm-5": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/glm-5-turbo": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/glm-5v-turbo": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/glm-5.1": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/kimi-k2.5": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/kimi-k2.6": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/minimax-m2.5": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
+    },
+    "tencent_cloud/minimax-m2.7": {
+        "litellm_provider": "tencent_cloud",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_system_messages": true,
+        "supports_response_schema": true,
+        "source": "https://cloud.tencent.com/document/product/1823/130079"
     }
 }

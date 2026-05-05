@@ -356,6 +356,12 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.hyperbolic.xyz/v1":
                         custom_llm_provider = "hyperbolic"
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
+                    elif endpoint in (
+                        "https://tokenhub.tencentmaas.com/v1",
+                        "https://tokenhub-intl.tencentmaas.com/v1",
+                    ):
+                        custom_llm_provider = "tencent_cloud"
+                        dynamic_api_key = get_secret_str("TENCENT_CLOUD_API_KEY")
                     elif endpoint == "https://ai-gateway.vercel.sh/v1":
                         custom_llm_provider = "vercel_ai_gateway"
                         dynamic_api_key = get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
@@ -728,6 +734,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )  # type: ignore
 
         dynamic_api_key = api_key or get_secret_str("DEEPSEEK_API_KEY")
+    elif custom_llm_provider == "tencent_cloud":
+        # tencent_cloud (TokenHub) is openai compatible
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.TencentCloudChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "fireworks_ai":
         # fireworks is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.fireworks.ai/inference/v1
         (

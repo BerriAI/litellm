@@ -5,6 +5,26 @@ model_list:
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
 
+  - model_name: deepseek-v3.2
+    litellm_params:
+      model: tencent_cloud/deepseek-v3.2
+      api_key: os.environ/TENCENT_CLOUD_API_KEY
+
+  - model_name: hunyuan-instruct
+    litellm_params:
+      model: tencent_cloud/hunyuan-2.0-instruct-20251111
+      api_key: os.environ/TENCENT_CLOUD_API_KEY
+
+  - model_name: glm-5
+    litellm_params:
+      model: tencent_cloud/glm-5
+      api_key: os.environ/TENCENT_CLOUD_API_KEY
+
+  - model_name: kimi-k2.6
+    litellm_params:
+      model: tencent_cloud/kimi-k2.6
+      api_key: os.environ/TENCENT_CLOUD_API_KEY
+
 general_settings:
   master_key: sk-1234
 

@@ -621,6 +621,7 @@ aws_polly_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 bedrock_mantle_models: Set = set()
+tencent_cloud_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -887,6 +888,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
+        elif value.get("litellm_provider") == "tencent_cloud":
+            tencent_cloud_models.add(key)
 
 
 add_known_models()
@@ -996,6 +999,7 @@ model_list = list(
     | lemonade_models
     | docker_model_runner_models
     | bedrock_mantle_models
+    | tencent_cloud_models
     | set(clarifai_models)
 )
 
@@ -1101,6 +1105,7 @@ models_by_provider: dict = {
     "gigachat": gigachat_models,
     "llamagate": llamagate_models,
     "bedrock_mantle": bedrock_mantle_models,
+    "tencent_cloud": tencent_cloud_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1717,6 +1722,9 @@ if TYPE_CHECKING:
     from .llms.deepseek.chat.transformation import (
         DeepSeekChatConfig as _DeepSeekChatConfig,
     )
+    from .llms.tencent_cloud.chat.transformation import (
+        TencentCloudChatConfig as _TencentCloudChatConfig,
+    )
     from .llms.sap.chat.transformation import (
         GenAIHubOrchestrationConfig as _GenAIHubOrchestrationConfig,
     )
@@ -1759,6 +1767,7 @@ if TYPE_CHECKING:
     # Type stubs for lazy-loaded config classes (to help mypy understand types)
     VLLMConfig: Type[_VLLMConfig]
     DeepSeekChatConfig: Type[_DeepSeekChatConfig]
+    TencentCloudChatConfig: Type[_TencentCloudChatConfig]
     GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
     GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
     AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]

@@ -279,6 +279,7 @@ LLM_CONFIG_NAMES = (
     "LiteLLMProxyChatConfig",
     "VLLMConfig",
     "DeepSeekChatConfig",
+    "TencentCloudChatConfig",
     "LMStudioChatConfig",
     "LmStudioEmbeddingConfig",
     "NscaleConfig",
@@ -1068,6 +1069,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     ),
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
+    "TencentCloudChatConfig": (
+        ".llms.tencent_cloud.chat.transformation",
+        "TencentCloudChatConfig",
+    ),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",

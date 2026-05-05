@@ -769,6 +769,8 @@ openai_compatible_endpoints: List = [
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
     "https://api.hyperbolic.xyz/v1",
+    "https://tokenhub.tencentmaas.com/v1",
+    "https://tokenhub-intl.tencentmaas.com/v1",
     "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
@@ -831,6 +833,7 @@ openai_compatible_providers: List = [
     "clarifai",
     "docker_model_runner",
     "ragflow",
+    "tencent_cloud",  # Tencent Cloud TokenHub - OpenAI-compatible
 ]
 openai_text_completion_compatible_providers: List = (
     [  # providers that support `/v1/completions`
