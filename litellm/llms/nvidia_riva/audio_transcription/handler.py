@@ -33,7 +33,6 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     process_audio_file,
 )
 from litellm.llms.nvidia_riva.audio_transcription.audio_utils import (
-    ResampledAudio,
     resample_to_riva_pcm,
 )
 from litellm.llms.nvidia_riva.audio_transcription.transformation import (
