@@ -96,3 +96,32 @@ Get redis service port
 {{ .Values.redis.master.service.ports.redis }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Resolve DB credentials secret name for standalone DB mode.
+Precedence:
+1) db.dbCredentialsSecretName
+2) postgresql.auth.existingSecret
+3) <fullname>-dbcredentials (legacy default)
+*/}}
+{{- define "litellm.dbCredentialsSecretName" -}}
+{{- if .Values.db.dbCredentialsSecretName -}}
+{{- .Values.db.dbCredentialsSecretName -}}
+{{- else if .Values.postgresql.auth.existingSecret -}}
+{{- .Values.postgresql.auth.existingSecret -}}
+{{- else -}}
+{{- printf "%s-dbcredentials" (include "litellm.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether chart should create the fallback <fullname>-dbcredentials secret.
+Only create it when no external secret is configured.
+*/}}
+{{- define "litellm.shouldCreateDbCredentialsSecret" -}}
+{{- if and (not .Values.db.dbCredentialsSecretName) (not .Values.postgresql.auth.existingSecret) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
