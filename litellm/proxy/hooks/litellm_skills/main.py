@@ -110,7 +110,10 @@ class SkillsInjectionHook(CustomLogger):
             skill_id = skill.get("skill_id", "")
             if skill_id.startswith("litellm_"):
                 # Fetch from LiteLLM DB
-                db_skill = await self._fetch_skill_from_db(skill_id)
+                db_skill = await self._fetch_skill_from_db(
+                    skill_id,
+                    user_api_key_dict=user_api_key_dict,
+                )
                 if db_skill:
                     litellm_skills.append(db_skill)
                 else:
@@ -276,7 +279,9 @@ class SkillsInjectionHook(CustomLogger):
         return data
 
     async def _fetch_skill_from_db(
-        self, skill_id: str
+        self,
+        skill_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
     ) -> Optional[LiteLLM_SkillsTable]:
         """
         Fetch a skill from the LiteLLM database.
@@ -290,7 +295,10 @@ class SkillsInjectionHook(CustomLogger):
         try:
             from litellm.llms.litellm_proxy.skills.handler import LiteLLMSkillsHandler
 
-            return await LiteLLMSkillsHandler.fetch_skill_from_db(skill_id)
+            return await LiteLLMSkillsHandler.fetch_skill_from_db(
+                skill_id,
+                user_api_key_dict=user_api_key_dict,
+            )
         except Exception as e:
             verbose_proxy_logger.warning(
                 f"SkillsInjectionHook: Error fetching skill {skill_id}: {e}"

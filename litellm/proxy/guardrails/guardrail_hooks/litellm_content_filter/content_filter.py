@@ -1873,8 +1873,9 @@ class ContentFilterGuardrail(CustomGuardrail):
         and the UI Request Lifecycle panel. Mirrors apply_guardrail's finally-block
         contract.
         """
-        accumulated_full_text = ""
-        yielded_masked_text_len = 0
+        accumulated_text_by_choice: Dict[int, str] = {}
+        yielded_masked_text_len_by_choice: Dict[int, int] = {}
+        latest_detections_by_choice: Dict[int, List[ContentFilterDetection]] = {}
         buffer_size = 50  # Increased buffer to catch patterns split across many chunks
 
         start_time = datetime.now()
@@ -1890,79 +1891,90 @@ class ContentFilterGuardrail(CustomGuardrail):
         try:
             async for item in response:
                 if isinstance(item, ModelResponseStream) and item.choices:
-                    delta_content = ""
-                    is_final = False
                     for choice in item.choices:
-                        if hasattr(choice, "delta") and choice.delta:
-                            content = getattr(choice.delta, "content", None)
-                            if content and isinstance(content, str):
-                                delta_content += content
-                        if getattr(choice, "finish_reason", None):
-                            is_final = True
+                        if not (hasattr(choice, "delta") and choice.delta):
+                            continue
 
-                    accumulated_full_text += delta_content
+                        choice_index = getattr(choice, "index", 0)
+                        if not isinstance(choice_index, int):
+                            choice_index = 0
 
-                    # Check for blocking or apply masking
-                    # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
-                    text_to_check = accumulated_full_text
-                    if is_final:
-                        text_to_check += " "
+                        content = getattr(choice.delta, "content", None)
+                        is_final = bool(getattr(choice, "finish_reason", None))
+                        if isinstance(content, str) and content:
+                            accumulated_text_by_choice[choice_index] = (
+                                accumulated_text_by_choice.get(choice_index, "")
+                                + content
+                            )
+                        elif not is_final:
+                            continue
 
-                    try:
-                        # Reset before each scan: _filter_single_text scans the
-                        # whole accumulated buffer every chunk, so previous-chunk
-                        # matches are guaranteed to be re-found. Keeping only the
-                        # latest scan's detections avoids N× duplication in the
-                        # final log row. BLOCK still records correctly because
-                        # handlers append to detections before raising.
-                        detections.clear()
-                        masked_text = self._filter_single_text(
-                            text_to_check, detections=detections
+                        text_to_check = accumulated_text_by_choice.get(choice_index, "")
+                        if not text_to_check:
+                            continue
+
+                        # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
+                        text_to_scan = text_to_check + (" " if is_final else "")
+                        choice_detections: List[ContentFilterDetection] = []
+
+                        try:
+                            # _filter_single_text scans the whole accumulated
+                            # choice buffer every chunk, so previous-chunk
+                            # matches are guaranteed to be re-found. Keeping
+                            # only each choice's latest scan avoids duplicate
+                            # detections in the final log row.
+                            masked_text = self._filter_single_text(
+                                text_to_scan, detections=choice_detections
+                            )
+                            if is_final and masked_text.endswith(" "):
+                                masked_text = masked_text[:-1]
+                            latest_detections_by_choice[choice_index] = (
+                                choice_detections
+                            )
+                        except HTTPException:
+                            latest_detections_by_choice[choice_index] = (
+                                choice_detections
+                            )
+                            raise
+                        except Exception as e:
+                            verbose_proxy_logger.error(
+                                f"ContentFilterGuardrail: Error in masking: {e}"
+                            )
+                            masked_text = text_to_scan  # Fallback to current text
+
+                        # Determine how much can be safely yielded
+                        if is_final:
+                            safe_to_yield_len = len(masked_text)
+                        else:
+                            safe_to_yield_len = max(0, len(masked_text) - buffer_size)
+
+                        yielded_masked_text_len = yielded_masked_text_len_by_choice.get(
+                            choice_index, 0
                         )
-                        if is_final and masked_text.endswith(" "):
-                            masked_text = masked_text[:-1]
-                    except HTTPException:
-                        raise
-                    except Exception as e:
-                        verbose_proxy_logger.error(
-                            f"ContentFilterGuardrail: Error in masking: {e}"
-                        )
-                        masked_text = text_to_check  # Fallback to current text
+                        if safe_to_yield_len > yielded_masked_text_len:
+                            new_masked_content = masked_text[
+                                yielded_masked_text_len:safe_to_yield_len
+                            ]
+                            choice.delta.content = new_masked_content
+                            yielded_masked_text_len_by_choice[choice_index] = (
+                                safe_to_yield_len
+                            )
+                        else:
+                            # Hold content by yielding empty content on this choice
+                            # while preserving chunk metadata and other choices.
+                            choice.delta.content = ""
 
-                    # Determine how much can be safely yielded
-                    if is_final:
-                        safe_to_yield_len = len(masked_text)
-                    else:
-                        safe_to_yield_len = max(0, len(masked_text) - buffer_size)
-
-                    if safe_to_yield_len > yielded_masked_text_len:
-                        new_masked_content = masked_text[
-                            yielded_masked_text_len:safe_to_yield_len
-                        ]
-                        # Modify the chunk to contain only the new masked content
-                        if (
-                            item.choices
-                            and hasattr(item.choices[0], "delta")
-                            and item.choices[0].delta
-                        ):
-                            item.choices[0].delta.content = new_masked_content
-                            yielded_masked_text_len = safe_to_yield_len
-                            yield item
-                    else:
-                        # Hold content by yielding empty content chunk (keeps metadata/structure)
-                        if (
-                            item.choices
-                            and hasattr(item.choices[0], "delta")
-                            and item.choices[0].delta
-                        ):
-                            item.choices[0].delta.content = ""
-                        yield item
+                    yield item
                 else:
                     # Not a ModelResponseStream or no choices - yield as is
                     yield item
 
             # Any remaining content (should have been handled by is_final, but just in case)
-            if yielded_masked_text_len < len(accumulated_full_text):
+            if any(
+                yielded_masked_text_len_by_choice.get(choice_index, 0)
+                < len(accumulated_text)
+                for choice_index, accumulated_text in accumulated_text_by_choice.items()
+            ):
                 # We already reached the end of the generator
                 pass
         except HTTPException:
@@ -1973,6 +1985,11 @@ class ContentFilterGuardrail(CustomGuardrail):
             exception_str = str(e)
             raise e
         finally:
+            detections = [
+                detection
+                for choice_detections in latest_detections_by_choice.values()
+                for detection in choice_detections
+            ]
             self._count_masked_entities(detections, masked_entity_count)
             self._log_guardrail_information(
                 request_data=request_data,

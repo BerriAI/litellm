@@ -167,3 +167,24 @@ def test_tool_name_sanitization():
     ]
     # Should be sanitized: only [a-zA-Z0-9_]
     assert tool_name == "my_tool_"
+
+
+def test_count_tokens_endpoint_encodes_model_id(monkeypatch):
+    """Test model IDs are treated as a single Bedrock path segment."""
+    config = BedrockCountTokensConfig()
+
+    monkeypatch.setattr(
+        config,
+        "get_runtime_endpoint",
+        lambda **kwargs: ("https://bedrock-runtime.us-east-1.amazonaws.com", None),
+    )
+
+    endpoint = config.get_bedrock_count_tokens_endpoint(
+        model="bedrock/../../model/other?x=1#frag",
+        aws_region_name="us-east-1",
+    )
+
+    assert (
+        endpoint
+        == "https://bedrock-runtime.us-east-1.amazonaws.com/model/..%2F..%2Fmodel%2Fother%3Fx%3D1%23frag/count-tokens"
+    )

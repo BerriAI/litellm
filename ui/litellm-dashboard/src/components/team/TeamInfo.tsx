@@ -653,10 +653,12 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const { team_info: info } = teamData;
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
-  const optedOutGlobals = new Set<string>(info.metadata?.opted_out_global_guardrails || []);
-  const nonGlobalOptIns: string[] = (info.metadata?.guardrails || []).filter(
-    (n: string) => !globalGuardrailNames.has(n),
+  const optedOutGlobals = new Set<string>(
+    Array.isArray(info.metadata?.opted_out_global_guardrails) ? info.metadata.opted_out_global_guardrails : [],
   );
+  const nonGlobalOptIns: string[] = (
+    Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []
+  ).filter((n: string) => !globalGuardrailNames.has(n));
   const effectiveGuardrails: string[] = initialKillSwitchOn
     ? nonGlobalOptIns
     : [
@@ -815,8 +817,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <GuardrailSettingsView
                     globalGuardrailNames={globalGuardrailNames}
-                    teamGuardrails={info.metadata?.guardrails || []}
-                    optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
+                    teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
+                    optedOutGlobalGuardrails={Array.isArray(info.metadata?.opted_out_global_guardrails) ? info.metadata.opted_out_global_guardrails : []}
                     killSwitchOn={initialKillSwitchOn}
                     variant="inline"
                   />
@@ -1619,8 +1621,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <GuardrailSettingsView
                       globalGuardrailNames={globalGuardrailNames}
-                      teamGuardrails={info.metadata?.guardrails || []}
-                      optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
+                      teamGuardrails={Array.isArray(info.metadata?.guardrails) ? info.metadata.guardrails : []}
+                      optedOutGlobalGuardrails={Array.isArray(info.metadata?.opted_out_global_guardrails) ? info.metadata.opted_out_global_guardrails : []}
                       killSwitchOn={initialKillSwitchOn}
                       variant="inline"
                       className="pt-4 border-t border-gray-200"
