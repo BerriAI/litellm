@@ -2138,17 +2138,23 @@ jobs:
             - ~/.cache/uv
       - restore_cache:
           keys:
-            - ui-e2e-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+            - ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
       - run:
           name: Install Node dependencies and Playwright
+          # The cimg/python:3.12-browsers image already ships the Chromium system
+          # libraries Playwright needs (libnss3, libatk-bridge2.0-0, libcups2, etc.).
+          # `--with-deps` triggers a redundant apt-get update + install that adds
+          # 5-10 minutes to the job and frequently stalls on flaky Ubuntu mirrors,
+          # so we install just the browser binary.
           command: |
             cd ui/litellm-dashboard
             npm ci
-            npx playwright install chromium --with-deps
+            npx playwright install chromium
       - save_cache:
-          key: ui-e2e-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          key: ui-e2e-node-deps-v2-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
           paths:
             - ui/litellm-dashboard/node_modules
+            - ~/.cache/ms-playwright
       - run:
           name: Build UI from source
           # Prior version used `cp -r out/ ../../litellm/proxy/_experimental/out/`.
