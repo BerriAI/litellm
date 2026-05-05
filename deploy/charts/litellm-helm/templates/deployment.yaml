@@ -138,6 +138,16 @@ spec:
             {{- with .Values.extraEnvVars }}
               {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{- if .Values.migrationJob.enabled }}
+            # Schema updates are owned by the dedicated migrations Job; skip
+            # the proxy's startup `prisma db push` so N replicas don't race
+            # one DB on every rollout. Placed last (after envVars and
+            # extraEnvVars) so this override can't be silently shadowed by a
+            # user-supplied DISABLE_SCHEMA_UPDATE under last-wins duplicate-env
+            # semantics — same pattern the migrations Job uses.
+            - name: DISABLE_SCHEMA_UPDATE
+              value: "true"
+            {{- end }}
           envFrom:
           {{- range .Values.environmentSecrets }}
             - secretRef:
