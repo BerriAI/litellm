@@ -37,12 +37,20 @@ class GetModelCostMap:
     @staticmethod
     def load_local_model_cost_map() -> dict:
         """Load the local model cost map: repo-root JSON in a source checkout, bundled package copy in an installed wheel."""
-        repo_root_json = (
-            Path(__file__).resolve().parents[2] / "model_prices_and_context_window.json"
-        )
-        if repo_root_json.is_file():
+        candidate_root = Path(__file__).resolve().parents[2]
+        repo_root_json = candidate_root / "model_prices_and_context_window.json"
+        # Require pyproject.toml as a witness so we don't misidentify an arbitrary
+        # parent directory as the repo root if this file is ever moved.
+        if repo_root_json.is_file() and (candidate_root / "pyproject.toml").is_file():
+            verbose_logger.debug(
+                "LiteLLM: loading local model cost map from repo root %s",
+                repo_root_json,
+            )
             return json.loads(repo_root_json.read_text(encoding="utf-8"))
 
+        verbose_logger.debug(
+            "LiteLLM: loading local model cost map from bundled package resource"
+        )
         return json.loads(
             files("litellm")
             .joinpath("model_prices_and_context_window_backup.json")
