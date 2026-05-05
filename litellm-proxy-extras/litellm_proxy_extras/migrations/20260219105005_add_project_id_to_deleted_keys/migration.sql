@@ -1,3 +1,3 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_DeletedVerificationToken" ADD COLUMN     "project_id" TEXT;
+ALTER TABLE "LiteLLM_DeletedVerificationToken" ADD COLUMN IF NOT EXISTS "project_id" TEXT;
 

@@ -54,14 +54,12 @@ class BaseVectorStoreFilesConfig(ABC):
     @abstractmethod
     def get_auth_credentials(
         self, litellm_params: Dict[str, Any]
-    ) -> VectorStoreFileAuthCredentials:
-        ...
+    ) -> VectorStoreFileAuthCredentials: ...
 
     @abstractmethod
-    def get_vector_store_file_endpoints_by_type(self) -> Dict[
-        str, Tuple[Tuple[str, str], ...]
-    ]:
-        ...
+    def get_vector_store_file_endpoints_by_type(
+        self,
+    ) -> Dict[str, Tuple[Tuple[str, str], ...]]: ...
 
     @abstractmethod
     def validate_environment(
@@ -91,16 +89,14 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         create_request: VectorStoreFileCreateRequest,
         api_base: str,
-    ) -> Tuple[str, Dict[str, Any]]:
-        ...
+    ) -> Tuple[str, Dict[str, Any]]: ...
 
     @abstractmethod
     def transform_create_vector_store_file_response(
         self,
         *,
         response: httpx.Response,
-    ) -> VectorStoreFileObject:
-        ...
+    ) -> VectorStoreFileObject: ...
 
     @abstractmethod
     def transform_list_vector_store_files_request(
@@ -109,16 +105,14 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         query_params: VectorStoreFileListQueryParams,
         api_base: str,
-    ) -> Tuple[str, Dict[str, Any]]:
-        ...
+    ) -> Tuple[str, Dict[str, Any]]: ...
 
     @abstractmethod
     def transform_list_vector_store_files_response(
         self,
         *,
         response: httpx.Response,
-    ) -> VectorStoreFileListResponse:
-        ...
+    ) -> VectorStoreFileListResponse: ...
 
     @abstractmethod
     def transform_retrieve_vector_store_file_request(
@@ -127,16 +121,14 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         file_id: str,
         api_base: str,
-    ) -> Tuple[str, Dict[str, Any]]:
-        ...
+    ) -> Tuple[str, Dict[str, Any]]: ...
 
     @abstractmethod
     def transform_retrieve_vector_store_file_response(
         self,
         *,
         response: httpx.Response,
-    ) -> VectorStoreFileObject:
-        ...
+    ) -> VectorStoreFileObject: ...
 
     @abstractmethod
     def transform_retrieve_vector_store_file_content_request(
@@ -145,16 +137,14 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         file_id: str,
         api_base: str,
-    ) -> Tuple[str, Dict[str, Any]]:
-        ...
+    ) -> Tuple[str, Dict[str, Any]]: ...
 
     @abstractmethod
     def transform_retrieve_vector_store_file_content_response(
         self,
         *,
         response: httpx.Response,
-    ) -> VectorStoreFileContentResponse:
-        ...
+    ) -> VectorStoreFileContentResponse: ...
 
     @abstractmethod
     def transform_update_vector_store_file_request(
@@ -164,16 +154,14 @@ class BaseVectorStoreFilesConfig(ABC):
         file_id: str,
         update_request: VectorStoreFileUpdateRequest,
         api_base: str,
-    ) -> Tuple[str, Dict[str, Any]]:
-        ...
+    ) -> Tuple[str, Dict[str, Any]]: ...
 
     @abstractmethod
     def transform_update_vector_store_file_response(
         self,
         *,
         response: httpx.Response,
-    ) -> VectorStoreFileObject:
-        ...
+    ) -> VectorStoreFileObject: ...
 
     @abstractmethod
     def transform_delete_vector_store_file_request(
@@ -182,16 +170,14 @@ class BaseVectorStoreFilesConfig(ABC):
         vector_store_id: str,
         file_id: str,
         api_base: str,
-    ) -> Tuple[str, Dict[str, Any]]:
-        ...
+    ) -> Tuple[str, Dict[str, Any]]: ...
 
     @abstractmethod
     def transform_delete_vector_store_file_response(
         self,
         *,
         response: httpx.Response,
-    ) -> VectorStoreFileDeleteResponse:
-        ...
+    ) -> VectorStoreFileDeleteResponse: ...
 
     def get_error_class(
         self,

@@ -17,4 +17,3 @@ __all__ = [
     "S3VectorsRAGIngestion",
     "VertexAIRAGIngestion",
 ]
-

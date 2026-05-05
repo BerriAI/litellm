@@ -11,17 +11,24 @@ from fastapi import APIRouter, Depends, HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.policy_engine.attachment_registry import \
-    get_attachment_registry
+from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.types.proxy.policy_engine import (
-    GuardrailPipeline, PipelineTestRequest, PolicyAttachmentCreateRequest,
-    PolicyAttachmentDBResponse, PolicyAttachmentListResponse,
-    PolicyCreateRequest, PolicyDBResponse, PolicyListDBResponse,
-    PolicyUpdateRequest, PolicyVersionCompareResponse,
-    PolicyVersionCreateRequest, PolicyVersionListResponse,
-    PolicyVersionStatusUpdateRequest)
+    GuardrailPipeline,
+    PipelineTestRequest,
+    PolicyAttachmentCreateRequest,
+    PolicyAttachmentDBResponse,
+    PolicyAttachmentListResponse,
+    PolicyCreateRequest,
+    PolicyDBResponse,
+    PolicyListDBResponse,
+    PolicyUpdateRequest,
+    PolicyVersionCompareResponse,
+    PolicyVersionCreateRequest,
+    PolicyVersionListResponse,
+    PolicyVersionStatusUpdateRequest,
+)
 
 router = APIRouter()
 
@@ -253,7 +260,11 @@ async def update_policy_version_status(
         raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating version status: {e}")
-        if "invalid status" in str(e).lower() or "only draft" in str(e).lower() or "cannot promote" in str(e).lower():
+        if (
+            "invalid status" in str(e).lower()
+            or "only draft" in str(e).lower()
+            or "cannot promote" in str(e).lower()
+        ):
             raise HTTPException(status_code=400, detail=str(e))
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))

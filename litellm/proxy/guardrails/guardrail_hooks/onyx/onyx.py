@@ -94,7 +94,6 @@ class OnyxGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
-
         conversation_id = (
             logging_obj.litellm_call_id if logging_obj else str(uuid.uuid4())
         )

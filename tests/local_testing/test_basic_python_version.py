@@ -7,9 +7,15 @@ import traceback
 
 import pytest
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
+
+
+def _run_uv(*args: str, **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(["uv", *args], check=True, cwd=PROJECT_ROOT, **kwargs)
 
 
 def test_using_litellm():
@@ -18,20 +24,18 @@ def test_using_litellm():
 
         print("litellm imported successfully")
     except Exception as e:
-        pytest.fail(
-            f"Error occurred: {e}. Installing litellm on python3.8 failed please retry"
-        )
+        pytest.fail(f"Error occurred: {e}. Installing litellm failed please retry")
 
 
 def test_litellm_proxy_server():
-    # Install the local litellm[proxy] package in development mode
-    subprocess.run(["pip", "install", "-e", ".[proxy]"])
+    # Sync the local litellm[proxy] dependencies into the project environment
+    _run_uv("sync", "--frozen", "--extra", "proxy")
 
-    # Import the proxy_server module
+    # Import through the uv-managed interpreter that uv sync populated.
     try:
-        import litellm.proxy.proxy_server
-    except ImportError:
-        pytest.fail("Failed to import litellm.proxy_server")
+        _run_uv("run", "--no-sync", "python", "-c", "import litellm.proxy.proxy_server")
+    except subprocess.CalledProcessError:
+        pytest.fail("Failed to import litellm.proxy.proxy_server")
 
     # Assertion to satisfy the test, you can add other checks as needed
     assert True
@@ -39,12 +43,13 @@ def test_litellm_proxy_server():
 
 def test_package_dependencies():
     """
-    Test that all optional dependencies are correctly specified in extras.
+    Test that all optional dependency entries are exposed via project optional-dependencies.
     """
     try:
         import pathlib
         import litellm
-        
+        from packaging.requirements import Requirement
+
         # Try to import tomllib (Python 3.11+) or tomli (older versions)
         try:
             import tomllib as tomli
@@ -62,28 +67,22 @@ def test_package_dependencies():
         with open(pyproject_path, "rb") as f:
             pyproject = tomli.load(f)
 
-        # Get all optional dependencies from poetry.dependencies
-        poetry_deps = pyproject["tool"]["poetry"]["dependencies"]
-        optional_deps = {
-            name.lower()
-            for name, value in poetry_deps.items()
-            if isinstance(value, dict) and value.get("optional", False)
-        }
-        print(optional_deps)
-        # Get all packages listed in extras
-        extras = pyproject["tool"]["poetry"]["extras"]
-        all_extra_deps = set()
-        for extra_group in extras.values():
-            all_extra_deps.update(dep.lower() for dep in extra_group)
-        print(all_extra_deps)
-        # Check that all optional dependencies are in some extras group
-        missing_from_extras = optional_deps - all_extra_deps
-        assert (
-            not missing_from_extras
-        ), f"Optional dependencies missing from extras: {missing_from_extras}"
+        optional_deps = pyproject["project"]["optional-dependencies"]
+        assert optional_deps, "Expected project.optional-dependencies to be defined"
 
+        parsed_requirements = set()
+        for extra_name, requirements in optional_deps.items():
+            assert requirements, f"Optional dependency group '{extra_name}' is empty"
+            for requirement in requirements:
+                assert isinstance(
+                    requirement, str
+                ), f"Expected string requirement in extra '{extra_name}'"
+                parsed = Requirement(requirement)
+                parsed_requirements.add(parsed.name.lower())
+
+        print(parsed_requirements)
         print(
-            f"All {len(optional_deps)} optional dependencies are correctly specified in extras"
+            f"Validated {len(parsed_requirements)} optional dependencies across {len(optional_deps)} extras groups"
         )
 
     except Exception as e:
@@ -101,25 +100,36 @@ import pytest
 import requests
 
 
-def test_litellm_proxy_server_config_no_general_settings():
-    # Install the local litellm packages in development mode
+def _run_proxy_server_smoke_test(extra_proxy_args=None):
+    """Sync deps, generate Prisma client, start proxy with optional extra args,
+    send a health check + chat/completions request, and tear down."""
+    if extra_proxy_args is None:
+        extra_proxy_args = []
+
     server_process = None
     try:
-        subprocess.run(["pip", "install", "-e", ".[proxy]"])
-        subprocess.run(["pip", "install", "-e", ".[extra_proxy]"])
-        
+        _run_uv(
+            "sync",
+            "--frozen",
+            "--group",
+            "proxy-dev",
+            "--extra",
+            "proxy",
+            "--extra",
+            "extra_proxy",
+        )
+
         # Ensure Prisma client is generated
         try:
-            # Get the project root directory (where schema.prisma is located)
-            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-            print(f"Running prisma generate from: {project_root}")
-            
-            result = subprocess.run(
-                ["prisma", "generate"], 
-                capture_output=True, 
-                text=True, 
-                check=True,
-                cwd=project_root
+            print(f"Running prisma generate from: {PROJECT_ROOT}")
+
+            result = _run_uv(
+                "run",
+                "--no-sync",
+                "prisma",
+                "generate",
+                capture_output=True,
+                text=True,
             )
             print(f"Prisma generate stdout: {result.stdout}")
         except subprocess.CalledProcessError as e:
@@ -130,16 +140,21 @@ def test_litellm_proxy_server_config_no_general_settings():
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
         server_process = subprocess.Popen(
             [
+                "uv",
+                "run",
+                "--no-sync",
                 "python",
                 "-m",
                 "litellm.proxy.proxy_cli",
                 "--config",
                 config_fp,
-            ]
+                *extra_proxy_args,
+            ],
+            cwd=PROJECT_ROOT,
         )
 
-        # Allow some time for the server to start
-        time.sleep(60)  # Adjust the sleep time if necessary
+        # Allow some time for the server to start (increased for CI environments)
+        time.sleep(90)  # Increased from 60s for slower CI runners
 
         # Send a request to the /health/liveliness endpoint
         response = requests.get("http://localhost:4000/health/liveliness")
@@ -172,3 +187,17 @@ def test_litellm_proxy_server_config_no_general_settings():
 
     # Additional assertions can be added here
     assert True
+
+
+def test_litellm_proxy_server_config_no_general_settings():
+    """Exercises the default (v1) migration resolver."""
+    _run_proxy_server_smoke_test()
+
+
+def test_litellm_proxy_server_config_no_general_settings_v2_resolver():
+    """Exercises the opt-in v2 migration resolver.
+
+    Runs in a separate CI job against a local Postgres to avoid collisions
+    with the v1 variant when they share a database.
+    """
+    _run_proxy_server_smoke_test(extra_proxy_args=["--use_v2_migration_resolver"])

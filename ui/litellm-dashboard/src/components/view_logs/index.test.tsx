@@ -4,20 +4,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable, { RequestViewer } from "./index";
 import type { LogEntry } from "./columns";
 import type { Row } from "@tanstack/react-table";
-import type { Team } from "../key_team_helpers/key_list";
 import { renderWithProviders } from "../../../tests/test-utils";
 
 const mockHandleFilterResetFromHook = vi.fn();
-vi.mock("./log_filter_logic", () => ({
-  useLogFilterLogic: vi.fn(() => ({
-    filters: {},
-    filteredLogs: { data: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
-    allTeams: [],
-    allKeyAliases: [],
-    handleFilterChange: vi.fn(),
-    handleFilterReset: mockHandleFilterResetFromHook,
-  })),
-}));
+vi.mock("./log_filter_logic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./log_filter_logic")>();
+  return {
+    ...actual,
+    useLogFilterLogic: vi.fn(() => ({
+      filters: {},
+      filteredLogs: {
+        data: [],
+        total: 0,
+        page: 1,
+        page_size: 50,
+        total_pages: 1,
+      },
+      allTeams: [],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: mockHandleFilterResetFromHook,
+    })),
+  };
+});
 
 vi.mock("../networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../networking")>();
@@ -37,7 +45,6 @@ vi.mock("../networking", async (importOriginal) => {
 });
 
 vi.mock("../key_team_helpers/filter_helpers", () => ({
-  fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
   fetchAllTeams: vi.fn().mockResolvedValue([]),
 }));
 
@@ -55,7 +62,7 @@ const baseLogEntry: LogEntry = {
   startTime: "2025-11-14T00:00:00Z",
   endTime: "2025-11-14T00:00:00Z",
   cache_hit: "miss",
-  duration: 1,
+  request_duration_ms: 1000,
   messages: [{ role: "user", content: "hello" }],
   response: { status: "ok" },
   metadata: {
@@ -180,7 +187,6 @@ describe("SpendLogsTable", () => {
     token: "test-token",
     userRole: "Admin",
     userID: "user-1",
-    allTeams: [] as Team[],
     premiumUser: false,
   };
 

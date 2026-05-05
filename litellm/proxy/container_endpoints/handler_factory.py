@@ -19,6 +19,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
 
 
 def _load_endpoints_config() -> Dict:
@@ -38,17 +39,27 @@ def _get_container_provider_config(custom_llm_provider: str):
     """Get the container provider config for the given provider."""
     if custom_llm_provider == "openai":
         from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+
         return OpenAIContainerConfig()
-    else:
-        raise ValueError(f"Container API not supported for provider: {custom_llm_provider}")
+    elif custom_llm_provider in ("azure", "azure_text"):
+        from litellm.llms.azure.containers.transformation import AzureContainerConfig
+
+        return AzureContainerConfig()
+    raise ValueError(f"Container API not supported for provider: {custom_llm_provider}")
 
 
-def _create_handler_for_path_params(path_params: List[str], route_type: str, returns_binary: bool = False, is_multipart: bool = False):
+def _create_handler_for_path_params(
+    path_params: List[str],
+    route_type: str,
+    returns_binary: bool = False,
+    is_multipart: bool = False,
+):
     """
     Dynamically create a handler with the correct path parameter signature.
     """
     # For binary content endpoints, use a different handler
     if returns_binary and path_params == ["container_id", "file_id"]:
+
         async def handler_binary_content(
             request: Request,
             container_id: str,
@@ -61,10 +72,12 @@ def _create_handler_for_path_params(path_params: List[str], route_type: str, ret
                 file_id=file_id,
                 user_api_key_dict=user_api_key_dict,
             )
+
         return handler_binary_content
-    
+
     # For multipart file upload endpoints
     if is_multipart:
+
         async def handler_multipart_upload(
             request: Request,
             container_id: str,
@@ -78,10 +91,12 @@ def _create_handler_for_path_params(path_params: List[str], route_type: str, ret
                 route_type=route_type,
                 container_id=container_id,
             )
+
         return handler_multipart_upload
-    
+
     # Create handlers for different path parameter combinations
     if path_params == ["container_id"]:
+
         async def handler_container_id(
             request: Request,
             container_id: str,
@@ -95,9 +110,11 @@ def _create_handler_for_path_params(path_params: List[str], route_type: str, ret
                 route_type=route_type,
                 path_params={"container_id": container_id},
             )
+
         return handler_container_id
-    
+
     elif path_params == ["container_id", "file_id"]:
+
         async def handler_container_file(
             request: Request,
             container_id: str,
@@ -112,8 +129,9 @@ def _create_handler_for_path_params(path_params: List[str], route_type: str, ret
                 route_type=route_type,
                 path_params={"container_id": container_id, "file_id": file_id},
             )
+
         return handler_container_file
-    
+
     else:
         # Fallback for no path params
         async def handler_no_params(
@@ -128,6 +146,7 @@ def _create_handler_for_path_params(path_params: List[str], route_type: str, ret
                 route_type=route_type,
                 path_params={},
             )
+
         return handler_no_params
 
 
@@ -139,7 +158,7 @@ async def _process_binary_request(
 ):
     """
     Process binary content requests using the proper transformation pattern.
-    
+
     This uses the provider config transformations and llm_http_handler
     to maintain consistency with the established pattern.
     """
@@ -153,13 +172,22 @@ async def _process_binary_request(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
-    
-    # Get the provider config
-    container_provider_config = _get_container_provider_config(custom_llm_provider)
-    
+
     # Build litellm_params - credentials are resolved by provider config from env
     litellm_params = GenericLiteLLMParams()
-    
+
+    # Decode container ID and extract provider info
+    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    original_container_id = decoded.get("response_id", container_id)
+
+    # If container ID has encoded provider info and user didn't explicitly set provider, use it
+    decoded_provider = decoded.get("custom_llm_provider")
+    if decoded_provider and custom_llm_provider == "openai":
+        custom_llm_provider = decoded_provider
+
+    # Get the provider config
+    container_provider_config = _get_container_provider_config(custom_llm_provider)
+
     # Create logging object
     logging_obj = Logging(
         model="container-file-content",
@@ -170,19 +198,19 @@ async def _process_binary_request(
         litellm_call_id="",
         function_id="",
     )
-    
+
     # Use the HTTP handler to make the request
     handler = BaseLLMHTTPHandler()
-    
+
     try:
         content = await handler.async_container_file_content_handler(
-            container_id=container_id,
+            container_id=original_container_id,  # Use decoded original ID
             file_id=file_id,
             container_provider_config=container_provider_config,
             litellm_params=litellm_params,
             logging_obj=logging_obj,
         )
-        
+
         # Determine content type based on common file extensions in the file_id
         content_type = "application/octet-stream"
         file_id_lower = file_id.lower()
@@ -200,12 +228,12 @@ async def _process_binary_request(
             content_type = "text/plain"
         elif ".pdf" in file_id_lower:
             content_type = "application/pdf"
-        
+
         return Response(
             content=content,
             media_type=content_type,
         )
-        
+
     except Exception as e:
         raise e
 
@@ -239,23 +267,33 @@ async def _process_multipart_upload_request(
     # Parse multipart form data and convert files
     form_data = await get_form_data(request)
     data = await convert_upload_files_to_file_data(form_data)
-    
+
     if "file" not in data:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=400, detail="Missing required 'file' field")
-    
+
     # convert_upload_files_to_file_data returns list of tuples, extract single file
     file_list = data["file"]
     if isinstance(file_list, list) and len(file_list) > 0:
         data["file"] = file_list[0]
-    
-    data["container_id"] = container_id
 
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
+
+    # Decode container ID and extract provider info
+    decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
+    original_container_id = decoded.get("response_id", container_id)
+
+    # If container ID has encoded provider info and user didn't explicitly set provider, use it
+    decoded_provider = decoded.get("custom_llm_provider")
+    if decoded_provider and custom_llm_provider == "openai":
+        custom_llm_provider = decoded_provider
+
+    data["container_id"] = original_container_id  # Use decoded original ID
     data["custom_llm_provider"] = custom_llm_provider
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -320,6 +358,22 @@ async def _process_request(
         or get_custom_llm_provider_from_request_query(request=request)
         or "openai"
     )
+
+    # Decode container_id if present in path_params
+    if "container_id" in path_params:
+        decoded = ResponsesAPIRequestUtils._decode_container_id(
+            path_params["container_id"]
+        )
+        original_container_id = decoded.get("response_id", path_params["container_id"])
+
+        # If container ID has encoded provider info and user didn't explicitly set provider, use it
+        decoded_provider = decoded.get("custom_llm_provider")
+        if decoded_provider and custom_llm_provider == "openai":
+            custom_llm_provider = decoded_provider
+
+        # Update path_params with decoded original ID
+        data["container_id"] = original_container_id
+
     data["custom_llm_provider"] = custom_llm_provider
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -354,12 +408,12 @@ async def _process_request(
 def register_container_file_endpoints(router: APIRouter) -> None:
     """
     Register ALL container file endpoints from JSON config to the router.
-    
+
     This single function registers all endpoints defined in endpoints.json,
     eliminating the need for manual endpoint definitions.
     """
     config = _load_endpoints_config()
-    
+
     for endpoint_config in config["endpoints"]:
         path = endpoint_config["path"]
         method = endpoint_config["method"].lower()
@@ -367,13 +421,15 @@ def register_container_file_endpoints(router: APIRouter) -> None:
         route_type = endpoint_config["async_name"]
         returns_binary = endpoint_config.get("returns_binary", False)
         is_multipart = endpoint_config.get("is_multipart", False)
-        
+
         # Create handler with correct signature for path params
-        handler = _create_handler_for_path_params(path_params, route_type, returns_binary, is_multipart)
-        
+        handler = _create_handler_for_path_params(
+            path_params, route_type, returns_binary, is_multipart
+        )
+
         # Register routes
         route_method = getattr(router, method)
-        
+
         # For binary endpoints, don't use ORJSONResponse
         if returns_binary:
             # Register both /v1/... and /... paths without JSON response class
@@ -382,7 +438,7 @@ def register_container_file_endpoints(router: APIRouter) -> None:
                 dependencies=[Depends(user_api_key_auth)],
                 tags=["containers"],
             )(handler)
-            
+
             route_method(
                 path,
                 dependencies=[Depends(user_api_key_auth)],
@@ -396,7 +452,7 @@ def register_container_file_endpoints(router: APIRouter) -> None:
                 response_class=ORJSONResponse,
                 tags=["containers"],
             )(handler)
-            
+
             route_method(
                 path,
                 dependencies=[Depends(user_api_key_auth)],

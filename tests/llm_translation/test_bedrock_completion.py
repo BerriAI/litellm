@@ -70,7 +70,7 @@ def test_completion_bedrock_claude_completion_auth():
 
     try:
         response = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -106,7 +106,7 @@ def test_completion_bedrock_guardrails(streaming):
     try:
         if streaming is False:
             response = completion(
-                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
@@ -134,7 +134,7 @@ def test_completion_bedrock_guardrails(streaming):
         else:
             litellm.set_verbose = True
             response = completion(
-                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
@@ -196,7 +196,7 @@ def test_completion_bedrock_claude_external_client_auth():
         )
 
         response = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -215,60 +215,6 @@ def test_completion_bedrock_claude_external_client_auth():
 
 
 # test_completion_bedrock_claude_external_client_auth()
-
-
-@pytest.mark.skip(reason="Expired token, need to renew")
-def test_completion_bedrock_claude_sts_client_auth():
-    print("\ncalling bedrock claude external client auth")
-    import os
-
-    aws_access_key_id = os.environ["AWS_TEMP_ACCESS_KEY_ID"]
-    aws_secret_access_key = os.environ["AWS_TEMP_SECRET_ACCESS_KEY"]
-    aws_region_name = os.environ["AWS_REGION_NAME"]
-    aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-
-    try:
-        import boto3
-
-        litellm.set_verbose = True
-
-        response = completion(
-            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            aws_region_name=aws_region_name,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-
-        response = embedding(
-            model="cohere.embed-multilingual-v3",
-            input=["hello world"],
-            aws_region_name="us-east-1",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-
-        response = completion(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            aws_region_name="us-east-1",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.fixture()
@@ -494,110 +440,6 @@ def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_cred
 
 
 # test_completion_bedrock_claude_sts_client_auth()
-
-
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_completion_bedrock_claude_sts_oidc_auth():
-    print("\ncalling bedrock claude with oidc auth")
-    import os
-
-    aws_web_identity_token = "oidc/circleci_v2/"
-    aws_region_name = os.environ["AWS_REGION_NAME"]
-    # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
-
-    try:
-        litellm.set_verbose = True
-
-        response_1 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            aws_region_name=aws_region_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-        print(response_1)
-        assert len(response_1.choices) > 0
-        assert len(response_1.choices[0].message.content) > 0
-
-        # This second call is to verify that the cache isn't breaking anything
-        response_2 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=5,
-            temperature=0.2,
-            aws_region_name=aws_region_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-        print(response_2)
-        assert len(response_2.choices) > 0
-        assert len(response_2.choices[0].message.content) > 0
-
-        # This third call is to verify that the cache isn't used for a different region
-        response_3 = completion(
-            model="bedrock/anthropic.claude-3-haiku-20240307-v1:0",
-            messages=messages,
-            max_tokens=6,
-            temperature=0.3,
-            aws_region_name="us-east-1",
-            aws_web_identity_token=aws_web_identity_token,
-            aws_role_name=aws_role_name,
-            aws_session_name="my-test-session",
-        )
-        print(response_3)
-        assert len(response_3.choices) > 0
-        assert len(response_3.choices[0].message.content) > 0
-
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_completion_bedrock_httpx_command_r_sts_oidc_auth():
-    print("\ncalling bedrock httpx command r with oidc auth")
-    import os
-
-    aws_web_identity_token = "oidc/circleci_v2/"
-    aws_region_name = "us-west-2"
-    # aws_role_name = os.environ["AWS_TEMP_ROLE_NAME"]
-    # TODO: This is using ai.moda's IAM role, we should use LiteLLM's IAM role eventually
-    aws_role_name = "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
-
-    try:
-        litellm.set_verbose = True
-
-        response = completion(
-            model="bedrock/cohere.command-r-v1:0",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            aws_region_name=aws_region_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_role_name=aws_role_name,
-            aws_session_name="cross-region-test",
-            aws_sts_endpoint="https://sts-fips.us-east-2.amazonaws.com",
-            aws_bedrock_runtime_endpoint="https://bedrock-runtime-fips.us-west-2.amazonaws.com",
-        )
-        # Add any assertions here to check the response
-        print(response)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 @pytest.mark.parametrize(
@@ -899,7 +741,7 @@ def test_bedrock_ptu():
         )
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "What's AWS?"}],
                 model_id=model_id,
                 client=client,
@@ -1065,7 +907,7 @@ def test_completion_bedrock_external_client_region():
         with patch.object(client, "post", new=Mock()) as mock_client_post:
             try:
                 response = completion(
-                    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                     messages=messages,
                     max_tokens=10,
                     temperature=0.1,
@@ -1224,6 +1066,72 @@ def test_bedrock_tools_pt_invalid_names():
     assert result[1]["toolSpec"]["name"] == "another_invalid_name"
 
 
+def test_bedrock_converse_tools_pt_converts_custom_schema_type_to_object():
+    """
+    Bedrock Converse ``toolSpec.inputSchema.json`` must use standard JSON Schema
+    types. Anthropic / Claude Code use ``type: \"custom\"`` in ``input_schema`` (or
+    OpenAI ``parameters``); ``_bedrock_tools_pt`` must convert ``custom`` → ``object``
+    at the root and inside nested ``properties``.
+    """
+    tools = [
+        {
+            "name": "Agent",
+            "description": "Subagent tool",
+            "type": "custom",
+            "input_schema": {
+                "type": "custom",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "nested": {
+                        "type": "custom",
+                        "properties": {"x": {"type": "string"}},
+                        "required": ["x"],
+                    },
+                },
+                "required": ["prompt"],
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "other",
+                "description": "x",
+                "parameters": {
+                    "type": "custom",
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "nested_obj": {
+                            "type": "custom",
+                            "properties": {"b": {"type": "string"}},
+                        },
+                    },
+                    "required": ["a"],
+                },
+            },
+        },
+        {
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    assert result[0]["toolSpec"]["name"] == "Agent"
+    j0 = result[0]["toolSpec"]["inputSchema"]["json"]
+    assert j0["type"] == "object"
+    assert j0["properties"]["nested"]["type"] == "object"
+
+    j1 = result[1]["toolSpec"]["inputSchema"]["json"]
+    assert j1["type"] == "object"
+    assert j1["properties"]["nested_obj"]["type"] == "object"
+
+    assert result[2]["toolSpec"]["name"] == "litellm_unnamed_tool_2"
+
+
 def test_bedrock_tools_transformation_valid_params():
     from litellm.types.llms.bedrock import ToolJsonSchemaBlock
 
@@ -1308,8 +1216,8 @@ def test_bedrock_cross_region_inference(model):
     "model, expected_base_model",
     [
         (
-            "apac.anthropic.claude-3-5-sonnet-20240620-v1:0",
-            "anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
         ),
     ],
 )
@@ -1415,7 +1323,7 @@ def test_base_aws_llm_get_credentials():
 def test_bedrock_completion_test_2():
     litellm.set_verbose = True
     data = {
-        "model": "bedrock/anthropic.claude-3-opus-20240229-v1:0",
+        "model": "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
             {
                 "role": "system",
@@ -1722,7 +1630,7 @@ def test_bedrock_completion_test_4(modify_params):
     litellm.modify_params = modify_params
 
     data = {
-        "model": "anthropic.claude-3-opus-20240229-v1:0",
+        "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
             {
                 "role": "user",
@@ -2047,9 +1955,9 @@ def test_bedrock_base_model_helper():
 
     assert (
         BedrockModelInfo.get_base_model(
-            "invoke/anthropic.claude-3-5-sonnet-20241022-v2:0"
+            "invoke/anthropic.claude-haiku-4-5-20251001-v1:0"
         )
-        == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        == "anthropic.claude-haiku-4-5-20251001-v1:0"
     )
 
 
@@ -2142,7 +2050,7 @@ def test_bedrock_prompt_caching_message(messages, expected_cache_control):
     "model, expected_supports_tool_call",
     [
         ("bedrock/us.amazon.nova-pro-v1:0", True),
-        ("bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", True),
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", True),
         ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
         ("bedrock/meta.llama3-1-8b-instruct:0", True),
         ("bedrock/meta.llama3-2-70b-instruct:0", True),
@@ -2166,7 +2074,7 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
@@ -2185,7 +2093,7 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
         """
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
         litellm.model_cost = litellm.get_model_cost_map(url="")
-        bedrock_model = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        bedrock_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         litellm.model_cost.pop(bedrock_model, None)
         model = f"bedrock/{bedrock_model}"
 
@@ -2202,12 +2110,12 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
 class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
         return {
-            "model": "bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         }
 
     def get_base_completion_call_args_with_thinking(self) -> dict:
         return {
-            "model": "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+            "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             "thinking": {"type": "enabled", "budget_tokens": 16000},
         }
 
@@ -2218,7 +2126,7 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
         litellm.model_cost = litellm.get_model_cost_map(url="")
         litellm.add_known_models()
         return {
-            "model": "bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             "aws_region_name": "us-east-1",
         }
 
@@ -2630,7 +2538,6 @@ def test_bedrock_error_handling_streaming():
         "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
         # "https://raw.githubusercontent.com/datasets/gdp/master/data/gdp.csv",
         "https://www.cmu.edu/blackboard/files/evaluate/tests-example.xls",
-        "http://www.krishdholakia.com/",
         # "https://raw.githubusercontent.com/datasets/sample-data/master/README.txt", # invalid url
         "https://raw.githubusercontent.com/mdn/content/main/README.md",
     ],
@@ -2812,13 +2719,13 @@ def test_bedrock_top_k_param(model, expected_params):
 def test_bedrock_invoke_provider():
     assert (
         litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "bedrock/invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+            "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
         == "anthropic"
     )
     assert (
         litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
-            "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+            "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
         == "anthropic"
     )
@@ -2921,7 +2828,7 @@ async def test_bedrock_thinking_in_assistant_message(sync_mode):
         client = AsyncHTTPHandler()
 
     params = {
-        "model": "bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "model": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "messages": [
             {
                 "role": "assistant",
@@ -2980,7 +2887,7 @@ async def test_bedrock_stream_thinking_content_openwebui():
     ```
     """
     response = await litellm.acompletion(
-        model="bedrock/us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         messages=[{"role": "user", "content": "Hello who is this?"}],
         stream=True,
         max_tokens=1080,
@@ -3062,12 +2969,13 @@ def test_bedrock_application_inference_profile():
         }
     ]
 
-    with patch.object(client, "post") as mock_post, patch.object(
-        client2, "post"
-    ) as mock_post2:
+    with (
+        patch.object(client, "post") as mock_post,
+        patch.object(client2, "post") as mock_post2,
+    ):
         try:
             resp = completion(
-                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 client=client,
@@ -3234,16 +3142,16 @@ async def test_bedrock_passthrough(sync_mode: bool):
 
     if sync_mode:
         response = litellm.llm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
             data=data,
         )
     else:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke",
             data=data,
         )
 
@@ -3270,7 +3178,7 @@ async def test_bedrock_passthrough_router():
             {
                 "model_name": "special-bedrock-model",
                 "litellm_params": {
-                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                    "model": "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 },
             }
         ]
@@ -3336,9 +3244,9 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     }
     with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/converse-stream",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/converse-stream",
             data=data,
         )
         async for chunk in response:
@@ -3389,9 +3297,9 @@ async def test_bedrock_streaming_passthrough_test2(monkeypatch):
 
     with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream",
             data=data,
         )
         async for chunk in response:
@@ -3441,9 +3349,9 @@ async def test_bedrock_streaming_passthrough_test1(monkeypatch):
 
     with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
         response = await litellm.allm_passthrough_route(
-            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
             method="POST",
-            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            endpoint="/model/us.anthropic.claude-haiku-4-5-20251001-v1:0/invoke-with-response-stream",
             data=data,
         )
         async for chunk in response:
@@ -3517,7 +3425,8 @@ def test_bedrock_openai_imported_model():
         print(f"URL: {url}")
         assert "bedrock-runtime.us-east-1.amazonaws.com" in url
         assert (
-            "arn:aws:bedrock:us-east-1:117159858402:imported-model%2Fm4gc1mrfuddy" in url
+            "arn:aws:bedrock:us-east-1:117159858402:imported-model%2Fm4gc1mrfuddy"
+            in url
         )
         assert "/invoke" in url
 
@@ -3954,9 +3863,11 @@ def test_bedrock_openai_error_handling():
     assert exc_info.value.status_code == 422
     print("✓ Error handling works correctly")
 
+
 # ============================================================================
 # Nova Grounding (web_search_options) Unit Tests (Mocked)
 # ============================================================================
+
 
 def test_bedrock_nova_grounding_web_search_options_non_streaming():
     """
@@ -4011,7 +3922,9 @@ def test_bedrock_nova_grounding_web_search_options_non_streaming():
                     break
 
             assert system_tool_found, "systemTool with nova_grounding should be present"
-            print(f"✓ web_search_options correctly transformed to systemTool (non-streaming)")
+            print(
+                f"✓ web_search_options correctly transformed to systemTool (non-streaming)"
+            )
 
 
 def test_bedrock_nova_grounding_with_function_tools():
@@ -4091,7 +4004,9 @@ def test_bedrock_nova_grounding_with_function_tools():
                     assert tool["systemTool"]["name"] == "nova_grounding"
                     system_tool_found = True
 
-            assert function_tool_found, "Function tool (get_stock_price) should be present"
+            assert (
+                function_tool_found
+            ), "Function tool (get_stock_price) should be present"
             assert system_tool_found, "systemTool (nova_grounding) should be present"
             print(f"✓ Both function tools and web_search_options correctly combined")
 
@@ -4196,10 +4111,12 @@ def test_bedrock_nova_grounding_request_transformation():
         mock_post.return_value = MagicMock(
             status_code=200,
             json=lambda: {
-                "output": {"message": {"role": "assistant", "content": [{"text": "Test"}]}},
+                "output": {
+                    "message": {"role": "assistant", "content": [{"text": "Test"}]}
+                },
                 "stopReason": "end_turn",
-                "usage": {"inputTokens": 10, "outputTokens": 5}
-            }
+                "usage": {"inputTokens": 10, "outputTokens": 5},
+            },
         )
 
         try:

@@ -5,6 +5,7 @@ This file contains the PrismaWrapper class, which is used to wrap the Prisma cli
 import asyncio
 import os
 import random
+import signal
 import subprocess
 import time
 import urllib
@@ -44,6 +45,53 @@ class PrismaWrapper:
         self._token_refresh_task: Optional[asyncio.Task] = None
         self._reconnection_lock = asyncio.Lock()
         self._last_refresh_time: Optional[datetime] = None
+
+    def _get_engine_pid(self) -> int:
+        """Get the PID of the current Prisma engine subprocess, or 0 if unavailable."""
+        try:
+            engine = self._original_prisma._engine
+            process = getattr(engine, "process", None) if engine is not None else None
+            if process is not None:
+                pid = process.pid
+                if isinstance(pid, int):
+                    return pid
+        except (AttributeError, TypeError):
+            pass
+        return 0
+
+    @staticmethod
+    async def _kill_engine_process(pid: int) -> None:
+        """Force-kill the engine subprocess to prevent DB connection pool leaks.
+
+        Called on every reconnect (in `recreate_prisma_client`) to retire the
+        old query-engine subprocess without invoking prisma-client-py's
+        synchronous `disconnect()` — which blocks the asyncio event loop on
+        `subprocess.Popen.wait()` for 30-120+ seconds when the engine is
+        stuck on TCP close.
+
+        Sends SIGTERM for graceful shutdown, waits briefly, then SIGKILL as
+        a backstop.
+        """
+        if pid <= 0:
+            return
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            return  # Already dead or inaccessible
+        verbose_proxy_logger.warning(
+            "Sent SIGTERM to prisma-query-engine PID %s during reconnect.",
+            pid,
+        )
+        # Brief wait for graceful shutdown, then force-kill
+        await asyncio.sleep(0.5)
+        try:
+            os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+            verbose_proxy_logger.warning(
+                "Sent SIGKILL to prisma-query-engine PID %s (did not exit after SIGTERM).",
+                pid,
+            )
+        except (ProcessLookupError, PermissionError, OSError):
+            pass  # Exited after SIGTERM — expected
 
     def _extract_token_from_db_url(self, db_url: Optional[str]) -> Optional[str]:
         """
@@ -176,13 +224,19 @@ class PrismaWrapper:
     async def recreate_prisma_client(
         self, new_db_url: str, http_client: Optional[Any] = None
     ):
-        """Disconnect and reconnect the Prisma client with a new database URL."""
+        """Disconnect and reconnect the Prisma client with a new database URL.
+
+        Kills the old engine subprocess directly (SIGTERM → SIGKILL) rather than
+        calling `disconnect()`. prisma-client-py's `disconnect()` calls a
+        synchronous `subprocess.Popen.wait()` that can freeze the asyncio event
+        loop for 30-120+ seconds when the engine is stuck on TCP close,
+        breaking `/health/liveliness` and causing Kubernetes pod restarts.
+        """
         from prisma import Prisma  # type: ignore
 
-        try:
-            await self._original_prisma.disconnect()
-        except Exception as e:
-            verbose_proxy_logger.warning(f"Failed to disconnect Prisma client: {e}")
+        old_engine_pid = self._get_engine_pid()
+        if old_engine_pid > 0:
+            await self._kill_engine_process(old_engine_pid)
 
         if http_client is not None:
             self._original_prisma = Prisma(http=http_client)
@@ -359,9 +413,17 @@ class PrismaManager:
         return dname
 
     @staticmethod
-    def setup_database(use_migrate: bool = False) -> bool:
+    def setup_database(
+        use_migrate: bool = False, use_v2_resolver: bool = False
+    ) -> bool:
         """
         Set up the database using either prisma migrate or prisma db push
+
+        Args:
+            use_migrate: Use `prisma migrate deploy` instead of `db push`.
+            use_v2_resolver: Opt into the v2 migration resolver that avoids
+                the diff-and-force recovery behavior (which caused schema
+                thrashing during rolling deploys). Defaults to False.
 
         Returns:
             bool: True if setup was successful, False otherwise
@@ -383,11 +445,20 @@ class PrismaManager:
 
                     prisma_dir = PrismaManager._get_prisma_dir()
 
-                    return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
+                    return ProxyExtrasDBManager.setup_database(
+                        use_migrate=use_migrate,
+                        use_v2_resolver=use_v2_resolver,
+                    )
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
-                        ["prisma", "db", "push", "--accept-data-loss"],
+                        [
+                            "prisma",
+                            "db",
+                            "push",
+                            "--accept-data-loss",
+                            "--skip-generate",
+                        ],
                         timeout=60,
                         check=True,
                     )

@@ -22,6 +22,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
+from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -198,11 +199,13 @@ async def make_call(
         if client is None:
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None,
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj
+                    and logging_obj.litellm_params
+                    and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                ),
             )  # Create a new client if none provided
 
         response = await client.post(
@@ -252,7 +255,7 @@ async def make_call(
                 response.aiter_bytes(chunk_size=stream_chunk_size)
             )
         else:
-            decoder = AWSEventStreamDecoder(model=model)
+            decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
             completion_stream = decoder.aiter_bytes(
                 response.aiter_bytes(chunk_size=stream_chunk_size)
             )
@@ -292,11 +295,13 @@ def make_sync_call(
     try:
         if client is None:
             client = _get_httpx_client(
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj
+                    and logging_obj.litellm_params
+                    and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                )
             )
 
         response = client.post(
@@ -346,7 +351,7 @@ def make_sync_call(
                 response.iter_bytes(chunk_size=stream_chunk_size)
             )
         else:
-            decoder = AWSEventStreamDecoder(model=model)
+            decoder = AWSEventStreamDecoder(model=model, json_mode=json_mode)
             completion_stream = decoder.iter_bytes(
                 response.iter_bytes(chunk_size=stream_chunk_size)
             )
@@ -406,9 +411,9 @@ class BedrockLLM(BaseAWSLLM):
 
         # Claude 3+ indicators (all use Messages API)
         messages_api_indicators = [
-            "claude-3",      # Claude 3.x models
-            "claude-opus-4", # Claude Opus 4
-            "claude-sonnet-4", # Claude Sonnet 4
+            "claude-3",  # Claude 3.x models
+            "claude-opus-4",  # Claude Opus 4
+            "claude-sonnet-4",  # Claude Sonnet 4
             "claude-haiku-4",  # Claude Haiku 4
         ]
 
@@ -546,9 +551,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params[
-                            "original_response"
-                        ] = outputText  # allow user to access raw anthropic tool calling response
+                        model_response._hidden_params["original_response"] = (
+                            outputText  # allow user to access raw anthropic tool calling response
+                        )
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -558,7 +563,7 @@ class BedrockLLM(BaseAWSLLM):
                             "INSIDE BEDROCK STREAMING TOOL CALLING CONDITION BLOCK"
                         )
                         # return an iterator
-                        streaming_model_response = ModelResponse(stream=True)
+                        streaming_model_response = ModelResponseStream()
                         streaming_model_response.choices[0].finish_reason = getattr(
                             model_response.choices[0], "finish_reason", "stop"
                         )
@@ -695,7 +700,7 @@ class BedrockLLM(BaseAWSLLM):
             )
 
         if stream and provider == "ai21":
-            streaming_model_response = ModelResponse(stream=True)
+            streaming_model_response = ModelResponseStream()
             streaming_model_response.choices[0].finish_reason = model_response.choices[  # type: ignore
                 0
             ].finish_reason
@@ -854,6 +859,34 @@ class BedrockLLM(BaseAWSLLM):
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
 
+        if (
+            acompletion
+            and provider == "anthropic"
+            and self.is_claude_messages_api_model(model)
+        ):
+            if isinstance(client, HTTPHandler):
+                client = None
+            return self._async_anthropic_messages_completion(
+                model=model,
+                messages=messages,
+                endpoint_url=endpoint_url,
+                proxy_endpoint_url=proxy_endpoint_url,
+                credentials=credentials,
+                aws_region_name=aws_region_name,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=stream,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client,
+                stream_chunk_size=stream_chunk_size,
+            )  # type: ignore[return-value]
+
         prompt, chat_history = self.convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
@@ -881,9 +914,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if self.is_claude_messages_api_model(model):
@@ -1147,6 +1180,97 @@ class BedrockLLM(BaseAWSLLM):
             encoding=encoding,
         )
 
+    async def _async_anthropic_messages_completion(
+        self,
+        model: str,
+        messages: list,
+        endpoint_url: str,
+        proxy_endpoint_url: str,
+        credentials,
+        aws_region_name: str,
+        model_response: ModelResponse,
+        print_verbose: Callable,
+        encoding,
+        logging_obj: Logging,
+        optional_params: dict,
+        stream,
+        litellm_params=None,
+        logger_fn=None,
+        extra_headers: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        client: Optional[AsyncHTTPHandler] = None,
+        stream_chunk_size: int = 1024,
+    ) -> Union[ModelResponse, CustomStreamWrapper]:
+        transformed_request = (
+            await litellm.AmazonAnthropicClaudeConfig().async_transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params or {},
+                headers=extra_headers or {},
+            )
+        )
+        data = json.dumps(transformed_request)
+
+        headers = {"Content-Type": "application/json"}
+        if extra_headers is not None:
+            headers = {"Content-Type": "application/json", **extra_headers}
+        prepped = self.get_request_headers(
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+            extra_headers=extra_headers,
+            endpoint_url=endpoint_url,
+            data=data,
+            headers=headers,
+        )
+
+        logging_obj.pre_call(
+            input=messages,
+            api_key="",
+            additional_args={
+                "complete_input_dict": data,
+                "api_base": proxy_endpoint_url,
+                "headers": prepped.headers,
+            },
+        )
+
+        if stream is True:
+            return await self.async_streaming(
+                model=model,
+                messages=messages,
+                data=data,
+                api_base=proxy_endpoint_url,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                encoding=encoding,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                stream=True,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                headers=prepped.headers,
+                timeout=timeout,
+                client=client,
+                stream_chunk_size=stream_chunk_size,
+            )
+        return await self.async_completion(
+            model=model,
+            messages=messages,
+            data=data,
+            api_base=proxy_endpoint_url,
+            model_response=model_response,
+            print_verbose=print_verbose,
+            encoding=encoding,
+            logging_obj=logging_obj,
+            optional_params=optional_params,
+            stream=stream,  # type: ignore
+            litellm_params=litellm_params,
+            logger_fn=logger_fn,
+            headers=prepped.headers,
+            timeout=timeout,
+            client=client,
+        )
+
     async def async_completion(
         self,
         model: str,
@@ -1282,7 +1406,7 @@ def get_response_stream_shape():
 
 
 class AWSEventStreamDecoder:
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, json_mode: Optional[bool] = False) -> None:
         from botocore.parsers import EventStreamJSONParser
 
         self.model = model
@@ -1290,6 +1414,8 @@ class AWSEventStreamDecoder:
         self.content_blocks: List[ContentBlockDeltaEvent] = []
         self.tool_calls_index: Optional[int] = None
         self.response_id: Optional[str] = None
+        self.json_mode = json_mode
+        self._current_tool_name: Optional[str] = None
 
     def check_empty_tool_call_args(self) -> bool:
         """
@@ -1391,6 +1517,16 @@ class AWSEventStreamDecoder:
                 response_tool_name = get_bedrock_tool_name(
                     response_tool_name=_response_tool_name
                 )
+                self._current_tool_name = response_tool_name
+
+                # When json_mode is True, suppress the internal json_tool_call
+                # and convert its content to text in delta events instead
+                if (
+                    self.json_mode is True
+                    and response_tool_name == RESPONSE_FORMAT_TOOL_NAME
+                ):
+                    return tool_use, provider_specific_fields, thinking_blocks
+
                 self.tool_calls_index = (
                     0 if self.tool_calls_index is None else self.tool_calls_index + 1
                 )
@@ -1445,19 +1581,27 @@ class AWSEventStreamDecoder:
         if "text" in delta_obj:
             text = delta_obj["text"]
         elif "toolUse" in delta_obj:
-            tool_use = {
-                "id": None,
-                "type": "function",
-                "function": {
-                    "name": None,
-                    "arguments": delta_obj["toolUse"]["input"],
-                },
-                "index": (
-                    self.tool_calls_index
-                    if self.tool_calls_index is not None
-                    else index
-                ),
-            }
+            # When json_mode is True and this is the internal json_tool_call,
+            # convert tool input to text content instead of tool call arguments
+            if (
+                self.json_mode is True
+                and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME
+            ):
+                text = delta_obj["toolUse"]["input"]
+            else:
+                tool_use = {
+                    "id": None,
+                    "type": "function",
+                    "function": {
+                        "name": None,
+                        "arguments": delta_obj["toolUse"]["input"],
+                    },
+                    "index": (
+                        self.tool_calls_index
+                        if self.tool_calls_index is not None
+                        else index
+                    ),
+                }
         elif "reasoningContent" in delta_obj:
             provider_specific_fields = {
                 "reasoningContent": delta_obj["reasoningContent"],
@@ -1494,6 +1638,17 @@ class AWSEventStreamDecoder:
     ) -> Optional[ChatCompletionToolCallChunk]:
         """Handle stop/contentBlockIndex event in converse chunk parsing."""
         tool_use: Optional[ChatCompletionToolCallChunk] = None
+
+        # If the ending block was the internal json_tool_call, skip emitting
+        # the empty-args tool chunk and reset tracking state
+        if (
+            self.json_mode is True
+            and self._current_tool_name == RESPONSE_FORMAT_TOOL_NAME
+        ):
+            self._current_tool_name = None
+            return tool_use
+
+        self._current_tool_name = None
         is_empty = self.check_empty_tool_call_args()
         if is_empty:
             tool_use = {

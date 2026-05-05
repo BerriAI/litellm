@@ -1,0 +1,8 @@
+{
+  "model": "gpt-35-turbo-1106",
+  "training_file": "file-5e4b20ecbd724182b9964f3cd2ab7212",
+  "hyperparameters": {},
+  "extra_body": {
+    "trainingType": 1
+  }
+}

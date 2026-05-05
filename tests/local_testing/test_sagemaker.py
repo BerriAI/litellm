@@ -134,6 +134,7 @@ async def test_completion_sagemaker_messages_api(sync_mode):
                         ],
                         temperature=0.2,
                         max_tokens=80,
+                        num_retries=0,
                         client=client,
                     )
                 except Exception as e:

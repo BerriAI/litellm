@@ -144,6 +144,45 @@ def test_get_optional_params_with_allowed_openai_params():
     assert optional_params["reasoning_effort"] == reasoning_effort
 
 
+def test_allowed_openai_params_does_not_forward_unset_params():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/25697
+
+    When a user lists a param in ``allowed_openai_params`` but does not
+    actually send that param in the request, litellm must not forward it
+    to the provider SDK as ``None``. The openai SDK rejects unknown
+    top-level kwargs with
+    ``AsyncCompletions.create() got an unexpected keyword argument 'enable_thinking'``.
+
+    Reproduces the reported config where the user listed both
+    ``chat_template_kwargs`` and ``enable_thinking`` in
+    ``allowed_openai_params`` and only sent ``chat_template_kwargs``
+    (with ``enable_thinking`` nested inside it). Previously the loop
+    added ``optional_params["enable_thinking"] = None`` which then
+    crashed the openai client.
+    """
+    from litellm.utils import _apply_openai_param_overrides
+
+    chat_template_kwargs = {"enable_thinking": False}
+    optional_params: dict = {}
+    non_default_params = {"chat_template_kwargs": chat_template_kwargs}
+
+    result = _apply_openai_param_overrides(
+        optional_params=optional_params,
+        non_default_params=non_default_params,
+        allowed_openai_params=["chat_template_kwargs", "enable_thinking"],
+    )
+
+    assert result["chat_template_kwargs"] == chat_template_kwargs
+    # enable_thinking was NOT sent as a top-level param — it must not be
+    # forwarded to the provider SDK (openai AsyncCompletions.create would
+    # reject an unknown kwarg, even if its value is None).
+    assert "enable_thinking" not in result
+    # And the only entry actually moved out of non_default_params is
+    # the one the caller sent.
+    assert "chat_template_kwargs" not in non_default_params
+
+
 def test_bedrock_optional_params_embeddings():
     litellm.drop_params = True
     optional_params = get_optional_params_embeddings(
@@ -769,7 +808,7 @@ def test_parse_additional_properties_json_schema(model, provider, expectedAddPro
 
 def test_o1_model_params():
     optional_params = get_optional_params(
-        model="o1-preview-2024-09-12",
+        model="o1-2024-12-17",
         custom_llm_provider="openai",
         seed=10,
         user="John",
@@ -780,7 +819,7 @@ def test_o1_model_params():
 
 def test_azure_o1_model_params():
     optional_params = get_optional_params(
-        model="o1-preview",
+        model="o1",
         custom_llm_provider="azure",
         seed=10,
         user="John",
@@ -798,13 +837,13 @@ def test_o1_model_temperature_params(provider, temperature, expected_error):
     if expected_error:
         with pytest.raises(litellm.UnsupportedParamsError):
             get_optional_params(
-                model="o1-preview",
+                model="o1",
                 custom_llm_provider=provider,
                 temperature=temperature,
             )
     else:
         get_optional_params(
-            model="o1-preview-2024-09-12",
+            model="o1-2024-12-17",
             custom_llm_provider="openai",
             temperature=temperature,
         )
@@ -1220,7 +1259,7 @@ def test_anthropic_thinking_param(model, expected_thinking):
 
 def test_bedrock_invoke_anthropic_max_tokens():
     passed_params = {
-        "model": "invoke/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+        "model": "invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "functions": None,
         "function_call": None,
         "temperature": 0.8,
@@ -1789,7 +1828,7 @@ def test_azure_response_format_param():
     "model, provider",
     [
         ("claude-3-7-sonnet-20240620-v1:0", "anthropic"),
-        ("anthropic.claude-3-7-sonnet-20250219-v1:0", "bedrock"),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock"),
         ("invoke/anthropic.claude-3-7-sonnet-20240620-v1:0", "bedrock"),
         ("claude-3-7-sonnet@20250219", "vertex_ai"),
     ],

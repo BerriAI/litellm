@@ -82,14 +82,16 @@ class BasetenConfig(OpenAIGPTConfig):
                 optional_params[param] = value
         return optional_params
 
-    def _get_openai_compatible_provider_info(self, api_base: str, api_key: str) -> tuple:
+    def _get_openai_compatible_provider_info(
+        self, api_base: str, api_key: str
+    ) -> tuple:
         """
         Get the OpenAI compatible provider info for Baseten
         """
         # Default to Model API
         default_api_base = "https://inference.baseten.co/v1"
         default_api_key = api_key or "BASETEN_API_KEY"
-        
+
         return default_api_base, default_api_key
 
     @staticmethod
@@ -99,10 +101,11 @@ class BasetenConfig(OpenAIGPTConfig):
         """
         # Remove 'baseten/' prefix if present
         model_id = model.replace("baseten/", "")
-        
+
         # Check if it's an 8-digit alphanumeric code
         import re
-        return bool(re.match(r'^[a-zA-Z0-9]{8}$', model_id))
+
+        return bool(re.match(r"^[a-zA-Z0-9]{8}$", model_id))
 
     @staticmethod
     def get_api_base_for_model(model: str) -> str:
@@ -115,4 +118,4 @@ class BasetenConfig(OpenAIGPTConfig):
             return f"https://model-{model_id}.api.baseten.co/environments/production/sync/v1"
         else:
             # Use Model API
-            return "https://inference.baseten.co/v1" 
+            return "https://inference.baseten.co/v1"

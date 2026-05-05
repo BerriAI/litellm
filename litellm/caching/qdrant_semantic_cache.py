@@ -54,7 +54,9 @@ class QdrantSemanticCache(BaseCache):
             raise Exception("similarity_threshold must be provided, passed None")
         self.similarity_threshold = similarity_threshold
         self.embedding_model = embedding_model
-        self.vector_size = vector_size if vector_size is not None else QDRANT_VECTOR_SIZE
+        self.vector_size = (
+            vector_size if vector_size is not None else QDRANT_VECTOR_SIZE
+        )
         headers = {}
 
         # check if defined as os.environ/ variable

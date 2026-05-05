@@ -1,5 +1,5 @@
 """
-Perplexity Agentic Research API (Responses API) module
+Perplexity Agent API (Responses API) module
 """
 
 from .transformation import PerplexityResponsesConfig

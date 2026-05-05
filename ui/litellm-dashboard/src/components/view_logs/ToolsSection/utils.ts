@@ -47,9 +47,9 @@ function extractToolsFromRequest(log: LogEntry): ToolDefinition[] {
  */
 function extractToolCallsFromResponse(log: LogEntry): ToolCall[] {
   const responseData = parseData(log.response);
-  
+
   if (!responseData || typeof responseData !== "object") return [];
-  
+
   // OpenAI format: response.choices[0].message.tool_calls
   const choices = responseData.choices;
   if (Array.isArray(choices) && choices.length > 0) {
@@ -59,7 +59,51 @@ function extractToolCallsFromResponse(log: LogEntry): ToolCall[] {
       return message.tool_calls;
     }
   }
-  
+
+  // Anthropic format: response.content[].type === "tool_use"
+  if (Array.isArray(responseData.content)) {
+    const toolUseBlocks = responseData.content.filter(
+      (block: any) => block.type === "tool_use"
+    );
+    if (toolUseBlocks.length > 0) {
+      return toolUseBlocks.map((block: any) => ({
+        id: block.id,
+        type: "function",
+        function: {
+          name: block.name,
+          arguments: JSON.stringify(block.input || {}),
+        },
+      }));
+    }
+  }
+
+  // Realtime API format: response.tool_calls (added by spend tracking for realtime calls)
+  if (Array.isArray(responseData.tool_calls)) {
+    return responseData.tool_calls;
+  }
+
+  // Realtime API format: response.results[].response.output[].type === "function_call"
+  if (Array.isArray(responseData.results)) {
+    const toolCalls: ToolCall[] = [];
+    for (const result of responseData.results) {
+      if (result.type === "response.done" && result.response?.output) {
+        for (const item of result.response.output) {
+          if (item.type === "function_call") {
+            toolCalls.push({
+              id: item.call_id || "",
+              type: "function",
+              function: {
+                name: item.name || "",
+                arguments: item.arguments || "{}",
+              },
+            });
+          }
+        }
+      }
+    }
+    if (toolCalls.length > 0) return toolCalls;
+  }
+
   return [];
 }
 
@@ -106,15 +150,20 @@ export function parseToolsFromLog(log: LogEntry): ParsedTool[] {
   });
   
   // Parse each tool definition
-  return requestTools.map((tool: ToolDefinition, index: number) => {
-    const func = tool.function || { name: `Tool ${index + 1}` };
-    const name = func.name || `Tool ${index + 1}`;
-    
+  // Handle both OpenAI format (tool.function.name) and Anthropic format (tool.name + tool.input_schema)
+  return requestTools.map((tool: any, index: number) => {
+    const name =
+      tool.function?.name || tool.name || `Tool ${index + 1}`;
+    const description =
+      tool.function?.description || tool.description || "";
+    const parameters =
+      tool.function?.parameters || tool.input_schema || {};
+
     return {
       index: index + 1,
-      name: name,
-      description: func.description || "",
-      parameters: func.parameters || {},
+      name,
+      description,
+      parameters,
       called: calledToolNames.has(name),
       callData: toolCallMap.get(name),
     };

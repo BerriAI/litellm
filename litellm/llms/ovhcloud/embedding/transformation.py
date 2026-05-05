@@ -2,6 +2,7 @@
 This is OpenAI compatible - no transformation is applied
 
 """
+
 from typing import List, Optional, Union
 
 import httpx
@@ -29,7 +30,11 @@ class OVHCloudEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
+        api_base = (
+            "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+            if api_base is None
+            else api_base.rstrip("/")
+        )
         complete_url = f"{api_base}/embeddings"
         return complete_url
 

@@ -158,7 +158,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             else:
                 stringified_response = TranscriptionResponse(text=response).model_dump()
                 duration = extract_duration_from_srt_or_vtt(response)
-                stringified_response["duration"] = duration
+                stringified_response["_audio_transcription_duration"] = duration
 
             ## LOGGING
             logging_obj.post_call(

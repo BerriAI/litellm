@@ -1,0 +1,13 @@
+{
+  "name": "litellm-pass-through-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "JS pass-through tests for Vertex AI / Google AI Studio routes. CI-only; not published.",
+  "dependencies": {
+    "@google-cloud/vertexai": "1.9.3",
+    "@google/generative-ai": "0.21.0"
+  },
+  "devDependencies": {
+    "jest": "29.7.0"
+  }
+}

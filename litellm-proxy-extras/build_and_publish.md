@@ -20,12 +20,11 @@ cz bump --increment patch
 ```
 
 This will automatically:
-- Bump the version in `pyproject.toml` (both `[tool.poetry].version` and `[tool.commitizen].version`)
-- Update the version in `../requirements.txt`
+- Bump the version in `pyproject.toml` (both `[project].version` and `[tool.commitizen].version`)
 - Update the version in `../pyproject.toml` (root)
 - Create a git commit with the version bump
 
-Then skip to Step 3 (Install Build Dependencies).
+Then skip to Step 3 (Clean Old Artifacts).
 
 ### Option B: Manual Version Bump
 
@@ -38,41 +37,33 @@ cd litellm-proxy-extras
 grep 'version' pyproject.toml
 ```
 
-Edit `pyproject.toml` and bump the version (both `[tool.poetry].version` and `[tool.commitizen].version`).
+Edit `pyproject.toml` and bump the version (both `[project].version` and `[tool.commitizen].version`).
 
-#### Step 2: Update Version in Root Package Files (Manual Only)
+#### Step 2: Update Version in the Root Package Metadata (Manual Only)
 
-After bumping the version in `litellm-proxy-extras/pyproject.toml`, you **must** also update the version reference in the root-level files:
+After bumping the version in `litellm-proxy-extras/pyproject.toml`, you **must** also update the version reference in the root `pyproject.toml`:
 
 | File | Line to update |
 |------|---------------|
-| `requirements.txt` | `litellm-proxy-extras==X.Y.Z` |
-| `pyproject.toml` (root) | `litellm-proxy-extras = {version = "X.Y.Z", optional = true}` |
+| `pyproject.toml` (root) | `litellm-proxy-extras==X.Y.Z` in `[project.optional-dependencies].proxy` |
 
 ```bash
 # From the repo root — replace OLD with NEW version
-sed -i '' 's/litellm-proxy-extras==OLD/litellm-proxy-extras==NEW/' requirements.txt
-sed -i '' 's/litellm-proxy-extras = {version = "OLD"/litellm-proxy-extras = {version = "NEW"/' pyproject.toml
+sed -i '' 's/litellm-proxy-extras==OLD/litellm-proxy-extras==NEW/' pyproject.toml
 ```
 
 > **Do NOT skip this step.** The main `litellm` package pins the extras version — if you don't update these, users will install the old version.
 
-## Step 3: Install Build Dependencies
-
-```bash
-pip install build twine
-```
-
-## Step 4: Clean Old Artifacts
+## Step 3: Clean Old Artifacts
 
 ```bash
 rm -rf dist/ build/ *.egg-info
 ```
 
-## Step 5: Build the Package
+## Step 4: Build the Package
 
 ```bash
-python3 -m build
+uv build
 ```
 
 This creates `.tar.gz` and `.whl` files in the `dist/` directory.
@@ -83,10 +74,10 @@ Verify the build output:
 ls -la dist/
 ```
 
-## Step 6: Upload to PyPI
+## Step 5: Upload to PyPI
 
 ```bash
-twine upload dist/*
+uv tool run --from 'twine==6.2.0' twine upload dist/*
 ```
 
 You will be prompted for your PyPI API token:
@@ -102,8 +93,8 @@ Enter your API token: pypi-...
 ```bash
 cd litellm-proxy-extras
 rm -rf dist/ build/ *.egg-info
-python3 -m build
-twine upload dist/*
+uv build
+uv tool run --from 'twine==6.2.0' twine upload dist/*
 ```
 
 ---
@@ -114,10 +105,9 @@ If **yes**, run the following commands in order:
 
 ```bash
 cd litellm-proxy-extras
-pip install build twine
 rm -rf dist/ build/ *.egg-info
-python3 -m build
-twine upload dist/*
+uv build
+uv tool run --from 'twine==6.2.0' twine upload dist/*
 ```
 
 When `twine upload` runs, enter your PyPI credentials:

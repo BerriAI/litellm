@@ -39,11 +39,8 @@ def prompt_initializer(
     gitlab_config = getattr(litellm_params, "gitlab_config", None)
     prompt_id = getattr(litellm_params, "prompt_id", None)
 
-
     if not gitlab_config:
-        raise ValueError(
-            "gitlab_config is required for gitlab prompt integration"
-        )
+        raise ValueError("gitlab_config is required for gitlab prompt integration")
 
     try:
         gitlab_prompt_manager = GitLabPromptManager(
@@ -55,9 +52,10 @@ def prompt_initializer(
     except Exception as e:
         raise e
 
+
 def _gitlab_prompt_initializer(
-        litellm_params: PromptLiteLLMParams,
-        prompt: PromptSpec,
+    litellm_params: PromptLiteLLMParams,
+    prompt: PromptSpec,
 ) -> CustomPromptManagement:
     """
     Build a GitLab-backed prompt manager for this prompt.

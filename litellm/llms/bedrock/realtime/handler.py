@@ -8,7 +8,7 @@ import asyncio
 import json
 from typing import Any, Optional
 
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 from ..base_aws_llm import BaseAWSLLM
@@ -97,8 +97,10 @@ class BedrockRealtime(BaseAWSLLM):
 
         try:
             # Initialize the bidirectional stream
-            bedrock_stream = await bedrock_client.invoke_model_with_bidirectional_stream(
-                InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
+            bedrock_stream = (
+                await bedrock_client.invoke_model_with_bidirectional_stream(
+                    InvokeModelWithBidirectionalStreamOperationInput(model_id=model)
+                )
             )
 
             verbose_proxy_logger.debug(
@@ -150,7 +152,9 @@ class BedrockRealtime(BaseAWSLLM):
                 f"Error in BedrockRealtime.async_realtime: {e}"
             )
             try:
-                await websocket.close(code=1011, reason=f"Internal error: {str(e)}")
+                await websocket.close(
+                    code=1011, reason=_redact_string(f"Internal error: {str(e)}")
+                )
             except Exception:
                 pass
             raise
@@ -232,8 +236,10 @@ class BedrockRealtime(BaseAWSLLM):
 
                     # Transform Bedrock format to OpenAI format
                     from litellm.types.realtime import RealtimeResponseTransformInput
-                    
-                    realtime_response_transform_input: RealtimeResponseTransformInput = {
+
+                    realtime_response_transform_input: (
+                        RealtimeResponseTransformInput
+                    ) = {
                         "current_output_item_id": session_state.get(
                             "current_output_item_id"
                         ),
@@ -251,13 +257,11 @@ class BedrockRealtime(BaseAWSLLM):
                         ),
                     }
 
-                    transformed_response = (
-                        transformation_config.transform_realtime_response(
-                            message=bedrock_response,
-                            model=model,
-                            logging_obj=logging_obj,
-                            realtime_response_transform_input=realtime_response_transform_input,
-                        )
+                    transformed_response = transformation_config.transform_realtime_response(
+                        message=bedrock_response,
+                        model=model,
+                        logging_obj=logging_obj,
+                        realtime_response_transform_input=realtime_response_transform_input,
                     )
 
                     # Update session state

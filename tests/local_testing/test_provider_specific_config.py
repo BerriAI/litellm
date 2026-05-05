@@ -600,7 +600,7 @@ def bedrock_test_completion():
     try:
         # OVERRIDE WITH DYNAMIC MAX TOKENS
         response_1 = litellm.completion(
-            model="bedrock/cohere.command-text-v14",
+            model="bedrock/cohere.command-r-v1:0",
             messages=[
                 {
                     "content": "Hello, how are you? Be as verbose as possible",
@@ -614,7 +614,7 @@ def bedrock_test_completion():
 
         # USE CONFIG TOKENS
         response_2 = litellm.completion(
-            model="bedrock/cohere.command-text-v14",
+            model="bedrock/cohere.command-r-v1:0",
             messages=[
                 {
                     "content": "Hello, how are you? Be as verbose as possible",

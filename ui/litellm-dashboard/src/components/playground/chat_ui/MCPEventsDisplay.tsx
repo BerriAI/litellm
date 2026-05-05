@@ -1,34 +1,9 @@
 import React from "react";
 import { Typography, Collapse } from "antd";
+import type { MCPEvent } from "../../mcp_tools/types";
 
 const { Text } = Typography;
 const { Panel } = Collapse;
-
-export interface MCPEvent {
-  type: string;
-  sequence_number?: number;
-  output_index?: number;
-  item_id?: string;
-  item?: {
-    id?: string;
-    type?: string;
-    server_label?: string;
-    tools?: Array<{
-      name: string;
-      description: string;
-      annotations?: {
-        read_only?: boolean;
-      };
-      input_schema?: any;
-    }>;
-    name?: string;
-    arguments?: string;
-    output?: string;
-  };
-  delta?: string;
-  arguments?: string;
-  timestamp?: number;
-}
 
 interface MCPEventsDisplayProps {
   events: MCPEvent[];

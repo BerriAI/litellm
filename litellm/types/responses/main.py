@@ -6,6 +6,8 @@ from typing_extensions import Any, List, Optional, TypedDict
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 
+Phase = Optional[Literal["commentary", "final_answer"]]
+
 
 class GenericResponseOutputItemContentAnnotation(BaseLiteLLMOpenAIResponseObject):
     """Annotation for content in a message"""
@@ -35,6 +37,7 @@ class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     type: Optional[str]  # "function_call"
     id: Optional[str]
     status: Literal["in_progress", "completed", "incomplete"]
+    phase: Phase = None
 
 
 class OutputImageGenerationCall(BaseLiteLLMOpenAIResponseObject):
@@ -44,6 +47,42 @@ class OutputImageGenerationCall(BaseLiteLLMOpenAIResponseObject):
     id: str
     status: Literal["in_progress", "completed", "incomplete", "failed"]
     result: Optional[str]  # Base64 encoded image data (without data:image prefix)
+
+
+class OutputCodeInterpreterCallLog(BaseLiteLLMOpenAIResponseObject):
+    """Log output from a code interpreter call"""
+
+    type: Literal["logs"]
+    logs: str
+
+
+class OutputCodeInterpreterCall(BaseLiteLLMOpenAIResponseObject):
+    """A code interpreter / code execution call output"""
+
+    type: Literal["code_interpreter_call"]
+    id: str
+    code: Optional[str]
+    container_id: Optional[str]
+    status: Literal["in_progress", "completed", "incomplete", "failed"]
+    outputs: Optional[List[OutputCodeInterpreterCallLog]]
+
+
+def build_code_interpreter_log_outputs(
+    content: Any,
+) -> Optional[List[OutputCodeInterpreterCallLog]]:
+    """Convert Anthropic bash_code_execution stdout/stderr to log outputs.
+
+    Shared by streaming (handler.py) and non-streaming (transformation.py) paths.
+    """
+    if not isinstance(content, dict):
+        return None
+    parts = []
+    if content.get("stdout"):
+        parts.append(content["stdout"])
+    if content.get("stderr"):
+        parts.append(f"STDERR: {content['stderr']}")
+    logs = "".join(parts)
+    return [OutputCodeInterpreterCallLog(type="logs", logs=logs)] if logs else None
 
 
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
@@ -57,6 +96,7 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
     content: List[OutputText]
+    phase: Phase = None
 
 
 class DeleteResponseResult(BaseLiteLLMOpenAIResponseObject):

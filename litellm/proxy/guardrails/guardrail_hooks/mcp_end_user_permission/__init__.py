@@ -14,7 +14,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     # Default to always-on. Only disable if the user explicitly sets default_on: false.
     # We check the raw guardrail dict because LitellmParams normalizes None → False,
     # making it impossible to distinguish "not set" from "explicitly false" via litellm_params.
-    _raw_default_on = cast(Dict[str, Any], guardrail).get("litellm_params", {}).get("default_on")
+    _raw_default_on = (
+        cast(Dict[str, Any], guardrail).get("litellm_params", {}).get("default_on")
+    )
     _default_on = False if _raw_default_on is False else True
 
     _callback = MCPEndUserPermissionGuardrail(

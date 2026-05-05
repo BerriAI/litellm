@@ -33,6 +33,7 @@ export interface DeletedKeysResponse {
 export interface KeyListCallOptions {
   organizationID?: string | null;
   teamID?: string | null;
+  projectID?: string | null;
   selectedKeyAlias?: string | null;
   userID?: string | null;
   keyHash?: string | null;
@@ -57,6 +58,7 @@ const keyListCall = async (
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
+        project_id: options.projectID,
         organization_id: options.organizationID,
         key_alias: options.selectedKeyAlias,
         key_hash: options.keyHash,

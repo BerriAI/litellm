@@ -21,7 +21,7 @@ const baseLogEntry: LogEntry = {
   startTime: "2025-11-14T00:00:00Z",
   endTime: "2025-11-14T00:00:00Z",
   cache_hit: "miss",
-  duration: 1,
+  request_duration_ms: 1000,
   messages: [{ role: "user", content: "hello" }],
   response: { status: "ok" },
   metadata: {

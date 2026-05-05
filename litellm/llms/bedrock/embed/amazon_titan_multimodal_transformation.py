@@ -13,7 +13,12 @@ from litellm.types.llms.bedrock import (
     AmazonTitanMultimodalEmbeddingRequest,
     AmazonTitanMultimodalEmbeddingResponse,
 )
-from litellm.types.utils import Embedding, EmbeddingResponse, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import (
+    Embedding,
+    EmbeddingResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from litellm.utils import get_base64_str, is_base64_encoded
 
 
@@ -33,9 +38,9 @@ class AmazonTitanMultimodalEmbeddingG1Config:
     ) -> dict:
         for k, v in non_default_params.items():
             if k == "dimensions":
-                optional_params[
-                    "embeddingConfig"
-                ] = AmazonTitanMultimodalEmbeddingConfig(outputEmbeddingLength=v)
+                optional_params["embeddingConfig"] = (
+                    AmazonTitanMultimodalEmbeddingConfig(outputEmbeddingLength=v)
+                )
         return optional_params
 
     def _transform_request(

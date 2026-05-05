@@ -61,7 +61,9 @@ class BaseInteractionsAPIStreamingIterator:
                 "litellm_params", {}
             ),
         )
-        _model_info: Dict = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        _model_info: Dict = (
+            litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        )
         self._hidden_params = {
             "model_id": _model_info.get("id", None),
             "api_base": _api_base,
@@ -91,10 +93,12 @@ class BaseInteractionsAPIStreamingIterator:
 
             # Format as InteractionsAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
-                streaming_response = self.interactions_api_config.transform_streaming_response(
-                    model=self.model,
-                    parsed_chunk=parsed_chunk,
-                    logging_obj=self.logging_obj,
+                streaming_response = (
+                    self.interactions_api_config.transform_streaming_response(
+                        model=self.model,
+                        parsed_chunk=parsed_chunk,
+                        logging_obj=self.logging_obj,
+                    )
                 )
 
                 # Store the completed response (check for status=completed)
@@ -110,7 +114,9 @@ class BaseInteractionsAPIStreamingIterator:
             return None
         except json.JSONDecodeError:
             # If we can't parse the chunk, continue
-            verbose_logger.debug(f"Failed to parse streaming chunk: {stripped_chunk[:200]}...")
+            verbose_logger.debug(
+                f"Failed to parse streaming chunk: {stripped_chunk[:200]}..."
+            )
             return None
 
     def _handle_logging_completed_response(self):
@@ -171,6 +177,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in async context."""
         import copy
+
         logging_response = copy.deepcopy(self.completed_response)
 
         asyncio.create_task(
@@ -244,6 +251,7 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in sync context."""
         import copy
+
         logging_response = copy.deepcopy(self.completed_response)
 
         run_async_function(
@@ -261,4 +269,3 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
             start_time=self.start_time,
             end_time=datetime.now(),
         )
-

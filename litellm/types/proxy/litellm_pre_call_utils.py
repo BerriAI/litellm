@@ -1,6 +1,19 @@
 from typing_extensions import TypedDict
 
 
+class RedactedDict(dict):
+    """Dict subclass with redacted str/repr to prevent leaking in logs."""
+
+    def __repr__(self) -> str:
+        return "RedactedDict(REDACTED)"
+
+    def __str__(self) -> str:
+        return "RedactedDict(REDACTED)"
+
+    def copy(self) -> "RedactedDict":
+        return RedactedDict(super().copy())
+
+
 class SecretFields(TypedDict):
     """
     Stored in data["secret_fields"]

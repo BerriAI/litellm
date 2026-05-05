@@ -30,7 +30,9 @@ class CZEntityType(str, Enum):
 class CZRNGenerator:
     """Generate CloudZero Resource Names (CZRNs) for LiteLLM resources."""
 
-    CZRN_REGEX = re.compile(r'^czrn:([a-z0-9-]+):([a-zA-Z0-9-]+):([a-z0-9-]+):([a-z0-9-]+):([a-z0-9-]+):(.+)$')
+    CZRN_REGEX = re.compile(
+        r"^czrn:([a-z0-9-]+):([a-zA-Z0-9-]+):([a-z0-9-]+):([a-z0-9-]+):([a-z0-9-]+):(.+)$"
+    )
 
     def __init__(self):
         """Initialize CZRN generator."""
@@ -38,9 +40,9 @@ class CZRNGenerator:
 
     def create_from_litellm_data(self, row: dict[str, Any]) -> str:
         """Create a CZRN from LiteLLM daily spend data.
-        
+
         CZRN format: czrn:<service-type>:<provider>:<region>:<owner-account-id>:<resource-type>:<cloud-local-id>
-        
+
         For LiteLLM resources, we map:
         - service-type: 'litellm' (the service managing the LLM calls)
         - provider: The custom_llm_provider (e.g., 'openai', 'anthropic', 'azure')
@@ -49,18 +51,18 @@ class CZRNGenerator:
         - resource-type: 'llm-usage' (represents LLM usage/inference)
         - cloud-local-id: model
         """
-        service_type = 'litellm'
-        provider = self._normalize_provider(row.get('custom_llm_provider', 'unknown'))
-        region = 'cross-region'
+        service_type = "litellm"
+        provider = self._normalize_provider(row.get("custom_llm_provider", "unknown"))
+        region = "cross-region"
 
         # Use the actual entity_id (team_id or user_id) as the owner account
-        team_id = row.get('team_id', 'unknown')
+        team_id = row.get("team_id", "unknown")
         owner_account_id = self._normalize_component(team_id)
 
-        resource_type = 'llm-usage'
+        resource_type = "llm-usage"
 
         # Create a unique identifier with just the model (entity info already in owner_account_id)
-        model = row.get('model', 'unknown')
+        model = row.get("model", "unknown")
 
         cloud_local_id = model
 
@@ -70,7 +72,7 @@ class CZRNGenerator:
             region=region,
             owner_account_id=owner_account_id,
             resource_type=resource_type,
-            cloud_local_id=cloud_local_id
+            cloud_local_id=cloud_local_id,
         )
 
     def create_from_components(
@@ -80,7 +82,7 @@ class CZRNGenerator:
         region: str,
         owner_account_id: str,
         resource_type: str,
-        cloud_local_id: str
+        cloud_local_id: str,
     ) -> str:
         """Create a CZRN from individual components."""
         # Normalize components to ensure they meet CZRN requirements
@@ -104,7 +106,7 @@ class CZRNGenerator:
 
     def extract_components(self, czrn: str) -> tuple[str, str, str, str, str, str]:
         """Extract all components from a CZRN.
-        
+
         Returns: (service_type, provider, region, owner_account_id, resource_type, cloud_local_id)
         """
         match = self.CZRN_REGEX.match(czrn)
@@ -117,42 +119,43 @@ class CZRNGenerator:
         """Normalize provider names to standard CZRN format."""
         # Map common provider names to CZRN standards
         provider_map = {
-            litellm.LlmProviders.AZURE.value: 'azure',
-            litellm.LlmProviders.AZURE_AI.value: 'azure',
-            litellm.LlmProviders.ANTHROPIC.value: 'anthropic',
-            litellm.LlmProviders.BEDROCK.value: 'aws',
-            litellm.LlmProviders.VERTEX_AI.value: 'gcp',
-            litellm.LlmProviders.GEMINI.value: 'google',
-            litellm.LlmProviders.COHERE.value: 'cohere',
-            litellm.LlmProviders.HUGGINGFACE.value: 'huggingface',
-            litellm.LlmProviders.REPLICATE.value: 'replicate',
-            litellm.LlmProviders.TOGETHER_AI.value: 'together-ai',
+            litellm.LlmProviders.AZURE.value: "azure",
+            litellm.LlmProviders.AZURE_AI.value: "azure",
+            litellm.LlmProviders.ANTHROPIC.value: "anthropic",
+            litellm.LlmProviders.BEDROCK.value: "aws",
+            litellm.LlmProviders.VERTEX_AI.value: "gcp",
+            litellm.LlmProviders.GEMINI.value: "google",
+            litellm.LlmProviders.COHERE.value: "cohere",
+            litellm.LlmProviders.HUGGINGFACE.value: "huggingface",
+            litellm.LlmProviders.REPLICATE.value: "replicate",
+            litellm.LlmProviders.TOGETHER_AI.value: "together-ai",
         }
 
-        normalized = provider.lower().replace('_', '-')
+        normalized = provider.lower().replace("_", "-")
 
         # use litellm custom llm provider if not in provider_map
         if normalized not in provider_map:
             return normalized
         return provider_map.get(normalized, normalized)
 
-    def _normalize_component(self, component: str, allow_uppercase: bool = False) -> str:
+    def _normalize_component(
+        self, component: str, allow_uppercase: bool = False
+    ) -> str:
         """Normalize a CZRN component to meet format requirements."""
         if not component:
-            return 'unknown'
+            return "unknown"
 
         # Convert to lowercase unless uppercase is allowed
         if not allow_uppercase:
             component = component.lower()
 
         # Replace invalid characters with hyphens
-        component = re.sub(r'[^a-zA-Z0-9-]', '-', component)
+        component = re.sub(r"[^a-zA-Z0-9-]", "-", component)
 
         # Remove consecutive hyphens
-        component = re.sub(r'-+', '-', component)
+        component = re.sub(r"-+", "-", component)
 
         # Remove leading/trailing hyphens
-        component = component.strip('-')
+        component = component.strip("-")
 
-        return component or 'unknown'
-
+        return component or "unknown"

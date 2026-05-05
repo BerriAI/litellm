@@ -1,5 +1,8 @@
 import { insultsCompliancePrompts } from "./insultsCompliancePrompts";
 import { financialCompliancePrompts } from "./financialCompliancePrompts";
+import { codeExecutionCompliancePrompts } from "./codeExecutionCompliancePrompts";
+import { canadianPiiCompliancePrompts } from "./canadianPiiCompliancePrompts";
+import { claimsCompliancePrompts } from "./claimsCompliancePrompts";
 
 export interface CompliancePrompt {
   id: string;
@@ -255,6 +258,9 @@ const compliancePrompts: CompliancePrompt[] = [
   // See: insultsCompliancePrompts.ts, financialCompliancePrompts.ts
   ...insultsCompliancePrompts,
   ...financialCompliancePrompts,
+  ...codeExecutionCompliancePrompts,
+  ...canadianPiiCompliancePrompts,
+  ...claimsCompliancePrompts,
 ];
 
 export const airlineCompliancePrompts: CompliancePrompt[] = [
@@ -532,9 +538,29 @@ const frameworkMeta: Record<string, { icon: string; description: string }> = {
     icon: "shield",
     description: "Content filter guardrails that block messages matching specific prohibited topics while allowing legitimate use of related words in context.",
   },
+  "Canadian PII (PIPEDA)": {
+    icon: "shield",
+    description:
+      "Canadian PII detection under PIPEDA and provincial privacy legislation — masks SIN, OHIP, driver's licence, passport, immigration docs, bank accounts, and postal codes.",
+  },
+  "Canadian PII (FIPPA)": {
+    icon: "graduation-cap",
+    description:
+      "Ontario FIPPA institutional identifier detection — masks University of Toronto student/employee numbers, UTORid logins, and TCard campus IDs.",
+  },
   "Airline Brand Protection": {
     icon: "plane",
     description: "Destination vs competitor intent — avoid answering competitor comparison questions.",
+  },
+  "Code Execution Safety": {
+    icon: "terminal",
+    description:
+      "Requests that ask the assistant to execute code, run commands, access the filesystem/network, or otherwise perform runtime actions should be blocked; static explanation/analysis is allowed.",
+  },
+  "Claims Assistant": {
+    icon: "shield",
+    description:
+      "Security + UX validation prompts for an AI claims assistant supporting out-of-network claim submissions.",
   },
 };
 

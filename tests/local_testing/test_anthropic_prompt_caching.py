@@ -151,6 +151,7 @@ async def test_litellm_anthropic_prompt_caching_tools():
                         },
                         "required": ["location"],
                     },
+                    "type": "custom",
                 }
             ],
             "max_tokens": 64000,
@@ -234,6 +235,7 @@ async def test_anthropic_vertex_ai_prompt_caching(anthropic_messages, sync_mode)
         mock_post.assert_called_once()
         print(mock_post.call_args.kwargs["headers"])
         assert "anthropic-beta" not in mock_post.call_args.kwargs["headers"]
+
 
 @pytest.mark.flaky(retries=3, delay=2)
 @pytest.mark.asyncio()
@@ -778,7 +780,7 @@ async def test_router_with_prompt_caching(anthropic_messages):
             {
                 "model_name": "claude-model",
                 "litellm_params": {
-                    "model": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+                    "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
                     "mock_response": "The sky is green.",
                 },
             },

@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
 
@@ -53,6 +53,14 @@ class BaseResponsesAPIConfig(ABC):
             )
             and v is not None
         }
+
+    def supports_native_file_search(self) -> bool:
+        """Return True if this provider handles the file_search tool natively.
+
+        Override in provider subclasses that support file_search without
+        LiteLLM emulation (e.g. OpenAI, Azure OpenAI).
+        """
+        return False
 
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
@@ -218,6 +226,18 @@ class BaseResponsesAPIConfig(ABC):
         """Returns True if litellm should fake a stream for the given model and stream value"""
         return False
 
+    def supports_native_websocket(self) -> bool:
+        """
+        Returns True if the provider has a native WebSocket endpoint for Responses API.
+
+        Providers with native websocket support can connect directly to wss:// endpoints.
+        Providers without native support will use the ManagedResponsesWebSocketHandler
+        which makes HTTP streaming calls and forwards events over the websocket.
+
+        Default: False (use managed websocket handler)
+        """
+        return False
+
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
     #########################################################
@@ -269,3 +289,32 @@ class BaseResponsesAPIConfig(ABC):
     #########################################################
     ########## END COMPACT RESPONSE API TRANSFORMATION ######
     #########################################################
+
+    @staticmethod
+    def strip_custom_tool_call_namespace_from_responses_input(
+        input: Union[str, ResponseInputParam],
+    ) -> Union[str, ResponseInputParam]:
+        """
+        Remove ``namespace`` from ``custom_tool_call`` input items.
+        """
+        if not isinstance(input, list):
+            return input
+        out: List[Any] = []
+        for item in input:
+            if isinstance(item, dict) and item.get("type") == "custom_tool_call":
+                out.append({k: v for k, v in item.items() if k != "namespace"})
+            else:
+                out.append(item)
+        return cast(ResponseInputParam, out)
+
+    @staticmethod
+    def normalize_responses_api_request_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply provider-agnostic fixes to an outbound Responses API request dict."""
+        if not isinstance(data, dict) or "input" not in data:
+            return data
+        return {
+            **data,
+            "input": BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
+                data["input"]
+            ),
+        }

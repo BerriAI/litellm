@@ -2,11 +2,15 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
-from litellm._uuid import uuid
-from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
+from litellm.constants import (
+    MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
+    MAX_OBJECTS_PER_POLL_CYCLE,
+)
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -29,6 +33,9 @@ class CheckBatchCost:
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
+        # Cached after the first poll cycle. Once we know the column is absent we skip
+        # the guaranteed-failing primary query on every subsequent cycle.
+        self._has_batch_processed_column: bool = True
 
     async def _get_user_info(self, batch_id, user_id) -> dict:
         """
@@ -48,6 +55,47 @@ class CheckBatchCost:
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
+
+    async def _cleanup_stale_managed_objects(self) -> None:
+        """
+        Mark managed objects older than MANAGED_OBJECT_STALENESS_CUTOFF_DAYS days
+        in non-terminal states as 'stale_expired'. These will never complete and
+        should not be polled.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
+        result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            where={
+                "file_purpose": "batch",
+                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
+                "created_at": {"lt": cutoff},
+            },
+            data={"status": "stale_expired"},
+        )
+        if result > 0:
+            verbose_proxy_logger.warning(
+                f"CheckBatchCost: marked {result} stale managed objects "
+                f"(older than {MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days) as stale_expired"
+            )
+
+    async def _fallback_find_jobs(self) -> list:
+        """Query batch jobs without the batch_processed filter (for older schemas)."""
+        return await self.prisma_client.db.litellm_managedobjecttable.find_many(
+            where={
+                "file_purpose": "batch",
+                "status": {
+                    "not_in": [
+                        "failed",
+                        "expired",
+                        "cancelled",
+                        "complete",
+                        "completed",
+                        "stale_expired",
+                    ]
+                },
+            },
+            take=MAX_OBJECTS_PER_POLL_CYCLE,
+            order={"created_at": "asc"},
+        )
 
     async def check_batch_cost(self):
         """
@@ -70,16 +118,59 @@ class CheckBatchCost:
             get_model_id_from_unified_batch_id,
         )
 
-        # Look for all batches that have not yet been processed by CheckBatchCost
-        jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
-            where={
-                "file_purpose": "batch",
-                "batch_processed" : False,
-                "status": {"not_in": ["failed", "expired", "cancelled"]}
-            }
-        )
-        completed_jobs = []
+        try:
+            from litellm.integrations.prometheus import PrometheusLogger
+            prom_logger = PrometheusLogger.get_instance()
+        except Exception as e:
+            verbose_proxy_logger.error(f"CheckBatchCost: could not get Prometheus logger: {e}")
+            prom_logger = None
 
+        processed_models: List[Tuple[Optional[str], Optional[str]]] = []
+
+        try:
+            await self._cleanup_stale_managed_objects()
+        except Exception as cleanup_err:
+            verbose_proxy_logger.warning(
+                f"CheckBatchCost: stale cleanup failed (poll will continue): {cleanup_err}"
+            )
+
+        # Look for all batches that have not yet been processed by CheckBatchCost.
+        # self._has_batch_processed_column is cached after the first probe so that
+        # older schemas don't pay a guaranteed-failing primary query + warning on
+        # every subsequent poll cycle.
+        if self._has_batch_processed_column:
+            try:
+                # Include "complete"/"completed" batches: the retrieve_batch
+                # endpoint may transition a batch to "complete" before
+                # CheckBatchCost runs.  The batch_processed=False filter
+                # already prevents reprocessing finished batches.
+                jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+                    where={
+                        "file_purpose": "batch",
+                        "batch_processed": False,
+                        "status": {
+                            "not_in": [
+                                "failed",
+                                "expired",
+                                "cancelled",
+                                "stale_expired",
+                            ]
+                        },
+                    },
+                    take=MAX_OBJECTS_PER_POLL_CYCLE,
+                    order={"created_at": "asc"},
+                )
+            except Exception as query_err:
+                if "batch_processed" not in str(query_err).lower() and "unknown column" not in str(query_err).lower() and "does not exist" not in str(query_err).lower():
+                    raise
+                # Permanent schema gap — cache the result so future cycles skip straight to fallback
+                self._has_batch_processed_column = False
+                verbose_proxy_logger.warning(
+                    "CheckBatchCost: batch_processed column not found, querying without it"
+                )
+                jobs = await self._fallback_find_jobs()
+        else:
+            jobs = await self._fallback_find_jobs()
         for job in jobs:
             # get the model from the job
             unified_object_id = job.unified_object_id
@@ -90,6 +181,8 @@ class CheckBatchCost:
                 verbose_proxy_logger.info(
                     f"Skipping job {unified_object_id} because it is not a valid unified object id"
                 )
+                if prom_logger:
+                    prom_logger.record_check_batch_cost_error("invalid_unified_id")
                 continue
             else:
                 unified_object_id = decoded_unified_object_id
@@ -101,6 +194,8 @@ class CheckBatchCost:
                 verbose_proxy_logger.info(
                     f"Skipping job {unified_object_id} because it is not a valid model id"
                 )
+                if prom_logger:
+                    prom_logger.record_check_batch_cost_error("invalid_model_id")
                 continue
 
             verbose_proxy_logger.info(
@@ -120,6 +215,8 @@ class CheckBatchCost:
                 verbose_proxy_logger.info(
                     f"Skipping job {unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
                 )
+                if prom_logger:
+                    prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
@@ -165,21 +262,35 @@ class CheckBatchCost:
 
                 # Access content - handle both direct attribute and method call
                 if hasattr(_file_content, 'content'):
-                    content_bytes = _file_content.content
+                    content_bytes = _file_content.content  # type: ignore[union-attr]
                 elif hasattr(_file_content, 'read'):
-                    content_bytes = await _file_content.read()
+                    content_bytes = await _file_content.read()  # type: ignore[misc]
                 else:
-                    content_bytes = _file_content
+                    content_bytes = _file_content  # type: ignore[assignment]
 
                 file_content_as_dict = _get_file_content_as_dictionary(
-                    content_bytes
+                    content_bytes  # type: ignore[arg-type]
                 )
+
+                # Record output file size
+                if prom_logger and content_bytes:
+                    try:
+                        prom_logger.record_managed_file_size(
+                            size_bytes=len(content_bytes),  # type: ignore
+                            purpose="batch",
+                            file_type="output",
+                            model=model_id,
+                        )
+                    except Exception:
+                        pass
 
                 deployment_info = self.llm_router.get_deployment(model_id=model_id)
                 if deployment_info is None:
                     verbose_proxy_logger.info(
                         f"Skipping job {unified_object_id} because it is not a valid deployment info"
                     )
+                    if prom_logger:
+                        prom_logger.record_check_batch_cost_error("deployment_not_found")
                     continue
                 custom_llm_provider = deployment_info.litellm_params.custom_llm_provider
                 litellm_model_name = deployment_info.litellm_params.model
@@ -197,7 +308,7 @@ class CheckBatchCost:
                         file_content_dictionary=file_content_as_dict,
                         custom_llm_provider=llm_provider,  # type: ignore
                         model_name=model_name,
-                        model_info=deployment_model_info,
+                        model_info=deployment_model_info,  # type: ignore[arg-type]
                     )
                 )
                 logging_obj = LiteLLMLogging(
@@ -236,11 +347,39 @@ class CheckBatchCost:
                     batch_models=batch_models,
                 )
 
-                # mark the job as complete
-                completed_jobs.append(job)
+                # Record batch duration (completed_at - created_at)
+                if prom_logger and response.completed_at and response.created_at:
+                    duration_seconds = float(response.completed_at - response.created_at)
+                    if duration_seconds >= 0:
+                        prom_logger.record_managed_batch_duration(
+                            duration_seconds=duration_seconds,
+                            model=model_name,
+                            api_provider=str(llm_provider) if llm_provider else None,
+                        )
 
-            if len(completed_jobs) > 0:
-                await self.prisma_client.db.litellm_managedobjecttable.update_many(
-                    where={"id": {"in": [job.id for job in completed_jobs]}},
-                    data={"batch_processed": True, "status": "complete"},
-                )
+                # Track this job for the final metrics summary
+                processed_models.append((model_name, str(llm_provider) if llm_provider else None))
+
+                # mark the job as complete
+                try:
+                    update_data: dict = {
+                        "status": "complete",
+                        "file_object": response.model_dump_json(),
+                    }
+                    if self._has_batch_processed_column:
+                        update_data["batch_processed"] = True
+                    await self.prisma_client.db.litellm_managedobjecttable.update(
+                        where={"id": job.id},
+                        data=update_data,
+                    )
+                except Exception as db_err:
+                    verbose_proxy_logger.error(
+                        f"CheckBatchCost: failed to mark job {job.id} complete in DB: {db_err}"
+                    )
+
+        # Record polling run metrics (always, even if nothing was processed)
+        if prom_logger:
+            prom_logger.record_check_batch_cost_run(
+                jobs_polled=len(jobs),
+                processed_models=processed_models if processed_models else None,
+            )

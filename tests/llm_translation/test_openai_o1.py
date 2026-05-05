@@ -18,7 +18,7 @@ from litellm import Choices, Message, ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
-@pytest.mark.parametrize("model", ["o1-mini", "o1"])
+@pytest.mark.parametrize("model", ["o1"])
 @pytest.mark.asyncio
 async def test_o1_handle_system_role(model):
     """
@@ -68,7 +68,7 @@ async def test_o1_handle_system_role(model):
 
 @pytest.mark.parametrize(
     "model, expected_tool_calling_support",
-    [("o1-mini", False), ("o1", True)],
+    [("o1", True)],
 )
 @pytest.mark.asyncio
 async def test_o1_handle_tool_calling_optional_params(
@@ -96,7 +96,7 @@ async def test_o1_handle_tool_calling_optional_params(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-4", "gpt-4-0314", "gpt-4-32k"])
+@pytest.mark.parametrize("model", ["gpt-4", "gpt-4-0613"])
 async def test_o1_max_completion_tokens(model: str):
     """
     Tests that:

@@ -7,7 +7,10 @@ which is required for models like gpt-5.1-codex that only support the /responses
 Implementation based on analysis of the copilot-api project by caozhiyuan:
 https://github.com/caozhiyuan/copilot-api
 """
+
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+
+import os
 
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -22,8 +25,8 @@ from litellm.types.utils import LlmProviders
 
 from ..authenticator import Authenticator
 from ..common_utils import (
+    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
-    GITHUB_COPILOT_API_BASE,
     get_copilot_default_headers,
 )
 
@@ -157,25 +160,20 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> str:
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
-
-        Returns: https://api.githubcopilot.com/responses
-
-        Note: Currently only supports individual accounts.
-        Business/enterprise accounts (api.business.githubcopilot.com) can be
-        added in the future by detecting account type.
         """
         # Use provided api_base or fall back to authenticator's base or default
-        api_base = (
+        effective_api_base = (
             api_base
             or self.authenticator.get_api_base()
-            or GITHUB_COPILOT_API_BASE
+            or os.getenv("GITHUB_COPILOT_API_BASE")
+            or DEFAULT_GITHUB_COPILOT_API_BASE
         )
 
         # Remove trailing slashes
-        api_base = api_base.rstrip("/")
+        effective_api_base = effective_api_base.rstrip("/")
 
         # Return the responses endpoint
-        return f"{api_base}/responses"
+        return f"{effective_api_base}/responses"
 
     def _handle_reasoning_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -308,7 +306,9 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Check arrays
         if isinstance(value, list):
             return any(
-                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth)
+                self._contains_vision_content(
+                    item, depth=depth + 1, max_depth=max_depth
+                )
                 for item in value
             )
 
@@ -324,8 +324,14 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # Check content field recursively
         if "content" in value and isinstance(value["content"], list):
             return any(
-                self._contains_vision_content(item, depth=depth + 1, max_depth=max_depth)
+                self._contains_vision_content(
+                    item, depth=depth + 1, max_depth=max_depth
+                )
                 for item in value["content"]
             )
 
+        return False
+
+    def supports_native_websocket(self) -> bool:
+        """GitHub Copilot does not support native WebSocket for Responses API"""
         return False

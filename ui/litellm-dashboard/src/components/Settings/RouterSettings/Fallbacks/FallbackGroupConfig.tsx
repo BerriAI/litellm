@@ -78,6 +78,7 @@ export function FallbackGroupConfig({
           value={group.primaryModel}
           onChange={handlePrimaryChange}
           showSearch
+          getPopupContainer={(trigger) => trigger.parentElement || document.body}
           filterOption={(input, option) =>
             (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
           }
@@ -125,6 +126,7 @@ export function FallbackGroupConfig({
               value={group.fallbackModels}
               onChange={handleFallbackSelect}
               disabled={!group.primaryModel}
+              getPopupContainer={(trigger) => trigger.parentElement || document.body}
               options={availableFallbackOptions.map((m) => ({
                 label: m,
                 value: m,

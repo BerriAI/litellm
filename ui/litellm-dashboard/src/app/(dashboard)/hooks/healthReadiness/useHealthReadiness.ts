@@ -6,6 +6,8 @@ const healthReadinessKeys = createQueryKeys("healthReadiness");
 
 interface HealthReadinessResponse {
   litellm_version?: string;
+  log_level?: string;
+  is_detailed_debug?: boolean;
   [key: string]: any;
 }
 

@@ -1,6 +1,7 @@
 """
 Tests for MCP End User Permission Guardrail Hook
 """
+
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch

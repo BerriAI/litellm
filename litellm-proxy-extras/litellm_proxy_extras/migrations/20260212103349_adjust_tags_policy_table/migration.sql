@@ -1,3 +1,3 @@
 -- AlterTable
-ALTER TABLE "LiteLLM_PolicyAttachmentTable" ADD COLUMN     "tags" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "LiteLLM_PolicyAttachmentTable" ADD COLUMN IF NOT EXISTS "tags" TEXT[] DEFAULT ARRAY[]::TEXT[];
 

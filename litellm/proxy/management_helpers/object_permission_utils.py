@@ -4,13 +4,20 @@ organizations, teams, and keys.
 """
 
 import json
-from litellm._uuid import uuid
-from typing import Dict, Optional, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Union
+
+from fastapi import HTTPException, status
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.utils import PrismaClient
+from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-        
+from litellm.proxy.utils import PrismaClient
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import (
+        LiteLLM_ObjectPermissionTable,
+        LiteLLM_TeamTableCachedObj,
+    )
 
 
 async def attach_object_permission_to_dict(
@@ -19,30 +26,32 @@ async def attach_object_permission_to_dict(
 ) -> Dict:
     """
     Helper method to attach object_permission to a dictionary if object_permission_id is set.
-    
+
     This function:
     1. Checks if the dictionary has an object_permission_id
     2. If found, queries the database for the corresponding object permission
     3. Converts the object permission to a dictionary format
     4. Attaches it to the input dictionary under the 'object_permission' key
-    
+
     Args:
         data_dict: The dictionary to attach object_permission to
         prisma_client: The database client
-        
+
     Returns:
         Dict: The input dictionary with object_permission attached if found
-        
+
     Raises:
         ValueError: If prisma_client is None
     """
     if prisma_client is None:
         raise ValueError("Prisma client not found")
-        
+
     object_permission_id = data_dict.get("object_permission_id")
     if object_permission_id:
-        object_permission = await prisma_client.db.litellm_objectpermissiontable.find_unique(
-            where={"object_permission_id": object_permission_id},
+        object_permission = (
+            await prisma_client.db.litellm_objectpermissiontable.find_unique(
+                where={"object_permission_id": object_permission_id},
+            )
         )
         if object_permission:
             # Convert to dict if needed
@@ -160,21 +169,283 @@ async def _set_object_permission(
     if not isinstance(permission_data, dict):
         data_json.pop("object_permission")
         return data_json
-    
+
     # Clean data: exclude None values and object_permission_id
     clean_data = {
-        k: v for k, v in permission_data.items()
+        k: v
+        for k, v in permission_data.items()
         if v is not None and k != "object_permission_id"
     }
-    
+
     # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
     if "mcp_tool_permissions" in clean_data:
-        clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
-    
+        clean_data["mcp_tool_permissions"] = safe_dumps(
+            clean_data["mcp_tool_permissions"]
+        )
+
     created_permission = await prisma_client.db.litellm_objectpermissiontable.create(
         data=clean_data
     )
-    
+
     data_json["object_permission_id"] = created_permission.object_permission_id
     data_json.pop("object_permission")
     return data_json
+
+
+async def _resolve_team_allowed_mcp_servers(
+    team_object_permission: "LiteLLM_ObjectPermissionTable",
+) -> Set[str]:
+    """
+    Resolve the full set of MCP server IDs a team has access to.
+
+    Combines:
+    - Direct mcp_servers list
+    - Servers from mcp_access_groups
+    - Server IDs referenced in mcp_tool_permissions keys
+    """
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+
+    direct_servers: List[str] = team_object_permission.mcp_servers or []
+    access_group_servers: List[str] = (
+        await MCPRequestHandler._get_mcp_servers_from_access_groups(
+            team_object_permission.mcp_access_groups or []
+        )
+    )
+    raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
+    if isinstance(raw_tool_perms, str):
+        raw_tool_perms = json.loads(raw_tool_perms)
+    tool_perm_servers: List[str] = list(raw_tool_perms.keys())
+    return set(direct_servers + access_group_servers + tool_perm_servers)
+
+
+def _get_allow_all_keys_server_ids() -> Set[str]:
+    """Return the set of MCP server IDs marked with allow_all_keys=True."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    return set(global_mcp_server_manager.get_allow_all_keys_server_ids())
+
+
+async def _get_team_allowed_mcp_servers(
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+) -> Set[str]:
+    """
+    Get the full set of MCP server IDs a team allows.
+
+    If team has no object_permission or no MCP config, returns empty set
+    (meaning only allow_all_keys servers are permitted).
+    """
+    if team_obj is None:
+        return set()
+
+    team_object_permission = team_obj.object_permission
+    if team_object_permission is None:
+        return set()
+
+    return await _resolve_team_allowed_mcp_servers(team_object_permission)
+
+
+def _extract_requested_mcp_server_ids(
+    object_permission: Optional[dict],
+) -> Set[str]:
+    """
+    Extract all MCP server IDs referenced in a key's object_permission dict.
+
+    Includes:
+    - mcp_servers list
+    - Keys from mcp_tool_permissions
+    """
+    if not object_permission or not isinstance(object_permission, dict):
+        return set()
+
+    server_ids: Set[str] = set()
+    mcp_servers = object_permission.get("mcp_servers")
+    if isinstance(mcp_servers, list):
+        server_ids.update(mcp_servers)
+
+    mcp_tool_permissions = object_permission.get("mcp_tool_permissions")
+    if isinstance(mcp_tool_permissions, dict):
+        server_ids.update(mcp_tool_permissions.keys())
+
+    return server_ids
+
+
+def _extract_requested_mcp_access_groups(
+    object_permission: Optional[dict],
+) -> Set[str]:
+    """Extract MCP access groups from a key's object_permission dict."""
+    if not object_permission or not isinstance(object_permission, dict):
+        return set()
+
+    groups = object_permission.get("mcp_access_groups")
+    if isinstance(groups, list):
+        return set(groups)
+    return set()
+
+
+def _extract_requested_mcp_toolsets(
+    object_permission: Optional[dict],
+) -> Set[str]:
+    """Extract MCP toolset IDs from a key's object_permission dict."""
+    if not object_permission or not isinstance(object_permission, dict):
+        return set()
+
+    toolsets = object_permission.get("mcp_toolsets")
+    if isinstance(toolsets, list):
+        return set(toolsets)
+    return set()
+
+
+async def validate_key_mcp_servers_against_team(
+    object_permission: Optional[dict],
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+):
+    """
+    Validate that MCP servers requested on a key are within the allowed scope.
+
+    Rules:
+    - If key is in a team: key's mcp_servers must be a subset of
+      (team's allowed servers + allow_all_keys servers)
+    - If key is NOT in a team: key's mcp_servers must only contain
+      allow_all_keys servers
+    - If team has no MCP config: key can only use allow_all_keys servers
+
+    Raises HTTPException(403) if validation fails.
+    """
+    requested_servers = _extract_requested_mcp_server_ids(object_permission)
+    requested_access_groups = _extract_requested_mcp_access_groups(object_permission)
+
+    requested_toolsets = _extract_requested_mcp_toolsets(object_permission)
+
+    # Nothing to validate
+    if not requested_servers and not requested_access_groups and not requested_toolsets:
+        return
+
+    allow_all_keys_servers = _get_allow_all_keys_server_ids()
+    team_allowed_servers = await _get_team_allowed_mcp_servers(team_obj)
+
+    # Combined allowed set = team servers + allow_all_keys servers
+    all_allowed_servers = team_allowed_servers | allow_all_keys_servers
+
+    # Validate requested server IDs
+    if requested_servers:
+        disallowed_servers = requested_servers - all_allowed_servers
+        if disallowed_servers:
+            if team_obj is not None:
+                team_id = team_obj.team_id
+                detail = (
+                    f"Key requests MCP servers not allowed by team '{team_id}': "
+                    f"{sorted(disallowed_servers)}. "
+                    f"Team allows: {sorted(team_allowed_servers)}. "
+                    f"Global (allow_all_keys) servers: {sorted(allow_all_keys_servers)}."
+                )
+            else:
+                detail = (
+                    f"Key is not in a team. Only globally available (allow_all_keys) MCP servers "
+                    f"can be assigned: {sorted(allow_all_keys_servers)}. "
+                    f"Disallowed servers: {sorted(disallowed_servers)}."
+                )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": detail},
+            )
+
+    # Validate requested access groups (must be subset of team's access groups)
+    if requested_access_groups:
+        team_access_groups: Set[str] = set()
+        if (
+            team_obj is not None
+            and team_obj.object_permission is not None
+            and team_obj.object_permission.mcp_access_groups
+        ):
+            team_access_groups = set(team_obj.object_permission.mcp_access_groups)
+
+        disallowed_groups = requested_access_groups - team_access_groups
+        if disallowed_groups:
+            if team_obj is not None:
+                team_id = team_obj.team_id
+                detail = (
+                    f"Key requests MCP access groups not allowed by team '{team_id}': "
+                    f"{sorted(disallowed_groups)}. "
+                    f"Team allows: {sorted(team_access_groups)}."
+                )
+            else:
+                detail = (
+                    f"Key is not in a team. MCP access groups cannot be assigned to "
+                    f"keys outside of a team. Disallowed groups: {sorted(disallowed_groups)}."
+                )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": detail},
+            )
+
+    # Validate requested toolsets against team's allowed toolsets.
+    # Only enforce the team-based restriction when a team is present — standalone
+    # keys (no team) can freely be granted any toolset by an admin.
+    if requested_toolsets and team_obj is not None:
+        team_op = team_obj.object_permission
+        team_mcp_toolsets = team_op.mcp_toolsets if team_op is not None else None
+        # None or [] means the team has no toolset restriction — allow any toolsets.
+        if team_mcp_toolsets:
+            disallowed_toolsets = requested_toolsets - set(team_mcp_toolsets)
+            if disallowed_toolsets:
+                team_id = team_obj.team_id
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": (
+                            f"Key requests MCP toolsets not allowed by team '{team_id}': "
+                            f"{sorted(disallowed_toolsets)}. "
+                            f"Team allows: {sorted(team_mcp_toolsets)}."
+                        )
+                    },
+                )
+
+
+def _extract_requested_search_tools(object_permission: Optional[dict]) -> List[str]:
+    """Return search_tool_name values from a key's object_permission dict."""
+    if not object_permission or not isinstance(object_permission, dict):
+        return []
+    raw = object_permission.get("search_tools")
+    if not isinstance(raw, list):
+        return []
+    return [str(x) for x in raw if x]
+
+
+async def validate_key_search_tools_against_team(
+    object_permission: Optional[dict],
+    team_obj: Optional["LiteLLM_TeamTableCachedObj"],
+) -> None:
+    """
+    Validate key object_permission.search_tools is a subset of the team's allowlist.
+
+    Empty team allowlist means no restriction at team layer (skip).
+    """
+    requested = _extract_requested_search_tools(object_permission)
+    if not requested:
+        return
+
+    team_tools: List[str] = []
+    if team_obj is not None and team_obj.object_permission is not None:
+        st = team_obj.object_permission.search_tools
+        if st:
+            team_tools = list(st)
+
+    if not team_tools:
+        return
+
+    disallowed = set(requested) - set(team_tools)
+    if disallowed:
+        team_id = team_obj.team_id if team_obj is not None else "unknown"
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"Key requests search tools not allowed by team '{team_id}': "
+                    f"{sorted(disallowed)}. Team allows: {sorted(team_tools)}."
+                )
+            },
+        )

@@ -332,7 +332,7 @@ class VertexFineTuningAPI(VertexLLM):
         }
 
         base_url = get_vertex_base_url(vertex_location)
-        
+
         url = None
         if request_route == "/tuningJobs":
             url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/tuningJobs"

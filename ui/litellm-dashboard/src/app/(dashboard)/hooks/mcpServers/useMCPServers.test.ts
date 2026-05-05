@@ -74,7 +74,7 @@ describe("useMCPServers", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken);
+    expect(networking.fetchMCPServers).toHaveBeenCalledWith(mockAccessToken, undefined);
     expect(result.current.data).toEqual(mockServers);
   });
 

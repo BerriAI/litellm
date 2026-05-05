@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from litellm import Router
 from litellm.router_utils.common_utils import (
     _deployment_supports_web_search,
     filter_team_based_models,
@@ -316,7 +317,9 @@ class TestFilterWebSearchDeployments:
         deployments = [
             {"model_info": {"id": "d1"}},  # No supports_web_search - defaults to True
             {"model_info": {"id": "d2"}},  # No supports_web_search - defaults to True
-            {"model_info": {"id": "d3", "supports_web_search": False}},  # Explicit False
+            {
+                "model_info": {"id": "d3", "supports_web_search": False}
+            },  # Explicit False
         ]
         request_kwargs = {"tools": [{"type": "web_search"}]}
         result = filter_web_search_deployments(deployments, request_kwargs)
@@ -340,3 +343,22 @@ class TestFilterWebSearchDeployments:
         result = filter_web_search_deployments(deployment, request_kwargs)
         # Should return the dict unchanged, not filter it
         assert result == deployment
+
+
+def test_invalidate_model_group_info_cache():
+    """Test that _invalidate_model_group_info_cache clears the LRU cache."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": "fake-key"},
+            }
+        ]
+    )
+    # Populate the cache
+    router._cached_get_model_group_info("gpt-4")
+    assert router._cached_get_model_group_info.cache_info().currsize > 0
+
+    # Invalidate and verify cache is cleared
+    router._invalidate_model_group_info_cache()
+    assert router._cached_get_model_group_info.cache_info().currsize == 0

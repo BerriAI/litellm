@@ -63,7 +63,8 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     isLoading: isProviderMetadataLoading,
     error: providerMetadataError,
   } = useProviderFields();
-  const { data: guardrailsList, isLoading: isGuardrailsLoading, error: guardrailsError } = useGuardrails();
+  const { data: guardrailsData } = useGuardrails();
+  const guardrailsList = guardrailsData?.guardrails.map((g) => g.guardrail_name);
   const { data: tagsList, isLoading: isTagsLoading, error: tagsError } = useTags();
 
   const handleTestConnection = async () => {
@@ -131,7 +132,6 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   tooltip="Select the team for which you want to add this model"
                 >
                   <TeamDropdown
-                    teams={teams}
                     onChange={(value) => {
                       setTeamAdminSelectedTeam(value);
                     }}
@@ -325,7 +325,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                       },
                     ]}
                   >
-                    <TeamDropdown teams={teams} disabled={!premiumUser} />
+                    <TeamDropdown disabled={!premiumUser} />
                   </Form.Item>
                 )}
                 {isAdmin && (
@@ -358,6 +358,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                   teams={teams}
                   guardrailsList={guardrailsList || []}
                   tagsList={tagsList || {}}
+                  accessToken={accessToken || ""}
                 />
               </>
             )}
@@ -366,10 +367,10 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                 <Typography.Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Typography.Link>
               </Tooltip>
               <div className="space-x-2">
-                <Button onClick={handleTestConnection} loading={isTestingConnection}>
+                <Button data-testid="test-connect-btn" onClick={handleTestConnection} loading={isTestingConnection}>
                   Test Connect
                 </Button>
-                <Button htmlType="submit">Add Model</Button>
+                <Button data-testid="add-model-btn" htmlType="submit">Add Model</Button>
               </div>
             </div>
           </>

@@ -66,9 +66,7 @@ class LangGraphConfig(BaseConfig):
         from litellm.secret_managers.main import get_secret_str
 
         api_base = (
-            api_base
-            or get_secret_str("LANGGRAPH_API_BASE")
-            or "http://localhost:2024"
+            api_base or get_secret_str("LANGGRAPH_API_BASE") or "http://localhost:2024"
         )
 
         api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
@@ -166,7 +164,7 @@ class LangGraphConfig(BaseConfig):
             # Handle content that might be a list
             if isinstance(content, list):
                 content = convert_content_list_to_str(msg)
-            
+
             # Ensure content is a string
             if not isinstance(content, str):
                 content = str(content)
@@ -510,4 +508,3 @@ class LangGraphConfig(BaseConfig):
         LangGraph has native streaming support, so we don't need to fake stream.
         """
         return False
-

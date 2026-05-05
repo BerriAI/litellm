@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { Card, Title, Text, Divider, Button, TextInput } from "@tremor/react";
-import { Typography, Spin, Switch, Select, InputNumber } from "antd";
+import { Card, Title, Text, Divider, TextInput } from "@tremor/react";
+import { Button, Typography, Spin, Switch, Select, InputNumber } from "antd";
 import { PlusOutlined, DeleteOutlined } from "@ant-design/icons";
 import { getInternalUserSettings, updateInternalUserSettings, modelAvailableCall } from "./networking";
 import BudgetDurationDropdown, { getBudgetDurationLabel } from "./common_components/budget_duration_dropdown";
@@ -160,11 +160,10 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
             <div className="flex items-center justify-between mb-3">
               <Text className="font-medium">Team {index + 1}</Text>
               <Button
-                size="sm"
-                variant="secondary"
-                icon={DeleteOutlined}
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
                 onClick={() => removeTeam(index)}
-                className="text-red-500 hover:text-red-700"
               >
                 Remove
               </Button>
@@ -208,7 +207,7 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
           </div>
         ))}
 
-        <Button variant="secondary" icon={PlusOutlined} onClick={addTeam} className="w-full">
+        <Button icon={<PlusOutlined />} onClick={addTeam} className="w-full">
           Add Team
         </Button>
       </div>
@@ -462,7 +461,6 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
           (isEditing ? (
             <div className="flex gap-2">
               <Button
-                variant="secondary"
                 onClick={() => {
                   setIsEditing(false);
                   setEditedValues(settings.values || {});
@@ -471,12 +469,12 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
               >
                 Cancel
               </Button>
-              <Button onClick={handleSaveSettings} loading={saving}>
+              <Button type="primary" onClick={handleSaveSettings} loading={saving}>
                 Save Changes
               </Button>
             </div>
           ) : (
-            <Button onClick={() => setIsEditing(true)}>Edit Settings</Button>
+            <Button type="primary" onClick={() => setIsEditing(true)}>Edit Settings</Button>
           ))}
       </div>
 

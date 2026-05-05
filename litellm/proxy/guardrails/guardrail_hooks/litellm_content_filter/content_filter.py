@@ -193,6 +193,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.post_call,
                 GuardrailEventHooks.during_call,
+                GuardrailEventHooks.realtime_input_transcription,
             ],
             event_hook=event_hook or GuardrailEventHooks.pre_call,
             default_on=default_on,
@@ -214,6 +215,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
             {}
         )  # keyword -> (category, severity, action)
+        # Always-block keywords are checked after exceptions (exceptions take precedence)
+        self.always_block_category_keywords: Dict[
+            str, Tuple[str, str, ContentFilterAction]
+        ] = {}
         # Store conditional categories (identifier_words + block_words)
         self.conditional_categories: Dict[str, Dict[str, Any]] = (
             {}
@@ -452,7 +457,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                         keyword = keyword_data["keyword"].lower()
                         severity = keyword_data.get("severity", "high")
                         if self._should_apply_severity(severity, severity_threshold):
-                            self.category_keywords[keyword] = (
+                            self.always_block_category_keywords[keyword] = (
                                 category_name,
                                 severity,
                                 category_action,
@@ -1064,13 +1069,31 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         text_lower = text.lower()
 
-        # First check if any exception applies
+        # Check exceptions first — they take precedence over always-block keywords too.
         for exception in exceptions:
             if exception in text_lower:
                 verbose_proxy_logger.debug(
                     f"Exception phrase '{exception}' found, skipping category keyword check"
                 )
                 return None
+
+        # Always-block keywords are checked after exceptions.
+        for keyword, (
+            category,
+            severity,
+            action,
+        ) in self.always_block_category_keywords.items():
+            keyword_pattern_str = self._keyword_to_regex_pattern(keyword)
+            if " " in keyword:
+                keyword_found = bool(re.search(keyword_pattern_str, text_lower))
+            else:
+                keyword_pattern = r"\b" + keyword_pattern_str + r"\b"
+                keyword_found = bool(re.search(keyword_pattern, text_lower))
+            if keyword_found:
+                verbose_proxy_logger.debug(
+                    f"Always-block keyword '{keyword}' found in category '{category}'"
+                )
+                return (keyword, category, severity, action)
 
         # Check category keywords
         for keyword, (category, severity, action) in self.category_keywords.items():
@@ -1571,6 +1594,7 @@ class ContentFilterGuardrail(CustomGuardrail):
             len(self.compiled_patterns)
             + len(self.blocked_words)
             + len(self.category_keywords)
+            + len(self.always_block_category_keywords)
         )
 
     def _get_policy_templates(self) -> Optional[str]:
@@ -1842,83 +1866,122 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         For BLOCK action: Raises HTTPException immediately when blocked content is detected.
         For MASK action: Content is buffered to handle patterns split across chunks.
+
+        At stream end (including when BLOCK raises HTTPException), write a
+        standard_logging_guardrail_information entry into request_data["metadata"]
+        so the post-call log row reaches standard_logging_object.guardrail_information
+        and the UI Request Lifecycle panel. Mirrors apply_guardrail's finally-block
+        contract.
         """
         accumulated_full_text = ""
         yielded_masked_text_len = 0
         buffer_size = 50  # Increased buffer to catch patterns split across many chunks
 
+        start_time = datetime.now()
+        detections: List[ContentFilterDetection] = []
+        masked_entity_count: Dict[str, int] = {}
+        status: GuardrailStatus = "success"
+        exception_str: str = ""
+
         verbose_proxy_logger.info(
             f"ContentFilterGuardrail: Starting robust streaming masking for model {request_data.get('model')}"
         )
 
-        async for item in response:
-            if isinstance(item, ModelResponseStream) and item.choices:
-                delta_content = ""
-                is_final = False
-                for choice in item.choices:
-                    if hasattr(choice, "delta") and choice.delta:
-                        content = getattr(choice.delta, "content", None)
-                        if content and isinstance(content, str):
-                            delta_content += content
-                    if getattr(choice, "finish_reason", None):
-                        is_final = True
+        try:
+            async for item in response:
+                if isinstance(item, ModelResponseStream) and item.choices:
+                    delta_content = ""
+                    is_final = False
+                    for choice in item.choices:
+                        if hasattr(choice, "delta") and choice.delta:
+                            content = getattr(choice.delta, "content", None)
+                            if content and isinstance(content, str):
+                                delta_content += content
+                        if getattr(choice, "finish_reason", None):
+                            is_final = True
 
-                accumulated_full_text += delta_content
+                    accumulated_full_text += delta_content
 
-                # Check for blocking or apply masking
-                # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
-                text_to_check = accumulated_full_text
-                if is_final:
-                    text_to_check += " "
+                    # Check for blocking or apply masking
+                    # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
+                    text_to_check = accumulated_full_text
+                    if is_final:
+                        text_to_check += " "
 
-                try:
-                    masked_text = self._filter_single_text(text_to_check)
-                    if is_final and masked_text.endswith(" "):
-                        masked_text = masked_text[:-1]
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    verbose_proxy_logger.error(
-                        f"ContentFilterGuardrail: Error in masking: {e}"
-                    )
-                    masked_text = text_to_check  # Fallback to current text
+                    try:
+                        # Reset before each scan: _filter_single_text scans the
+                        # whole accumulated buffer every chunk, so previous-chunk
+                        # matches are guaranteed to be re-found. Keeping only the
+                        # latest scan's detections avoids N× duplication in the
+                        # final log row. BLOCK still records correctly because
+                        # handlers append to detections before raising.
+                        detections.clear()
+                        masked_text = self._filter_single_text(
+                            text_to_check, detections=detections
+                        )
+                        if is_final and masked_text.endswith(" "):
+                            masked_text = masked_text[:-1]
+                    except HTTPException:
+                        raise
+                    except Exception as e:
+                        verbose_proxy_logger.error(
+                            f"ContentFilterGuardrail: Error in masking: {e}"
+                        )
+                        masked_text = text_to_check  # Fallback to current text
 
-                # Determine how much can be safely yielded
-                if is_final:
-                    safe_to_yield_len = len(masked_text)
-                else:
-                    safe_to_yield_len = max(0, len(masked_text) - buffer_size)
+                    # Determine how much can be safely yielded
+                    if is_final:
+                        safe_to_yield_len = len(masked_text)
+                    else:
+                        safe_to_yield_len = max(0, len(masked_text) - buffer_size)
 
-                if safe_to_yield_len > yielded_masked_text_len:
-                    new_masked_content = masked_text[
-                        yielded_masked_text_len:safe_to_yield_len
-                    ]
-                    # Modify the chunk to contain only the new masked content
-                    if (
-                        item.choices
-                        and hasattr(item.choices[0], "delta")
-                        and item.choices[0].delta
-                    ):
-                        item.choices[0].delta.content = new_masked_content
-                        yielded_masked_text_len = safe_to_yield_len
+                    if safe_to_yield_len > yielded_masked_text_len:
+                        new_masked_content = masked_text[
+                            yielded_masked_text_len:safe_to_yield_len
+                        ]
+                        # Modify the chunk to contain only the new masked content
+                        if (
+                            item.choices
+                            and hasattr(item.choices[0], "delta")
+                            and item.choices[0].delta
+                        ):
+                            item.choices[0].delta.content = new_masked_content
+                            yielded_masked_text_len = safe_to_yield_len
+                            yield item
+                    else:
+                        # Hold content by yielding empty content chunk (keeps metadata/structure)
+                        if (
+                            item.choices
+                            and hasattr(item.choices[0], "delta")
+                            and item.choices[0].delta
+                        ):
+                            item.choices[0].delta.content = ""
                         yield item
                 else:
-                    # Hold content by yielding empty content chunk (keeps metadata/structure)
-                    if (
-                        item.choices
-                        and hasattr(item.choices[0], "delta")
-                        and item.choices[0].delta
-                    ):
-                        item.choices[0].delta.content = ""
+                    # Not a ModelResponseStream or no choices - yield as is
                     yield item
-            else:
-                # Not a ModelResponseStream or no choices - yield as is
-                yield item
 
-        # Any remaining content (should have been handled by is_final, but just in case)
-        if yielded_masked_text_len < len(accumulated_full_text):
-            # We already reached the end of the generator
-            pass
+            # Any remaining content (should have been handled by is_final, but just in case)
+            if yielded_masked_text_len < len(accumulated_full_text):
+                # We already reached the end of the generator
+                pass
+        except HTTPException:
+            status = "guardrail_intervened"
+            raise
+        except Exception as e:
+            status = "guardrail_failed_to_respond"
+            exception_str = str(e)
+            raise e
+        finally:
+            self._count_masked_entities(detections, masked_entity_count)
+            self._log_guardrail_information(
+                request_data=request_data,
+                detections=detections,
+                status=status,
+                start_time=start_time,
+                masked_entity_count=masked_entity_count,
+                exception_str=exception_str,
+            )
 
     @staticmethod
     def get_config_model():

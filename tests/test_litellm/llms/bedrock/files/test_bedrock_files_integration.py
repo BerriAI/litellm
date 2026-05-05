@@ -3,7 +3,7 @@ Test Bedrock files integration with main files API
 """
 
 import base64
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,27 +19,28 @@ class TestBedrockFilesIntegration:
     async def test_litellm_afile_content_bedrock_provider_with_s3_uri(self):
         """Test litellm.afile_content with bedrock provider using direct S3 URI"""
         file_id = "s3://test-bucket/test-file.jsonl"
-        expected_content = b'{"recordId": "request-1", "modelInput": {}, "modelOutput": {}}'
+        expected_content = (
+            b'{"recordId": "request-1", "modelInput": {}, "modelOutput": {}}'
+        )
 
-        # Mock the bedrock_files_instance.file_content method
+        # Create a mock HttpxBinaryResponseContent response
+        import httpx
+
+        mock_response = httpx.Response(
+            status_code=200,
+            content=expected_content,
+            headers={"content-type": "application/octet-stream"},
+            request=httpx.Request(method="GET", url="s3://test-bucket/test-file.jsonl"),
+        )
+        mock_result = HttpxBinaryResponseContent(response=mock_response)
+
+        # Mock the base_llm_http_handler.retrieve_file_content since the code
+        # now routes through ProviderConfigManager -> base_llm_http_handler
         with patch(
-            "litellm.files.main.bedrock_files_instance.file_content",
-            new_callable=AsyncMock,
-        ) as mock_file_content:
-            # Create a mock HttpxBinaryResponseContent response
-            import httpx
-
-            mock_response = httpx.Response(
-                status_code=200,
-                content=expected_content,
-                headers={"content-type": "application/octet-stream"},
-                request=httpx.Request(
-                    method="GET", url="s3://test-bucket/test-file.jsonl"
-                ),
-            )
-            mock_file_content.return_value = HttpxBinaryResponseContent(
-                response=mock_response
-            )
+            "litellm.files.main.base_llm_http_handler.retrieve_file_content",
+            new_callable=MagicMock,
+        ) as mock_retrieve:
+            mock_retrieve.return_value = mock_result
 
             # Call litellm.afile_content
             result = await litellm.afile_content(
@@ -54,8 +55,8 @@ class TestBedrockFilesIntegration:
             assert result.response.status_code == 200
 
             # Verify the mock was called with correct parameters
-            mock_file_content.assert_called_once()
-            call_kwargs = mock_file_content.call_args.kwargs
+            mock_retrieve.assert_called_once()
+            call_kwargs = mock_retrieve.call_args.kwargs
             assert call_kwargs["_is_async"] is True
             assert call_kwargs["file_content_request"]["file_id"] == file_id
 
@@ -66,29 +67,33 @@ class TestBedrockFilesIntegration:
         s3_uri = "s3://test-bucket/batch-outputs/output.jsonl"
         unified_id = "test-unified-id-123"
         model_id = "test-model-id-456"
-        
+
         unified_file_id_str = f"litellm_proxy:application/json;unified_id,{unified_id};target_model_names,;llm_output_file_id,{s3_uri};llm_output_file_model_id,{model_id}"
-        encoded_file_id = base64.urlsafe_b64encode(unified_file_id_str.encode()).decode().rstrip("=")
-        
-        expected_content = b'{"recordId": "request-1", "modelInput": {}, "modelOutput": {}}'
+        encoded_file_id = (
+            base64.urlsafe_b64encode(unified_file_id_str.encode()).decode().rstrip("=")
+        )
 
-        # Mock the bedrock_files_instance.file_content method
+        expected_content = (
+            b'{"recordId": "request-1", "modelInput": {}, "modelOutput": {}}'
+        )
+
+        # Create a mock HttpxBinaryResponseContent response
+        import httpx
+
+        mock_response = httpx.Response(
+            status_code=200,
+            content=expected_content,
+            headers={"content-type": "application/octet-stream"},
+            request=httpx.Request(method="GET", url=s3_uri),
+        )
+        mock_result = HttpxBinaryResponseContent(response=mock_response)
+
+        # Mock the base_llm_http_handler.retrieve_file_content
         with patch(
-            "litellm.files.main.bedrock_files_instance.file_content",
-            new_callable=AsyncMock,
-        ) as mock_file_content:
-            # Create a mock HttpxBinaryResponseContent response
-            import httpx
-
-            mock_response = httpx.Response(
-                status_code=200,
-                content=expected_content,
-                headers={"content-type": "application/octet-stream"},
-                request=httpx.Request(method="GET", url=s3_uri),
-            )
-            mock_file_content.return_value = HttpxBinaryResponseContent(
-                response=mock_response
-            )
+            "litellm.files.main.base_llm_http_handler.retrieve_file_content",
+            new_callable=MagicMock,
+        ) as mock_retrieve:
+            mock_retrieve.return_value = mock_result
 
             # Call litellm.afile_content with unified file ID
             result = await litellm.afile_content(
@@ -102,9 +107,9 @@ class TestBedrockFilesIntegration:
             assert result.response.content == expected_content
             assert result.response.status_code == 200
 
-            # Verify the mock was called - the handler should extract S3 URI from unified file ID
-            mock_file_content.assert_called_once()
-            call_kwargs = mock_file_content.call_args.kwargs
+            # Verify the mock was called
+            mock_retrieve.assert_called_once()
+            call_kwargs = mock_retrieve.call_args.kwargs
             assert call_kwargs["_is_async"] is True
-            # The handler extracts S3 URI from the unified file ID
+            # The handler passes the encoded file_id as-is
             assert call_kwargs["file_content_request"]["file_id"] == encoded_file_id

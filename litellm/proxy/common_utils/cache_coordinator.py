@@ -22,11 +22,9 @@ T = TypeVar("T")
 class AsyncCacheProtocol(Protocol):
     """Protocol for cache backends used by EventDrivenCacheCoordinator."""
 
-    async def async_get_cache(self, key: str, **kwargs: Any) -> Any:
-        ...
+    async def async_get_cache(self, key: str, **kwargs: Any) -> Any: ...
 
-    async def async_set_cache(self, key: str, value: Any, **kwargs: Any) -> Any:
-        ...
+    async def async_set_cache(self, key: str, value: Any, **kwargs: Any) -> Any: ...
 
 
 class EventDrivenCacheCoordinator:
@@ -181,9 +179,7 @@ class EventDrivenCacheCoordinator:
         event_to_wait = await self._claim_role()
 
         if event_to_wait is not None:
-            return await self._wait_for_signal_and_get(
-                event_to_wait, cache_key, cache
-            )
+            return await self._wait_for_signal_and_get(event_to_wait, cache_key, cache)
 
         try:
             result = await self._load_and_cache(cache_key, cache, load_fn)

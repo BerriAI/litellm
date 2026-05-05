@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Input } from "antd";
 import { SearchOutlined, ArrowRightOutlined } from "@ant-design/icons";
-import { GuardrailCardInfo, LITELLM_CONTENT_FILTER_CARDS, PARTNER_GUARDRAIL_CARDS, ALL_CARDS } from "./guardrail_garden_data";
+import { GuardrailCardInfo, ALL_CARDS } from "./guardrail_garden_data";
 import GuardrailCard from "./guardrail_garden_card";
 import GuardrailDetailView from "./guardrail_garden_detail";
 

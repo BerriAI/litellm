@@ -27,8 +27,8 @@ from ..common_utils import InfinityError
 
 class InfinityRerankConfig(CohereRerankConfig):
     def get_complete_url(
-        self, 
-        api_base: Optional[str], 
+        self,
+        api_base: Optional[str],
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:

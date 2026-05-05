@@ -1,0 +1,27 @@
+name: "Unit Tests: Proxy Auth & Key Management"
+
+on:
+  pull_request:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proxy-auth:
+    uses: ./.github/workflows/_test-unit-base.yml
+    with:
+      test-path: "tests/test_litellm/proxy/auth tests/test_litellm/proxy/hooks tests/test_litellm/proxy/policy_engine tests/test_litellm/proxy/client"
+      workers: 2
+      reruns: 2
+      artifact-name: proxy-auth

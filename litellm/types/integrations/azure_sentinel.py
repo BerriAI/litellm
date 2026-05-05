@@ -9,4 +9,3 @@ class AzureSentinelInitParams(StandardCustomLoggerInitParams):
     """
 
     pass
-

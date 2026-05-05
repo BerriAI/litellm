@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -16,6 +17,7 @@ sys.path.insert(
 
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     pass_through_request,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -191,6 +193,47 @@ async def test_make_multipart_http_request_removes_content_type_header():
 
     # Verify the original headers dict was not modified (copy was used)
     assert "content-type" in original_headers
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_http_request_handler_multipart_with_non_empty_parsed_body():
+    """
+    Regression: pass_through_request injects litellm_logging_obj into _parsed_body before
+    forwarding. Multipart uploads must still use files=, not json=_parsed_body.
+    """
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.headers = Headers(
+        {"content-type": "multipart/form-data; boundary=------------------------test"}
+    )
+
+    file_content = b"test file content"
+    file = BytesIO(file_content)
+    upload_headers = Headers({"content-type": "text/plain"})
+    upload_file = UploadFile(file=file, filename="test.txt", headers=upload_headers)
+    upload_file.read = AsyncMock(return_value=file_content)
+    request.form = AsyncMock(return_value={"file": upload_file})
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    async_client = MagicMock()
+    async_client.request = AsyncMock(return_value=mock_response)
+
+    await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
+        request=request,
+        async_client=async_client,
+        url=httpx.URL("http://test.com"),
+        headers={},
+        requested_query_params=None,
+        _parsed_body={"litellm_logging_obj": MagicMock()},
+        forward_multipart=True,
+    )
+
+    async_client.request.assert_called_once()
+    call_args = async_client.request.call_args[1]
+    assert "files" in call_args
+    assert "json" not in call_args
+    assert call_args["files"]["file"][0] == "test.txt"
 
 
 @pytest.mark.asyncio
@@ -728,13 +771,17 @@ async def test_create_pass_through_route_with_cost_per_request():
     )
 
     # Mock the pass_through_request function to capture its call
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+    ):
         mock_pass_through.return_value = MagicMock()
         mock_is_registered.return_value = True
         mock_get_registered.return_value = None
@@ -1571,6 +1618,7 @@ async def test_pass_through_request_query_params_forwarding():
                         assert call_kwargs["requested_query_params"] == {
                             "api-version": "2025-01-01-preview"
                         }
+                        assert call_kwargs.get("forward_multipart") is False
 
                         # Verify the target URL is correct
                         assert (
@@ -2090,13 +2138,12 @@ async def test_add_litellm_data_to_request_adds_headers_to_metadata():
 @pytest.mark.asyncio
 async def test_create_pass_through_route_custom_body_url_target():
     """
-    Test that the URL-based endpoint_func created by create_pass_through_route
-    accepts a custom_body parameter and forwards it to pass_through_request,
-    taking precedence over the request-parsed body.
+    Test that programmatic callers (e.g. Bedrock proxy) can attach a JSON body via
+    request.state[LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY]; it is forwarded to
+    pass_through_request and takes precedence over the request-parsed body.
 
-    This verifies the fix for issue #16999 where bedrock_proxy_route passes
-    custom_body=data to the endpoint function, which previously crashed with:
-    TypeError: endpoint_func() got an unexpected keyword argument 'custom_body'
+    We cannot use a `custom_body: dict` route parameter: FastAPI would treat it as
+    the HTTP body and reject multipart/form-data before the handler runs.
     """
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         create_pass_through_route,
@@ -2110,15 +2157,20 @@ async def test_create_pass_through_route_custom_body_url_target():
         _forward_headers=True,
     )
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
-    ) as mock_parse_request:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
+        ) as mock_parse_request,
+    ):
         mock_pass_through.return_value = MagicMock()
         mock_is_registered.return_value = True
         mock_get_registered.return_value = None
@@ -2135,6 +2187,7 @@ async def test_create_pass_through_route_custom_body_url_target():
         mock_request.url.path = unique_path
         mock_request.path_params = {}
         mock_request.query_params = QueryParams({})
+        mock_request.state = SimpleNamespace()
 
         mock_user_api_key_dict = MagicMock()
         mock_user_api_key_dict.api_key = "test-key"
@@ -2144,13 +2197,14 @@ async def test_create_pass_through_route_custom_body_url_target():
             "retrievalQuery": {"text": "What is in the knowledge base?"},
         }
 
-        # Call endpoint_func with custom_body — this is the call that
-        # used to crash with TypeError before the fix
+        setattr(
+            mock_request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, bedrock_body
+        )
+
         await endpoint_func(
             request=mock_request,
             fastapi_response=MagicMock(),
             user_api_key_dict=mock_user_api_key_dict,
-            custom_body=bedrock_body,
         )
 
         mock_pass_through.assert_called_once()
@@ -2181,15 +2235,20 @@ async def test_create_pass_through_route_no_custom_body_falls_back():
         custom_headers={},
     )
 
-    with patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
-    ) as mock_parse_request:
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+        ) as mock_pass_through,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
+        ) as mock_is_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
+        ) as mock_get_registered,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type"
+        ) as mock_parse_request,
+    ):
         mock_pass_through.return_value = MagicMock()
         mock_is_registered.return_value = True
         mock_get_registered.return_value = None
@@ -2206,11 +2265,12 @@ async def test_create_pass_through_route_no_custom_body_falls_back():
         mock_request.url.path = unique_path
         mock_request.path_params = {}
         mock_request.query_params = QueryParams({})
+        mock_request.state = SimpleNamespace()
 
         mock_user_api_key_dict = MagicMock()
         mock_user_api_key_dict.api_key = "test-key"
 
-        # Call without custom_body — should use the request-parsed body
+        # Call without state body — should use the request-parsed body
         await endpoint_func(
             request=mock_request,
             fastapi_response=MagicMock(),
@@ -2232,11 +2292,15 @@ def test_build_full_path_with_root_default():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with default root path
         mock_get_root.return_value = "/"
 
-        result = InitPassThroughEndpointHelpers._build_full_path_with_root("/api/v1/endpoint")
+        result = InitPassThroughEndpointHelpers._build_full_path_with_root(
+            "/api/v1/endpoint"
+        )
         assert result == "/api/v1/endpoint"
 
 
@@ -2248,11 +2312,15 @@ def test_build_full_path_with_root_custom():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with custom root path /proxy
         mock_get_root.return_value = "/proxy"
 
-        result = InitPassThroughEndpointHelpers._build_full_path_with_root("/api/v1/endpoint")
+        result = InitPassThroughEndpointHelpers._build_full_path_with_root(
+            "/api/v1/endpoint"
+        )
         assert result == "/proxy/api/v1/endpoint"
 
 
@@ -2264,7 +2332,9 @@ def test_build_full_path_with_root_nested():
         InitPassThroughEndpointHelpers,
     )
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with nested root path /api/v2
         mock_get_root.return_value = "/api/v2"
 
@@ -2296,24 +2366,46 @@ def test_is_registered_pass_through_route_with_custom_root():
         "headers": {},
     }
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with custom root path /proxy
         mock_get_root.return_value = "/proxy"
 
         # Should match when request route includes the root path
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is True
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/proxy/api/endpoint"
+            )
+            is True
+        )
 
         # Should not match when request route doesn't include root path
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is False
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/api/endpoint"
+            )
+            is False
+        )
 
         # Test with default root path
         mock_get_root.return_value = "/"
 
         # Should match with default root
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is True
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/api/endpoint"
+            )
+            is True
+        )
 
         # Should not match with root prepended when root is /
-        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is False
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/proxy/api/endpoint"
+            )
+            is False
+        )
 
     # Clean up
     _registered_pass_through_routes.clear()
@@ -2345,27 +2437,184 @@ def test_get_registered_pass_through_route_with_custom_root():
     route_key = f"{endpoint_id}:exact:{path}"
     _registered_pass_through_routes[route_key] = target_config
 
-    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path"
+    ) as mock_get_root:
         # Test with custom root path /litellm
         mock_get_root.return_value = "/litellm"
 
         # Should return config when request route includes root path
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/litellm/chat/completions")
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            "/litellm/chat/completions"
+        )
         assert result is not None
         assert result["target"] == "http://api.example.com/v1/chat/completions"
         assert result["headers"]["Authorization"] == "Bearer token123"
 
         # Should return None when route doesn't match
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            "/chat/completions"
+        )
         assert result is None
 
         # Test with default root path
         mock_get_root.return_value = "/"
 
         # Should return config with default root
-        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            "/chat/completions"
+        )
         assert result is not None
         assert result["target"] == "http://api.example.com/v1/chat/completions"
 
     # Clean up
     _registered_pass_through_routes.clear()
+
+
+def test_mapped_pass_through_routes_with_server_root_path():
+    """
+    Mapped passthrough routes (vertex_ai, bedrock, etc) should match
+    even when SERVER_ROOT_PATH is set and the incoming route is prefixed.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/22272
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    with patch("litellm.proxy.utils.get_server_root_path") as mock_get_root:
+        mock_get_root.return_value = "/litellm"
+
+        # prefixed route should match mapped routes like /vertex_ai
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/litellm/vertex_ai/v1/projects/foo"
+            )
+            is True
+        )
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/litellm/bedrock/model/invoke"
+            )
+            is True
+        )
+
+        # bare route without prefix should not match when root is set
+        assert (
+            InitPassThroughEndpointHelpers.is_registered_pass_through_route(
+                "/vertex_ai/v1/projects/foo"
+            )
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_multipart_passthrough_preserves_boundary():
+    """
+    Test that multipart/form-data requests through passthrough preserve the boundary
+    and can be correctly parsed by the upstream server.
+
+    Regression test for multipart boundary stripping issue.
+    """
+    from io import BytesIO
+
+    # Mock the httpx request to verify files are passed correctly
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = httpx.Headers({"content-type": "application/json"})
+    mock_response.aread = AsyncMock(
+        return_value=b'{"filename": "test.txt", "size": 17}'
+    )
+    mock_response.text = '{"filename": "test.txt", "size": 17}'
+
+    async def mock_httpx_request(method, url, **kwargs):
+        # Verify that files parameter is passed (not json)
+        assert "files" in kwargs, "Files should be passed for multipart requests"
+        assert "file" in kwargs["files"], "File field should be in files dict"
+
+        # Verify content-type is NOT in headers (httpx will set it with correct boundary)
+        headers = kwargs.get("headers", {})
+        assert (
+            "content-type" not in headers
+        ), "content-type should be removed for multipart"
+
+        filename, content, content_type = kwargs["files"]["file"]
+        assert filename == "test.txt"
+        assert content == b"test file content"
+        assert content_type == "text/plain"
+
+        return mock_response
+
+    async_client = MagicMock()
+    async_client.request = AsyncMock(side_effect=mock_httpx_request)
+
+    # Create mock request
+    request = MagicMock(spec=Request)
+    request.method = "POST"
+    request.headers = Headers({"content-type": "multipart/form-data; boundary=test123"})
+
+    # Mock form data
+    file_content = b"test file content"
+    file = BytesIO(file_content)
+    headers = Headers({"content-type": "text/plain"})
+    upload_file = UploadFile(file=file, filename="test.txt", headers=headers)
+    upload_file.read = AsyncMock(return_value=file_content)
+
+    form_data = {"file": upload_file}
+    request.form = AsyncMock(return_value=form_data)
+
+    # Test the multipart handler directly
+    response = await HttpPassThroughEndpointHelpers.make_multipart_http_request(
+        request=request,
+        async_client=async_client,
+        url=httpx.URL("http://test.com/upload"),
+        headers={},
+        requested_query_params=None,
+    )
+
+    # Verify the response
+    assert response.status_code == 200
+    async_client.request.assert_called_once()
+
+
+def test_get_response_headers_strips_server_and_date():
+    """Regression: forwarding the upstream's Server/Date headers causes
+    uvicorn to add its own and strict HTTP parsers (aiohttp) reject the
+    response with 'Duplicate Server header found'. The helper must strip
+    headers that the ASGI server writes itself."""
+    upstream_headers = httpx.Headers(
+        {
+            "server": "cloudflare",
+            "date": "Fri, 24 Apr 2026 23:26:19 GMT",
+            "content-type": "application/json",
+            "content-length": "123",
+            "transfer-encoding": "chunked",
+            "content-encoding": "gzip",
+            "connection": "keep-alive",
+            "keep-alive": "timeout=5",
+            "x-request-id": "req_abc",
+            "anthropic-ratelimit-requests-remaining": "100",
+        }
+    )
+
+    result = HttpPassThroughEndpointHelpers.get_response_headers(upstream_headers)
+
+    lowered_keys = {k.lower() for k in result}
+    for stripped in (
+        "server",
+        "date",
+        "content-length",
+        "transfer-encoding",
+        "content-encoding",
+        "connection",
+        "keep-alive",
+    ):
+        assert (
+            stripped not in lowered_keys
+        ), f"{stripped!r} must not be forwarded by passthrough"
+
+    # Application/business headers must still pass through.
+    lowered = {k.lower(): v for k, v in result.items()}
+    assert lowered["content-type"] == "application/json"
+    assert lowered["x-request-id"] == "req_abc"
+    assert lowered["anthropic-ratelimit-requests-remaining"] == "100"

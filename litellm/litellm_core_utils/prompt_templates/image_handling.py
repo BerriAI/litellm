@@ -10,6 +10,7 @@ import litellm
 from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
+from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
 
 MAX_IMGS_IN_MEMORY = 10
 
@@ -35,7 +36,7 @@ def _process_image_response(response: Response, url: str) -> str:
     max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
     image_bytes = bytearray()
     bytes_downloaded = 0
-    
+
     for chunk in response.iter_bytes(chunk_size=8192):
         bytes_downloaded += len(chunk)
         if bytes_downloaded > max_bytes:
@@ -44,7 +45,7 @@ def _process_image_response(response: Response, url: str) -> str:
                 f"Error: Image size ({size_mb:.2f}MB) exceeds maximum allowed size ({MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB). url={url}"
             )
         image_bytes.extend(chunk)
-    
+
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
     image_type = response.headers.get("Content-Type")
@@ -84,7 +85,7 @@ async def async_convert_url_to_base64(url: str) -> str:
     client = litellm.module_level_aclient
     for _ in range(3):
         try:
-            response = await client.get(url, follow_redirects=True)
+            response = await async_safe_get(client, url)
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
@@ -109,7 +110,7 @@ def convert_url_to_base64(url: str) -> str:
     client = litellm.module_level_client
     for _ in range(3):
         try:
-            response = client.get(url, follow_redirects=True)
+            response = safe_get(client, url)
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise

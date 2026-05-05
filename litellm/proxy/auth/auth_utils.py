@@ -6,9 +6,11 @@ from typing import Any, List, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 
+import litellm
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 
@@ -53,6 +55,12 @@ def _check_valid_ip(
 def check_complete_credentials(request_body: dict) -> bool:
     """
     if 'api_base' in request body. Check if complete credentials given. Prevent malicious attacks.
+
+    Supplying an ``api_key`` is necessary but not sufficient: even with
+    credentials supplied, an ``api_base`` / ``base_url`` that resolves to a
+    private/internal/cloud-metadata address would still allow the proxy to
+    be used as an SSRF pivot. Validate any URL fields here so the gate
+    can't be bypassed with ``api_key=anything`` plus a malicious target.
     """
     given_model: Optional[str] = None
 
@@ -69,10 +77,28 @@ def check_complete_credentials(request_body: dict) -> bool:
         # complex credentials - easier to make a malicious request
         return False
 
-    if "api_key" in request_body:
-        return True
+    api_key_value = request_body.get("api_key")
+    if not (api_key_value and isinstance(api_key_value, str) and api_key_value.strip()):
+        return False
 
-    return False
+    # ``validate_url`` itself doesn't consult the toggle; ``safe_get`` /
+    # ``async_safe_get`` do. Mirror that here so admins who explicitly
+    # disabled URL validation (e.g. for an internal Ollama endpoint they
+    # accept the SSRF risk for) aren't blocked at the proxy boundary.
+    if getattr(litellm, "user_url_validation", False):
+        for url_field in ("api_base", "base_url"):
+            url_value = request_body.get(url_field)
+            if not url_value or not isinstance(url_value, str):
+                continue
+            try:
+                validate_url(url_value)
+            except SSRFError as e:
+                raise ValueError(
+                    f"Rejected request: client-side {url_field}={url_value!r} "
+                    f"is rejected by the SSRF guard ({e})."
+                )
+
+    return True
 
 
 def check_regex_or_str_match(request_body_value: Any, regex_str: str) -> bool:
@@ -150,15 +176,50 @@ def is_request_body_safe(
     A malicious user can set the ﻿api_base to their own domain and invoke POST /chat/completions to intercept and steal the OpenAI API key.
     Relevant issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997
     """
-    banned_params = ["api_base", "base_url"]
+    banned_params = [
+        "api_base",
+        "base_url",
+        "user_config",
+        "aws_sts_endpoint",
+        "aws_web_identity_token",
+        "aws_role_name",
+        "vertex_credentials",
+        # Endpoint-targeting fields that retarget the outbound request or
+        # an observability callback. An attacker-controlled value either
+        # exfiltrates the request payload (incl. messages + admin-set
+        # tokens) to the attacker's host, or coerces the proxy into
+        # authenticating against the attacker's host with admin secrets.
+        "aws_bedrock_runtime_endpoint",
+        "langsmith_base_url",
+        "langfuse_host",
+        "posthog_host",
+        "braintrust_host",
+        "slack_webhook_url",
+        # Provider-specific endpoint overrides that flow into the outbound
+        # request via ``optional_params``. Same threat as ``api_base``:
+        # ``s3_endpoint_url`` redirects Bedrock file uploads to attacker
+        # S3; ``sagemaker_base_url`` redirects all SageMaker traffic;
+        # ``deployment_url`` redirects SAP deployments.
+        "s3_endpoint_url",
+        "sagemaker_base_url",
+        "deployment_url",
+    ]
 
+    # The blocklist is enforced unconditionally. Legitimate clientside
+    # credential / endpoint passthrough goes through one of the two
+    # explicit admin opt-ins (``general_settings.allow_client_side_credentials``
+    # proxy-wide or ``configurable_clientside_auth_params`` per deployment).
+    # Historically there was a third, *implicit*, *caller-controlled* path:
+    # ``check_complete_credentials`` returned True when the caller supplied
+    # any non-empty ``api_key``, which made the entire blocklist a no-op.
+    # That bypass turned every missing entry on the blocklist into an
+    # exploitable SSRF / credential-exfil hole — see GHSA-jh89-88fc-qrfp,
+    # GHSA-3frq-6r6h-7j64, and the chain of veria-admin findings (Dv_m860l,
+    # b_yRJeQ5, stN90yjP, LBlyOAc8, U2TD78kg). Removed: the blocklist now
+    # has a single, predictable failure mode for missing entries (a 400),
+    # not a credential leak.
     for param in banned_params:
-        if (
-            param in request_body
-            and not check_complete_credentials(  # allow client-credentials to be passed to proxy
-                request_body=request_body
-            )
-        ):
+        if param in request_body:
             if general_settings.get("allow_client_side_credentials") is True:
                 return True
             elif (
@@ -173,7 +234,10 @@ def is_request_body_safe(
                 return True
             raise ValueError(
                 f"Rejected Request: {param} is not allowed in request body. "
-                "Enable with `general_settings::allow_client_side_credentials` on proxy config.yaml. "
+                "Clientside passthrough requires explicit admin opt-in via "
+                "either `general_settings.allow_client_side_credentials = true` "
+                "(proxy-wide) or `configurable_clientside_auth_params` on the "
+                "deployment in your proxy config.yaml. "
                 "Relevant Issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997",
             )
 
@@ -320,13 +384,13 @@ def normalize_request_route(route: str) -> str:
     This prevents high cardinality in Prometheus metrics by collapsing routes like:
     - /v1/responses/1234567890 -> /v1/responses/{response_id}
     - /v1/threads/thread_123 -> /v1/threads/{thread_id}
-    
+
     Args:
         route: The request route path
-        
+
     Returns:
         Normalized route with dynamic parameters replaced by placeholders
-        
+
     Examples:
         >>> normalize_request_route("/v1/responses/abc123")
         '/v1/responses/{response_id}'
@@ -339,58 +403,90 @@ def normalize_request_route(route: str) -> str:
     # Format: (regex_pattern, replacement_template)
     patterns = [
         # Responses API - must come before generic patterns
-        (r'^(/(?:openai/)?v1/responses)/([^/]+)(/input_items)$', r'\1/{response_id}\3'),
-        (r'^(/(?:openai/)?v1/responses)/([^/]+)(/cancel)$', r'\1/{response_id}\3'),
-        (r'^(/(?:openai/)?v1/responses)/([^/]+)$', r'\1/{response_id}'),
-        (r'^(/responses)/([^/]+)(/input_items)$', r'\1/{response_id}\3'),
-        (r'^(/responses)/([^/]+)(/cancel)$', r'\1/{response_id}\3'),
-        (r'^(/responses)/([^/]+)$', r'\1/{response_id}'),
-        
+        (r"^(/(?:openai/)?v1/responses)/([^/]+)(/input_items)$", r"\1/{response_id}\3"),
+        (r"^(/(?:openai/)?v1/responses)/([^/]+)(/cancel)$", r"\1/{response_id}\3"),
+        (r"^(/(?:openai/)?v1/responses)/([^/]+)$", r"\1/{response_id}"),
+        (r"^(/responses)/([^/]+)(/input_items)$", r"\1/{response_id}\3"),
+        (r"^(/responses)/([^/]+)(/cancel)$", r"\1/{response_id}\3"),
+        (r"^(/responses)/([^/]+)$", r"\1/{response_id}"),
         # Threads API
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)/([^/]+)$', r'\1/{thread_id}\3/{run_id}\5/{step_id}'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)$', r'\1/{thread_id}\3/{run_id}\5'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/cancel)$', r'\1/{thread_id}\3/{run_id}\5'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/submit_tool_outputs)$', r'\1/{thread_id}\3/{run_id}\5'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)$', r'\1/{thread_id}\3/{run_id}'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/runs)$', r'\1/{thread_id}\3'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/messages)/([^/]+)$', r'\1/{thread_id}\3/{message_id}'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)(/messages)$', r'\1/{thread_id}\3'),
-        (r'^(/(?:openai/)?v1/threads)/([^/]+)$', r'\1/{thread_id}'),
-        
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)/([^/]+)$",
+            r"\1/{thread_id}\3/{run_id}\5/{step_id}",
+        ),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/steps)$",
+            r"\1/{thread_id}\3/{run_id}\5",
+        ),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/cancel)$",
+            r"\1/{thread_id}\3/{run_id}\5",
+        ),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)(/submit_tool_outputs)$",
+            r"\1/{thread_id}\3/{run_id}\5",
+        ),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)/([^/]+)$",
+            r"\1/{thread_id}\3/{run_id}",
+        ),
+        (r"^(/(?:openai/)?v1/threads)/([^/]+)(/runs)$", r"\1/{thread_id}\3"),
+        (
+            r"^(/(?:openai/)?v1/threads)/([^/]+)(/messages)/([^/]+)$",
+            r"\1/{thread_id}\3/{message_id}",
+        ),
+        (r"^(/(?:openai/)?v1/threads)/([^/]+)(/messages)$", r"\1/{thread_id}\3"),
+        (r"^(/(?:openai/)?v1/threads)/([^/]+)$", r"\1/{thread_id}"),
         # Vector Stores API
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)/([^/]+)$', r'\1/{vector_store_id}\3/{file_id}'),
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)$', r'\1/{vector_store_id}\3'),
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)/([^/]+)$', r'\1/{vector_store_id}\3/{batch_id}'),
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)$', r'\1/{vector_store_id}\3'),
-        (r'^(/(?:openai/)?v1/vector_stores)/([^/]+)$', r'\1/{vector_store_id}'),
-        
+        (
+            r"^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)/([^/]+)$",
+            r"\1/{vector_store_id}\3/{file_id}",
+        ),
+        (
+            r"^(/(?:openai/)?v1/vector_stores)/([^/]+)(/files)$",
+            r"\1/{vector_store_id}\3",
+        ),
+        (
+            r"^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)/([^/]+)$",
+            r"\1/{vector_store_id}\3/{batch_id}",
+        ),
+        (
+            r"^(/(?:openai/)?v1/vector_stores)/([^/]+)(/file_batches)$",
+            r"\1/{vector_store_id}\3",
+        ),
+        (r"^(/(?:openai/)?v1/vector_stores)/([^/]+)$", r"\1/{vector_store_id}"),
         # Assistants API
-        (r'^(/(?:openai/)?v1/assistants)/([^/]+)$', r'\1/{assistant_id}'),
-        
+        (r"^(/(?:openai/)?v1/assistants)/([^/]+)$", r"\1/{assistant_id}"),
         # Files API
-        (r'^(/(?:openai/)?v1/files)/([^/]+)(/content)$', r'\1/{file_id}\3'),
-        (r'^(/(?:openai/)?v1/files)/([^/]+)$', r'\1/{file_id}'),
-        
+        (r"^(/(?:openai/)?v1/files)/([^/]+)(/content)$", r"\1/{file_id}\3"),
+        (r"^(/(?:openai/)?v1/files)/([^/]+)$", r"\1/{file_id}"),
         # Batches API
-        (r'^(/(?:openai/)?v1/batches)/([^/]+)(/cancel)$', r'\1/{batch_id}\3'),
-        (r'^(/(?:openai/)?v1/batches)/([^/]+)$', r'\1/{batch_id}'),
-        
+        (r"^(/(?:openai/)?v1/batches)/([^/]+)(/cancel)$", r"\1/{batch_id}\3"),
+        (r"^(/(?:openai/)?v1/batches)/([^/]+)$", r"\1/{batch_id}"),
         # Fine-tuning API
-        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/events)$', r'\1/{fine_tuning_job_id}\3'),
-        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/cancel)$', r'\1/{fine_tuning_job_id}\3'),
-        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/checkpoints)$', r'\1/{fine_tuning_job_id}\3'),
-        (r'^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)$', r'\1/{fine_tuning_job_id}'),
-        
+        (
+            r"^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/events)$",
+            r"\1/{fine_tuning_job_id}\3",
+        ),
+        (
+            r"^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/cancel)$",
+            r"\1/{fine_tuning_job_id}\3",
+        ),
+        (
+            r"^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)(/checkpoints)$",
+            r"\1/{fine_tuning_job_id}\3",
+        ),
+        (r"^(/(?:openai/)?v1/fine_tuning/jobs)/([^/]+)$", r"\1/{fine_tuning_job_id}"),
         # Models API
-        (r'^(/(?:openai/)?v1/models)/([^/]+)$', r'\1/{model}'),
+        (r"^(/(?:openai/)?v1/models)/([^/]+)$", r"\1/{model}"),
     ]
-    
+
     # Apply patterns in order
     for pattern, replacement in patterns:
         normalized = re.sub(pattern, replacement, route)
         if normalized != route:
             return normalized
-    
+
     # Return original route if no pattern matched
     return route
 
@@ -507,8 +603,45 @@ def bytes_to_mb(bytes_value: int):
 
 
 # helpers used by parallel request limiter to handle model rpm/tpm limits for a given api key
+def _get_deployment_default_limit(model_name: str, field: str) -> Optional[int]:
+    """
+    Return the minimum value of `field` across all deployments for model_name,
+    or None if no deployment has the field set.
+
+    When multiple deployments share the same model name, taking the minimum is
+    the safest choice for load-balanced setups: it ensures no deployment is
+    over-consumed regardless of which one actually serves a given request.
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return None
+    deployments = llm_router.get_model_list(model_name=model_name)
+    if not deployments:
+        return None
+    limits = []
+    for deployment in deployments:
+        raw = deployment.get("litellm_params", {}).get(field)
+        if raw is not None:
+            try:
+                if isinstance(raw, (int, float, str, bytes, bytearray)):
+                    limits.append(int(raw))
+            except (ValueError, TypeError):
+                pass
+    return min(limits) if limits else None
+
+
+def _get_deployment_default_rpm_limit(model_name: str) -> Optional[int]:
+    return _get_deployment_default_limit(model_name, "default_api_key_rpm_limit")
+
+
+def _get_deployment_default_tpm_limit(model_name: str) -> Optional[int]:
+    return _get_deployment_default_limit(model_name, "default_api_key_tpm_limit")
+
+
 def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
+    model_name: Optional[str] = None,
 ) -> Optional[Dict[str, int]]:
     """
     Get the model rpm limit for a given api key.
@@ -517,6 +650,7 @@ def get_key_model_rpm_limit(
     1. Key metadata (model_rpm_limit)
     2. Key model_max_budget (rpm_limit per model)
     3. Team metadata (model_rpm_limit)
+    4. Deployment default_api_key_rpm_limit (when model_name is provided)
     """
     # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
@@ -535,13 +669,22 @@ def get_key_model_rpm_limit(
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
-        return user_api_key_dict.team_metadata.get("model_rpm_limit")
+        team_limit = user_api_key_dict.team_metadata.get("model_rpm_limit")
+        if team_limit is not None:
+            return team_limit
+
+    # 4. Fallback to deployment default_api_key_rpm_limit
+    if model_name is not None:
+        default_limit = _get_deployment_default_rpm_limit(model_name)
+        if default_limit is not None:
+            return {model_name: default_limit}
 
     return None
 
 
 def get_key_model_tpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
+    model_name: Optional[str] = None,
 ) -> Optional[Dict[str, int]]:
     """
     Get the model tpm limit for a given api key.
@@ -550,6 +693,7 @@ def get_key_model_tpm_limit(
     1. Key metadata (model_tpm_limit)
     2. Key model_max_budget (tpm_limit per model)
     3. Team metadata (model_tpm_limit)
+    4. Deployment default_api_key_tpm_limit (when model_name is provided)
     """
     # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
@@ -568,14 +712,24 @@ def get_key_model_tpm_limit(
 
     # 3. Fallback to team metadata
     if user_api_key_dict.team_metadata:
-        return user_api_key_dict.team_metadata.get("model_tpm_limit")
+        team_limit = user_api_key_dict.team_metadata.get("model_tpm_limit")
+        if team_limit is not None:
+            return team_limit
+
+    # 4. Fallback to deployment default_api_key_tpm_limit
+    if model_name is not None:
+        default_limit = _get_deployment_default_tpm_limit(model_name)
+        if default_limit is not None:
+            return {model_name: default_limit}
 
     return None
 
 
 def get_model_rate_limit_from_metadata(
     user_api_key_dict: UserAPIKeyAuth,
-    metadata_accessor_key: Literal["team_metadata", "organization_metadata"],
+    metadata_accessor_key: Literal[
+        "team_metadata", "organization_metadata", "project_metadata"
+    ],
     rate_limit_key: Literal["model_rpm_limit", "model_tpm_limit"],
 ) -> Optional[Dict[str, int]]:
     if getattr(user_api_key_dict, metadata_accessor_key):
@@ -596,6 +750,22 @@ def get_team_model_tpm_limit(
 ) -> Optional[Dict[str, int]]:
     if user_api_key_dict.team_metadata:
         return user_api_key_dict.team_metadata.get("model_tpm_limit")
+    return None
+
+
+def get_project_model_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.project_metadata:
+        return user_api_key_dict.project_metadata.get("model_rpm_limit")
+    return None
+
+
+def get_project_model_tpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.project_metadata:
+        return user_api_key_dict.project_metadata.get("model_tpm_limit")
     return None
 
 
@@ -630,11 +800,12 @@ def _has_user_setup_sso():
     return sso_setup
 
 
-def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
+def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[list]:
     """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
     if not user_id_mapping:
         return None
     items = user_id_mapping if isinstance(user_id_mapping, list) else [user_id_mapping]
+    customer_headers_mappings = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -643,8 +814,13 @@ def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
         if role is None or not header_name:
             continue
         if str(role).lower() == str(LitellmUserRoles.CUSTOMER).lower():
-            return header_name
+            customer_headers_mappings.append(header_name.lower())
+
+    if customer_headers_mappings:
+        return customer_headers_mappings
+
     return None
+
 
 def _get_customer_id_from_standard_headers(
     request_headers: Optional[dict],
@@ -681,7 +857,9 @@ def get_end_user_id_from_request_body(
     from litellm.proxy.proxy_server import general_settings
 
     # Check 1: Standard customer ID headers (always checked, no configuration required)
-    customer_id = _get_customer_id_from_standard_headers(request_headers=request_headers)
+    customer_id = _get_customer_id_from_standard_headers(
+        request_headers=request_headers
+    )
     if customer_id is not None:
         return customer_id
 
@@ -689,7 +867,7 @@ def get_end_user_id_from_request_body(
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
-        custom_header_name_to_check: Optional[str] = None
+        custom_header_name_to_check: Optional[Union[list, str]] = None
 
         # Prefer user mappings (new behavior)
         user_id_mapping = general_settings.get("user_header_mappings", None)
@@ -706,15 +884,19 @@ def get_end_user_id_from_request_body(
                 custom_header_name_to_check = value
 
         # If we have a header name to check, try to read it from request headers
-        if isinstance(custom_header_name_to_check, str):
+        if isinstance(custom_header_name_to_check, list):
+            headers_lower = {k.lower(): v for k, v in request_headers.items()}
+            for expected_header in custom_header_name_to_check:
+                header_value = headers_lower.get(expected_header)
+                if header_value is not None:
+                    user_id_str = str(header_value)
+                    if user_id_str.strip():
+                        return user_id_str
+
+        elif isinstance(custom_header_name_to_check, str):
             for header_name, header_value in request_headers.items():
                 if header_name.lower() == custom_header_name_to_check.lower():
-                    user_id_from_header = header_value
-                    user_id_str = (
-                        str(user_id_from_header)
-                        if user_id_from_header is not None
-                        else ""
-                    )
+                    user_id_str = str(header_value) if header_value is not None else ""
                     if user_id_str.strip():
                         return user_id_str
 
@@ -723,21 +905,31 @@ def get_end_user_id_from_request_body(
         user_from_body_user_field = request_body["user"]
         return str(user_from_body_user_field)
 
+    def _as_dict(value: Any) -> dict:
+        # metadata / litellm_metadata can arrive as JSON strings from
+        # multipart/form-data or extra_body; coerce so string-encoded
+        # payloads can't evade end-user attribution.
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
+            parsed = safe_json_loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
     # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
-    litellm_metadata = request_body.get("litellm_metadata")
-    if isinstance(litellm_metadata, dict):
-        user_from_litellm_metadata = litellm_metadata.get("user")
-        if user_from_litellm_metadata is not None:
-            return str(user_from_litellm_metadata)
+    litellm_metadata = _as_dict(request_body.get("litellm_metadata"))
+    user_from_litellm_metadata = litellm_metadata.get("user")
+    if user_from_litellm_metadata is not None:
+        return str(user_from_litellm_metadata)
 
     # Check 5: 'metadata.user_id' in request_body (another common pattern)
-    metadata_dict = request_body.get("metadata")
-    if isinstance(metadata_dict, dict):
-        user_id_from_metadata_field = metadata_dict.get("user_id")
-        if user_id_from_metadata_field is not None:
-            return str(user_id_from_metadata_field)
-        
-    
+    metadata_dict = _as_dict(request_body.get("metadata"))
+    user_id_from_metadata_field = metadata_dict.get("user_id")
+    if user_id_from_metadata_field is not None:
+        return str(user_id_from_metadata_field)
+
     # Check 6: 'safety_identifier' in request body (OpenAI Responses API parameter)
     # SECURITY NOTE: safety_identifier can be set by any caller in the request body.
     # Only use this for end-user identification in trusted environments where you control

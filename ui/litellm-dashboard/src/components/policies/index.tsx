@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { Modal, message, Alert } from "antd";
-import { ExclamationCircleOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import { Alert } from "antd";
+
+import MessageManager from "@/components/molecules/message_manager";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { isAdminRole } from "@/utils/roles";
 import PolicyTable from "./policy_table";
 import PolicyInfoView from "./policy_info";
@@ -14,11 +16,11 @@ import PolicyTemplates from "./policy_templates";
 import GuardrailSelectionModal from "./guardrail_selection_modal";
 import TemplateParameterModal from "./template_parameter_modal";
 import AiSuggestionModal from "./ai_suggestion_modal";
+import { useDeletePolicyAttachment } from "@/hooks/policies/useDeletePolicyAttachment";
 import {
   getPoliciesList,
   deletePolicyCall,
   getPolicyAttachmentsList,
-  deletePolicyAttachmentCall,
   getGuardrailsList,
   getPolicyInfo,
   createPolicyCall,
@@ -56,6 +58,8 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [policyToDelete, setPolicyToDelete] = useState<Policy | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [attachmentToDelete, setAttachmentToDelete] = useState<PolicyAttachment | null>(null);
+  const [isDeleteAttachmentModalOpen, setIsDeleteAttachmentModalOpen] = useState(false);
   const [isGuardrailSelectionModalOpen, setIsGuardrailSelectionModalOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
   const [existingGuardrailNames, setExistingGuardrailNames] = useState<Set<string>>(new Set());
@@ -80,7 +84,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setPoliciesList(response.policies || []);
     } catch (error) {
       console.error("Error fetching policies:", error);
-      message.error("Failed to fetch policies");
+      MessageManager.error("Failed to fetch policies");
     } finally {
       setIsLoading(false);
     }
@@ -95,7 +99,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setAttachmentsList(response.attachments || []);
     } catch (error) {
       console.error("Error fetching attachments:", error);
-      message.error("Failed to fetch attachments");
+      MessageManager.error("Failed to fetch attachments");
     } finally {
       setIsAttachmentsLoading(false);
     }
@@ -148,11 +152,11 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setIsDeleting(true);
     try {
       await deletePolicyCall(accessToken, policyToDelete.policy_id);
-      message.success(`Policy "${policyToDelete.policy_name}" deleted successfully`);
+      MessageManager.success(`Policy "${policyToDelete.policy_name}" deleted successfully`);
       await fetchPolicies();
     } catch (error) {
       console.error("Error deleting policy:", error);
-      message.error("Failed to delete policy");
+      MessageManager.error("Failed to delete policy");
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -165,24 +169,28 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
     setPolicyToDelete(null);
   };
 
-  const handleDeleteAttachment = (attachmentId: string) => {
-    Modal.confirm({
-      title: "Delete Attachment",
-      icon: <ExclamationCircleOutlined />,
-      content: "Are you sure you want to delete this attachment? This action cannot be undone.",
-      okText: "Delete",
-      okType: "danger",
-      cancelText: "Cancel",
-      onOk: async () => {
-        if (!accessToken) return;
-        try {
-          await deletePolicyAttachmentCall(accessToken, attachmentId);
-          message.success("Attachment deleted successfully");
-          fetchAttachments();
-        } catch (error) {
-          console.error("Error deleting attachment:", error);
-          message.error("Failed to delete attachment");
-        }
+  const deleteAttachmentMutation = useDeletePolicyAttachment({
+    accessToken,
+    onSuccess: fetchAttachments,
+  });
+
+  const handleDeleteAttachmentClick = (attachmentId: string) => {
+    const attachment = attachmentsList.find((a) => a.attachment_id === attachmentId) || null;
+    setAttachmentToDelete(attachment);
+    setIsDeleteAttachmentModalOpen(true);
+  };
+
+  const handleAttachmentDeleteCancel = () => {
+    setIsDeleteAttachmentModalOpen(false);
+    setAttachmentToDelete(null);
+  };
+
+  const handleAttachmentDeleteConfirm = () => {
+    if (!attachmentToDelete) return;
+    deleteAttachmentMutation.mutate(attachmentToDelete.attachment_id, {
+      onSettled: () => {
+        setIsDeleteAttachmentModalOpen(false);
+        setAttachmentToDelete(null);
       },
     });
   };
@@ -193,7 +201,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
   const handleUseTemplate = async (template: any) => {
     if (!accessToken) {
-      message.error("Authentication required");
+      MessageManager.error("Authentication required");
       return;
     }
 
@@ -221,7 +229,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setIsGuardrailSelectionModalOpen(true);
     } catch (error) {
       console.error("Error fetching guardrails:", error);
-      message.error("Failed to load guardrails. Please try again.");
+      MessageManager.error("Failed to load guardrails. Please try again.");
     }
   };
 
@@ -271,7 +279,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       await proceedWithTemplate(enrichedTemplate);
     } catch (error) {
       console.error("Error enriching template:", error);
-      message.error("Failed to configure template. Please try again.");
+      MessageManager.error("Failed to configure template. Please try again.");
       setIsEnrichingTemplate(false);
     }
   };
@@ -318,15 +326,15 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
 
       // Show success message
       if (createdGuardrails.length > 0) {
-        message.success(
+        MessageManager.success(
           `Created ${createdGuardrails.length} guardrail${createdGuardrails.length > 1 ? "s" : ""}! Complete the policy form to save.`
         );
       } else {
-        message.success("Template ready! Complete the policy form to save.");
+        MessageManager.success("Template ready! Complete the policy form to save.");
       }
 
       if (failedGuardrails.length > 0) {
-        message.warning(
+        MessageManager.warning(
           `Failed to create ${failedGuardrails.length} guardrail(s): ${failedGuardrails.join(", ")}. You may need to create them manually.`
         );
       }
@@ -348,7 +356,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
       setTemplateQueue([]);
       setTemplateQueueProgress(null);
       console.error("Error creating guardrails:", error);
-      message.error("Failed to create guardrails. Please try again.");
+      MessageManager.error("Failed to create guardrails. Please try again.");
     }
   };
 
@@ -578,7 +586,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
             <AttachmentTable
               attachments={attachmentsList}
               isLoading={isAttachmentsLoading}
-              onDeleteClick={handleDeleteAttachment}
+              onDeleteClick={handleDeleteAttachmentClick}
               isAdmin={isAdmin}
               accessToken={accessToken}
             />
@@ -598,6 +606,21 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
           </TabPanel>
         </TabPanels>
       </TabGroup>
+
+      <DeleteResourceModal
+        isOpen={isDeleteAttachmentModalOpen}
+        title="Delete Attachment"
+        message="Are you sure you want to delete this attachment? This action cannot be undone."
+        resourceInformationTitle="Attachment Information"
+        resourceInformation={[
+          { label: "Attachment ID", value: attachmentToDelete?.attachment_id, code: true },
+          { label: "Policy", value: attachmentToDelete?.policy_name ?? "-" },
+          { label: "Scope", value: attachmentToDelete?.scope ?? "-" },
+        ]}
+        onCancel={handleAttachmentDeleteCancel}
+        onOk={handleAttachmentDeleteConfirm}
+        confirmLoading={deleteAttachmentMutation.isPending}
+      />
 
       <AiSuggestionModal
         visible={isAiSuggestionModalOpen}
