@@ -496,7 +496,7 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
-            session_manager,
+            session_manager_stateless,
         )
     except ImportError:
         pytest.skip("MCP server not available")
@@ -545,7 +545,7 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             return_value=oauth_server,
         ),
         patch.object(
-            session_manager,
+            session_manager_stateless,
             "handle_request",
             new_callable=AsyncMock,
         ) as mock_handle_request,
@@ -569,7 +569,7 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
-            session_manager,
+            session_manager_stateless,
         )
     except ImportError:
         pytest.skip("MCP server not available")
@@ -618,7 +618,7 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
             return_value=oauth_server,
         ),
         patch.object(
-            session_manager,
+            session_manager_stateless,
             "handle_request",
             new_callable=AsyncMock,
         ) as mock_handle_request,
