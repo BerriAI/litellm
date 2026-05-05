@@ -31,7 +31,11 @@ def _make_unified_file_id() -> str:
     return base64.b64encode(raw.encode()).decode()
 
 
-def _make_managed_files_instance(file_created_by: str, unified_file_id: str):
+def _make_managed_files_instance(
+    file_created_by: str,
+    unified_file_id: str,
+    file_team_id=None,
+):
     """Create a _PROXY_LiteLLMManagedFiles with a mocked DB that returns a file owned by file_created_by."""
     from litellm_enterprise.proxy.hooks.managed_files import (
         _PROXY_LiteLLMManagedFiles,
@@ -39,6 +43,7 @@ def _make_managed_files_instance(file_created_by: str, unified_file_id: str):
 
     mock_db_record = MagicMock()
     mock_db_record.created_by = file_created_by
+    mock_db_record.team_id = file_team_id
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(
@@ -105,6 +110,57 @@ async def test_should_block_default_user_id_access():
     assert exc_info.value.status_code == 403
 
 
+# --- Service-account isolation: created_by/team_id checks ---
+
+
+@pytest.mark.asyncio
+async def test_keyless_caller_cannot_access_keyless_file():
+    """A file created by a key without a user_id used to be accessible by
+    any other keyless caller because `None == None` was True."""
+    unified_file_id = _make_unified_file_id()
+    managed_files = _make_managed_files_instance(
+        file_created_by=None,
+        file_team_id=None,
+        unified_file_id=unified_file_id,
+    )
+    keyless = UserAPIKeyAuth(api_key="sk-test", parent_otel_span=None)
+    data = {"file_id": unified_file_id}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.check_managed_file_id_access(data, keyless)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_service_account_can_access_team_file():
+    unified_file_id = _make_unified_file_id()
+    managed_files = _make_managed_files_instance(
+        file_created_by=None,
+        file_team_id="team-eng",
+        unified_file_id=unified_file_id,
+    )
+    sa = UserAPIKeyAuth(api_key="sk-svc", team_id="team-eng", parent_otel_span=None)
+    data = {"file_id": unified_file_id}
+
+    assert await managed_files.check_managed_file_id_access(data, sa) is True
+
+
+@pytest.mark.asyncio
+async def test_service_account_blocked_from_other_team_file():
+    unified_file_id = _make_unified_file_id()
+    managed_files = _make_managed_files_instance(
+        file_created_by=None,
+        file_team_id="team-sales",
+        unified_file_id=unified_file_id,
+    )
+    sa = UserAPIKeyAuth(api_key="sk-svc", team_id="team-eng", parent_otel_span=None)
+    data = {"file_id": unified_file_id}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.check_managed_file_id_access(data, sa)
+    assert exc_info.value.status_code == 403
+
+
 # --- Option C fix test: check_batch_cost bypasses managed files hook ---
 
 
@@ -144,6 +200,7 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
 
     # Mock the batch response (completed, with output file)
     from litellm.types.utils import LiteLLMBatch
+
     batch_response = LiteLLMBatch(
         id="batch-123",
         completion_window="24h",
@@ -201,9 +258,11 @@ async def test_check_batch_cost_should_call_afile_content_directly_with_credenti
 
         # Verify the DB update writes batch_processed, status, and file_object
         mock_prisma.db.litellm_managedobjecttable.update.assert_called_once()
-        update_call_kwargs = mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs
+        update_call_kwargs = (
+            mock_prisma.db.litellm_managedobjecttable.update.call_args.kwargs
+        )
         assert update_call_kwargs["data"]["batch_processed"] is True
         assert update_call_kwargs["data"]["status"] == "complete"
-        assert "file_object" in update_call_kwargs["data"], (
-            "file_object must be written to DB so list_batches reads updated status"
-        )
+        assert (
+            "file_object" in update_call_kwargs["data"]
+        ), "file_object must be written to DB so list_batches reads updated status"
