@@ -1469,7 +1469,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # been parsed and stripped. Consumers (standard_logging_payload, lago,
     # spend_tracking_utils, streaming_iterator) read `body` to audit the
     # request; taking the snapshot here ensures they see cleaned metadata.
-    data["proxy_server_request"]["body"] = copy.copy(data)
+    #
+    # Exclude secret_fields (which contains raw_headers with Authorization
+    # tokens) from the snapshot — they must never be persisted in spend logs
+    # or any other audit trail.
+    _body_snapshot = {k: v for k, v in data.items() if k != "secret_fields"}
+    data["proxy_server_request"]["body"] = _body_snapshot
 
     # Snapshot the (now-cleaned) requester-supplied metadata for downstream
     # consumers. Taking the deepcopy AFTER the strip prevents attacker-
