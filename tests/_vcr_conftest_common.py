@@ -217,7 +217,6 @@ def _key_fingerprint_matcher(r1, r2) -> None:
 
 
 def vcr_config_dict() -> dict:
-    """Return the VCR config dict shared across all consuming conftests."""
     return {
         "decode_compressed_response": True,
         "record_mode": "new_episodes",
@@ -238,7 +237,6 @@ def vcr_config_dict() -> dict:
 
 
 def vcr_disabled() -> bool:
-    """VCR is disabled when explicitly turned off, or when no Redis is configured."""
     if os.environ.get("LITELLM_VCR_DISABLE") == "1":
         return True
     return not os.environ.get("CASSETTE_REDIS_URL")

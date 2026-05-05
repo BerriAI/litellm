@@ -1,9 +1,3 @@
-# conftest.py
-#
-# Wires pass-through unit tests into the Redis-backed VCR cache so live
-# provider calls are replayed for 24h. See tests/llm_translation/Readme.md
-# for the design overview.
-
 import os
 import sys
 

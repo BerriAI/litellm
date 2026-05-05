@@ -1,5 +1,3 @@
-"""Unit tests for the shared VCR helpers in ``tests/_vcr_conftest_common``."""
-
 from __future__ import annotations
 
 import os

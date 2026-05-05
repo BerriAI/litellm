@@ -302,11 +302,6 @@ def test_only_2xx_responses_are_cached(status_code, expect_dropped):
         assert result is response
 
 
-# ---------------------------------------------------------------------------
-# Cache-health observability
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture
 def reset_health():
     reset_cassette_cache_health()

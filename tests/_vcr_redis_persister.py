@@ -49,12 +49,10 @@ def _record_cache_failure(kind: str, exc: BaseException) -> None:
 
 
 def cassette_cache_health() -> dict:
-    """Return a snapshot of cassette-cache failure counters for this process."""
     return dict(_cache_health)
 
 
 def reset_cassette_cache_health() -> None:
-    """Reset cassette-cache counters. Intended for tests."""
     _cache_health["save_failures"] = 0
     _cache_health["save_failure_last_error"] = ""
     _cache_health["load_failures"] = 0

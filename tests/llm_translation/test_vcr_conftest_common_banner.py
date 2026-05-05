@@ -18,8 +18,6 @@ from tests._vcr_redis_persister import (  # noqa: E402
 
 
 class _FakeTerminalReporter:
-    """Minimal stand-in for pytest's TerminalReporter."""
-
     def __init__(self) -> None:
         self.buf = StringIO()
 
