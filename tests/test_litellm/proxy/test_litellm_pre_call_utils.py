@@ -2276,6 +2276,104 @@ def test_get_chain_id_from_headers_generic_vendor_session_id():
     )
 
 
+def test_get_chain_id_from_headers_traceparent():
+    """get_chain_id_from_headers extracts trace-id from a W3C traceparent header."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    assert (
+        get_chain_id_from_headers({"traceparent": traceparent})
+        == "0af7651916cd43dd8448eb211c80319c"
+    )
+
+
+def test_get_chain_id_from_headers_traceparent_case_insensitive():
+    """traceparent header key matching is case-insensitive."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    traceparent = "00-abcdef1234567890abcdef1234567890-1234567890abcdef-00"
+    assert (
+        get_chain_id_from_headers({"Traceparent": traceparent})
+        == "abcdef1234567890abcdef1234567890"
+    )
+
+
+def test_get_chain_id_from_headers_traceparent_malformed_ignored():
+    """Malformed traceparent values are ignored."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert get_chain_id_from_headers({"traceparent": "not-a-valid-traceparent"}) is None
+    assert get_chain_id_from_headers({"traceparent": ""}) is None
+    assert get_chain_id_from_headers({"traceparent": "00-short-abc-01"}) is None
+
+
+def test_get_chain_id_from_headers_traceparent_lower_priority_than_explicit():
+    """Explicit litellm headers take precedence over traceparent."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-litellm-trace-id": "explicit-id",
+                "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            }
+        )
+        == "explicit-id"
+    )
+
+
+def test_get_chain_id_from_headers_traceparent_lower_priority_than_generic_session():
+    """Generic x-<vendor>-session-id headers take precedence over traceparent."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
+                "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+            }
+        )
+        == "e96634a3-fa28-4083-b354-55542e2dca01"
+    )
+
+
+def test_add_litellm_metadata_from_request_headers_traceparent_sets_session_id():
+    """traceparent header sets session_id and trace_id in metadata."""
+    traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+    headers = {"traceparent": traceparent}
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    expected_trace_id = "0af7651916cd43dd8448eb211c80319c"
+    assert data["metadata"]["session_id"] == expected_trace_id
+    assert data["metadata"]["trace_id"] == expected_trace_id
+    assert data["litellm_session_id"] == expected_trace_id
+    assert data["litellm_trace_id"] == expected_trace_id
+
+
+def test_extract_trace_id_from_traceparent_directly():
+    """Unit test for _extract_trace_id_from_traceparent helper."""
+    from litellm.proxy.litellm_pre_call_utils import _extract_trace_id_from_traceparent
+
+    assert (
+        _extract_trace_id_from_traceparent(
+            {"traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"}
+        )
+        == "0af7651916cd43dd8448eb211c80319c"
+    )
+    assert _extract_trace_id_from_traceparent({}) is None
+    assert _extract_trace_id_from_traceparent({"traceparent": ""}) is None
+    assert _extract_trace_id_from_traceparent({"traceparent": "invalid-format"}) is None
+    # Uppercase hex should also work
+    assert (
+        _extract_trace_id_from_traceparent(
+            {"traceparent": "00-0AF7651916CD43DD8448EB211C80319C-B7AD6B7169203331-01"}
+        )
+        == "0AF7651916CD43DD8448EB211C80319C"
+    )
+
+
 def test_get_internal_user_header_from_mapping_returns_expected_header():
     mappings = [
         {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
