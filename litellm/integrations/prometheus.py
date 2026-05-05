@@ -1416,12 +1416,51 @@ class PrometheusLogger(CustomLogger):
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
-        remaining_requests = (
-            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
+        # The proxy v3 parallel_request_limiter writes the per-key/per-model
+        # remaining values into the response's hidden_params.additional_headers
+        # (see parallel_request_limiter_v3.async_post_call_success_hook), under
+        # keys like ``x-ratelimit-model_per_key-remaining-{requests,tokens}``.
+        # The older metadata keys (``litellm-key-remaining-{requests,tokens}-<model_group>``)
+        # are not populated on the success path, so reading only from ``metadata``
+        # caused these gauges to fall back to ``sys.maxsize`` (~9e18) in DataDog.
+        # Prefer the headers, fall back to metadata for backwards compatibility.
+        additional_headers: dict = {}
+        standard_logging_payload = kwargs.get("standard_logging_object") or {}
+        if isinstance(standard_logging_payload, dict):
+            _hidden_params = standard_logging_payload.get("hidden_params") or {}
+            if isinstance(_hidden_params, dict):
+                additional_headers = _hidden_params.get("additional_headers") or {}
+
+        def _coerce_int(value: Any) -> Optional[int]:
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        remaining_requests_header = _coerce_int(
+            additional_headers.get("x-ratelimit-model_per_key-remaining-requests")
         )
-        remaining_tokens = (
-            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
+        remaining_tokens_header = _coerce_int(
+            additional_headers.get("x-ratelimit-model_per_key-remaining-tokens")
         )
+
+        if remaining_requests_header is not None:
+            remaining_requests = remaining_requests_header
+        else:
+            remaining_requests = (
+                metadata.get(remaining_requests_variable_name, sys.maxsize)
+                or sys.maxsize
+            )
+
+        if remaining_tokens_header is not None:
+            remaining_tokens = remaining_tokens_header
+        else:
+            remaining_tokens = (
+                metadata.get(remaining_tokens_variable_name, sys.maxsize)
+                or sys.maxsize
+            )
 
         self.litellm_remaining_api_key_requests_for_model.labels(
             _sanitize_prometheus_label_value(user_api_key),
