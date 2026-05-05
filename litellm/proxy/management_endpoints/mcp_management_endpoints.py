@@ -147,6 +147,7 @@ if MCP_AVAILABLE:
         MCPUserCredentialResponse,
         NewMCPServerRequest,
         RejectMCPServerRequest,
+        SpecialHeaders,
         SpecialMCPServerName,
         UpdateMCPServerRequest,
         UserAPIKeyAuth,
@@ -1502,7 +1503,7 @@ if MCP_AVAILABLE:
         servers only (browser OAuth). When present, global-registry access
         follows admin / allowlist rules via ``_get_cached_temporary_mcp_server_or_404``.
 
-        Only non-empty **string** ``Authorization`` values trigger a full auth
+        Only non-empty **string** auth header values trigger a full auth
         pipeline import (tests and mocks may attach MagicMock headers).
         """
         try:
@@ -1510,13 +1511,23 @@ if MCP_AVAILABLE:
         except Exception:
             return None
         raw: object = None
-        for key in ("authorization", "Authorization"):
-            try:
-                candidate = headers.get(key)
-            except Exception:
-                candidate = None
-            if isinstance(candidate, str) and candidate.strip():
-                raw = candidate
+        for header_name in (
+            SpecialHeaders.openai_authorization.value,
+            SpecialHeaders.azure_authorization.value,
+            SpecialHeaders.anthropic_authorization.value,
+            SpecialHeaders.google_ai_studio_authorization.value,
+            SpecialHeaders.azure_apim_authorization.value,
+            SpecialHeaders.custom_litellm_api_key.value,
+        ):
+            for key in (header_name, header_name.lower()):
+                try:
+                    candidate = headers.get(key)
+                except Exception:
+                    candidate = None
+                if isinstance(candidate, str) and candidate.strip():
+                    raw = candidate
+                    break
+            if isinstance(raw, str):
                 break
         if not isinstance(raw, str) or not raw.strip():
             return None

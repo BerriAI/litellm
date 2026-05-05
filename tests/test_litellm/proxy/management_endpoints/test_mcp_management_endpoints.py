@@ -1554,6 +1554,27 @@ class TestTemporaryMCPSessionEndpoints:
         assert "permission" in str(exc_info.value)
 
     @pytest.mark.asyncio
+    async def test_try_resolve_mcp_oauth_broker_user_accepts_api_key_header(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _try_resolve_mcp_oauth_broker_user,
+        )
+
+        request = MagicMock()
+        request.headers = {"api-key": "sk-alt-header"}
+        user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_from_request_headers",
+            AsyncMock(return_value=user_auth),
+        ) as auth_mock:
+            result = await _try_resolve_mcp_oauth_broker_user(request)
+
+        assert result is user_auth
+        auth_mock.assert_awaited_once_with(request)
+
+    @pytest.mark.asyncio
     async def test_mcp_authorize_proxies_to_discoverable_endpoint(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             mcp_authorize,
