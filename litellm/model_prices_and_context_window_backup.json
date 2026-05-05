@@ -39973,6 +39973,10 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 1.666667e-06,
+        "output_cost_per_token": 3.333333e-06,
+        "cache_read_input_token_cost": 1.38889e-07
     },
     "tencent_cloud/deepseek-v4-flash": {
         "litellm_provider": "tencent_cloud",
@@ -39983,6 +39987,10 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 1.38889e-07,
+        "output_cost_per_token": 2.77778e-07,
+        "cache_read_input_token_cost": 2.7778e-08
     },
     "tencent_cloud/deepseek-v3.2": {
         "litellm_provider": "tencent_cloud",
@@ -39993,6 +40001,9 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 2.77778e-07,
+        "output_cost_per_token": 4.16667e-07
     },
     "tencent_cloud/deepseek-v3.1-terminus": {
         "litellm_provider": "tencent_cloud",
@@ -40003,6 +40014,9 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 5.55556e-07,
+        "output_cost_per_token": 1.666667e-06
     },
     "tencent_cloud/deepseek-v3-0324": {
         "litellm_provider": "tencent_cloud",
@@ -40013,6 +40027,9 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 2.77778e-07,
+        "output_cost_per_token": 1.111111e-06
     },
     "tencent_cloud/deepseek-r1-0528": {
         "litellm_provider": "tencent_cloud",
@@ -40022,6 +40039,10 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 5.55556e-07,
+        "output_cost_per_token": 2.222222e-06,
+        "supports_reasoning": true
     },
     "tencent_cloud/hy3-preview": {
         "litellm_provider": "tencent_cloud",
@@ -40032,6 +40053,10 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 1.66667e-07,
+        "output_cost_per_token": 5.55556e-07,
+        "cache_read_input_token_cost": 5.5556e-08
     },
     "tencent_cloud/hunyuan-2.0-thinking-20251109": {
         "litellm_provider": "tencent_cloud",
@@ -40041,6 +40066,12 @@
         "supports_system_messages": true,
         "supports_reasoning": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 5.52083e-07,
+        "output_cost_per_token": 2.208333e-06,
+        "max_input_tokens": 131072,
+        "max_tokens": 131072,
+        "supports_reasoning": true
     },
     "tencent_cloud/hunyuan-2.0-instruct-20251111": {
         "litellm_provider": "tencent_cloud",
@@ -40051,6 +40082,11 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 4.41667e-07,
+        "output_cost_per_token": 1.104167e-06,
+        "max_input_tokens": 131072,
+        "max_tokens": 131072
     },
     "tencent_cloud/hunyuan-role-latest": {
         "litellm_provider": "tencent_cloud",
@@ -40059,6 +40095,9 @@
         "supports_tool_choice": true,
         "supports_system_messages": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 3.33333e-07,
+        "output_cost_per_token": 1.333333e-06
     },
     "tencent_cloud/glm-5": {
         "litellm_provider": "tencent_cloud",
@@ -40069,6 +40108,10 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 5.55556e-07,
+        "output_cost_per_token": 2.5e-06,
+        "cache_read_input_token_cost": 1.38889e-07
     },
     "tencent_cloud/glm-5-turbo": {
         "litellm_provider": "tencent_cloud",
@@ -40079,6 +40122,10 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 6.94444e-07,
+        "output_cost_per_token": 3.055556e-06,
+        "cache_read_input_token_cost": 1.66667e-07
     },
     "tencent_cloud/glm-5v-turbo": {
         "litellm_provider": "tencent_cloud",
@@ -40088,6 +40135,11 @@
         "supports_system_messages": true,
         "supports_vision": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 6.94444e-07,
+        "output_cost_per_token": 3.055556e-06,
+        "cache_read_input_token_cost": 1.66667e-07,
+        "supports_vision": true
     },
     "tencent_cloud/glm-5.1": {
         "litellm_provider": "tencent_cloud",
@@ -40098,6 +40150,10 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 8.33333e-07,
+        "output_cost_per_token": 3.333333e-06,
+        "cache_read_input_token_cost": 1.80556e-07
     },
     "tencent_cloud/kimi-k2.5": {
         "litellm_provider": "tencent_cloud",
@@ -40108,6 +40164,10 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 5.55556e-07,
+        "output_cost_per_token": 2.916667e-06,
+        "cache_read_input_token_cost": 9.7222e-08
     },
     "tencent_cloud/kimi-k2.6": {
         "litellm_provider": "tencent_cloud",
@@ -40118,6 +40178,10 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 9.02778e-07,
+        "output_cost_per_token": 3.75e-06,
+        "cache_read_input_token_cost": 1.52778e-07
     },
     "tencent_cloud/minimax-m2.5": {
         "litellm_provider": "tencent_cloud",
@@ -40128,6 +40192,10 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 2.91667e-07,
+        "output_cost_per_token": 1.166667e-06,
+        "cache_read_input_token_cost": 2.9167e-08
     },
     "tencent_cloud/minimax-m2.7": {
         "litellm_provider": "tencent_cloud",
@@ -40138,5 +40206,9 @@
         "supports_system_messages": true,
         "supports_response_schema": true,
         "source": "https://cloud.tencent.com/document/product/1823/130079"
+    ,
+        "input_cost_per_token": 2.91667e-07,
+        "output_cost_per_token": 1.166667e-06,
+        "cache_read_input_token_cost": 5.8333e-08
     }
 }
