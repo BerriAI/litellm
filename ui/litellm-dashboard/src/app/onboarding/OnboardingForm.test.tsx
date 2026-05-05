@@ -61,6 +61,8 @@ describe("OnboardingForm", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/";
+    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/ui";
+    sessionStorage.clear();
   });
 
   it("should render loading view when credentials are loading", () => {
@@ -110,6 +112,58 @@ describe("OnboardingForm", () => {
     render(<OnboardingForm variant="reset_password" />);
 
     expect(screen.getByTestId("form-body")).toHaveAttribute("data-variant", "reset_password");
+  });
+
+  it("should overwrite a prior admin sessionStorage token after successful claim", async () => {
+    // Simulate the prior admin session that the inviter left behind in the same tab.
+    sessionStorage.setItem("token", "ADMIN_SESSION_TOKEN");
+
+    mockUseOnboardingCredentials.mockReturnValue({
+      data: { token: "fake-jwt-token" },
+      isLoading: false,
+      isError: false,
+    });
+    mockClaimToken.mockImplementation((_params, options) => {
+      options.onSuccess({ token: "NEW_USER_TOKEN" });
+    });
+
+    render(<OnboardingForm variant="signup" />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    });
+
+    // After signup the new user's token must replace the admin's sessionStorage entry,
+    // otherwise the HttpOnly-fallback path in getCookie() keeps returning the admin token.
+    expect(sessionStorage.getItem("token")).toBe("NEW_USER_TOKEN");
+  });
+
+  it("should set the new token cookie at path=/ui after successful claim", async () => {
+    mockUseOnboardingCredentials.mockReturnValue({
+      data: { token: "fake-jwt-token" },
+      isLoading: false,
+      isError: false,
+    });
+    mockClaimToken.mockImplementation((_params, options) => {
+      options.onSuccess({ token: "NEW_USER_TOKEN" });
+    });
+
+    const cookieSpy = vi.spyOn(document, "cookie", "set");
+    render(<OnboardingForm variant="signup" />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    });
+
+    // The /ui path is what storeLoginToken writes to (and what LoginPage reads from);
+    // a cookie at path=/ alone leaves any pre-existing /ui-scoped admin cookie winning.
+    const newTokenCookieAtUiPath = cookieSpy.mock.calls.some(([value]) => {
+      const v = String(value);
+      return v.includes("token=NEW_USER_TOKEN") && v.includes("path=/ui");
+    });
+    expect(newTokenCookieAtUiPath).toBe(true);
+
+    cookieSpy.mockRestore();
   });
 
   it("should show claim error when claim response is missing final token", async () => {

@@ -38,6 +38,19 @@ class ModelConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class RoutingGroup(BaseModel):
+    """
+    A group of models that share a routing strategy.
+    """
+
+    group_name: str
+    models: List[str]
+    routing_strategy: str
+    routing_strategy_args: Optional[dict] = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class RouterConfig(BaseModel):
     model_list: List[ModelConfig]
 
@@ -65,6 +78,7 @@ class RouterConfig(BaseModel):
         "usage-based-routing",
         "latency-based-routing",
     ] = "simple-shuffle"
+    routing_groups: Optional[List[RoutingGroup]] = None
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -76,6 +90,7 @@ class UpdateRouterConfig(BaseModel):
 
     routing_strategy_args: Optional[dict] = None
     routing_strategy: Optional[str] = None
+    routing_groups: Optional[List[RoutingGroup]] = None
     model_group_retry_policy: Optional[dict] = None
     model_group_affinity_config: Optional[Dict[str, List[str]]] = None
     allowed_fails: Optional[int] = None
