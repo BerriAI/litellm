@@ -200,31 +200,8 @@ jwt_display_template = """
             <p>The SSO authentication completed successfully. Below is the information returned by the provider.</p>
         </div>
         
-        <div class="data-container" id="userData">
-            <!-- Data will be inserted here by JavaScript -->
-        </div>
-        
-        <div class="info-box">
-            <div class="info-header">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"></circle>
-                    <line x1="12" y1="16" x2="12" y2="12"></line>
-                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                </svg>
-                JSON Representation
-            </div>
-            <div class="jwt-container">
-                <pre class="jwt-text" id="jsonData">Loading...</pre>
-            </div>
-            <div class="buttons">
-                <button class="copy-button" onclick="copyToClipboard('jsonData')">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                    Copy to Clipboard
-                </button>
-            </div>
+        <div class="data-container" id="sections">
+            <!-- Sections (parsed, raw claims, access token) inserted by JavaScript -->
         </div>
         
         <a href="/sso/debug/login" class="back-button">
@@ -233,40 +210,148 @@ jwt_display_template = """
     </div>
 
     <script>
-        // This will be populated with the actual data from the server
-        const userData = SSO_DATA;
-        
-        function renderUserData() {
-            const container = document.getElementById('userData');
-            const jsonDisplay = document.getElementById('jsonData');
-            
-            // Format JSON with indentation for display
-            jsonDisplay.textContent = JSON.stringify(userData, null, 2);
-            
-            // Clear container
-            container.innerHTML = '';
-            
-            // Add each key-value pair to the UI
-            for (const [key, value] of Object.entries(userData)) {
-                if (typeof value !== 'object' || value === null) {
+        // This will be populated with the actual data from the server.
+        // Shape:
+        //   {
+        //     "parsed_by_proxy":     { ...what the proxy mapped out... },
+        //     "raw_claims":          { ...full provider response... },     // optional
+        //     "access_token_claims": { ...decoded JWT access token... }    // optional, generic SSO only
+        //   }
+        // Older deployments may still emit a flat dict; we wrap that into
+        // ``parsed_by_proxy`` so the page renders consistently.
+        const rawData = SSO_DATA;
+        const userData =
+            rawData && typeof rawData === 'object' && (
+                'parsed_by_proxy' in rawData ||
+                'raw_claims' in rawData ||
+                'access_token_claims' in rawData
+            )
+                ? rawData
+                : { parsed_by_proxy: rawData || {} };
+
+        const SECTION_META = {
+            parsed_by_proxy: {
+                title: 'Parsed by Proxy',
+                description:
+                    'These are the fields the proxy resolved from the SSO response using the configured mappings (GENERIC_USER_*_ATTRIBUTE, team_ids_jwt_field, role_mappings, GENERIC_USER_EXTRA_ATTRIBUTES, etc.).',
+            },
+            raw_claims: {
+                title: 'Raw Claims (provider response)',
+                description:
+                    'The complete, unmodified payload returned by the SSO provider (OIDC userinfo / id_token / Graph API response). Use this to confirm which claims your IdP is actually emitting.',
+            },
+            access_token_claims: {
+                title: 'Access Token Claims (decoded JWT)',
+                description:
+                    'Decoded payload of the OAuth access token. Available for generic SSO when the access token is a JWT.',
+            },
+        };
+
+        function formatValue(value) {
+            if (value === null || value === undefined) return 'null';
+            if (typeof value === 'object') return JSON.stringify(value, null, 2);
+            return String(value);
+        }
+
+        function renderSection(key, data) {
+            const meta = SECTION_META[key] || { title: key, description: '' };
+            const wrap = document.createElement('div');
+            wrap.className = 'info-box';
+
+            const header = document.createElement('div');
+            header.className = 'info-header';
+            header.textContent = meta.title;
+            wrap.appendChild(header);
+
+            if (meta.description) {
+                const desc = document.createElement('p');
+                desc.style.margin = '0 0 12px';
+                desc.style.color = '#475569';
+                desc.style.fontSize = '13px';
+                desc.textContent = meta.description;
+                wrap.appendChild(desc);
+            }
+
+            const rows = document.createElement('div');
+            rows.className = 'data-container';
+            if (data && typeof data === 'object' && !Array.isArray(data)) {
+                const entries = Object.entries(data);
+                if (entries.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'data-value';
+                    empty.textContent = '(empty)';
+                    rows.appendChild(empty);
+                }
+                for (const [k, v] of entries) {
                     const row = document.createElement('div');
                     row.className = 'data-row';
-                    
                     const label = document.createElement('div');
                     label.className = 'data-label';
-                    label.textContent = key;
-                    
-                    const dataValue = document.createElement('div');
-                    dataValue.className = 'data-value';
-                    dataValue.textContent = value !== null ? value : 'null';
-                    
+                    label.textContent = k;
+                    const val = document.createElement('div');
+                    val.className = 'data-value';
+                    if (v !== null && typeof v === 'object') {
+                        const pre = document.createElement('pre');
+                        pre.className = 'jwt-text';
+                        pre.style.margin = '0';
+                        pre.textContent = JSON.stringify(v, null, 2);
+                        val.appendChild(pre);
+                    } else {
+                        val.textContent = formatValue(v);
+                    }
                     row.appendChild(label);
-                    row.appendChild(dataValue);
-                    container.appendChild(row);
+                    row.appendChild(val);
+                    rows.appendChild(row);
+                }
+            } else {
+                const pre = document.createElement('pre');
+                pre.className = 'jwt-text';
+                pre.textContent = JSON.stringify(data, null, 2);
+                rows.appendChild(pre);
+            }
+            wrap.appendChild(rows);
+
+            const jsonBox = document.createElement('div');
+            jsonBox.className = 'jwt-container';
+            const pre = document.createElement('pre');
+            pre.className = 'jwt-text';
+            const jsonId = 'json_' + key;
+            pre.id = jsonId;
+            pre.textContent = JSON.stringify(data, null, 2);
+            jsonBox.appendChild(pre);
+            wrap.appendChild(jsonBox);
+
+            const buttons = document.createElement('div');
+            buttons.className = 'buttons';
+            const btn = document.createElement('button');
+            btn.className = 'copy-button';
+            btn.textContent = 'Copy JSON';
+            btn.addEventListener('click', () => copyToClipboard(jsonId));
+            buttons.appendChild(btn);
+            wrap.appendChild(buttons);
+
+            return wrap;
+        }
+
+        function renderUserData() {
+            const container = document.getElementById('sections');
+            container.innerHTML = '';
+            const order = ['parsed_by_proxy', 'raw_claims', 'access_token_claims'];
+            const seen = new Set();
+            for (const key of order) {
+                if (key in userData) {
+                    container.appendChild(renderSection(key, userData[key]));
+                    seen.add(key);
+                }
+            }
+            // Render any additional sections we didn't anticipate.
+            for (const [k, v] of Object.entries(userData)) {
+                if (!seen.has(k)) {
+                    container.appendChild(renderSection(k, v));
                 }
             }
         }
-        
+
         function copyToClipboard(elementId) {
             const text = document.getElementById(elementId).textContent;
             navigator.clipboard.writeText(text).then(() => {
@@ -275,7 +360,7 @@ jwt_display_template = """
                 console.error('Could not copy text: ', err);
             });
         }
-        
+
         // Render the data when the page loads
         document.addEventListener('DOMContentLoaded', renderUserData);
     </script>
