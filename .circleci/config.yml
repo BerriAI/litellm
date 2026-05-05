@@ -1675,7 +1675,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v -x \
+                -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
           no_output_timeout: 15m
