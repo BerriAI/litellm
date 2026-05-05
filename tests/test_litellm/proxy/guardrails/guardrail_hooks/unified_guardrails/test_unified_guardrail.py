@@ -636,6 +636,57 @@ class TestUnifiedLLMGuardrails:
                 )
 
         @pytest.mark.asyncio
+        async def test_action_mode_eos_shrink_does_not_leak_raw_tail(self):
+            """At EOS, a guardrail returning text shorter than the cursor
+            must not cause the raw, unmodified tail to leak.
+
+            Regression scenario: a redaction guardrail substitutes cleanly
+            on every mid-stream sample, then at is_final=True returns short
+            text (e.g. due to a bug or backend timeout). Falling back to
+            `accumulated_text` would emit `accumulated_text[cursor:]` —
+            the raw, unredacted tail of the upstream stream. The correct
+            behavior is to emit nothing further; the bytes through cursor
+            were already sent (with substitutions) and we cannot extend
+            without potentially leaking source content past cursor.
+            """
+            handler = UnifiedLLMGuardrails()
+            # Mid-stream sample at cursor=2 (after chunk 2): substitute
+            # "ab" with "AB". Cursor advances to 2.
+            # Mid-stream sample at cursor=4: substitute with "ABCD". Cursor=4.
+            # EOS sample: guardrail returns short text "AB" (len 2 < cursor 4)
+            # — should not leak the raw tail "efgh".
+            guardrail = TestUnifiedLLMGuardrails.TestActionMode._ScriptedActionGuardrail(
+                [
+                    ("GUARDRAIL_INTERVENED", "AB", None),
+                    ("GUARDRAIL_INTERVENED", "ABCD", None),
+                    ("GUARDRAIL_INTERVENED", "AB", None),  # EOS shrink
+                ],
+                sampling_rate=2,
+            )
+            user = UserAPIKeyAuth(
+                api_key="k", request_route="/v1/chat/completions"
+            )
+            out = await TestUnifiedLLMGuardrails.TestActionMode._collect(
+                handler.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user,
+                    response=TestUnifiedLLMGuardrails.TestActionMode._content_chunks(
+                        ["ab", "cd", "ef", "gh"]
+                    ),
+                    request_data={"guardrail_to_apply": guardrail},
+                )
+            )
+            text = "".join(c.choices[0].delta.content or "" for c in out)
+            # Stream emitted "AB" + "CD" through mid-stream samples.
+            # EOS shrink: nothing more is emitted. The raw tail "efgh"
+            # MUST NOT appear.
+            assert "ef" not in text and "gh" not in text, (
+                f"raw upstream tail leaked at EOS shrink: {text!r}"
+            )
+            assert text == "ABCD", text
+            # Stream still terminates with finish_reason.
+            assert out[-1].choices[0].finish_reason == "stop"
+
+        @pytest.mark.asyncio
         async def test_action_mode_chunk_straddling_surrogate(self):
             """Surrogate token spans chunks: WAIT until complete, then INTERVENED."""
             handler = UnifiedLLMGuardrails()

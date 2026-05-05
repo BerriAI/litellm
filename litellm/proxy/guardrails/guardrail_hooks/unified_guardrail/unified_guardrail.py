@@ -152,6 +152,13 @@ def _chunk_tool_call_deltas(chunk: Any) -> List[Any]:
     return list(tcs)
 
 
+def _get_attr_or_key(obj: Any, key: str) -> Any:
+    """Read `key` off `obj` whether it's a dict (subscript) or a model (attribute)."""
+    if isinstance(obj, dict):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
 def _accumulate_tool_calls(chunks: List[Any]) -> List[dict]:
     """
     Reduce all tool_call deltas across chunks into per-index accumulated state.
@@ -166,6 +173,7 @@ def _accumulate_tool_calls(chunks: List[Any]) -> List[dict]:
     a complete payload should return WAIT until they can parse it.
     """
     by_index: dict[int, dict] = {}
+    _g = _get_attr_or_key
     for chunk in chunks:
         for tc in _chunk_tool_call_deltas(chunk):
             idx = getattr(tc, "index", None)
@@ -177,11 +185,6 @@ def _accumulate_tool_calls(chunks: List[Any]) -> List[dict]:
                 idx,
                 {"id": None, "type": None, "function": {"name": None, "arguments": ""}},
             )
-
-            def _g(obj: Any, key: str) -> Any:
-                if isinstance(obj, dict):
-                    return obj.get(key)
-                return getattr(obj, key, None)
 
             if slot["id"] is None:
                 slot["id"] = _g(tc, "id")
@@ -944,23 +947,27 @@ class UnifiedLLMGuardrails(CustomLogger):
                     should_wrap_with_default_message=False,
                 )
 
-        # At EOS we can't retract bytes already emitted. Soft-fall back to
-        # the raw accumulated text rather than failing the whole stream.
+        # At EOS we can't retract bytes already emitted. If the guardrail
+        # returns text shorter than what's been emitted, emit nothing more
+        # — bytes through `cursor` were sent (with whatever substitutions
+        # earlier calls applied) and falling back to `accumulated_text`
+        # here would leak the raw, unmodified tail (e.g. unredacted PII)
+        # for guardrails that rewrote mid-stream but returned short at EOS.
+        # The terminal chunk below still carries the finish_reason.
         if len(new_text) < cursor:
             verbose_proxy_logger.error(
                 "UnifiedLLMGuardrails action mode (EOS): %s returned text "
-                "shorter than already-emitted (cursor=%d, new=%d) — falling "
-                "back to raw accumulated text",
+                "shorter than already-emitted (cursor=%d, new=%d) — "
+                "stopping emission to avoid leaking unmodified tail",
                 guardrail_name,
                 cursor,
                 len(new_text),
             )
-            new_text = accumulated_text
-
-        delta = new_text[cursor:]
-        cursor = len(new_text)
-        if delta and template_chunk is not None:
-            yield _build_delta_chunk(template_chunk, delta)
+        else:
+            delta = new_text[cursor:]
+            cursor = len(new_text)
+            if delta and template_chunk is not None:
+                yield _build_delta_chunk(template_chunk, delta)
         # Replay any tool_call deltas that arrived between the last sample-point
         # emit and EOS so the client sees the complete tool-call stream.
         for tc_chunk in _replay_tool_call_chunks(

@@ -548,6 +548,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             guardrail_response=guardrail_response,
         )
 
+    @log_guardrail_information
     async def apply_guardrail_action(
         self,
         inputs: GenericGuardrailAPIInputs,
