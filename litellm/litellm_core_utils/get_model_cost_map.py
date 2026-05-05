@@ -51,11 +51,20 @@ class GetModelCostMap:
         verbose_logger.debug(
             "LiteLLM: loading local model cost map from bundled package resource"
         )
-        return json.loads(
-            files("litellm")
-            .joinpath("model_prices_and_context_window_backup.json")
-            .read_text(encoding="utf-8")
-        )
+        try:
+            return json.loads(
+                files("litellm")
+                .joinpath("model_prices_and_context_window_backup.json")
+                .read_text(encoding="utf-8")
+            )
+        except FileNotFoundError as e:
+            raise FileNotFoundError(
+                "litellm/model_prices_and_context_window_backup.json is missing from the installed package. "
+                "This file is a build-time artefact — the `cp` step in .github/workflows/publish_to_pypi.yml "
+                "and the source-build Dockerfiles materialize it before the wheel is built. If you ran "
+                "`uv build` manually, first run: "
+                "cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json"
+            ) from e
 
     @classmethod
     def _get_backup_model_count(cls) -> int:
