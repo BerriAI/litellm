@@ -1935,7 +1935,7 @@ jobs:
           name: Run Vertex AI, Google AI Studio Node.js tests
           command: |
             cd tests/pass_through_tests
-            npx jest . --verbose
+            NODE_OPTIONS=--experimental-vm-modules npx jest . --verbose
           no_output_timeout: 30m
       - run:
           name: Run tests
