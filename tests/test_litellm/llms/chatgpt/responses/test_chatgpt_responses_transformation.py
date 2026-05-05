@@ -248,6 +248,48 @@ class TestChatGPTResponsesAPITransformation:
 
         assert parsed.output_text == "Hello from stream!"
 
+    def test_chatgpt_non_stream_sse_recovers_whitespace_padded_chunks(self):
+        """Chunks with leading whitespace before `data:` must still parse.
+
+        `_strip_sse_data_from_chunk` only matches the prefix at position 0,
+        so without an outer `.strip()` such chunks would fail JSON parsing
+        and silently drop the contained event.
+        """
+        config = ChatGPTResponsesAPIConfig()
+        response_payload = {
+            "id": "resp_test",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "completed",
+            "model": "gpt-5.4",
+            "output": [],
+        }
+        streamed_output_item = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Recovered from padded"}],
+        }
+        sse_body = "\n".join(
+            [
+                f"   data:  {json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': streamed_output_item})}   ",
+                f"\tdata: {json.dumps({'type': 'response.completed', 'response': response_payload})}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+        logging_obj = MagicMock()
+
+        parsed = config.transform_response_api_response(
+            model="chatgpt/gpt-5.4",
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        assert parsed.output_text == "Recovered from padded"
+
     @pytest.mark.parametrize(
         "error_chunk",
         [
