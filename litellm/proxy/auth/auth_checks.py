@@ -3547,7 +3547,13 @@ async def _check_team_member_budget(
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                 )
-                if default_budget is not None:
+                # Treat 0 on the team default as "no cap".
+                # Per-member rows still respect 0 as an explicit admin disable.
+                if (
+                    default_budget is not None
+                    and default_budget.max_budget is not None
+                    and default_budget.max_budget > 0
+                ):
                     team_member_budget = default_budget.max_budget
 
         if team_member_budget is not None:
