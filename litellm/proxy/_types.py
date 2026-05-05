@@ -190,6 +190,8 @@ class LitellmTableNames(str, enum.Enum):
     PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
     MANAGED_FILE_TABLE_NAME = "LiteLLM_ManagedFileTable"
     TOOL_TABLE_NAME = "LiteLLM_ToolTable"
+    CACHE_CONFIG_TABLE_NAME = "LiteLLM_CacheConfig"
+    CONFIG_OVERRIDES_TABLE_NAME = "LiteLLM_ConfigOverrides"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -565,6 +567,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/available",
             "/team/permissions_list",
             "/team/permissions_update",
+            "/team/permissions_bulk_update",
             "/team/daily/activity",
             # model
             "/model/new",
@@ -614,13 +617,12 @@ class LiteLLMRoutes(enum.Enum):
             "/",
             "/health/liveliness",
             "/health/liveness",
-            "/health/readiness",
             "/test",
             "/config/yaml",
-            "/metrics",
             "/litellm/.well-known/litellm-ui-config",
             "/.well-known/litellm-ui-config",
             "/public/model_hub",
+            "/public/model_hub/info",
             "/public/agent_hub",
             "/public/mcp_hub",
             "/public/skill_hub",
@@ -2733,6 +2735,19 @@ class UserAPIKeyAuth(
         )
 
 
+def user_api_key_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """Return True if the caller's role grants unscoped read access to all
+    tenant resources (managed files, batches, vector stores, spend rows, etc).
+
+    Lives on _types.py so leaf modules (e.g. litellm.llms.base_llm.managed_resources)
+    can use it without pulling in litellm.proxy.utils via management_endpoints.
+    """
+    return user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+
 class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_id: Optional[str]
     user_info: Optional[Union[dict, BaseModel]]
@@ -4601,6 +4616,7 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     model_mappings: Dict[str, str]
     flat_model_file_ids: List[str]
     created_by: Optional[str] = None
+    team_id: Optional[str] = None
     updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None
@@ -4609,8 +4625,10 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     unified_object_id: str
     model_object_id: str
-    file_purpose: Literal["batch", "fine-tune", "response"]
+    file_purpose: Literal["batch", "fine-tune", "response", "container"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
+    created_by: Optional[str] = None
+    team_id: Optional[str] = None
 
 
 class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
@@ -4621,6 +4639,7 @@ class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     model_mappings: Dict[str, str]
     flat_model_resource_ids: List[str]
     created_by: Optional[str] = None
+    team_id: Optional[str] = None
     updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None

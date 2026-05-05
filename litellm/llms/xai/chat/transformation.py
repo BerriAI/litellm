@@ -223,7 +223,42 @@ class XAIChatConfig(OpenAIGPTConfig):
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
             verbose_logger.debug(f"Error extracting X.AI web search usage: {e}")
+
+        self._fold_reasoning_tokens_into_completion(response)
         return response
+
+    @staticmethod
+    def _fold_reasoning_tokens_into_completion(model_response: ModelResponse) -> None:
+        """Reconcile xAI Usage to the OpenAI invariant.
+
+        xAI accounts ``reasoning_tokens`` separately from
+        ``completion_tokens`` while still summing them into ``total_tokens``.
+        OpenAI's contract (o1/o3) folds reasoning into ``completion_tokens``,
+        so fold here to keep ``total = prompt + completion``. Idempotent.
+        """
+        usage = getattr(model_response, "usage", None)
+        if usage is None:
+            return
+
+        details = getattr(usage, "completion_tokens_details", None)
+        reasoning_tokens = (
+            int(getattr(details, "reasoning_tokens", 0) or 0) if details else 0
+        )
+        if reasoning_tokens <= 0:
+            return
+
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        total_tokens = int(getattr(usage, "total_tokens", 0) or 0)
+
+        if total_tokens == prompt_tokens + completion_tokens:
+            return
+
+        # Guard against double-counting if xAI changes accounting.
+        if total_tokens != prompt_tokens + completion_tokens + reasoning_tokens:
+            return
+
+        usage.completion_tokens = completion_tokens + reasoning_tokens
 
     def _enhance_usage_with_xai_web_search_fields(
         self, model_response: ModelResponse, raw_response_json: dict
