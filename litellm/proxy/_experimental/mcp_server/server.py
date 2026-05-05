@@ -250,6 +250,7 @@ if MCP_AVAILABLE:
         json_response=False,  # enables SSE streaming
         stateless=False,
     )
+    _stateful_session_auth_contexts: Dict[str, MCPAuthenticatedUser] = {}
 
     # Keep this alias so existing references to session_manager still work
     session_manager = session_manager_stateless
@@ -2882,17 +2883,6 @@ if MCP_AVAILABLE:
             if _debug_headers:
                 send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers)
 
-            # Set the auth context variable for easy access in MCP functions
-            set_auth_context(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                client_ip=_client_ip,
-            )
-
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
                 await initialize_session_managers()
@@ -2945,12 +2935,29 @@ if MCP_AVAILABLE:
 
                 receive = wrapped_receive
 
+            auth_user = _set_or_update_auth_context(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                client_ip=_client_ip,
+                session_id=session_id if use_stateful else None,
+            )
+            if use_stateful and is_initialize:
+                send = _wrap_send_with_stateful_session_auth_context(send, auth_user)
+
             async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
                 mcp_servers,
                 _client_ip,
             ):
-                await target_manager.handle_request(scope, receive, send)
+                try:
+                    await target_manager.handle_request(scope, receive, send)
+                finally:
+                    if use_stateful and session_id and scope.get("method") == "DELETE":
+                        _stateful_session_auth_contexts.pop(session_id, None)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -3064,8 +3071,9 @@ if MCP_AVAILABLE:
     ############ Auth Context Functions ####################
     ########################################################
 
-    def set_auth_context(
-        user_api_key_auth: UserAPIKeyAuth,
+    def _update_auth_context(
+        auth_user: MCPAuthenticatedUser,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str] = None,
         mcp_servers: Optional[List[str]] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
@@ -3073,6 +3081,23 @@ if MCP_AVAILABLE:
         raw_headers: Optional[Dict[str, str]] = None,
         client_ip: Optional[str] = None,
     ) -> None:
+        auth_user.user_api_key_auth = user_api_key_auth
+        auth_user.mcp_auth_header = mcp_auth_header
+        auth_user.mcp_servers = mcp_servers
+        auth_user.mcp_server_auth_headers = mcp_server_auth_headers or {}
+        auth_user.oauth2_headers = oauth2_headers
+        auth_user.raw_headers = raw_headers
+        auth_user.client_ip = client_ip
+
+    def set_auth_context(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str] = None,
+        mcp_servers: Optional[List[str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
+    ) -> MCPAuthenticatedUser:
         """
         Set the UserAPIKeyAuth in the auth context variable.
 
@@ -3093,6 +3118,57 @@ if MCP_AVAILABLE:
             client_ip=client_ip,
         )
         auth_context_var.set(auth_user)
+        return auth_user
+
+    def _set_or_update_auth_context(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        mcp_auth_header: Optional[str] = None,
+        mcp_servers: Optional[List[str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> MCPAuthenticatedUser:
+        auth_user = (
+            _stateful_session_auth_contexts.get(session_id) if session_id else None
+        )
+        if auth_user is not None:
+            _update_auth_context(
+                auth_user=auth_user,
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=mcp_servers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+            )
+            auth_context_var.set(auth_user)
+            return auth_user
+        return set_auth_context(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_servers=mcp_servers,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+        )
+
+    def _wrap_send_with_stateful_session_auth_context(
+        send: Send,
+        auth_user: MCPAuthenticatedUser,
+    ) -> Send:
+        async def wrapped_send(message: Message) -> None:
+            if message.get("type") == "http.response.start":
+                for key, value in message.get("headers", []):
+                    if key.lower() == b"mcp-session-id":
+                        _stateful_session_auth_contexts[value.decode()] = auth_user
+                        break
+            await send(message)
+
+        return wrapped_send
 
     def get_auth_context() -> Tuple[
         Optional[UserAPIKeyAuth],

@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1275,6 +1276,107 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
     assert stateful_called and not stateless_called, (
         "chunked initialize (no session) should route to stateful, not stateless"
     )
+
+
+@pytest.mark.asyncio
+async def test_stateful_mcp_requests_refresh_session_auth_context():
+    """
+    Stateful MCP sessions run callbacks in the initialize task's context; the
+    stored auth object must be refreshed for each mcp-session-id request.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            get_auth_context,
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "stateful-session-1"
+    initialize_auth = UserAPIKeyAuth(api_key="initialize-key", user_id="user-a")
+    current_auth = UserAPIKeyAuth(api_key="current-key", user_id="user-b")
+    callback_context = contextvars.copy_context()
+    callback_context.run(
+        mcp_server.set_auth_context,
+        initialize_auth,
+        None,
+        ["old-server"],
+        None,
+        None,
+        None,
+        "1.1.1.1",
+    )
+    mcp_server._stateful_session_auth_contexts[session_id] = callback_context.run(
+        mcp_server.auth_context_var.get
+    )
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/current-server",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer current-key"),
+            (b"mcp-session-id", session_id.encode()),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}',
+            "more_body": False,
+        }
+    )
+    send = AsyncMock()
+
+    captured_context = None
+
+    async def stateful_handle(s, r, se):
+        nonlocal captured_context
+        captured_context = callback_context.run(get_auth_context)
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(
+                current_auth,
+                "current-mcp-auth",
+                ["current-server"],
+                {"current-server": {"Authorization": "Bearer server-key"}},
+                {"Authorization": "Bearer oauth-key"},
+                {"mcp-session-id": session_id},
+            ),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            side_effect=stateful_handle,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "_server_instances",
+            {session_id: MagicMock()},
+        ),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert captured_context == (
+        current_auth,
+        "current-mcp-auth",
+        ["current-server"],
+        {"current-server": {"Authorization": "Bearer server-key"}},
+        {"Authorization": "Bearer oauth-key"},
+        {"mcp-session-id": session_id},
+        "",
+    )
+    mcp_server._stateful_session_auth_contexts.pop(session_id, None)
 
 
 @pytest.mark.asyncio
