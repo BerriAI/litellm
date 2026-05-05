@@ -86,6 +86,76 @@ def test_check_if_part_exists_in_parts_camel_case_snake_case():
     assert check_if_part_exists_in_parts(parts_mixed, part_mixed_casing)
 
 
+def test_cached_content_respects_modify_params_for_cache_incompatible_fields():
+    """Regression: cachedContent drops system/tools/toolConfig only when modify_params=True."""
+    import litellm
+
+    cache_name = "projects/p/locations/us-central1/cachedContents/abc123"
+    messages = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "hi"},
+    ]
+    optional_params = {
+        "tools": [
+            {
+                "functionDeclarations": [
+                    {"name": "get_weather", "description": "Get weather"},
+                ]
+            }
+        ],
+        "tool_choice": {"functionCallingConfig": {"mode": "AUTO"}},
+    }
+
+    original_modify_params = litellm.modify_params
+    try:
+        # With modify_params=False (default), keep fields even with cachedContent.
+        litellm.modify_params = False
+        result = _transform_request_body(
+            messages=list(messages),
+            model="gemini-2.5-pro",
+            optional_params=dict(optional_params),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=cache_name,
+        )
+        assert result.get("cachedContent") == cache_name
+        assert "system_instruction" in result
+        assert "tools" in result
+        assert "toolConfig" in result
+        assert "contents" in result
+
+        # With modify_params=True, drop cache-incompatible fields.
+        litellm.modify_params = True
+        result_modify_true = _transform_request_body(
+            messages=list(messages),
+            model="gemini-2.5-pro",
+            optional_params=dict(optional_params),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=cache_name,
+        )
+        assert result_modify_true.get("cachedContent") == cache_name
+        assert "system_instruction" not in result_modify_true
+        assert "tools" not in result_modify_true
+        assert "toolConfig" not in result_modify_true
+        assert "contents" in result_modify_true
+
+        # Without cache, fields are always included.
+        result_no_cache = _transform_request_body(
+            messages=list(messages),
+            model="gemini-2.5-pro",
+            optional_params=dict(optional_params),
+            custom_llm_provider="vertex_ai",
+            litellm_params={},
+            cached_content=None,
+        )
+        assert "system_instruction" in result_no_cache
+        assert "tools" in result_no_cache
+        assert "toolConfig" in result_no_cache
+    finally:
+        litellm.modify_params = original_modify_params
+
+
 # Tests for issue #14556: Labels field provider-aware filtering
 def test_google_genai_excludes_labels():
     """Test that Google GenAI/AI Studio endpoints exclude labels when custom_llm_provider='gemini'"""
@@ -1289,6 +1359,53 @@ def test_file_data_field_order_gcs_urls():
     assert file_data_keys.index("mime_type") < file_data_keys.index(
         "file_uri"
     ), "mime_type must come before file_uri in the file_data dict"
+
+
+def test_gemini_files_api_uri_without_format():
+    """
+    Test that Gemini Files API URIs work WITHOUT an explicit format/mime_type.
+
+    When a user uploads a file via the Gemini Files API and then references it
+    by URI (https://generativelanguage.googleapis.com/v1beta/files/...),
+    the file is already on Google's servers. These URLs return 403 when
+    fetched directly, so _process_gemini_media must NOT try to resolve the
+    MIME type via HTTP.  Instead it should pass the URI through as file_data
+    and let the Gemini API resolve the type from its stored metadata.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/24907
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
+    file_url = "https://generativelanguage.googleapis.com/v1beta/files/37eh7rsw1vfe"
+
+    # Should NOT raise — previously this hit the generic https:// handler
+    # which called _get_image_mime_type_from_url() and got a 403.
+    result = _process_gemini_media(image_url=file_url)
+
+    assert "file_data" in result
+    file_data = result["file_data"]
+    assert file_data["file_uri"] == file_url
+    # When no format is provided, mime_type should be absent so the
+    # Gemini API infers it from the stored file metadata.
+    assert "mime_type" not in file_data
+
+
+def test_gemini_files_api_uri_with_format():
+    """
+    Test that Gemini Files API URIs correctly forward an explicit format.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/24907
+    """
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+
+    file_url = "https://generativelanguage.googleapis.com/v1beta/files/n1vhxa28lyaw"
+
+    result = _process_gemini_media(image_url=file_url, format="text/plain")
+
+    assert "file_data" in result
+    file_data = result["file_data"]
+    assert file_data["file_uri"] == file_url
+    assert file_data["mime_type"] == "text/plain"
 
 
 def test_extract_file_data_with_path_object():

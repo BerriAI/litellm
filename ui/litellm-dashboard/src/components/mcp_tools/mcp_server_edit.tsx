@@ -3,7 +3,7 @@ import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber } from 
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
-import { updateMCPServer, testMCPToolsListRequest } from "../networking";
+import { updateMCPServer, listMCPTools } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -37,6 +37,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [costConfig, setCostConfig] = useState<MCPServerCostInfo>({});
   const [tools, setTools] = useState<any[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(false);
+  const [toolsError, setToolsError] = useState<string | null>(null);
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
@@ -272,57 +273,36 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
   }, [mcpServer]);
 
-  // Fetch tools when component mounts or when OAuth token is received
-  // But only if the server has been properly saved (has a permanent server_id)
+  // Fetch tools when component mounts for a saved server
   useEffect(() => {
-    // Don't fetch if server hasn't been saved yet (no permanent server_id)
     if (!mcpServer.server_id || mcpServer.server_id.trim() === "") {
       return;
     }
     fetchTools();
-  }, [mcpServer, accessToken, oauthAccessToken]);
+  }, [mcpServer, accessToken]);
 
   const fetchTools = async () => {
-    if (!accessToken) return;
-
-    // HTTP/SSE requires a URL (unless spec_path is set); stdio does not.
-    if (mcpServer.transport !== "stdio" && !mcpServer.url && !mcpServer.spec_path) return;
-
-    const isM2M = mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !!mcpServer.token_url;
-    if (mcpServer.auth_type === AUTH_TYPE.OAUTH2 && !isM2M && !oauthAccessToken) {
-      return;
-    }
+    if (!accessToken || !mcpServer.server_id) return;
 
     setIsLoadingTools(true);
+    setToolsError(null);
 
     try {
-      // Prepare the MCP server config from existing server data
-      const mcpServerConfig = {
-        server_id: mcpServer.server_id,
-        server_name: mcpServer.server_name,
-        url: mcpServer.url,
-        transport: mcpServer.transport,
-        auth_type: mcpServer.auth_type,
-        mcp_info: mcpServer.mcp_info,
-        authorization_url: mcpServer.authorization_url,
-        token_url: mcpServer.token_url,
-        registration_url: mcpServer.registration_url,
-        command: mcpServer.command,
-        args: mcpServer.args,
-        env: mcpServer.env,
-      };
-
-      const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
+      // Use the GET endpoint which looks up stored credentials by server_id,
+      // rather than POST /test/tools/list which requires inline credentials.
+      const toolsResponse = await listMCPTools(accessToken, mcpServer.server_id);
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
       } else {
         console.error("Failed to fetch tools:", toolsResponse.message);
         setTools([]);
+        setToolsError(toolsResponse.message || "Failed to load tools");
       }
     } catch (error) {
       console.error("Tools fetch error:", error);
       setTools([]);
+      setToolsError(error instanceof Error ? error.message : "Failed to load tools");
     } finally {
       setIsLoadingTools(false);
     }
@@ -1122,6 +1102,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 toolNameToDescription={toolNameToDescription}
                 onToolNameToDisplayNameChange={setToolNameToDisplayName}
                 onToolNameToDescriptionChange={setToolNameToDescription}
+                externalTools={tools}
+                externalIsLoading={isLoadingTools}
+                externalError={toolsError}
+                externalCanFetch={!!mcpServer.server_id}
               />
             </div>
 

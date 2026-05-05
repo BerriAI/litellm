@@ -2243,10 +2243,50 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
     return enc
 
 
-def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = None):
+def decode(
+    model="",
+    tokens: List[int] = [],
+    custom_tokenizer: Optional[dict] = None,
+    skip_special_tokens: bool = True,
+):
+    """
+    Decodes token ids using the selected tokenizer.
+
+    Args:
+        skip_special_tokens: For HuggingFace tokenizers, keep the historical
+            LiteLLM round-trip behavior by omitting special tokens by default.
+            Set to False to inspect decoded BOS/EOS tokens.
+    """
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
+    if tokenizer_json["type"] == "huggingface_tokenizer":
+        if skip_special_tokens:
+            tokens = _strip_huggingface_special_token_ids(
+                tokenizer_json["tokenizer"], tokens
+            )
+        dec = tokenizer_json["tokenizer"].decode(
+            tokens, skip_special_tokens=skip_special_tokens
+        )
+        return dec
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
+
+
+def _strip_huggingface_special_token_ids(
+    tokenizer: Tokenizer, tokens: List[int]
+) -> List[int]:
+    try:
+        added_tokens_decoder = tokenizer.get_added_tokens_decoder()
+    except Exception:
+        return tokens
+
+    special_token_ids = {
+        token_id
+        for token_id, added_token in added_tokens_decoder.items()
+        if getattr(added_token, "special", False)
+    }
+    if not special_token_ids:
+        return tokens
+    return [token for token in tokens if token not in special_token_ids]
 
 
 def create_pretrained_tokenizer(
@@ -5896,6 +5936,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_minimal_reasoning_effort=_model_info.get(
                     "supports_minimal_reasoning_effort", None
                 ),
+                supports_low_reasoning_effort=_model_info.get(
+                    "supports_low_reasoning_effort", None
+                ),
                 supports_xhigh_reasoning_effort=_model_info.get(
                     "supports_xhigh_reasoning_effort", None
                 ),
@@ -6526,6 +6569,7 @@ def validate_environment(  # noqa: PLR0915
             or model in litellm.open_ai_text_completion_models
             or model in litellm.open_ai_embedding_models
             or model in litellm.openai_image_generation_models
+            or model.startswith("gpt-image")
         ):
             if "OPENAI_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8410,6 +8454,17 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseAnthropicMessagesConfig]:
+        return ProviderConfigManager._get_provider_anthropic_messages_config_cached(
+            model=model, provider=provider
+        )
+
+    @staticmethod
+    @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+    def _get_provider_anthropic_messages_config_cached(
+        model: str,
+        provider: LlmProviders,
+    ) -> Optional[BaseAnthropicMessagesConfig]:
+        model_lower = model.lower()
         if litellm.LlmProviders.ANTHROPIC == provider:
             return litellm.AnthropicMessagesConfig()
         # The 'BEDROCK' provider corresponds to Amazon's implementation of Anthropic Claude v3.
@@ -8419,14 +8474,14 @@ class ProviderConfigManager:
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "claude" in model.lower():
+            if "claude" in model_lower:
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
                     VertexAIPartnerModelsAnthropicMessagesConfig,
                 )
 
                 return VertexAIPartnerModelsAnthropicMessagesConfig()
         elif litellm.LlmProviders.AZURE_AI == provider:
-            if "claude" in model.lower():
+            if "claude" in model_lower:
                 from litellm.llms.azure_ai.anthropic.messages_transformation import (
                     AzureAnthropicMessagesConfig,
                 )

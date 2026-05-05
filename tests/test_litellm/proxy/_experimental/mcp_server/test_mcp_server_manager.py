@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from datetime import datetime
+from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -719,7 +720,8 @@ class TestMCPServerManager:
             return_value=mock_client,
         ):
             servers, scopes = await manager._fetch_oauth_metadata_from_resource(
-                "https://protected.example.com/.well-known/oauth"
+                "https://protected.example.com/.well-known/oauth",
+                "https://protected.example.com/mcp",
             )
 
         assert servers == [
@@ -727,6 +729,144 @@ class TestMCPServerManager:
             "https://auth2.example.com",
         ]
         assert scopes == ["read", "write"]
+
+    @pytest.mark.asyncio
+    async def test_descovery_metadata_probes_well_known_when_server_does_not_challenge(
+        self,
+    ):
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        mock_metadata = MCPOAuthMetadata(
+            scopes=None,
+            authorization_url="https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize",
+            token_url="https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+            registration_url=None,
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+                return_value=mock_client,
+            ),
+            patch.object(
+                manager,
+                "_attempt_well_known_discovery",
+                AsyncMock(
+                    return_value=(
+                        ["https://login.microsoftonline.com/test-tenant-id/v2.0"],
+                        ["api://some-scope/.default"],
+                    )
+                ),
+            ) as mock_well_known,
+            patch.object(
+                manager,
+                "_fetch_authorization_server_metadata",
+                AsyncMock(return_value=mock_metadata),
+            ) as mock_fetch_auth,
+        ):
+            result = await manager._descovery_metadata("http://localhost:8001/mcp")
+
+        mock_well_known.assert_awaited_once_with("http://localhost:8001/mcp")
+        mock_fetch_auth.assert_awaited_once_with(
+            ["https://login.microsoftonline.com/test-tenant-id/v2.0"],
+            "http://localhost:8001/mcp",
+        )
+        assert result is mock_metadata
+        assert result.scopes == ["api://some-scope/.default"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_authorization_server_metadata_supports_azure_issuer_path(
+        self,
+    ):
+        manager = MCPServerManager()
+        issuer = "https://login.microsoftonline.com/test-tenant-id/v2.0"
+
+        def build_response(url: str, **kwargs):
+            mock_response = MagicMock()
+            if url == f"{issuer}/.well-known/openid-configuration":
+                mock_response.json.return_value = {
+                    "authorization_endpoint": "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize",
+                    "token_endpoint": "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token",
+                    "scopes_supported": ["api://some-scope/.default"],
+                }
+                mock_response.raise_for_status = MagicMock()
+            else:
+                request = httpx.Request("GET", url)
+                response_obj = httpx.Response(status_code=404, request=request)
+                mock_response.raise_for_status = MagicMock(
+                    side_effect=httpx.HTTPStatusError(
+                        "not found", request=request, response=response_obj
+                    )
+                )
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=build_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            # The Azure issuer is cross-origin against the server_url — use
+            # the issuer itself as server_url so the test exercises the
+            # well-known fetch logic without needing real DNS.
+            result = await manager._fetch_single_authorization_server_metadata(
+                issuer, issuer
+            )
+
+        assert result is not None
+        assert (
+            result.authorization_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize"
+        )
+        assert (
+            result.token_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token"
+        )
+        assert result.scopes == ["api://some-scope/.default"]
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_authorization_server_metadata_derives_azure_metadata(
+        self,
+    ):
+        manager = MCPServerManager()
+        issuer = "https://login.microsoftonline.com/test-tenant-id/v2.0"
+
+        request = httpx.Request("GET", issuer)
+        response_obj = httpx.Response(status_code=404, request=request)
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "not found", request=request, response=response_obj
+            )
+        )
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(
+                issuer, issuer
+            )
+
+        assert result is not None
+        assert (
+            result.authorization_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/authorize"
+        )
+        assert (
+            result.token_url
+            == "https://login.microsoftonline.com/test-tenant-id/oauth2/v2.0/token"
+        )
 
     @pytest.mark.asyncio
     async def test_descovery_metadata_falls_back_to_origin_when_no_auth_servers(self):
@@ -780,7 +920,7 @@ class TestMCPServerManager:
         ):
             result = await manager._descovery_metadata(server_url)
 
-        mock_fetch_auth.assert_awaited_once_with(["https://example.com"])
+        mock_fetch_auth.assert_awaited_once_with(["https://example.com"], server_url)
         assert result is mock_metadata
         assert result.scopes == ["read"]
 
@@ -2608,6 +2748,567 @@ class TestMCPServerManagerUpstreamInstructionsCache:
         by_name = {s.server_name: s for s in manager.config_mcp_servers.values()}
         assert "srv_a" in by_name and by_name["srv_a"].instructions == "A instructions"
         assert "srv_b" in by_name and by_name["srv_b"].instructions is None
+
+
+class TestMCPServerManagerExpandPermissionList:
+    """Tests for the alias/name-aware permission list expansion used by team MCP permissions."""
+
+    def _make_server(
+        self,
+        server_id: str,
+        server_name: str,
+        alias=None,
+        name=None,
+    ) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=name if name is not None else (alias or server_name),
+            alias=alias,
+            server_name=server_name,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+
+    def test_empty_list_returns_empty(self):
+        manager = MCPServerManager()
+        assert manager.expand_permission_list([]) == []
+
+    def test_expands_server_name(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-usw1"] = self._make_server(
+            "id-usw1", server_name="a"
+        )
+
+        assert manager.expand_permission_list(["a"]) == ["id-usw1"]
+
+    def test_expands_alias(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-1"] = self._make_server(
+            "id-1", server_name="internal_name", alias="public_alias"
+        )
+
+        assert manager.expand_permission_list(["public_alias"]) == ["id-1"]
+
+    def test_passes_through_unknown_entry(self):
+        """Unresolved entries pass through unchanged (with a debug log) —
+        the downstream access check denies them when compared to the
+        concrete request server_id."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-1"] = self._make_server("id-1", server_name="b")
+
+        assert manager.expand_permission_list(["a"]) == ["a"]
+
+    def test_name_collision_expands_to_all_matches(self):
+        """Two servers sharing a server_name both resolve — the documented behavior."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-config"] = self._make_server(
+            "id-config", server_name="shared"
+        )
+        manager.registry["id-db"] = self._make_server("id-db", server_name="shared")
+
+        assert sorted(manager.expand_permission_list(["shared"])) == [
+            "id-config",
+            "id-db",
+        ]
+
+    def test_searches_config_and_registry_union(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["cfg-id"] = self._make_server(
+            "cfg-id", server_name="a"
+        )
+        manager.registry["reg-id"] = self._make_server("reg-id", server_name="b")
+
+        assert manager.expand_permission_list(["a"]) == ["cfg-id"]
+        assert manager.expand_permission_list(["b"]) == ["reg-id"]
+
+    def test_id_match_takes_precedence_over_name_match(self):
+        """
+        If a permission entry matches a server_id directly, don't also add
+        servers whose server_name happens to equal that id.
+        """
+        manager = MCPServerManager()
+        manager.config_mcp_servers["id-1"] = self._make_server(
+            "id-1", server_name="other_name"
+        )
+        manager.config_mcp_servers["id-2"] = self._make_server(
+            "id-2", server_name="id-1"
+        )
+
+        assert manager.expand_permission_list(["id-1"]) == ["id-1"]
+
+    def test_mixed_ids_and_names_in_same_list(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-1"] = self._make_server(
+            "uuid-1", server_name="a"
+        )
+        manager.config_mcp_servers["uuid-2"] = self._make_server(
+            "uuid-2", server_name="b"
+        )
+
+        # ["uuid-1", "b"] -> uuid-1 passes through, "b" resolves to uuid-2
+        assert sorted(manager.expand_permission_list(["uuid-1", "b"])) == [
+            "uuid-1",
+            "uuid-2",
+        ]
+
+    def test_deduplicates_overlapping_id_and_name_entries(self):
+        """If a list references the same server by both id and name, return it once."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-1"] = self._make_server(
+            "uuid-1", server_name="a"
+        )
+
+        assert manager.expand_permission_list(["uuid-1", "a"]) == ["uuid-1"]
+
+    def test_simulates_cross_region_portability(self):
+        """
+        Same permission entry "a" resolves to different concrete IDs per region —
+        the cross-region portability the customer is asking for.
+        """
+        usw1 = MCPServerManager()
+        usw1.config_mcp_servers["hash-usw1"] = self._make_server(
+            "hash-usw1", server_name="a"
+        )
+
+        usc1 = MCPServerManager()
+        usc1.config_mcp_servers["hash-usc1"] = self._make_server(
+            "hash-usc1", server_name="a"
+        )
+
+        assert usw1.expand_permission_list(["a"]) == ["hash-usw1"]
+        assert usc1.expand_permission_list(["a"]) == ["hash-usc1"]
+
+
+class TestMCPServerManagerExpandToolPermissions:
+    """Tests for tool-permission dict rewriting — the privilege-escalation guard."""
+
+    def _make_server(self, server_id: str, server_name: str, alias=None) -> MCPServer:
+        return MCPServer(
+            server_id=server_id,
+            name=alias or server_name,
+            alias=alias,
+            server_name=server_name,
+            url=f"https://{server_id}.example.com",
+            transport=MCPTransport.http,
+        )
+
+    def test_empty_or_none_returns_empty_dict(self):
+        manager = MCPServerManager()
+        assert manager.expand_tool_permissions(None) == {}
+        assert manager.expand_tool_permissions({}) == {}
+
+    def test_rewrites_name_key_to_server_id(self):
+        """Privilege-escalation guard: a name-based key must resolve to the
+        concrete server_id, otherwise `.get(server_id)` misses and the tool
+        restriction is silently dropped (caller treats None as allow-all)."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a", server_name="my-alias"
+        )
+
+        result = manager.expand_tool_permissions({"my-alias": ["read_file"]})
+        assert result == {"uuid-a": ["read_file"]}
+
+    def test_passes_through_existing_server_id_key(self):
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a", server_name="alpha"
+        )
+
+        result = manager.expand_tool_permissions({"uuid-a": ["read_file"]})
+        assert result == {"uuid-a": ["read_file"]}
+
+    def test_unresolved_key_passes_through_unchanged(self):
+        """A stale id-keyed restriction (server since deleted, or just a
+        test-fixture placeholder) must still apply when something looks it
+        up by that same string — dropping would silently remove the
+        restriction."""
+        manager = MCPServerManager()
+
+        result = manager.expand_tool_permissions({"stale-uuid": ["read_file"]})
+        assert result == {"stale-uuid": ["read_file"]}
+
+    def test_name_collision_unions_tool_lists(self):
+        """Two servers sharing a server_name both match; their tool lists get
+        the restriction (matches the list-expansion collision semantics)."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-1"] = self._make_server(
+            "uuid-1", server_name="shared"
+        )
+        manager.registry["uuid-2"] = self._make_server("uuid-2", server_name="shared")
+
+        result = manager.expand_tool_permissions({"shared": ["read_file"]})
+        assert sorted(result.keys()) == ["uuid-1", "uuid-2"]
+        assert result["uuid-1"] == ["read_file"]
+        assert result["uuid-2"] == ["read_file"]
+
+    def test_id_and_name_keys_pointing_at_same_server_union_tools(self):
+        """If the admin writes both {"uuid-a": [...], "alias-a": [...]} and
+        both refer to the same server, the tool lists are unioned rather
+        than one overwriting the other."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server(
+            "uuid-a", server_name="alias-a"
+        )
+
+        result = manager.expand_tool_permissions(
+            {"uuid-a": ["read_file"], "alias-a": ["write_file"]}
+        )
+        assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
+
+
+class TestOAuthDiscoverySSRFGuard:
+    """SSRF guard for the OAuth metadata discovery follow-up fetches.
+
+    The vulnerability: a malicious MCP server returns a ``WWW-Authenticate``
+    header pointing at an attacker-chosen ``resource_metadata`` URL, then a
+    PRM JSON whose ``authorization_servers[0]`` points at internal/loopback
+    addresses, coercing the proxy into making blind GETs to cloud-metadata
+    services, internal admin panels, or loopback debug endpoints.
+    """
+
+    @staticmethod
+    def _patch_resolves(monkeypatch, mapping):
+        """Patch ``socket.getaddrinfo`` for a deterministic SSRF-guard test.
+
+        ``mapping`` is ``{hostname: [ip-string, ...]}``; unknown hosts raise
+        ``gaierror`` (treated as "unresolvable" -> blocked by async_safe_get).
+        """
+        import socket as _socket
+
+        def fake_getaddrinfo(host, port, *args, **kwargs):
+            if host not in mapping:
+                raise _socket.gaierror(f"unknown host {host}")
+            family = _socket.AF_INET
+            return [
+                (family, _socket.SOCK_STREAM, 0, "", (ip, port)) for ip in mapping[host]
+            ]
+
+        monkeypatch.setattr(
+            "litellm.litellm_core_utils.url_utils.socket.getaddrinfo",
+            fake_getaddrinfo,
+        )
+
+    def test_same_authority_url_is_direct_fetch_eligible(self):
+        # Same scheme + host + port skips DNS entirely — the well-known
+        # endpoint construction in _attempt_well_known_discovery always
+        # produces same-authority URLs against the admin's server_url.
+        assert MCPServerManager._is_same_authority_metadata_url(
+            "https://example.com/.well-known/oauth-protected-resource",
+            "https://example.com/mcp",
+        )
+
+    def test_same_host_different_port_uses_safe_fetch_path(self):
+        assert not MCPServerManager._is_same_authority_metadata_url(
+            "https://example.com:9999/.well-known/oauth-protected-resource",
+            "https://example.com/mcp",
+        )
+
+    @pytest.mark.parametrize(
+        "ip",
+        [
+            "127.0.0.1",  # loopback
+            "10.0.0.5",  # RFC1918
+            "172.16.0.1",  # RFC1918
+            "192.168.1.1",  # RFC1918
+            "169.254.169.254",  # AWS / Azure / GCP IMDS
+            "100.100.100.200",  # Alibaba Cloud metadata
+            "0.0.0.0",  # unspecified
+            "::1",  # IPv6 loopback
+            "fe80::1",  # IPv6 link-local
+            "fc00::1",  # IPv6 ULA
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_cross_origin_blocked_when_resolves_to_unsafe_ip(
+        self, monkeypatch, ip
+    ):
+        self._patch_resolves(monkeypatch, {"attacker.example.com": [ip]})
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(
+                "https://attacker.example.com",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert result is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cross_origin_allowed_when_resolves_to_public_ip(self, monkeypatch):
+        self._patch_resolves(
+            monkeypatch, {"login.microsoftonline.com": ["20.190.151.7"]}
+        )
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.is_redirect = False
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_servers": ["https://login.microsoftonline.com/tenant/v2.0"],
+            "scopes_supported": ["mcp.read"],
+        }
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://login.microsoftonline.com/tenant/v2.0/.well-known/openid-configuration",
+                "https://atlassian-mcp.example.com/mcp",
+            )
+
+        assert servers == ["https://login.microsoftonline.com/tenant/v2.0"]
+        assert scopes == ["mcp.read"]
+        mock_client.get.assert_awaited_once()
+        assert mock_client.get.await_args.kwargs["follow_redirects"] is False
+        assert (
+            mock_client.get.await_args.kwargs["headers"]["Host"]
+            == "login.microsoftonline.com"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cross_origin_blocked_when_unresolvable(self, monkeypatch):
+        self._patch_resolves(monkeypatch, {})
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://nope.example.invalid/.well-known/oauth-authorization-server",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_http_scheme_is_not_safe(self):
+        manager = MCPServerManager()
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "file:///etc/passwd",
+                "https://example.com/mcp",
+            )
+            result = await manager._fetch_single_authorization_server_metadata(
+                "gopher://example.com/",
+                "https://example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        assert result is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dual_resolution_blocked_if_any_ip_unsafe(self, monkeypatch):
+        # If the attacker controls a DNS record returning multiple A records,
+        # one of which is private, async_safe_get rejects before any network call.
+        self._patch_resolves(
+            monkeypatch, {"dual-stack.example.com": ["8.8.8.8", "127.0.0.1"]}
+        )
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://dual-stack.example.com/.well-known/oauth-authorization-server",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_oauth_metadata_refuses_unsafe_url(self, monkeypatch):
+        # End-to-end: a malicious WWW-Authenticate redirecting to a loopback
+        # resource_metadata URL must not produce a network call.
+        self._patch_resolves(monkeypatch, {"attacker.example.com": ["127.0.0.1"]})
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://attacker.example.com/meta",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_getaddrinfo_result_blocks_url(self, monkeypatch):
+        # POSIX doesn't strictly forbid an empty success-list from getaddrinfo.
+        # async_safe_get must fail closed rather than making a network call.
+        monkeypatch.setattr(
+            "litellm.litellm_core_utils.url_utils.socket.getaddrinfo",
+            lambda *a, **k: [],
+        )
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://no-records.example.com/.well-known/oauth-authorization-server",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes is None
+        mock_client.get.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cross_origin_redirect_is_revalidated(self, monkeypatch):
+        self._patch_resolves(
+            monkeypatch,
+            {
+                "provider.example.com": ["8.8.8.8"],
+                "127.0.0.1": ["127.0.0.1"],
+            },
+        )
+        manager = MCPServerManager()
+
+        redirect_response = MagicMock()
+        redirect_response.is_redirect = True
+        redirect_response.headers = {"location": "http://127.0.0.1/admin"}
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=redirect_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(
+                "https://provider.example.com",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert result is None
+        assert mock_client.get.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_same_authority_fetch_does_not_follow_redirects(self):
+        # Same-authority URLs may be internal admin-configured MCP servers, so
+        # they are fetched directly. Redirects are still disabled because a
+        # Location target would not inherit the same-authority guarantee.
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_servers": ["https://auth.example.com"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def fake_get(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            await manager._fetch_oauth_metadata_from_resource(
+                "https://protected.example.com/.well-known/oauth",
+                "https://protected.example.com/mcp",
+            )
+        assert captured_kwargs.get("follow_redirects") is False
+
+    @pytest.mark.asyncio
+    async def test_same_authority_auth_server_fetch_does_not_follow_redirects(self):
+        # Same redirect-bypass concern for the authorization-server fetch path.
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_endpoint": "https://provider.example.com/authorize",
+            "token_endpoint": "https://provider.example.com/token",
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        captured_kwargs: Dict[str, Any] = {}
+
+        async def fake_get(url, **kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=fake_get)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            await manager._fetch_single_authorization_server_metadata(
+                "https://provider.example.com",
+                "https://provider.example.com",
+            )
+        assert captured_kwargs.get("follow_redirects") is False
+
+    @pytest.mark.asyncio
+    async def test_fetch_authorization_server_refuses_unsafe_issuer(self, monkeypatch):
+        # Mirrors the GHSA-mrfv repro: PRM lists a loopback issuer URL.
+        self._patch_resolves(monkeypatch, {"attacker.example.com": ["127.0.0.1"]})
+        manager = MCPServerManager()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock()
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            result = await manager._fetch_single_authorization_server_metadata(
+                "http://attacker.example.com:19999",
+                "https://legit-mcp.example.com/mcp",
+            )
+
+        assert result is None
+        mock_client.get.assert_not_called()
 
 
 if __name__ == "__main__":

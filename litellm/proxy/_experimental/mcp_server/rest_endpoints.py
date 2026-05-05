@@ -315,10 +315,12 @@ if MCP_AVAILABLE:
             and user_api_key_auth.object_permission
             and user_api_key_auth.object_permission.mcp_tool_permissions
         ):
+            # Dict keys may be server_ids OR names/aliases; normalize so lookup
+            # by concrete server_id resolves name-keyed restrictions too.
             allowed_tools_for_server = (
-                user_api_key_auth.object_permission.mcp_tool_permissions.get(
-                    server.server_id
-                )
+                global_mcp_server_manager.expand_tool_permissions(
+                    user_api_key_auth.object_permission.mcp_tool_permissions
+                ).get(server.server_id)
             )
             if (
                 allowed_tools_for_server is not None

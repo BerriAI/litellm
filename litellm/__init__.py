@@ -166,7 +166,7 @@ langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 prometheus_latency_buckets: Optional[List[float]] = None
-require_auth_for_metrics_endpoint: Optional[bool] = False
+require_auth_for_metrics_endpoint: Optional[bool] = True
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
 gcs_pub_sub_use_v1: Optional[bool] = (
@@ -221,6 +221,9 @@ modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
 use_chat_completions_url_for_anthropic_messages: bool = bool(
     os.getenv("LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES", False)
 )  # When True, routes OpenAI /v1/messages requests to chat/completions instead of the Responses API
+route_all_chat_openai_to_responses: bool = (
+    os.getenv("LITELLM_ROUTE_ALL_CHAT_OPENAI_TO_RESPONSES", "false").lower() == "true"
+)  # When True, routes all OpenAI /chat/completions requests through the Responses API bridge
 retry = True
 ### AUTH ###
 api_key: Optional[str] = None
@@ -277,6 +280,7 @@ ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
+provider_url_destination_allowed_hosts: List[str] = []
 ssl_ecdh_curve: Optional[str] = (
     None  # Set to 'X25519' to disable PQC and improve performance
 )
@@ -285,6 +289,7 @@ disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 disable_anthropic_gemini_context_caching_transform: bool = False
+disable_vertex_batch_output_transformation: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
@@ -326,6 +331,9 @@ enable_json_schema_validation: bool = False
 enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
+)
+enable_gemini_default_thinking_level_low: bool = (
+    False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
 ####################
 logging: bool = True

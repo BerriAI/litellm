@@ -19,10 +19,10 @@ import html as _html_module
 import time
 import uuid
 from typing import Dict, Optional, cast
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import jwt
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from litellm._logging import verbose_proxy_logger
@@ -30,6 +30,11 @@ from litellm.proxy._experimental.mcp_server.db import store_user_credential
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
 )
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    TOKEN_NO_CACHE_HEADERS,
+    validate_loopback_redirect_uri,
+)
+from litellm.proxy._types import UserAPIKeyAuth
 
 # ---------------------------------------------------------------------------
 # In-memory store for pending authorization codes.
@@ -67,6 +72,65 @@ def _purge_expired_codes() -> None:
     expired = [k for k, v in _byok_auth_codes.items() if v["expires_at"] < now]
     for k in expired:
         del _byok_auth_codes[k]
+
+
+def _oauth_token_error(code: str, status: int = 400) -> JSONResponse:
+    """RFC 6749 §5.2 token-endpoint error body: ``{"error": "<code>"}``.
+    FastAPI's default ``HTTPException`` renders ``{"detail": ...}`` which
+    spec-compliant OAuth clients parsing the ``error`` field won't recognize.
+    """
+    return JSONResponse(
+        status_code=status, content={"error": code}, headers=TOKEN_NO_CACHE_HEADERS
+    )
+
+
+def _user_id_from_session_cookie(request: Request) -> Optional[str]:
+    """Return user_id from the UI ``token`` cookie (HS256-signed with
+    ``master_key``), or None if missing/invalid.
+
+    The /token endpoint in this file ALSO issues master-key-signed JWTs
+    (type="byok_session") for MCP-client-side use. They must not be
+    accepted here as UI sessions — otherwise a leaked byok_session token
+    could be replayed as a cookie to re-authorize BYOK writes. Distinguish
+    by requiring a ``login_method`` claim (UI tokens set ``"sso"`` or
+    ``"username_password"``; byok_session tokens never set it) and
+    rejecting any token whose ``type`` identifies it as non-UI.
+    """
+    # Inline import avoids a circular dep (proxy_server -> mcp_server router).
+    from litellm.proxy.proxy_server import master_key
+
+    if not master_key:
+        return None
+    token = request.cookies.get("token")
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(
+            token,
+            master_key,
+            algorithms=["HS256"],
+            # Require an expiry claim so a leaked UI session cookie has a
+            # bounded lifetime. PyJWT verifies exp by default when present;
+            # require=["exp"] additionally rejects tokens that omit it.
+            options={"require": ["exp"]},
+        )
+    except jwt.InvalidTokenError:
+        return None
+    if payload.get("type") == "byok_session":
+        return None
+    if payload.get("login_method") not in ("sso", "username_password"):
+        return None
+    user_id = payload.get("user_id")
+    return user_id if isinstance(user_id, str) and user_id else None
+
+
+async def _byok_session_auth(request: Request) -> UserAPIKeyAuth:
+    """Require the UI session cookie. Programmatic BYOK management uses
+    ``POST /v1/mcp/server/{id}/user-credential`` instead."""
+    user_id = _user_id_from_session_cookie(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="login_required")
+    return UserAPIKeyAuth(api_key="byok_session_cookie", user_id=user_id)
 
 
 def _build_authorize_html(
@@ -582,11 +646,18 @@ async def byok_authorize_get(
 
     The MCP client navigates the user here; the user types their API key and
     clicks "Connect & Authorize", which POSTs back to this same path.
+
+    This GET is intentionally unauthenticated: it only renders HTML with no
+    state change. The POST handler enforces ``user_api_key_auth`` and pins
+    the stored credential to the authenticated session.
     """
     if response_type != "code":
         raise HTTPException(status_code=400, detail="response_type must be 'code'")
     if not redirect_uri:
         raise HTTPException(status_code=400, detail="redirect_uri is required")
+    # Validate here too so the user sees the rejection before typing their
+    # API key into the HTML form (the POST handler also validates).
+    validate_loopback_redirect_uri(redirect_uri)
     if not code_challenge:
         raise HTTPException(status_code=400, detail="code_challenge is required")
 
@@ -636,6 +707,7 @@ async def byok_authorize_post(
     state: str = Form(default=""),
     server_id: str = Form(default=""),
     api_key: str = Form(...),
+    user_api_key_dict: UserAPIKeyAuth = Depends(_byok_session_auth),
 ) -> RedirectResponse:
     """
     Process the BYOK API-key form submission.
@@ -645,10 +717,7 @@ async def byok_authorize_post(
     """
     _purge_expired_codes()
 
-    # Validate redirect_uri scheme to prevent open redirect
-    parsed_uri = urlparse(redirect_uri)
-    if parsed_uri.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="Invalid redirect_uri scheme")
+    validate_loopback_redirect_uri(redirect_uri)
 
     # Reject new codes if the store is at capacity (prevents memory exhaustion
     # from a burst of abandoned OAuth flows).
@@ -662,13 +731,25 @@ async def byok_authorize_post(
             status_code=400, detail="Only S256 code_challenge_method is supported"
         )
 
+    # Identity comes from the authenticated session, not the OAuth client_id
+    # form field (RFC 6749 §2.2: client_id identifies the client application,
+    # not the user). We do bind the code to the submitted client_id so the
+    # /token call must present the same value (RFC 6749 §4.1.3).
+    user_id = user_api_key_dict.user_id
+    if not user_id:
+        raise HTTPException(status_code=401, detail="login_required")
+
     auth_code = str(uuid.uuid4())
     _byok_auth_codes[auth_code] = {
         "api_key": api_key,
         "server_id": server_id,
         "code_challenge": code_challenge,
         "redirect_uri": redirect_uri,
-        "user_id": client_id,  # external client passes LiteLLM user-id as client_id
+        # RFC 6749 §4.1.3 defense-in-depth: if the authorization request
+        # declared a client_id, the token request must submit the same
+        # value. Stored even though we don't pre-register clients.
+        "client_id": client_id,
+        "user_id": user_id,
         "expires_at": time.time() + _AUTH_CODE_TTL_SECONDS,
     }
 
@@ -704,34 +785,60 @@ async def byok_token(
     _purge_expired_codes()
 
     if grant_type != "authorization_code":
-        raise HTTPException(status_code=400, detail="unsupported_grant_type")
+        return _oauth_token_error("unsupported_grant_type")
 
     record = _byok_auth_codes.get(code)
     if record is None:
-        raise HTTPException(status_code=400, detail="invalid_grant")
+        return _oauth_token_error("invalid_grant")
 
     if time.time() > record["expires_at"]:
         del _byok_auth_codes[code]
-        raise HTTPException(status_code=400, detail="invalid_grant")
+        return _oauth_token_error("invalid_grant")
 
     # PKCE verification
     if not _verify_pkce(code_verifier, record["code_challenge"]):
-        raise HTTPException(status_code=400, detail="invalid_grant")
+        return _oauth_token_error("invalid_grant")
 
-    # Consume the code (one-time use)
-    del _byok_auth_codes[code]
+    # RFC 6749 §4.1.3: if redirect_uri was sent with the authorization
+    # request, the token request MUST include the identical value.
+    # OAuth 2.1 draft-15 §4.1.3 drops this requirement — strict OAuth 2.1
+    # clients will omit it. Enforce equality ONLY when the client
+    # actually submitted a value, so we stay RFC 6749-backward-compatible
+    # without breaking OAuth 2.1 clients. PKCE + client_id binding
+    # (checked below) cover the security role redirect_uri played.
+    if (
+        record.get("redirect_uri")
+        and redirect_uri
+        and redirect_uri != record["redirect_uri"]
+    ):
+        return _oauth_token_error("invalid_grant")
+
+    # RFC 6749 §4.1.3: if the client was identified at /authorize, the
+    # /token request MUST authenticate as the same client. We don't
+    # pre-register clients, so an empty stored client_id skips the check.
+    if record.get("client_id") and client_id != record["client_id"]:
+        return _oauth_token_error("invalid_grant")
 
     server_id: str = record["server_id"]
     api_key_value: str = record["api_key"]
-    # Prefer the user_id that was stored when the code was issued; fall back to
-    # whatever client_id the token request supplies (they should match).
-    user_id: str = record.get("user_id") or client_id
-
+    # user_id is stamped by the authenticated /authorize POST. No client_id
+    # fallback — that fallback was the credential-hijack primitive. The
+    # token-endpoint client_id is informational per RFC 6749 and is not
+    # cross-checked against user_id (which identifies the resource owner,
+    # not the client application).
+    user_id: str = record.get("user_id") or ""
     if not user_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot determine user_id; pass LiteLLM user id as client_id",
-        )
+        return _oauth_token_error("invalid_grant")
+
+    # Verify preconditions that would fail token issuance BEFORE consuming
+    # the code or writing to the DB — otherwise a misconfigured proxy
+    # (missing master_key) silently persists the user's credential without
+    # ever returning an access token, and the user has no way to recover.
+    if master_key is None:
+        return _oauth_token_error("server_error", status=500)
+
+    # Consume the code (one-time use)
+    del _byok_auth_codes[code]
 
     # Persist the BYOK credential
     if prisma_client is not None:
@@ -756,15 +863,10 @@ async def byok_token(
                 server_id,
                 exc,
             )
-            raise HTTPException(status_code=500, detail="Failed to store credential")
+            return _oauth_token_error("server_error", status=500)
     else:
         verbose_proxy_logger.warning(
             "byok_token: prisma_client is None — credential not persisted"
-        )
-
-    if master_key is None:
-        raise HTTPException(
-            status_code=500, detail="Master key not configured; cannot issue token"
         )
 
     now = int(time.time())
@@ -785,5 +887,6 @@ async def byok_token(
             "access_token": access_token,
             "token_type": "bearer",
             "expires_in": 3600,
-        }
+        },
+        headers=TOKEN_NO_CACHE_HEADERS,
     )

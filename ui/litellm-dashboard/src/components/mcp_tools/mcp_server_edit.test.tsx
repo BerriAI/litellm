@@ -7,7 +7,7 @@ import NotificationsManager from "../molecules/notifications_manager";
 
 vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
-  testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
+  listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({

@@ -220,6 +220,7 @@ class AttachmentRegistry:
             attachment: PolicyAttachment object to add
         """
         self._attachments.append(attachment)
+        self._initialized = True
         verbose_proxy_logger.debug(f"Added attachment for policy: {attachment.policy}")
 
     def remove_attachments_for_policy(self, policy_name: str) -> int:
