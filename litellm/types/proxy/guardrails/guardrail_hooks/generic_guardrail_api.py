@@ -81,6 +81,25 @@ class GenericGuardrailAPIRequest(BaseModel):
         Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]
     ] = None
     model: Optional[str] = None  # the model being used for the LLM call
+    is_final: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Streaming action protocol: True iff this is the final guardrail call "
+            "for the stream (no more upstream chunks will arrive). The guardrail "
+            "MUST NOT return action=WAIT when is_final=True. Unset/None outside "
+            "the streaming action-protocol path."
+        ),
+    )
+
+
+# Action values returned by Generic Guardrail API responses.
+# WAIT is used only by the streaming action protocol (auto-enabled when
+# the guardrail implements apply_guardrail_action) and only when
+# is_final=False on the request.
+GENERIC_GUARDRAIL_ACTION_NONE = "NONE"
+GENERIC_GUARDRAIL_ACTION_BLOCKED = "BLOCKED"
+GENERIC_GUARDRAIL_ACTION_GUARDRAIL_INTERVENED = "GUARDRAIL_INTERVENED"
+GENERIC_GUARDRAIL_ACTION_WAIT = "WAIT"
 
 
 class GenericGuardrailAPIResponse:
