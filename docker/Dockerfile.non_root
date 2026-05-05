@@ -32,7 +32,6 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     PATH="/app/.venv/bin:${PATH}" \
     LITELLM_NON_ROOT=true \
     PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
-    PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
     XDG_CACHE_HOME=/app/.cache
 
 # Copy dependency metadata first for layer caching
@@ -114,7 +113,6 @@ COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 
 ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
-    PRISMA_CLI_BINARY_TARGETS="debian-openssl-3.0.x" \
     HOME=/app \
     LITELLM_NON_ROOT=true \
     XDG_CACHE_HOME=/app/.cache \

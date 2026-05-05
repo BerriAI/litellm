@@ -36,7 +36,6 @@ _controller_terminal_reporter = None
 # silently win, so respx-using files opt out of the auto-marker.
 _RESPX_CONFLICTING_FILES = frozenset(
     {
-        "test_azure_o_series.py",
         "test_gpt4o_audio.py",
         "test_nvidia_nim.py",
         "test_openai.py",
