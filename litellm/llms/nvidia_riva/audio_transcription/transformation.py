@@ -239,7 +239,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             "zh": "zh-CN",
             "ru": "ru-RU",
             "hi": "hi-IN",
-            "ar": "ar-AR",
+            "ar": "ar-SA",
         }
         return bare_to_bcp47.get(language.lower(), language)
 
