@@ -95,13 +95,16 @@ def _safe_body_matcher(r1, r2) -> None:
     upload paths use — before the matcher even gets a chance to return
     "not a match".
 
-    This matcher avoids the JSON normalization step entirely and just
-    compares the request bodies as bytes, falling back to repr equality
-    for non-bytes/str payloads. It is strictly more conservative than
-    vcrpy's default — the only thing it gives up is "different JSON key
-    order is treated as the same body", which doesn't matter for our
-    deterministic litellm-built request payloads. It can never produce a
-    false positive that the default would have rejected.
+    This matcher avoids the JSON normalization step entirely. It first
+    tries direct ``==`` equality on the original payloads (so dicts,
+    lists, etc. are compared structurally), then falls back to a bytes
+    comparison after coercing ``str`` to UTF-8. Anything that's not
+    bytes/str/equal-by-default is treated as a mismatch. This is
+    strictly more conservative than vcrpy's default — the only thing it
+    gives up is "different JSON key order is treated as the same body",
+    which doesn't matter for our deterministic litellm-built request
+    payloads. It can never produce a false positive that the default
+    would have rejected.
 
     The trade-off is that bodies containing nondeterministic values (UUIDs,
     timestamps) will produce a cache miss; the right fix for those cases
@@ -191,7 +194,7 @@ def apply_vcr_auto_marker_to_items(
     skip_files = frozenset(skip_files)
     skip_nodeid_suffixes = tuple(skip_nodeid_suffixes)
     for item in items:
-        filename = os.path.basename(str(item.fspath))
+        filename = os.path.basename(str(item.path))
         if filename in skip_files:
             continue
         if any(item.nodeid.endswith(suffix) for suffix in skip_nodeid_suffixes):
