@@ -128,19 +128,28 @@ class SemanticToolFilterHook(CustomLogger):
         Check whether *tool* is registered in the MCP semantic router.
 
         Classification strategy:
-        1. Standard OpenAI-format dicts (``{"type": "function",
-           "function": {"name": ...}}``) are **always** classified as
-           native — they are detected by shape (both ``"function"``
-           and ``"type"`` keys present) regardless of how
-           ``_extract_tool_info`` resolves the name.
-        2. Everything else (MCP ``Tool`` objects, flat dicts, etc.) is
+        1. Standard OpenAI Chat Completions-format dicts
+           (``{"type": "function", "function": {"name": ...}}``) are
+           **always** classified as native — detected by shape (both
+           ``"function"`` and ``"type"`` keys present).
+        2. Responses API function tools
+           (``{"type": "function", "name": ..., ...}``) are **always**
+           classified as native — detected by ``type == "function"``
+           with a top-level string ``name`` but no nested ``"function"``
+           dict.  This prevents name collisions with MCP canonicals.
+        3. Everything else (MCP ``Tool`` objects, flat dicts, etc.) is
            looked up by name in ``self.filter._tool_map``.
         """
-        # OpenAI-format dicts have name nested under "function", not at
-        # top level.  Check shape first to avoid relying on
-        # _extract_tool_info's return value for these dicts.
+        # Chat Completions format: {"type": "function", "function": {...}}
         if isinstance(tool, dict) and "function" in tool and "type" in tool:
             return False  # Standard OpenAI function tool — always native
+        # Responses API format: {"type": "function", "name": "...", ...}
+        if (
+            isinstance(tool, dict)
+            and tool.get("type") == "function"
+            and isinstance(tool.get("name"), str)
+        ):
+            return False  # Responses API function tool — always native
         name, _ = self.filter._extract_tool_info(tool)
         return bool(name) and name in self.filter._tool_map
 
@@ -313,8 +322,15 @@ class SemanticToolFilterHook(CustomLogger):
             else:
                 filtered_mcp_tools = []
 
-            # Merge: native tools always kept, filtered MCP tools appended
-            filtered_tools = native_tools + filtered_mcp_tools
+            # Merge preserving original request order — some LLMs are
+            # sensitive to the position tools appear in.
+            filtered_mcp_ids = {id(t) for t in filtered_mcp_tools}
+            mcp_ids = {id(t) for t in mcp_tools}
+            filtered_tools = [
+                t
+                for t in tools
+                if id(t) not in mcp_ids or id(t) in filtered_mcp_ids
+            ]
 
             # Always update tools
             data["tools"] = filtered_tools

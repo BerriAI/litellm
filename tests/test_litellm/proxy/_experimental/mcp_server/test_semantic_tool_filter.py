@@ -683,6 +683,197 @@ async def test_semantic_filter_hook_all_native_tools():
     )
 
 
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_responses_api_name_collision():
+    """
+    Regression test: Responses API native tool with MCP-matching name.
+
+    Given: A Responses-API native tool whose top-level ``name`` collides
+           with an MCP canonical name in ``_tool_map``
+    When:  The hook classifies tools
+    Then:  The native tool must NOT be sent to the semantic filter, even
+           though its name matches an MCP canonical.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=2,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Register an MCP tool with name "github-search"
+    mcp_tools = [
+        MCPTool(
+            name="github-search",
+            description="Search GitHub repos",
+            inputSchema={"type": "object"},
+        )
+    ]
+    filter_instance._build_router(mcp_tools)
+
+    # Responses API native tool with SAME name as MCP canonical
+    responses_api_tool = {
+        "type": "function",
+        "name": "github-search",
+        "description": "Caller-owned search tool",
+        "parameters": {"type": "object"},
+    }
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    # Verify classification: should be native, not MCP
+    assert not hook._is_mcp_tool(responses_api_tool), (
+        "Responses API tool with type=function + top-level name "
+        "should be classified as native, not MCP"
+    )
+
+    # Full hook test: all-native request should preserve tools
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Search GitHub"}],
+        "tools": [responses_api_tool],
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    # All tools are native → hook returns data with all tools preserved
+    filtered = (result or data)["tools"]
+    assert len(filtered) == 1, f"Native tool must survive, got {len(filtered)}"
+    assert filtered[0]["name"] == "github-search"
+
+    print("✅ Responses API tool with MCP-matching name correctly classified as native")
+
+
+@pytest.mark.asyncio
+async def test_semantic_filter_hook_preserves_tool_order():
+    """
+    Regression test: tool ordering preservation.
+
+    Given: An interleaved request [mcp_tool_A, native_tool, mcp_tool_B]
+    When:  The hook filters tools (all MCP tools survive)
+    Then:  The output order must match the original request order,
+           NOT native-first.
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+    from litellm.types.utils import Embedding, EmbeddingResponse
+
+    mock_router = Mock()
+
+    def mock_embedding_sync(*args, **kwargs):
+        return EmbeddingResponse(
+            data=[Embedding(embedding=[0.1] * 1536, index=0, object="embedding")],
+            model="text-embedding-3-small",
+            object="list",
+            usage={"prompt_tokens": 10, "total_tokens": 10},
+        )
+
+    async def mock_embedding_async(*args, **kwargs):
+        return mock_embedding_sync()
+
+    mock_router.embedding = mock_embedding_sync
+    mock_router.aembedding = mock_embedding_async
+
+    filter_instance = SemanticMCPToolFilter(
+        embedding_model="text-embedding-3-small",
+        litellm_router_instance=mock_router,
+        top_k=5,
+        similarity_threshold=0.3,
+        enabled=True,
+    )
+
+    # Register MCP tools
+    mcp_tool_a = MCPTool(
+        name="github-search",
+        description="Search GitHub",
+        inputSchema={"type": "object"},
+    )
+    mcp_tool_b = MCPTool(
+        name="github-issue",
+        description="Create GitHub issue",
+        inputSchema={"type": "object"},
+    )
+    filter_instance._build_router([mcp_tool_a, mcp_tool_b])
+
+    # Mock filter_tools to return both MCP tools (deterministic)
+    filter_instance.filter_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value=[mcp_tool_a, mcp_tool_b]
+    )
+
+    # Native tool (interleaved between MCP tools)
+    native_tool = {
+        "type": "function",
+        "function": {
+            "name": "weather_lookup",
+            "description": "Look up weather",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+    # Original order: [mcp_A, native, mcp_B]
+    original_tools = [mcp_tool_a, native_tool, mcp_tool_b]
+
+    hook = SemanticToolFilterHook(filter_instance)
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Search GitHub and check weather"}],
+        "tools": original_tools,
+        "metadata": {},
+    }
+
+    result = await hook.async_pre_call_hook(
+        user_api_key_dict=Mock(),
+        cache=Mock(),
+        data=data,
+        call_type="completion",
+    )
+
+    assert result is not None, "Hook should return modified data"
+    filtered = result["tools"]
+
+    # All tools should survive
+    assert len(filtered) == 3, f"Expected 3 tools, got {len(filtered)}"
+
+    # Order must be preserved: [mcp_A, native, mcp_B]
+    assert filtered[0] is mcp_tool_a, "First tool should be mcp_tool_a"
+    assert filtered[1] is native_tool, "Second tool should be native_tool"
+    assert filtered[2] is mcp_tool_b, "Third tool should be mcp_tool_b"
+
+    print("✅ Tool ordering preserved: [mcp_A, native, mcp_B] maintained after filtering")
+
+
 class TestGetToolsByNames:
     """
     Regression coverage for SemanticMCPToolFilter._get_tools_by_names
