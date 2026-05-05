@@ -71,6 +71,7 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME = "bedrock"
+_BEDROCK_DYNAMIC_BODY_DENYLIST = frozenset({"content", "source"})
 
 
 class GuardrailMessageFilterResult(NamedTuple):
@@ -413,10 +414,17 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         api_key: Optional[str] = None
         if request_data:
-            bedrock_request_data.update(
+            dynamic_request_body_params = (
                 self.get_guardrail_dynamic_request_body_params(
                     request_data=request_data
                 )
+            )
+            bedrock_request_data.update(
+                {
+                    key: value
+                    for key, value in dynamic_request_body_params.items()
+                    if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
+                }
             )
             if request_data.get("api_key") is not None:
                 api_key = request_data["api_key"]

@@ -565,3 +565,133 @@ async def test_organization_info_includes_user_email(monkeypatch):
 
     membership = LiteLLM_OrganizationMembershipTable(**raw_membership)
     assert membership.user_email == "alice@example.com"
+
+
+# Regression tests for IDOR fixes on org-scoped endpoints. Sibling cluster
+# to GHSA-xxv2-fprq-9x93 (team callback IDOR): the same shape of "any
+# authenticated key holder reaches an endpoint that takes an
+# organization_id from the request body without an access guard." The
+# fix routes ``update_organization``, ``organization_member_add``,
+# ``organization_member_update``, and ``organization_member_delete``
+# through the existing ``_verify_org_access`` helper.
+
+
+@pytest.fixture
+def unauthorized_caller():
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="random_authenticated_user",
+        api_key="sk-random",
+    )
+
+
+@pytest.fixture
+def patched_org_prisma():
+    """Mock prisma so that find_unique returns a victim org and
+    get_user_object reports the caller has no org membership — so
+    _verify_org_access raises 403."""
+    victim_row = MagicMock()
+    victim_row.organization_id = "org-victim"
+    victim_row.metadata = {}
+    victim_row.model_dump.return_value = {"organization_id": "org-victim"}
+
+    caller_user = MagicMock()
+    caller_user.organization_memberships = []  # no admin role anywhere
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.organization_endpoints.get_user_object",
+            new_callable=AsyncMock,
+            return_value=caller_user,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.user_api_key_cache",
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),
+    ):
+        mock_prisma.db.litellm_organizationtable.find_unique = AsyncMock(
+            return_value=victim_row
+        )
+        yield mock_prisma
+
+
+@pytest.mark.asyncio
+async def test_organization_member_add_rejects_unauthorized_caller(
+    patched_org_prisma, unauthorized_caller
+):
+    # ``organization_member_add`` catches HTTPException in its
+    # catch-all and re-wraps as ProxyException with the original status
+    # code preserved.
+    from litellm.proxy._types import (
+        OrganizationMemberAddRequest,
+        OrgMember,
+        ProxyException,
+    )
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        organization_member_add,
+    )
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    data = OrganizationMemberAddRequest(
+        organization_id="org-victim",
+        member=OrgMember(role="internal_user", user_id="attacker-user"),
+    )
+
+    with pytest.raises((HTTPException, ProxyException)) as exc:
+        await organization_member_add(
+            data=data,
+            http_request=Mock(spec=Request),
+            user_api_key_dict=unauthorized_caller,
+        )
+    code = getattr(exc.value, "status_code", None) or getattr(exc.value, "code", None)
+    assert int(code) == 403
+
+
+@pytest.mark.asyncio
+async def test_organization_member_update_rejects_unauthorized_caller(
+    patched_org_prisma, unauthorized_caller
+):
+    from litellm.proxy._types import OrganizationMemberUpdateRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        organization_member_update,
+    )
+
+    data = OrganizationMemberUpdateRequest(
+        organization_id="org-victim",
+        user_id="some-other-user",
+        role="org_admin",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await organization_member_update(
+            data=data,
+            user_api_key_dict=unauthorized_caller,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_organization_member_delete_rejects_unauthorized_caller(
+    patched_org_prisma, unauthorized_caller
+):
+    from litellm.proxy._types import OrganizationMemberDeleteRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        organization_member_delete,
+    )
+
+    data = OrganizationMemberDeleteRequest(
+        organization_id="org-victim",
+        user_id="some-other-user",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await organization_member_delete(
+            data=data,
+            user_api_key_dict=unauthorized_caller,
+        )
+    assert exc.value.status_code == 403

@@ -23,6 +23,21 @@ def mock_mcp_client_ip():
         yield
 
 
+@pytest.fixture
+def trust_xff():
+    """Force ``IPAddressUtils.is_request_from_trusted_proxy`` to True.
+
+    Tests that exercise X-Forwarded-* parsing logic opt into this fixture.
+    The trust gate's own behaviour is covered by
+    ``test_get_request_base_url_xff_trust_gate``.
+    """
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.is_request_from_trusted_proxy",
+        return_value=True,
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_authorize_endpoint_includes_response_type():
     """Test that authorize endpoint includes response_type=code parameter (fixes #15684)"""
@@ -230,7 +245,6 @@ async def test_authorize_endpoint_forwards_pkce_parameters():
 async def test_token_endpoint_forwards_code_verifier():
     """Test that token endpoint forwards code_verifier for PKCE flow"""
     try:
-        import httpx
         from fastapi import Request
 
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
@@ -506,6 +520,7 @@ async def test_register_client_remote_registration_success():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_authorize_endpoint_respects_x_forwarded_proto():
     """Test that authorize endpoint uses X-Forwarded-Proto header to construct correct redirect_uri"""
     try:
@@ -573,6 +588,7 @@ async def test_authorize_endpoint_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_token_endpoint_respects_x_forwarded_proto():
     """Test that token endpoint uses X-Forwarded-Proto header for redirect_uri"""
     try:
@@ -632,8 +648,7 @@ async def test_token_endpoint_respects_x_forwarded_proto():
     ) as mock_get_client:
         mock_get_client.return_value = mock_async_client
 
-        # Call token endpoint
-        response = await token_endpoint(
+        await token_endpoint(
             request=mock_request,
             grant_type="authorization_code",
             code="test_code",
@@ -652,6 +667,7 @@ async def test_token_endpoint_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_oauth_protected_resource_respects_x_forwarded_proto():
     """Test that oauth_protected_resource_mcp uses X-Forwarded-Proto for URLs"""
     try:
@@ -706,6 +722,7 @@ async def test_oauth_protected_resource_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_oauth_authorization_server_respects_x_forwarded_proto():
     """Test that oauth_authorization_server_mcp uses X-Forwarded-Proto for URLs"""
     try:
@@ -761,6 +778,7 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_register_client_respects_x_forwarded_proto():
     """Test that register_client uses X-Forwarded-Proto for redirect_uris"""
     try:
@@ -798,6 +816,7 @@ async def test_register_client_respects_x_forwarded_proto():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_authorize_endpoint_respects_x_forwarded_host():
     """Test that authorize endpoint uses X-Forwarded-Host and X-Forwarded-Proto to construct correct redirect_uri"""
     try:
@@ -871,6 +890,7 @@ async def test_authorize_endpoint_respects_x_forwarded_host():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("trust_xff")
 async def test_token_endpoint_respects_x_forwarded_host():
     """Test that token endpoint uses X-Forwarded-Host and X-Forwarded-Proto for redirect_uri"""
     try:
@@ -933,8 +953,7 @@ async def test_token_endpoint_respects_x_forwarded_host():
     ) as mock_get_client:
         mock_get_client.return_value = mock_async_client
 
-        # Call token endpoint
-        response = await token_endpoint(
+        await token_endpoint(
             request=mock_request,
             grant_type="authorization_code",
             code="test_code",
@@ -1074,7 +1093,12 @@ async def test_token_endpoint_respects_x_forwarded_host():
 def test_get_request_base_url_comprehensive(
     base_url, x_forwarded_proto, x_forwarded_host, x_forwarded_port, expected_url
 ):
-    """Comprehensive test for get_request_base_url with various header combinations"""
+    """Comprehensive test for get_request_base_url with various header combinations.
+
+    These cases exercise the X-Forwarded-* parsing logic, so the trust gate
+    is patched True; the gate's own behaviour is covered by the
+    ``test_get_request_base_url_xff_trust_gate`` matrix below.
+    """
     try:
         from fastapi import Request
 
@@ -1084,11 +1108,9 @@ def test_get_request_base_url_comprehensive(
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
-    # Create mock request
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = base_url
 
-    # Build headers dict
     headers = {}
     if x_forwarded_proto:
         headers["X-Forwarded-Proto"] = x_forwarded_proto
@@ -1097,16 +1119,17 @@ def test_get_request_base_url_comprehensive(
     if x_forwarded_port:
         headers["X-Forwarded-Port"] = x_forwarded_port
 
-    # Mock headers.get() to return our test values
     def mock_get(header_name, default=None):
         return headers.get(header_name, default)
 
     mock_request.headers.get = mock_get
 
-    # Test the function
-    result = get_request_base_url(mock_request)
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.is_request_from_trusted_proxy",
+        return_value=True,
+    ):
+        result = get_request_base_url(mock_request)
 
-    # Verify result
     assert result == expected_url, (
         f"Expected '{expected_url}' but got '{result}'\n"
         f"Input: base_url={base_url}, "
@@ -1114,6 +1137,131 @@ def test_get_request_base_url_comprehensive(
         f"X-Forwarded-Host={x_forwarded_host}, "
         f"X-Forwarded-Port={x_forwarded_port}"
     )
+
+
+@pytest.mark.parametrize(
+    "general_settings,direct_ip,expect_xff_honoured",
+    [
+        # Default: use_x_forwarded_for not set -> ignore X-Forwarded-* entirely.
+        ({}, "127.0.0.1", False),
+        # XFF enabled, no trusted ranges -> still ignored (no way to tell a trusted
+        # reverse proxy from a direct attacker).
+        ({"use_x_forwarded_for": True}, "127.0.0.1", False),
+        # XFF enabled, ranges set, but caller IP outside any range -> ignored.
+        (
+            {
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+            },
+            "203.0.113.5",
+            False,
+        ),
+        # XFF enabled, caller in trusted range -> headers honoured.
+        (
+            {
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["10.0.0.0/8"],
+            },
+            "10.0.0.7",
+            True,
+        ),
+        # Loopback example (common dev / single-host deploy).
+        (
+            {
+                "use_x_forwarded_for": True,
+                "mcp_trusted_proxy_ranges": ["127.0.0.0/8"],
+            },
+            "127.0.0.1",
+            True,
+        ),
+    ],
+)
+def test_get_request_base_url_xff_trust_gate(
+    general_settings, direct_ip, expect_xff_honoured
+):
+    """Verify the X-Forwarded-* trust gate.
+
+    With XFF poisoning attempted, the helper must return either the literal
+    base_url (gate denies) or the forwarded URL (gate allows), never the
+    forwarded URL when the gate denies.
+    """
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = direct_ip
+
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "attacker.example.com",
+    }
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+    mock_request.headers.__contains__ = lambda self_, name: name in headers
+
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        general_settings,
+        create=True,
+    ):
+        result = get_request_base_url(mock_request)
+
+    if expect_xff_honoured:
+        assert result == "https://attacker.example.com"
+    else:
+        assert result == "http://localhost:4000"
+
+
+def test_xff_misconfig_warning_emitted_once(caplog):
+    """Operators upgrading from the old "always trust X-Forwarded-*" behaviour
+    get a one-shot warning when they have ``use_x_forwarded_for`` enabled
+    but no ``mcp_trusted_proxy_ranges`` configured. The warning must NOT
+    spam every request."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy import auth as proxy_auth_pkg  # noqa: F401
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            get_request_base_url,
+        )
+        from litellm.proxy.auth import ip_address_utils
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    # Reset the module-level one-shot flag so the test is deterministic.
+    ip_address_utils._warned_xff_without_trusted_ranges = False
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "203.0.113.5"
+    headers = {"X-Forwarded-Host": "attacker.example.com"}
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+
+    misconfig = {"use_x_forwarded_for": True}
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        patch("litellm.proxy.proxy_server.general_settings", misconfig, create=True),
+    ):
+        for _ in range(3):
+            get_request_base_url(mock_request)
+
+    matching = [
+        rec for rec in caplog.records if "mcp_trusted_proxy_ranges" in rec.getMessage()
+    ]
+    assert (
+        len(matching) == 1
+    ), f"expected exactly one warning, got {len(matching)}: {[r.getMessage() for r in matching]}"
 
 
 # -------------------------------------------------------------------
@@ -1240,6 +1388,7 @@ def _create_oauth2_server(
     alias="test_oauth",
     client_id="test_client_id",
     client_secret="test_client_secret",
+    available_on_public_internet=True,
 ):
     """Helper to create a mock OAuth2 MCPServer."""
     from litellm.proxy._types import MCPTransport
@@ -1258,6 +1407,7 @@ def _create_oauth2_server(
         authorization_url="https://provider.com/oauth/authorize",
         token_url="https://provider.com/oauth/token",
         scopes=["read", "write"],
+        available_on_public_internet=available_on_public_internet,
     )
 
 
@@ -1353,6 +1503,47 @@ async def test_authorize_root_fails_with_multiple_oauth2_servers():
 
 
 @pytest.mark.asyncio
+async def test_authorize_root_does_not_resolve_private_server_for_external_client():
+    """Root /authorize must not auto-select an MCP server hidden from the caller IP."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            authorize,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server(available_on_public_internet=False)
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
+            return_value="198.51.100.10",
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await authorize(
+                    request=mock_request,
+                    client_id="dummy_client",
+                    mcp_server_name=None,
+                    redirect_uri="http://localhost:62646/callback",
+                    state="test_state",
+                )
+        assert exc_info.value.status_code == 404
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
 async def test_token_root_resolves_single_oauth2_server():
     """When /token is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
     try:
@@ -1418,6 +1609,50 @@ async def test_token_root_resolves_single_oauth2_server():
 
 
 @pytest.mark.asyncio
+async def test_token_root_does_not_resolve_private_server_for_external_client():
+    """Root /token must not exchange codes for a hidden MCP server."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            token_endpoint,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server(available_on_public_internet=False)
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
+            return_value="198.51.100.10",
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await token_endpoint(
+                    request=mock_request,
+                    grant_type="authorization_code",
+                    code="test_auth_code",
+                    redirect_uri="http://localhost:62646/callback",
+                    client_id="dummy_client",
+                    mcp_server_name=None,
+                    client_secret=None,
+                    code_verifier="test_verifier",
+                )
+        assert exc_info.value.status_code == 404
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
 async def test_register_root_resolves_single_oauth2_server():
     """When /register is hit without server name and exactly 1 OAuth2 server exists, resolve it."""
     try:
@@ -1450,6 +1685,48 @@ async def test_register_root_resolves_single_oauth2_server():
         # Should resolve to the single server and return its name as client_id
         assert result["client_id"] == "test_oauth"
         assert "redirect_uris" in result
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_register_root_does_not_resolve_private_server_for_external_client():
+    """Root /register must not reveal or use a hidden MCP server."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            register_client,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server(available_on_public_internet=False)
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+                new=AsyncMock(return_value={}),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
+                return_value="198.51.100.10",
+            ),
+        ):
+            result = await register_client(request=mock_request, mcp_server_name=None)
+
+        assert result["client_id"] == "dummy_client"
+        assert result["redirect_uris"] == ["https://llm.example.com/callback"]
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -1489,6 +1766,54 @@ async def test_discovery_root_includes_server_name_prefix():
         assert "/test_oauth/token" in response["token_endpoint"]
         assert "/test_oauth/register" in response["registration_endpoint"]
         assert response["scopes_supported"] == ["read", "write"]
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+
+@pytest.mark.asyncio
+async def test_discovery_root_does_not_expose_private_server_for_external_client():
+    """Root discovery must use caller visibility before adding server-specific metadata."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+            _build_oauth_protected_resource_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = _create_oauth2_server(available_on_public_internet=False)
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://llm.example.com/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
+            return_value="198.51.100.10",
+        ):
+            authorization_response = _build_oauth_authorization_server_response(
+                request=mock_request,
+                mcp_server_name=None,
+            )
+            resource_response = _build_oauth_protected_resource_response(
+                request=mock_request,
+                mcp_server_name=None,
+                use_standard_pattern=False,
+            )
+
+        assert "/test_oauth/" not in authorization_response["authorization_endpoint"]
+        assert "/test_oauth/" not in authorization_response["token_endpoint"]
+        assert authorization_response["scopes_supported"] == []
+        assert resource_response["authorization_servers"] == ["https://llm.example.com"]
+        assert resource_response["scopes_supported"] == []
     finally:
         global_mcp_server_manager.registry.clear()
 
@@ -1534,6 +1859,44 @@ async def test_oauth_callback_redirects_with_state():
 
         # Verify state was decoded
         mock_decode.assert_called_once_with("encrypted_state_value")
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_preserves_client_redirect_uri_query():
+    """The callback should append code/state without dropping a client's existing query."""
+    try:
+        from urllib.parse import parse_qs, urlparse
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            callback,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.return_value = {
+            "base_url": "http://localhost:3000/ui/mcp/oauth/callback",
+            "original_state": "test-uuid-state-123",
+            "code_challenge": "test_challenge",
+            "code_challenge_method": "S256",
+            "client_redirect_uri": (
+                "http://localhost:3000/ui/mcp/oauth/callback?session=abc"
+            ),
+        }
+
+        response = await callback(
+            code="test_authorization_code_12345",
+            state="encrypted_state_value",
+        )
+
+    assert response.status_code == 302
+    parsed_location = urlparse(response.headers["location"])
+    query_params = parse_qs(parsed_location.query)
+    assert query_params["session"] == ["abc"]
+    assert query_params["code"] == ["test_authorization_code_12345"]
+    assert query_params["state"] == ["test-uuid-state-123"]
 
 
 @pytest.mark.asyncio
@@ -1945,6 +2308,48 @@ async def test_callback_revalidates_loopback_on_decoded_base_url():
         }
         with pytest.raises(HTTPException) as exc_info:
             await callback(code="stolen_code", state="encrypted_stale_state")
+        assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_callback_revalidates_loopback_on_decoded_client_redirect_uri():
+    """If a state contains a full client_redirect_uri, validate that exact sink."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        callback,
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.return_value = {
+            "base_url": "http://localhost:3000/cb",
+            "original_state": "s",
+            "code_challenge": None,
+            "code_challenge_method": None,
+            "client_redirect_uri": "https://attacker.example.com/cb",
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            await callback(code="stolen_code", state="encrypted_stale_state")
+        assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_state_missing_redirect_uri():
+    """Malformed state without a redirect target should fail with a structured 400."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        callback,
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.return_value = {
+            "original_state": "s",
+            "code_challenge": None,
+            "code_challenge_method": None,
+        }
+        with pytest.raises(HTTPException) as exc_info:
+            await callback(code="code", state="encrypted_malformed_state")
         assert exc_info.value.status_code == 400
 
 
