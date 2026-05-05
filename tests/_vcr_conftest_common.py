@@ -36,6 +36,9 @@ from tests._vcr_redis_persister import (
     vcr_verbose_enabled,
 )
 
+
+SAFE_BODY_MATCHER_NAME = "safe_body"
+
 FILTERED_REQUEST_HEADERS = (
     "authorization",
     "x-api-key",
@@ -82,6 +85,51 @@ def _before_record_response(response):
     return filter_non_2xx_response(_scrub_response(response))
 
 
+def _safe_body_matcher(r1, r2) -> None:
+    """Body matcher that compares raw bytes and never raises on bad JSON.
+
+    vcrpy's stock ``body`` matcher inspects ``Content-Type`` and runs
+    ``json.loads`` on bodies typed ``application/json`` so it can compare
+    semantically. That crashes (``json.JSONDecodeError: Extra data``) on
+    JSON Lines payloads — which the Bedrock batch S3 PUT and a few other
+    upload paths use — before the matcher even gets a chance to return
+    "not a match".
+
+    This matcher avoids the JSON normalization step entirely and just
+    compares the request bodies as bytes, falling back to repr equality
+    for non-bytes/str payloads. It is strictly more conservative than
+    vcrpy's default — the only thing it gives up is "different JSON key
+    order is treated as the same body", which doesn't matter for our
+    deterministic litellm-built request payloads. It can never produce a
+    false positive that the default would have rejected.
+
+    The trade-off is that bodies containing nondeterministic values (UUIDs,
+    timestamps) will produce a cache miss; the right fix for those cases
+    is a ``before_record_request`` scrubber, not a smarter matcher.
+    """
+    body1 = getattr(r1, "body", None)
+    body2 = getattr(r2, "body", None)
+    if body1 == body2:
+        return
+
+    def _to_bytes(b):
+        if b is None:
+            return b""
+        if isinstance(b, bytes):
+            return b
+        if isinstance(b, str):
+            return b.encode("utf-8")
+        return None
+
+    n1 = _to_bytes(body1)
+    n2 = _to_bytes(body2)
+    if n1 is not None and n2 is not None:
+        if n1 == n2:
+            return
+        raise AssertionError("request bodies differ")
+    raise AssertionError("request bodies differ")
+
+
 def vcr_config_dict() -> dict:
     """Return the VCR config dict shared across all consuming conftests."""
     return {
@@ -96,7 +144,7 @@ def vcr_config_dict() -> dict:
             "port",
             "path",
             "query",
-            "body",
+            SAFE_BODY_MATCHER_NAME,
         ),
         "before_record_response": _before_record_response,
     }
@@ -110,13 +158,15 @@ def vcr_disabled() -> bool:
 
 
 def register_persister_if_enabled(vcr) -> None:
-    """Wire the Redis persister into vcrpy if VCR is enabled.
+    """Wire the Redis persister and custom matchers into vcrpy if VCR is
+    enabled.
 
     Call this from ``pytest_recording_configure(config, vcr)`` in conftest.
     """
     if vcr_disabled():
         return
     vcr.register_persister(make_redis_persister())
+    vcr.register_matcher(SAFE_BODY_MATCHER_NAME, _safe_body_matcher)
     patch_vcrpy_aiohttp_record_path()
 
 
