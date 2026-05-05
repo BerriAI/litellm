@@ -11,14 +11,15 @@ authors = [
 ]
 dependencies = [
     # Ranges (not exact pins) so SDK consumers can coexist with their other
-    # deps. Reproducibility for our Docker/CI comes from `uv.lock`. The
-    # `dependency-floors` CI job validates the floors actually install.
+    # deps. Reproducibility for our Docker/CI comes from `uv.lock`.
+    # When changing a floor, verify it installs + imports on every supported
+    # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0",
     "httpx>=0.28.0,<1.0",
     "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",
     "tiktoken>=0.8.0,<1.0",
-    "importlib-metadata>=8.0.0",
+    "importlib-metadata>=8.0.0,<9.0",
     "tokenizers>=0.21.0,<1.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.0,<4.0",
