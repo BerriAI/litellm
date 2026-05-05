@@ -70,19 +70,16 @@ def make_redis_persister(
     redis_client = client if client is not None else _build_default_client()
 
     try:
-        from redis.exceptions import ConnectionError as RedisConnectionError
-        from redis.exceptions import TimeoutError as RedisTimeoutError
-
-        _transient_errors: tuple = (RedisConnectionError, RedisTimeoutError)
+        from redis.exceptions import RedisError
     except ImportError:  # pragma: no cover - redis is a hard test dep
-        _transient_errors = ()
+        RedisError = Exception  # type: ignore[assignment,misc]
 
     class _RedisPersister:
         @staticmethod
         def load_cassette(cassette_path, serializer):
             try:
                 data = redis_client.get(redis_key_for(cassette_path))
-            except _transient_errors as exc:
+            except RedisError as exc:
                 _log.warning(
                     "VCR redis load failed for %s; treating as cache miss: %s",
                     cassette_path,
@@ -123,7 +120,12 @@ def make_redis_persister(
             payload = data.encode("utf-8") if isinstance(data, str) else data
             try:
                 redis_client.set(key, payload, ex=ttl_seconds)
-            except _transient_errors as exc:
+            except RedisError as exc:
+                # Cassette persistence is strictly best-effort: connection
+                # blips, timeouts, OOM at the maxmemory cap, READONLY
+                # replicas, etc. should all degrade gracefully to "test
+                # passed but cassette not cached" rather than failing the
+                # test on teardown.
                 _log.warning(
                     "VCR redis save failed for %s; cassette not persisted: %s",
                     cassette_path,

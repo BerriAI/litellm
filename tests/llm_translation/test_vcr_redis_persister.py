@@ -6,6 +6,8 @@ import sys
 import fakeredis
 import pytest
 from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import OutOfMemoryError as RedisOutOfMemoryError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from vcr.persisters.filesystem import CassetteNotFoundError
 from vcr.request import Request
 from vcr.serializers import yamlserializer
@@ -107,23 +109,42 @@ def test_redis_key_is_stable_across_working_directories(tmp_path, monkeypatch):
 
 
 class _FlakyRedis:
-    def __init__(self, inner, fail_on: str):
+    def __init__(self, inner, fail_on: str, exc=None):
         self._inner = inner
         self._fail_on = fail_on
+        self._exc = exc if exc is not None else RedisConnectionError("simulated outage")
 
     def get(self, *args, **kwargs):
         if self._fail_on == "get":
-            raise RedisConnectionError("simulated outage")
+            raise self._exc
         return self._inner.get(*args, **kwargs)
 
     def set(self, *args, **kwargs):
         if self._fail_on == "set":
-            raise RedisConnectionError("simulated outage")
+            raise self._exc
         return self._inner.set(*args, **kwargs)
 
 
-def test_save_swallows_connection_errors_so_teardown_does_not_fail():
-    flaky = _FlakyRedis(fakeredis.FakeStrictRedis(), fail_on="set")
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RedisConnectionError("simulated outage"),
+        RedisTimeoutError("simulated timeout"),
+        RedisOutOfMemoryError("command not allowed when used memory > 'maxmemory'."),
+    ],
+    ids=["connection_error", "timeout", "out_of_memory"],
+)
+def test_save_swallows_redis_errors_so_teardown_does_not_fail(exc):
+    """Redis-side failures during cassette persistence must never fail
+    the test on teardown.
+
+    Regression: previously the persister only swallowed
+    ConnectionError/TimeoutError, so OutOfMemoryError (raised by Redis
+    Cloud when the cassette cache hit its maxmemory cap) propagated out
+    of vcrpy's autouse fixture and failed otherwise-passing tests on
+    teardown.
+    """
+    flaky = _FlakyRedis(fakeredis.FakeStrictRedis(), fail_on="set", exc=exc)
     persister = make_redis_persister(client=flaky)
 
     persister.save_cassette(
@@ -229,8 +250,17 @@ def test_save_proceeds_when_outcome_unknown():
     assert fake.get(key) is not None
 
 
-def test_load_treats_connection_errors_as_cassette_miss():
-    flaky = _FlakyRedis(fakeredis.FakeStrictRedis(), fail_on="get")
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RedisConnectionError("simulated outage"),
+        RedisTimeoutError("simulated timeout"),
+        RedisOutOfMemoryError("command not allowed when used memory > 'maxmemory'."),
+    ],
+    ids=["connection_error", "timeout", "out_of_memory"],
+)
+def test_load_treats_redis_errors_as_cassette_miss(exc):
+    flaky = _FlakyRedis(fakeredis.FakeStrictRedis(), fail_on="get", exc=exc)
     persister = make_redis_persister(client=flaky)
 
     with pytest.raises(CassetteNotFoundError):
