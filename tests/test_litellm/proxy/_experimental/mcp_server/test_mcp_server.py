@@ -1154,31 +1154,39 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
         async def stateful_handle(s, r, se):
             stateful_called.append(1)
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-            new_callable=AsyncMock,
-            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-            True,
-        ), patch.object(
-            session_manager_stateless,
-            "handle_request",
-            side_effect=stateless_handle,
-        ), patch.object(
-            session_manager_stateful,
-            "handle_request",
-            side_effect=stateful_handle,
-        ), patch.object(
-            session_manager_stateless,
-            "_server_instances",
-            {},
-        ), patch.object(
-            session_manager_stateful,
-            "_server_instances",
-            {},
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                session_manager_stateless,
+                "handle_request",
+                side_effect=stateless_handle,
+            ),
+            patch.object(
+                session_manager_stateful,
+                "handle_request",
+                side_effect=stateful_handle,
+            ),
+            patch.object(
+                session_manager_stateless,
+                "_server_instances",
+                {},
+            ),
+            patch.object(
+                session_manager_stateful,
+                "_server_instances",
+                {},
+            ),
         ):
             await handle_streamable_http_mcp(scope, receive, send)
 
@@ -1187,16 +1195,16 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
     # initialize → stateful
     init_body = b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}'
     stateless_called, stateful_called = await make_request(init_body)
-    assert stateful_called and not stateless_called, (
-        "initialize (no session) should route to stateful, not stateless"
-    )
+    assert (
+        stateful_called and not stateless_called
+    ), "initialize (no session) should route to stateful, not stateless"
 
     # tools/list → stateless
     tools_body = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
     stateless_called, stateful_called = await make_request(tools_body)
-    assert stateless_called and not stateful_called, (
-        "tools/list (no session) should route to stateless, not stateful"
-    )
+    assert (
+        stateless_called and not stateful_called
+    ), "tools/list (no session) should route to stateless, not stateful"
 
 
 @pytest.mark.asyncio
@@ -1377,6 +1385,36 @@ async def test_stateful_mcp_requests_refresh_session_auth_context():
         "",
     )
     mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+
+
+@pytest.mark.asyncio
+async def test_stateful_mcp_auth_contexts_expire_with_idle_sessions():
+    """Expired session auth contexts should not remain in memory indefinitely."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "expired-stateful-session"
+    auth_user = UserAPIKeyAuth(api_key="expired-key", user_id="expired-user")
+    transport = MagicMock()
+    now = 1000.0
+
+    mcp_server._stateful_session_auth_contexts[session_id] = auth_user
+    mcp_server._stateful_session_auth_context_last_seen[session_id] = (
+        now - mcp_server._STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
+    )
+
+    with patch.object(
+        mcp_server.session_manager_stateful,
+        "_server_instances",
+        {session_id: transport},
+    ):
+        await mcp_server._purge_expired_stateful_session_auth_contexts(now=now)
+
+    assert session_id not in mcp_server._stateful_session_auth_contexts
+    assert session_id not in mcp_server._stateful_session_auth_context_last_seen
+    transport.terminate.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -3405,4 +3443,3 @@ async def test_call_tool_empty_extra_headers_returns_none():
         "P2 API consistency issue: expected None for empty extra_headers, got: "
         + str(captured_extra_headers)
     )
-

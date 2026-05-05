@@ -70,6 +70,7 @@ from litellm.utils import Rules, client, function_setup
 _byok_cred_cache: Dict[Tuple[str, str], Tuple[Optional[str], float]] = {}
 _BYOK_CRED_CACHE_TTL = 60  # seconds
 _BYOK_CRED_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
+_STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS = 30 * 60
 
 
 def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
@@ -251,6 +252,7 @@ if MCP_AVAILABLE:
         stateless=False,
     )
     _stateful_session_auth_contexts: Dict[str, MCPAuthenticatedUser] = {}
+    _stateful_session_auth_context_last_seen: Dict[str, float] = {}
 
     # Keep this alias so existing references to session_manager still work
     session_manager = session_manager_stateless
@@ -267,10 +269,40 @@ if MCP_AVAILABLE:
     _session_manager_cm = None
     _session_manager_stateful_cm = None
     _sse_session_manager_cm = None
+    _stateful_auth_context_cleanup_task: Optional[asyncio.Task] = None
+
+    async def _purge_expired_stateful_session_auth_contexts(
+        now: Optional[float] = None,
+    ) -> None:
+        """Terminate expired stateful sessions and drop their auth contexts."""
+        now = now or time.monotonic()
+        server_instances = getattr(session_manager_stateful, "_server_instances", {})
+        expired_session_ids = [
+            session_id
+            for session_id, last_seen in _stateful_session_auth_context_last_seen.items()
+            if now - last_seen >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
+            or session_id not in server_instances
+        ]
+
+        for session_id in expired_session_ids:
+            _stateful_session_auth_contexts.pop(session_id, None)
+            _stateful_session_auth_context_last_seen.pop(session_id, None)
+            transport = server_instances.pop(session_id, None)
+            if transport is not None:
+                await transport.terminate()
+
+        for session_id in list(_stateful_session_auth_context_last_seen):
+            if session_id not in _stateful_session_auth_contexts:
+                _stateful_session_auth_context_last_seen.pop(session_id, None)
+
+    async def _cleanup_expired_stateful_session_auth_contexts() -> None:
+        while True:
+            await asyncio.sleep(_STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS)
+            await _purge_expired_stateful_session_auth_contexts()
 
     async def initialize_session_managers():
         """Initialize the session managers. Can be called from main app lifespan."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm, _stateful_auth_context_cleanup_task
 
         # Use async lock to prevent concurrent initialization
         async with _INITIALIZATION_LOCK:
@@ -288,6 +320,9 @@ if MCP_AVAILABLE:
             await _session_manager_cm.__aenter__()
             await _session_manager_stateful_cm.__aenter__()
             await _sse_session_manager_cm.__aenter__()
+            _stateful_auth_context_cleanup_task = asyncio.create_task(
+                _cleanup_expired_stateful_session_auth_contexts()
+            )
 
             _SESSION_MANAGERS_INITIALIZED = True
             verbose_logger.info(
@@ -296,12 +331,16 @@ if MCP_AVAILABLE:
 
     async def shutdown_session_managers():
         """Shutdown the session managers."""
-        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm
+        global _SESSION_MANAGERS_INITIALIZED, _session_manager_cm, _session_manager_stateful_cm, _sse_session_manager_cm, _stateful_auth_context_cleanup_task
 
         if _SESSION_MANAGERS_INITIALIZED:
             verbose_logger.info("Shutting down MCP session managers...")
 
             try:
+                if _stateful_auth_context_cleanup_task:
+                    _stateful_auth_context_cleanup_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await _stateful_auth_context_cleanup_task
                 if _session_manager_cm:
                     await _session_manager_cm.__aexit__(None, None, None)
                 if _session_manager_stateful_cm:
@@ -314,6 +353,7 @@ if MCP_AVAILABLE:
             _session_manager_cm = None
             _session_manager_stateful_cm = None
             _sse_session_manager_cm = None
+            _stateful_auth_context_cleanup_task = None
             _SESSION_MANAGERS_INITIALIZED = False
 
     @contextlib.asynccontextmanager
@@ -2958,6 +2998,7 @@ if MCP_AVAILABLE:
                 finally:
                     if use_stateful and session_id and scope.get("method") == "DELETE":
                         _stateful_session_auth_contexts.pop(session_id, None)
+                        _stateful_session_auth_context_last_seen.pop(session_id, None)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -3133,7 +3174,8 @@ if MCP_AVAILABLE:
         auth_user = (
             _stateful_session_auth_contexts.get(session_id) if session_id else None
         )
-        if auth_user is not None:
+        if auth_user is not None and session_id is not None:
+            _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
             _update_auth_context(
                 auth_user=auth_user,
                 user_api_key_auth=user_api_key_auth,
@@ -3164,7 +3206,11 @@ if MCP_AVAILABLE:
             if message.get("type") == "http.response.start":
                 for key, value in message.get("headers", []):
                     if key.lower() == b"mcp-session-id":
-                        _stateful_session_auth_contexts[value.decode()] = auth_user
+                        session_id = value.decode()
+                        _stateful_session_auth_contexts[session_id] = auth_user
+                        _stateful_session_auth_context_last_seen[session_id] = (
+                            time.monotonic()
+                        )
                         break
             await send(message)
 
