@@ -1,9 +1,9 @@
 """
 BUDGET MANAGEMENT
 
-All /budget management endpoints 
+All /budget management endpoints
 
-/budget/new   
+/budget/new
 /budget/info
 /budget/update
 /budget/delete

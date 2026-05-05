@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 import litellm.types
 import litellm.types.utils
 
-
 load_dotenv()
 import io
 

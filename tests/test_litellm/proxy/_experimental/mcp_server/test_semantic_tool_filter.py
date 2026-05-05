@@ -489,9 +489,7 @@ class TestGetToolsByNames:
             {"name": "send_email", "description": "send mail"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            ["send_email"], available_tools
-        )
+        matched = filter_instance._get_tools_by_names(["send_email"], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "send_email"
@@ -503,9 +501,7 @@ class TestGetToolsByNames:
         client_name = "litellm_" + canonical
         available_tools = [{"name": client_name, "description": "scrape"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         # Must return the incoming tool unchanged so the client-facing
@@ -516,13 +512,9 @@ class TestGetToolsByNames:
         """Some clients use dash as alias separator; accept that too."""
         filter_instance = self._make_filter()
         canonical = "weather_svc-get_weather"
-        available_tools = [
-            {"name": "mcp-" + canonical, "description": "weather"}
-        ]
+        available_tools = [{"name": "mcp-" + canonical, "description": "weather"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "mcp-" + canonical
@@ -552,9 +544,7 @@ class TestGetToolsByNames:
             {"name": "litellm_" + canonical, "description": "wrapped"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == canonical
@@ -567,9 +557,7 @@ class TestGetToolsByNames:
         separator-anchored suffixes of ``litellm_api-fs-read_file``.
         """
         filter_instance = self._make_filter()
-        available_tools = [
-            {"name": "litellm_api-fs-read_file", "description": "read"}
-        ]
+        available_tools = [{"name": "litellm_api-fs-read_file", "description": "read"}]
 
         matched = filter_instance._get_tools_by_names(
             ["fs-read_file", "api-fs-read_file"], available_tools
@@ -590,9 +578,7 @@ class TestGetToolsByNames:
             {"name": "my_" + canonical, "description": "plain search"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "my_" + canonical

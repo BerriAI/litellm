@@ -87,7 +87,7 @@ async def test_send_email_success(mock_env_vars):
 async def test_send_email_missing_api_key():
     # Remove the API key from environment before initializing logger
     original_key = os.environ.pop("RESEND_API_KEY", None)
-    
+
     try:
         # Initialize the logger after removing the API key
         logger = ResendEmailLogger()
@@ -104,16 +104,19 @@ async def test_send_email_missing_api_key():
         mock_response.raise_for_status.return_value = None
         mock_response.status_code = 200
         mock_response.json.return_value = {"id": "test_email_id"}
-        
+
         mock_async_client = mock.AsyncMock()
         mock_async_client.post.return_value = mock_response
-        
+
         # Directly inject the mock client to bypass any caching
         logger.async_httpx_client = mock_async_client
 
         # Send email
         await logger.send_email(
-            from_email=from_email, to_email=to_email, subject=subject, html_body=html_body
+            from_email=from_email,
+            to_email=to_email,
+            subject=subject,
+            html_body=html_body,
         )
 
         # Verify the HTTP client was called with None as the API key

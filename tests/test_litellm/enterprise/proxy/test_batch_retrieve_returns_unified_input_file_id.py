@@ -93,7 +93,9 @@ async def test_should_preserve_already_managed_input_file_id():
 
     unified_batch_id = "bGl0ZWxsbV9wcm94eTpiYXRjaF9pZA"
     decoded_unified = "litellm_proxy:application/octet-stream;unified_id,test-123"
-    base64_input_file_id = base64.urlsafe_b64encode(decoded_unified.encode()).decode().rstrip("=")
+    base64_input_file_id = (
+        base64.urlsafe_b64encode(decoded_unified.encode()).decode().rstrip("=")
+    )
 
     batch_data = {
         "id": "batch-raw-123",

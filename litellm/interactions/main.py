@@ -8,25 +8,25 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 
 Usage:
     import litellm
-    
+
     # Create an interaction with a model
     response = litellm.interactions.create(
         model="gemini-2.5-flash",
         input="Hello, how are you?"
     )
-    
+
     # Create an interaction with an agent
     response = litellm.interactions.create(
         agent="deep-research-pro-preview-12-2025",
         input="Research the current state of cancer research"
     )
-    
+
     # Async version
     response = await litellm.interactions.acreate(...)
-    
+
     # Get an interaction
     response = litellm.interactions.get(interaction_id="...")
-    
+
     # Delete an interaction
     result = litellm.interactions.delete(interaction_id="...")
 """

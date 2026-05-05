@@ -14,7 +14,6 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-
 # ---------------------------------------------------------------------------
 # Token counter — covers all three batch payload shapes
 # ---------------------------------------------------------------------------

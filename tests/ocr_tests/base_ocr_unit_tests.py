@@ -9,7 +9,6 @@ import litellm
 import os
 from abc import ABC, abstractmethod
 
-
 # Test resources
 TEST_IMAGE_PATH = "test_image_edit.png"
 TEST_PDF_URL = "https://arxiv.org/pdf/2201.04234"

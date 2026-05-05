@@ -22,7 +22,6 @@ from litellm.llms.vertex_ai.gemini.transformation import (
 )
 from litellm.types.llms.vertex_ai import HttpxPartType
 
-
 # --- Response extraction tests ---
 
 

@@ -1,7 +1,7 @@
 """
 Nvidia NIM embeddings endpoint: https://docs.api.nvidia.com/nim/reference/nvidia-nv-embedqa-e5-v5-infer
 
-This is OpenAI compatible 
+This is OpenAI compatible
 
 This file only contains param mapping logic
 

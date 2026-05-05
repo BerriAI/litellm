@@ -20,7 +20,6 @@ from litellm.proxy.proxy_server import (
     initialize,
 )
 
-
 CONFIG_TEMPLATE_PATH = Path("tests/mcp_tests/test_configs/test_config_mcp_e2e.yaml")
 MCP_SERVER_SCRIPT = Path("tests/mcp_tests/mcp_server.py")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]

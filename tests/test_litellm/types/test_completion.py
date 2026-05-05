@@ -1,7 +1,7 @@
 """
 Tests for litellm.types.completion module
 
-This test suite validates the CompletionRequest model and its compatibility with 
+This test suite validates the CompletionRequest model and its compatibility with
 OpenAI ChatCompletion API message formats.
 
 Usage:

@@ -233,7 +233,9 @@ def test_predibase_transform_response_non_dict_payload():
     raw_response.headers = {}
     raw_response.json.return_value = []
 
-    with pytest.raises(PredibaseError, match="'completion_response' is not a dictionary"):
+    with pytest.raises(
+        PredibaseError, match="'completion_response' is not a dictionary"
+    ):
         config.transform_response(
             model="predibase-model",
             raw_response=raw_response,
@@ -375,7 +377,9 @@ def test_predibase_transform_response_best_of_invalid_value_falls_back(monkeypat
     assert result.choices[0].message.content == "primary-output"
 
 
-def test_predibase_transform_response_empty_output_sets_completion_tokens_zero(monkeypatch):
+def test_predibase_transform_response_empty_output_sets_completion_tokens_zero(
+    monkeypatch,
+):
     config = PredibaseConfig()
     logging_obj = Mock()
     encoding = Mock()
@@ -429,7 +433,10 @@ def test_predibase_transform_response_usage_fallbacks(monkeypatch):
 
     raw_response = httpx.Response(
         status_code=200,
-        json={"generated_text": "ok", "details": {"tokens": [], "finish_reason": "stop"}},
+        json={
+            "generated_text": "ok",
+            "details": {"tokens": [], "finish_reason": "stop"},
+        },
     )
 
     result = config.transform_response(
@@ -539,13 +546,17 @@ def test_predibase_completion_sync_returns_transform_response(monkeypatch):
     def fake_transform_response(self, **kwargs):
         return expected
 
-    monkeypatch.setattr(PredibaseConfig, "validate_environment", fake_validate_environment)
+    monkeypatch.setattr(
+        PredibaseConfig, "validate_environment", fake_validate_environment
+    )
     monkeypatch.setattr(PredibaseConfig, "get_complete_url", fake_get_complete_url)
     monkeypatch.setattr(PredibaseConfig, "transform_request", fake_transform_request)
     monkeypatch.setattr(PredibaseConfig, "transform_response", fake_transform_response)
     monkeypatch.setattr(
         "litellm.module_level_client.post",
-        lambda *args, **kwargs: httpx.Response(status_code=200, json={"generated_text": "ok"}),
+        lambda *args, **kwargs: httpx.Response(
+            status_code=200, json={"generated_text": "ok"}
+        ),
     )
 
     result = handler.completion(
@@ -586,7 +597,9 @@ def test_predibase_completion_passes_existing_config_to_async_completion(monkeyp
         captured["async_kwargs"] = kwargs
         return "async-result"
 
-    monkeypatch.setattr(PredibaseConfig, "validate_environment", fake_validate_environment)
+    monkeypatch.setattr(
+        PredibaseConfig, "validate_environment", fake_validate_environment
+    )
     monkeypatch.setattr(PredibaseConfig, "get_complete_url", fake_get_complete_url)
     monkeypatch.setattr(PredibaseConfig, "transform_request", fake_transform_request)
     monkeypatch.setattr(handler, "async_completion", fake_async_completion)

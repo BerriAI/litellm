@@ -25,7 +25,6 @@ from litellm.proxy._experimental.mcp_server.db import (
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
-
 SALT_KEY = "test-salt-key-for-byok-credential-tests-1234"
 
 

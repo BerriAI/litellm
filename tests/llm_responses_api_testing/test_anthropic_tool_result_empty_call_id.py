@@ -2,7 +2,7 @@
 Test to reproduce and verify fix for Anthropic tool_result issue with empty call_id.
 
 This test reproduces the exact error:
-"messages.0.content.0: unexpected `tool_use_id` found in `tool_result` blocks: tool_use_id. 
+"messages.0.content.0: unexpected `tool_use_id` found in `tool_result` blocks: tool_use_id.
 Each `tool_result` block must have a corresponding `tool_use` block in the previous message."
 
 The issue occurs when:

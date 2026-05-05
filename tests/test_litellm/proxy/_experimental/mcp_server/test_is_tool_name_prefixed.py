@@ -8,7 +8,6 @@ import pytest
 
 from litellm.proxy._experimental.mcp_server.utils import is_tool_name_prefixed
 
-
 # ---------------------------------------------------------------------------
 # Legacy behaviour (no known_server_prefixes passed)
 # ---------------------------------------------------------------------------

@@ -1092,9 +1092,9 @@ class TestVertexAIPassThroughHandler:
 
         assert result is not None
         assert result["result"] is not None
-        assert result["kwargs"].get("custom_llm_provider") == "gemini", (
-            "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
-        )
+        assert (
+            result["kwargs"].get("custom_llm_provider") == "gemini"
+        ), "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
 

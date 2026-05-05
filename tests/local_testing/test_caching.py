@@ -450,12 +450,9 @@ def c():
     litellm.enable_caching_on_provider_specific_optional_params = False
 
 
-embedding_large_text = (
-    """
+embedding_large_text = """
 small text
-"""
-    * 5
-)
+""" * 5
 
 
 # # test_caching_with_models()

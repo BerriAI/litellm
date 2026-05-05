@@ -22,7 +22,6 @@ from tests._vcr_redis_persister import (  # noqa: E402
     vcr_verbose_enabled,
 )
 
-
 _controller_pluginmanager = None
 _controller_terminal_reporter = None
 

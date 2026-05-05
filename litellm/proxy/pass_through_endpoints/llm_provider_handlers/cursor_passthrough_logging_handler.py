@@ -18,7 +18,6 @@ from litellm.litellm_core_utils.litellm_logging import (
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.types.utils import StandardPassThroughResponseObject
 
-
 CURSOR_AGENT_ENDPOINTS: Dict[str, str] = {
     "POST /v0/agents": "cursor:agent:create",
     "GET /v0/agents": "cursor:agent:list",

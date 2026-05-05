@@ -1,5 +1,5 @@
 """
-Base class for Additional Logging Utils for CustomLoggers 
+Base class for Additional Logging Utils for CustomLoggers
 
 - Health Check for the logging util
 - Get Request / Response Payload for the logging util

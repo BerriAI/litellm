@@ -257,7 +257,7 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
 
 
 async def convert_upload_files_to_file_data(
-    form_data: Dict[str, Any]
+    form_data: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Convert FastAPI UploadFile objects to file data tuples for litellm.

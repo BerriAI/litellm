@@ -7,7 +7,7 @@ variables.
 
 Environment Variables:
 - MICROSOFT_AUTHORIZATION_ENDPOINT: Custom authorization endpoint URL
-- MICROSOFT_TOKEN_ENDPOINT: Custom token endpoint URL  
+- MICROSOFT_TOKEN_ENDPOINT: Custom token endpoint URL
 - MICROSOFT_USERINFO_ENDPOINT: Custom userinfo endpoint URL
 
 If these are not set, the default Microsoft endpoints are used.

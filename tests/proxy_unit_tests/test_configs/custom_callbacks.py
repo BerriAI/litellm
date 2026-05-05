@@ -93,8 +93,7 @@ class testCustomCallbackProxy(CustomLogger):
 
         print("\n\n in custom callback vars my custom logger, ", vars(my_custom_logger))
 
-        print(
-            f"""
+        print(f"""
                 Model: {model},
                 Messages: {messages},
                 User: {user},
@@ -102,8 +101,7 @@ class testCustomCallbackProxy(CustomLogger):
                 Cost: {cost},
                 Response: {response}
                 Proxy Metadata: {metadata}
-            """
-        )
+            """)
         return
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):

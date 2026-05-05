@@ -2946,7 +2946,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     """
     P1 Regression: list_tools path must apply _resolve_oauth2_flow to legacy DB
     rows where oauth2_flow is NULL but M2M credentials are present.
-    
+
     Without this fix, has_client_credentials returns False and the caller's
     Authorization header is forwarded upstream instead of being blocked.
     """
@@ -3044,7 +3044,7 @@ async def test_call_tool_empty_extra_headers_returns_none():
     """
     P2 Regression: When all configured extra_headers are filtered out (e.g.
     Authorization for M2M), the resulting extra_headers should be None, not {}.
-    
+
     Downstream code that checks `if extra_headers is None` will behave
     differently if an empty dict is passed instead.
     """
@@ -3071,7 +3071,10 @@ async def test_call_tool_empty_extra_headers_returns_none():
         extra_headers=["Authorization"],  # Will be filtered out for M2M
     )
 
-    raw_headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    raw_headers = {
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
 
     captured_extra_headers = None
 
@@ -3108,8 +3111,8 @@ async def test_call_tool_empty_extra_headers_returns_none():
             pass  # We only care about the captured headers
 
     # With P2 fix: extra_headers should be None (not {}) when all headers filtered
-    assert captured_extra_headers is None, (
-        "P2 API consistency issue: expected None for empty extra_headers, got: "
-        + str(captured_extra_headers)
+    assert (
+        captured_extra_headers is None
+    ), "P2 API consistency issue: expected None for empty extra_headers, got: " + str(
+        captured_extra_headers
     )
-

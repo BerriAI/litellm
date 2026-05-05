@@ -454,9 +454,7 @@ def test_finalize_prunes_stale_adaptive_router_hooks_from_callbacks():
         Router(model_list=model_list)  # simulate hot-reload
 
         adaptive_hooks = [
-            cb
-            for cb in litellm.callbacks
-            if isinstance(cb, AdaptiveRouterPostCallHook)
+            cb for cb in litellm.callbacks if isinstance(cb, AdaptiveRouterPostCallHook)
         ]
         assert len(adaptive_hooks) == 1, (
             f"expected exactly one AdaptiveRouterPostCallHook after hot-reload, "

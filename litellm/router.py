@@ -826,7 +826,7 @@ class Router:
 
     @staticmethod
     def _normalize_strategy(
-        strategy: Union[RoutingStrategy, str, None]
+        strategy: Union[RoutingStrategy, str, None],
     ) -> Optional[str]:
         if strategy is None:
             return None

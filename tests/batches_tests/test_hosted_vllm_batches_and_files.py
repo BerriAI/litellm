@@ -20,7 +20,6 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 
-
 SERVER_URL = "https://exampleopenaiendpoint-production-0ee2.up.railway.app/v1"
 
 

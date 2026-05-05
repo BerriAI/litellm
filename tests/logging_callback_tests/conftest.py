@@ -19,7 +19,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 
-
 _LIST_ATTRS = (
     "callbacks",
     "success_callback",

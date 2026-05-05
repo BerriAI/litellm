@@ -11,7 +11,6 @@ import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import app
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, CommonProxyErrors
 
-
 sys.path.insert(
     0, os.path.abspath("../../../")
 )  # Adds the parent directory to the system path

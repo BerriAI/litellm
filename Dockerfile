@@ -85,10 +85,12 @@ ENV PATH="/app/.venv/bin:${PATH}"
 
 COPY --from=builder /app /app
 # Prisma binaries live in $HOME/.cache (default prisma-python location),
-# which is /root/.cache here. Copy them from the builder so they survive
-# deployments that volume-mount /app/.cache (e.g. readOnlyRootFilesystem
-# + emptyDir) — otherwise the mount would shadow the baked-in query engine.
-COPY --from=builder /root/.cache /root/.cache
+# which is /root/.cache here. Copy only the Prisma subdirs — copying the
+# whole /root/.cache drags in the uv build cache (~660 MB, includes a
+# setuptools wheel that surfaces as a CVE finding even though it's not
+# on the runtime sys.path).
+COPY --from=builder /root/.cache/prisma /root/.cache/prisma
+COPY --from=builder /root/.cache/prisma-python /root/.cache/prisma-python
 
 RUN find /app/.venv -type f -path "*/tornado/test/*" -delete && \
     find /app/.venv -type d -path "*/tornado/test" -delete

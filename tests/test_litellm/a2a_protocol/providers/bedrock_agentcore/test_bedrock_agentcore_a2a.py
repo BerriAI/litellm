@@ -14,7 +14,6 @@ import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
 SAMPLE_ARN = "arn:aws:bedrock-agentcore:us-west-2:123456789:runtime/my_agent"
 SAMPLE_MODEL = f"bedrock/agentcore/{SAMPLE_ARN}"
 SAMPLE_PARAMS = {

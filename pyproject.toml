@@ -76,7 +76,11 @@ utils = [
     # Not in Docker or PyPI proxy extra.
     "numpydoc==1.8.0",
 ]
-caching = ["diskcache==5.6.3"]
+# diskcache intentionally unpinned: CVE-2025-69872 (pickle RCE) has no
+# upstream fix. Stub kept so `pip install litellm[caching]` doesn't warn;
+# DiskCache loads diskcache lazily and forces JSONDisk for safety. See
+# litellm/caching/disk_cache.py.
+caching = []
 semantic-router = [
     "semantic-router==0.1.12; python_version < '3.14'",
     "aurelio-sdk==0.0.19; python_version < '3.14'",
@@ -118,7 +122,7 @@ litellm-proxy = "litellm.proxy.client.cli:cli"
 dev = [
     "diff-cover==9.7.2",
     "flake8==7.3.0",
-    "black==24.10.0",
+    "black==26.3.1",
     "mypy==1.19.0",
     "pytest==9.0.3",
     "pytest-mock==3.15.1",
