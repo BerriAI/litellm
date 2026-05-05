@@ -87,6 +87,7 @@ export enum Providers {
   Sambanova = "Sambanova",
   SAP = "SAP Generative AI Hub",
   Snowflake = "Snowflake",
+  TencentCloud = "Tencent Cloud",
   TEXT_COMPLETION_CODESTRAL = "Text-Completion-Codestral",
   TogetherAI = "TogetherAI",
   TOPAZ = "Topaz",
@@ -195,6 +196,7 @@ export const provider_map: Record<string, string> = {
   Sambanova: "sambanova",
   SAP: "sap",
   Snowflake: "snowflake",
+  TencentCloud: "tencent_cloud",
   TEXT_COMPLETION_CODESTRAL: "text-completion-codestral",
   TogetherAI: "together_ai",
   TOPAZ: "topaz",
@@ -370,6 +372,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "cursor/claude-4-sonnet";
   } else if (selectedProvider === Providers.ZAI) {
     return "zai/glm-4.5";
+  } else if (selectedProvider === Providers.TencentCloud) {
+    return "tencent_cloud/deepseek-v3.2";
   } else {
     return "gpt-3.5-turbo";
   }
