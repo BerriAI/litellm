@@ -670,12 +670,20 @@ class RealTimeStreaming:
         # input_audio_format → audio.input.format
         if "input_audio_format" in session:
             raw = session.pop("input_audio_format")
-            inp["format"] = RealTimeStreaming._AUDIO_FORMAT_MAP.get(raw, raw)
+            inp["format"] = (
+                RealTimeStreaming._AUDIO_FORMAT_MAP.get(raw, raw)
+                if isinstance(raw, str)
+                else raw
+            )
 
         # output_audio_format → audio.output.format
         if "output_audio_format" in session:
             raw = session.pop("output_audio_format")
-            out["format"] = RealTimeStreaming._AUDIO_FORMAT_MAP.get(raw, raw)
+            out["format"] = (
+                RealTimeStreaming._AUDIO_FORMAT_MAP.get(raw, raw)
+                if isinstance(raw, str)
+                else raw
+            )
 
         # turn_detection → audio.input.turn_detection
         if "turn_detection" in session:

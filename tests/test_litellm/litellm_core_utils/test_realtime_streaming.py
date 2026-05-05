@@ -92,6 +92,21 @@ def test_remap_beta_session_to_ga_normalizes_modalities_and_audio():
     assert out["audio"]["output"]["voice"] == "alloy"
 
 
+def test_remap_beta_session_to_ga_preserves_ga_audio_format_dicts():
+    input_format = {"type": "audio/pcm", "rate": 24000}
+    output_format = {"type": "audio/G711-ulaw", "rate": 8000}
+
+    out = RealTimeStreaming._remap_beta_session_to_ga(
+        {
+            "input_audio_format": input_format,
+            "output_audio_format": output_format,
+        }
+    )
+
+    assert out["audio"]["input"]["format"] == input_format
+    assert out["audio"]["output"]["format"] == output_format
+
+
 def test_make_disable_auto_response_message_produces_ga_shape():
     """_make_disable_auto_response_message must produce a GA-shaped session.update.
 
