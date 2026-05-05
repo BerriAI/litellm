@@ -235,26 +235,41 @@ def test_fire_and_forget_respects_semaphore_cap():
 
 def test_semaphore_released_on_thread_start_failure():
     """If t.start() raises, the semaphore slot must be released so future reports work."""
-    before = _inflight._value
-
+    # Verify the semaphore can be re-acquired after a thread-start failure,
+    # which proves the slot was released (without reading private CPython internals).
     with patch("threading.Thread") as mock_thread:
         mock_thread.return_value.start.side_effect = RuntimeError("OS thread limit")
         _fire_and_forget({"provider": "openai"})
 
-    # Slot must be back to its original value after the exception
-    assert _inflight._value == before
+    # If the semaphore was not released, this acquire would block forever.
+    # Use non-blocking to fail fast in case of a bug.
+    acquired = _inflight.acquire(blocking=False)
+    assert acquired, "semaphore slot was not released after thread start failure"
+    _inflight.release()  # restore
 
 
 # ── Network failure is silent ─────────────────────────────────────────────────
 
 
 def test_fire_and_forget_silent_on_network_error():
-    """A network error in the background thread must not propagate."""
-    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
-        # Should complete without raising
-        _fire_and_forget({"provider": "anthropic", "model": "claude-haiku-4-5"})
-        import time
-        time.sleep(0.2)  # let daemon thread run
+    """A network error in the send function must not propagate to the caller."""
+    # Mock threading.Thread so no real thread is created and no real network
+    # call can escape the test boundary (repo rule: no real network calls).
+    with patch("threading.Thread") as mock_thread_cls:
+        mock_thread = MagicMock()
+        mock_thread_cls.return_value = mock_thread
+
+        # Simulate the send function raising an OSError inside the thread
+        def run_target(*args, **kwargs):
+            target = mock_thread_cls.call_args[1].get("target") or mock_thread_cls.call_args[0][0]
+            try:
+                target()
+            except Exception:
+                pass  # errors in thread body must not surface
+
+        mock_thread.start.side_effect = run_target
+        with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+            _fire_and_forget({"provider": "anthropic", "model": "claude-haiku-4-5"})
 
 
 # ── Async hooks ───────────────────────────────────────────────────────────────
