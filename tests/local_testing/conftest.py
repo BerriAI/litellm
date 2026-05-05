@@ -62,17 +62,13 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
     }
 )
 
-# Specific tests where VCR replay actively breaks the test:
-# - These tests deliberately call the LLM API with ``api_key="my-bad-key"``
-#   to assert that the failure callback fires. We scrub auth headers from
-#   cassettes (so the bad-key request matches the prior good-key request),
-#   and vcrpy replays the recorded 200 — so the failure callback never
-#   fires and the assertion flips.
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES = (
-    "::test_amazing_sync_embedding",
-    "::test_async_custom_handler_completion",
-    "::test_async_custom_handler_embedding",
-)
+# No node-id suffix skips at the moment. Tests that deliberately use
+# ``api_key="my-bad-key"`` to assert a failure callback fires are handled
+# transparently by the ``key_fingerprint`` matcher in
+# ``tests/_vcr_conftest_common.py`` — bad-key requests get a different
+# cassette bucket than good-key ones, so vcrpy will not replay a recorded
+# 200 in place of the expected 401.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 
 _verbose_state = VerboseReporterState()

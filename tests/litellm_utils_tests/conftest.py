@@ -34,13 +34,11 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
     }
 )
 
-# Specific tests where VCR replay actively breaks the test:
-# - ``test_get_valid_models_from_dynamic_api_key`` deliberately calls
-#   ``GET /v1/models`` with ``api_key="123"`` to assert the result is empty.
-#   We scrub auth headers from cassettes (so the bad-key request matches
-#   the prior good-key request), and vcrpy replays the recorded list of
-#   models — flipping ``len(...) == 0`` to a long list.
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES = ("::test_get_valid_models_from_dynamic_api_key",)
+# No node-id suffix skips at the moment. Tests that deliberately use a
+# bad API key (e.g. ``test_get_valid_models_from_dynamic_api_key`` with
+# ``api_key="123"``) are handled transparently by the ``key_fingerprint``
+# matcher in ``tests/_vcr_conftest_common.py``.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 
 @pytest.fixture(scope="function", autouse=True)

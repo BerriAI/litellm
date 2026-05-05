@@ -23,6 +23,7 @@ Each consuming ``conftest.py`` should:
 from __future__ import annotations
 
 import atexit
+import hashlib
 import os
 import sys
 from typing import Iterable
@@ -47,6 +48,32 @@ CASSETTE_CACHE_HIGH_WATER_FRACTION = 0.85
 
 
 SAFE_BODY_MATCHER_NAME = "safe_body"
+KEY_FINGERPRINT_MATCHER_NAME = "key_fingerprint"
+
+# Synthetic header name we attach to every request before it is recorded.
+# The value is a one-way hash of the API-key headers on the request. This
+# lets the ``key_fingerprint`` matcher distinguish requests that carry
+# different API keys *after* we have scrubbed the real key value out of
+# the cassette, without ever leaking the secret. See ``_before_record_request``
+# and ``_key_fingerprint_matcher`` below.
+KEY_FINGERPRINT_HEADER = "x-litellm-key-fp"
+
+# Headers that carry an API key whose VALUE distinguishes one request from
+# another (e.g. "the prior request used a real key, this one uses a bad
+# key, so the cassette should not be reused"). We hash these into the
+# fingerprint header. Note this is intentionally narrower than
+# ``FILTERED_REQUEST_HEADERS`` — AWS SigV4 headers (``x-amz-date`` etc.)
+# are *also* secrets-bearing but their values change on every call, so
+# fingerprinting them would defeat caching entirely.
+API_KEY_HEADERS = (
+    "authorization",
+    "x-api-key",
+    "anthropic-api-key",
+    "openai-api-key",
+    "azure-api-key",
+    "api-key",
+    "x-goog-api-key",
+)
 
 FILTERED_REQUEST_HEADERS = (
     "authorization",
@@ -142,10 +169,144 @@ def _safe_body_matcher(r1, r2) -> None:
     raise AssertionError("request bodies differ")
 
 
+def _iter_header_values(headers, name: str):
+    """Yield all values for ``name`` from a vcrpy request headers object.
+
+    vcrpy normalizes request headers into a dict-like (case-insensitive on
+    most transports, case-sensitive on a few). Some transports also pass
+    through multi-valued headers as lists. We accept either shape so the
+    fingerprint stays stable across transports.
+    """
+    if headers is None:
+        return
+    target = name.lower()
+    try:
+        items = headers.items()
+    except AttributeError:
+        return
+    for key, value in items:
+        if str(key).lower() != target:
+            continue
+        if isinstance(value, (list, tuple)):
+            for v in value:
+                yield v
+        else:
+            yield value
+
+
+def _compute_key_fingerprint(request) -> str:
+    """Return a short, deterministic hash of the request's API-key headers.
+
+    Empty/missing keys hash to a stable sentinel so requests without auth
+    headers all bucket together (and don't accidentally collide with any
+    real key). The hash is one-way so cassettes never contain the secret.
+    """
+    headers = getattr(request, "headers", None)
+    parts: list[str] = []
+    for header_name in API_KEY_HEADERS:
+        for value in _iter_header_values(headers, header_name):
+            if value is None:
+                continue
+            text = value if isinstance(value, str) else str(value)
+            text = text.strip()
+            if not text:
+                continue
+            parts.append(f"{header_name}={text}")
+    if not parts:
+        return "no-key"
+    digest = hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def _strip_headers(headers, names: Iterable[str]) -> None:
+    """Remove any header in ``names`` from a vcrpy request headers dict.
+
+    Comparison is case-insensitive; we delete *all* keys whose lowercase
+    name is in ``names``. We do this in-place because vcrpy already deep-
+    copies the request before invoking ``before_record_request``.
+    """
+    if headers is None:
+        return
+    targets = {n.lower() for n in names}
+    try:
+        keys = list(headers.keys())
+    except AttributeError:
+        return
+    for key in keys:
+        if str(key).lower() in targets:
+            try:
+                del headers[key]
+            except (KeyError, TypeError):
+                pass
+
+
+def _before_record_request(request):
+    """Stamp + scrub auth headers before vcrpy persists the request.
+
+    Two responsibilities, in this order:
+
+    1. Compute a one-way hash of the API-key headers and stash it as the
+       synthetic ``KEY_FINGERPRINT_HEADER``. The ``key_fingerprint``
+       matcher uses this so a request made with a different API key is
+       not silently served from a cassette recorded with the real key.
+    2. Strip every ``FILTERED_REQUEST_HEADERS`` value (auth headers, AWS
+       SigV4 timestamps, cookies, etc.) so the cassette never contains
+       the secret. We do the scrubbing here — instead of via vcrpy's
+       ``filter_headers`` knob — because ``filter_headers`` runs *before*
+       ``before_record_request`` and would erase the auth value before
+       step 1 could read it.
+
+    Without step 1, scrubbing the auth header would cause a "bad-key"
+    request to match a "good-key" cassette (because everything else —
+    method, URL, body — is identical), so vcrpy would replay the recorded
+    200 and any test that expects a 401 (failure callbacks,
+    ``check_valid_key`` returning False, etc.) would silently flip.
+    """
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return request
+    fingerprint = _compute_key_fingerprint(request)
+    try:
+        headers[KEY_FINGERPRINT_HEADER] = fingerprint
+    except (TypeError, AttributeError):
+        pass
+    _strip_headers(headers, FILTERED_REQUEST_HEADERS)
+    return request
+
+
+def _key_fingerprint_matcher(r1, r2) -> None:
+    """Match requests by the synthetic key-fingerprint header.
+
+    Two requests are considered equivalent only if they were sent with the
+    same API key (or both with no key). Combined with the existing scrub
+    of the real auth header, this lets us cache responses for the real
+    key without poisoning the cassette for tests that deliberately use a
+    bad key.
+    """
+
+    def _fp(req):
+        for value in _iter_header_values(
+            getattr(req, "headers", None), KEY_FINGERPRINT_HEADER
+        ):
+            if value is None:
+                continue
+            return value if isinstance(value, str) else str(value)
+        return "no-key"
+
+    if _fp(r1) != _fp(r2):
+        raise AssertionError("API key fingerprints differ")
+
+
 def vcr_config_dict() -> dict:
-    """Return the VCR config dict shared across all consuming conftests."""
+    """Return the VCR config dict shared across all consuming conftests.
+
+    Note: the auth-header scrubbing is intentionally performed inside
+    ``_before_record_request`` instead of via vcrpy's ``filter_headers``
+    knob. ``filter_headers`` runs *before* ``before_record_request``, and
+    we need the raw auth header values available so we can fingerprint
+    them for the ``key_fingerprint`` matcher before stripping them.
+    """
     return {
-        "filter_headers": list(FILTERED_REQUEST_HEADERS),
         "decode_compressed_response": True,
         "record_mode": "new_episodes",
         "allow_playback_repeats": True,
@@ -156,8 +317,10 @@ def vcr_config_dict() -> dict:
             "port",
             "path",
             "query",
+            KEY_FINGERPRINT_MATCHER_NAME,
             SAFE_BODY_MATCHER_NAME,
         ),
+        "before_record_request": _before_record_request,
         "before_record_response": _before_record_response,
     }
 
@@ -225,6 +388,7 @@ def register_persister_if_enabled(vcr) -> None:
         return
     vcr.register_persister(make_redis_persister())
     vcr.register_matcher(SAFE_BODY_MATCHER_NAME, _safe_body_matcher)
+    vcr.register_matcher(KEY_FINGERPRINT_MATCHER_NAME, _key_fingerprint_matcher)
     patch_vcrpy_aiohttp_record_path()
     global _atexit_banner_registered
     if not _atexit_banner_registered:
