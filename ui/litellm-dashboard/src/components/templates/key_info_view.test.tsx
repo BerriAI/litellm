@@ -777,4 +777,92 @@ describe("KeyInfoView", () => {
       );
     });
   });
+
+  describe("allowed_routes payload normalization", () => {
+    const enterEditMode = async (keyData: KeyResponse) => {
+      vi.mocked(useAuthorized).mockReturnValue({
+        ...baseUseAuthorizedMock,
+        userId: "proxy-admin-user",
+        userRole: "proxy_admin",
+      });
+      renderWithProviders(
+        <KeyInfoView
+          keyData={keyData}
+          onClose={() => {}}
+          keyId="test-key-id"
+          onKeyDataUpdate={() => {}}
+          teams={[]}
+        />,
+      );
+      await userEvent.click(screen.getByRole("tab", { name: /settings/i }));
+      await userEvent.click(screen.getByRole("button", { name: /edit settings/i }));
+      await waitFor(() => expect(editViewMocks.onSubmit).toBeDefined());
+    };
+
+    beforeEach(() => {
+      editViewMocks.onSubmit = undefined;
+      vi.mocked(keyUpdateCall).mockClear();
+      vi.mocked(keyUpdateCall).mockResolvedValue({});
+    });
+
+    it("should drop allowed_routes when the submitted value matches the existing key", async () => {
+      const keyData: KeyResponse = {
+        ...MOCK_KEY_DATA,
+        user_id: "proxy-admin-user",
+        allowed_routes: ["management_routes"],
+      } as KeyResponse;
+
+      await enterEditMode(keyData);
+      await editViewMocks.onSubmit!({
+        key: keyData.token,
+        token: keyData.token,
+        allowed_routes: ["management_routes"],
+      });
+
+      expect(keyUpdateCall).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.not.objectContaining({ allowed_routes: expect.anything() }),
+      );
+    });
+
+    it("should drop empty allowed_routes when the key previously had no route override", async () => {
+      const keyData: KeyResponse = {
+        ...MOCK_KEY_DATA,
+        user_id: "proxy-admin-user",
+        allowed_routes: [],
+      } as KeyResponse;
+
+      await enterEditMode(keyData);
+      await editViewMocks.onSubmit!({
+        key: keyData.token,
+        token: keyData.token,
+        allowed_routes: [],
+      });
+
+      expect(keyUpdateCall).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.not.objectContaining({ allowed_routes: expect.anything() }),
+      );
+    });
+
+    it("should keep allowed_routes when the user clears an existing route override", async () => {
+      const keyData: KeyResponse = {
+        ...MOCK_KEY_DATA,
+        user_id: "proxy-admin-user",
+        allowed_routes: ["management_routes"],
+      } as KeyResponse;
+
+      await enterEditMode(keyData);
+      await editViewMocks.onSubmit!({
+        key: keyData.token,
+        token: keyData.token,
+        allowed_routes: [],
+      });
+
+      expect(keyUpdateCall).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ allowed_routes: [] }),
+      );
+    });
+  });
 });
