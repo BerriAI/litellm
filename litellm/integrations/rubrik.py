@@ -387,7 +387,13 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             raise
 
     async def async_send_batch(self):
-        """Handles sending batches of responses to Rubrik."""
+        """Handles sending batches of responses to Rubrik.
+
+        Note: the canonical flush path is :meth:`flush_queue`, which takes a
+        single snapshot used for both sending and queue draining. This method
+        is kept for direct callers / tests; it intentionally does NOT remove
+        events from the queue.
+        """
         if not self.log_queue:
             return
 
@@ -398,6 +404,33 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         await self._log_batch_to_rubrik(
             data=log_queue_snapshot,
         )
+
+    async def flush_queue(self):
+        """Snapshot, send, and drain in one consistent step.
+
+        Overrides the base implementation so the same snapshot drives both
+        the HTTP send and the queue truncation. This avoids the subtle
+        coupling where the base class captures `len(self.log_queue)`
+        separately from the snapshot taken inside `async_send_batch`,
+        which could otherwise drift in a future refactor and cause
+        duplicate deliveries to Rubrik.
+        """
+        if self.flush_lock is None:
+            return
+
+        async with self.flush_lock:
+            if not self.log_queue:
+                return
+            snapshot = list(self.log_queue)
+            verbose_logger.debug("Rubrik: Flushing batch of %s events", len(snapshot))
+            try:
+                await self._log_batch_to_rubrik(data=snapshot)
+            except Exception:
+                # Already logged with traceback inside _log_batch_to_rubrik.
+                # Preserve the in-flight events for retry on the next flush.
+                return
+            del self.log_queue[: len(snapshot)]
+            self.last_flush_time = time.time()
 
     # -- Tool blocking service -------------------------------------------------
 
