@@ -3415,12 +3415,12 @@ proxy-dev = [
 
 [[package]]
 name = "litellm-enterprise"
-version = "0.1.39"
+version = "0.1.40"
 source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.70"
+version = "0.4.71"
 source = { editable = "litellm-proxy-extras" }
 
 [[package]]
