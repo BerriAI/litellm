@@ -69,6 +69,117 @@ def test_static_access_key_credentials_use_iam_cache_across_calls():
         mock_static_auth.assert_called_once()
 
 
+def _os_environ_without_aws_keys() -> Dict[str, str]:
+    """Strip AWS_* so get_credentials hits the ambient-env branch when no explicit keys are passed."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
+
+
+def test_ambient_env_credentials_use_iam_cache_across_instances():
+    """Else-branch env path uses shared iam_cache; second call on another instance does not refetch."""
+    base_a = BaseAWSLLM()
+    base_b = BaseAWSLLM()
+    fake_creds = MagicMock()
+    with patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True):
+        with patch.object(
+            BaseAWSLLM,
+            "_auth_with_env_vars",
+            return_value=(fake_creds, None),
+        ) as mock_env:
+            base_a.get_credentials()
+            base_b.get_credentials()
+            mock_env.assert_called_once()
+
+
+def test_static_access_key_path_boto3_session_constructed_once_when_cached():
+    """With real _auth_with_access_key_and_secret_key, boto3.Session is only built once per cache key."""
+    base_a = BaseAWSLLM()
+    base_b = BaseAWSLLM()
+    real_creds = Credentials("AKIAEXAMPLE", "secret-key-val", None)
+    mock_session_instance = MagicMock()
+    mock_session_instance.get_credentials.return_value = real_creds
+    with patch("boto3.Session", return_value=mock_session_instance) as mock_session_cls:
+        base_a.get_credentials(
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="secret-key-val",
+            aws_region_name="us-east-1",
+        )
+        base_b.get_credentials(
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="secret-key-val",
+            aws_region_name="us-east-1",
+        )
+        mock_session_cls.assert_called_once()
+
+
+def test_ambient_env_path_boto3_session_constructed_once_when_cached():
+    """Else branch: boto3.Session() inside _auth_with_env_vars runs once for two cache hits."""
+    base_a = BaseAWSLLM()
+    base_b = BaseAWSLLM()
+    real_creds = Credentials("AKIAENV", "secret-env", None)
+    mock_session_instance = MagicMock()
+    mock_session_instance.get_credentials.return_value = real_creds
+    with patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True):
+        with patch(
+            "boto3.Session", return_value=mock_session_instance
+        ) as mock_session_cls:
+            base_a.get_credentials()
+            base_b.get_credentials()
+            mock_session_cls.assert_called_once()
+
+
+def test_explicit_session_token_tuple_not_cached_in_iam_cache():
+    """Temporary key+secret+session paths must not use process-wide iam_cache between calls."""
+    base = BaseAWSLLM()
+    with patch.object(
+        base,
+        "_auth_with_aws_session_token",
+        return_value=(
+            Credentials("ak", "sk", "token"),
+            None,
+        ),
+    ) as mock_sess:
+        base.get_credentials(
+            aws_access_key_id="AKIA",
+            aws_secret_access_key="sec",
+            aws_session_token="tok",
+        )
+        base.get_credentials(
+            aws_access_key_id="AKIA",
+            aws_secret_access_key="sec",
+            aws_session_token="tok",
+        )
+        assert mock_sess.call_count == 2
+
+
+def test_aws_profile_path_not_cached_in_iam_cache():
+    base = BaseAWSLLM()
+    with patch.object(
+        base,
+        "_auth_with_aws_profile",
+        return_value=(Credentials("prof-ak", "prof-sk", None), None),
+    ) as mock_profile:
+        base.get_credentials(aws_profile_name="my-profile")
+        base.get_credentials(aws_profile_name="my-profile")
+        assert mock_profile.call_count == 2
+
+
+def test_web_identity_path_not_cached_in_iam_cache():
+    base = BaseAWSLLM()
+    with patch.object(
+        base,
+        "_auth_with_web_identity_token",
+        return_value=(Credentials("wi-ak", "wi-sk", "wi-tok"), None),
+    ) as mock_wi:
+        kwargs = dict(
+            aws_web_identity_token="jwt-token",
+            aws_role_name="arn:aws:iam::123456789012:role/WebIdentity",
+            aws_session_name="web-id-session",
+        )
+        base.get_credentials(**kwargs)
+        base.get_credentials(**kwargs)
+        assert mock_wi.call_count == 2
+
+
 def test_boto3_init_tracer_wrapping():
     """
     Test that all boto3 initializations are wrapped in tracer.trace or @tracer.wrap

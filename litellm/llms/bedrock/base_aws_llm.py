@@ -66,9 +66,11 @@ class AwsAuthError(Exception):
 
 class BaseAWSLLM:
     # Process-wide IAM credential cache (shared across instances — Bedrock passthrough is per-request).
-    # get_credentials caches only static access-key flows and ambient env (TTL from fetcher; see
-    # _get_or_set_cached_credentials). AssumeRole, web identity, profiles, and explicit session-token
-    # tuples are not cached here — see get_credentials and _get_or_set_cached_credentials docstrings.
+    # Storage is in-process memory only: default ``DualCache()`` has no Redis backend unless attached
+    # elsewhere. Entry TTL: static access-key + secret + region use ``_get_default_ttl_for_boto3_credentials``
+    # (~59 minutes); ambient env (``_auth_with_env_vars`` returns ``ttl=None``) uses ``InMemoryCache``'s
+    # ``default_ttl`` (600 seconds / 10 minutes). AssumeRole, web identity, profiles, and explicit
+    # session-token tuples are not cached — see ``get_credentials`` and ``_get_or_set_cached_credentials``.
     _shared_iam_cache: ClassVar[DualCache] = DualCache()
 
     def __init__(self) -> None:
@@ -117,7 +119,13 @@ class BaseAWSLLM:
         credential_fetcher: Callable[[], Tuple[Any, Optional[int]]],
     ) -> Any:
         """
-        Read-through IAM cache on the process-wide DualCache.
+        Read-through IAM cache on the process-wide ``DualCache``.
+
+        Only the in-memory layer is used by default (no Redis on ``_shared_iam_cache`` unless
+        configured globally). TTL on write: static access-key fetches pass
+        ``_get_default_ttl_for_boto3_credentials()`` (~59 minutes); ambient env passes ``ttl=None``,
+        which ``InMemoryCache.set_cache`` resolves to ``default_ttl`` (600 seconds / 10 minutes by
+        default).
 
         Used only for static access-key credentials and ambient credentials from
         ``_auth_with_env_vars`` (including when skipping AssumeRole because the runtime identity
