@@ -9,6 +9,7 @@ in set_llm_deployment_success_metrics.
 import os
 import sys
 from datetime import datetime
+from typing import Any
 
 import pytest
 from prometheus_client import REGISTRY
@@ -17,6 +18,22 @@ sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
+
+
+class _CapturingGaugeChild:
+    def __init__(self) -> None:
+        self.value: Any = None
+
+    def set(self, value: Any) -> None:
+        self.value = value
+
+
+class _CapturingGauge:
+    def __init__(self) -> None:
+        self.child = _CapturingGaugeChild()
+
+    def labels(self, *args: Any, **kwargs: Any) -> _CapturingGaugeChild:
+        return self.child
 
 
 @pytest.fixture(scope="function")
@@ -83,6 +100,45 @@ class TestNoneMetadataHandling:
             enum_values=enum_values,
             output_tokens=10.0,
         )
+
+    def test_virtual_key_rate_limit_metrics_read_model_per_key_headers(
+        self, prometheus_logger
+    ):
+        """
+        v3 rate limiting stores model_per_key remaining limits in
+        hidden_params.additional_headers. Prometheus should use those values
+        instead of falling back to sys.maxsize when metadata lacks the legacy keys.
+        """
+        requests_gauge = _CapturingGauge()
+        tokens_gauge = _CapturingGauge()
+        prometheus_logger.litellm_remaining_api_key_requests_for_model = requests_gauge
+        prometheus_logger.litellm_remaining_api_key_tokens_for_model = tokens_gauge
+
+        model_group = "gpt-4o"
+        prometheus_logger._set_virtual_key_rate_limit_metrics(
+            user_api_key="key-hash",
+            user_api_key_alias="key-alias",
+            kwargs={
+                "litellm_params": {
+                    "metadata": {
+                        "model_group": model_group,
+                    },
+                },
+                "standard_logging_object": {
+                    "hidden_params": {
+                        "additional_headers": {
+                            "x-ratelimit-model_per_key-remaining-requests": 17,
+                            "x-ratelimit-model_per_key-remaining-tokens": 2300,
+                        },
+                    },
+                },
+            },
+            metadata={"model_group": model_group},
+            model_id="model-id",
+        )
+
+        assert requests_gauge.child.value == 17
+        assert tokens_gauge.child.value == 2300
 
     def test_set_llm_deployment_success_metrics_with_missing_litellm_params(
         self, prometheus_logger

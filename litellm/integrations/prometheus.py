@@ -1416,12 +1416,37 @@ class PrometheusLogger(CustomLogger):
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
-        remaining_requests = (
-            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
+        standard_logging_payload: Optional[StandardLoggingPayload] = kwargs.get(
+            "standard_logging_object"
         )
-        remaining_tokens = (
-            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
-        )
+        additional_headers = {}
+        if standard_logging_payload is not None:
+            hidden_params = standard_logging_payload.get("hidden_params") or {}
+            additional_headers = hidden_params.get("additional_headers") or {}
+
+        remaining_requests = metadata.get(remaining_requests_variable_name)
+        if remaining_requests is None:
+            remaining_requests = additional_headers.get(
+                "x-ratelimit-model_per_key-remaining-requests"
+            )
+        if remaining_requests is None:
+            remaining_requests = additional_headers.get(
+                "x_ratelimit_model_per_key_remaining_requests"
+            )
+        if remaining_requests is None:
+            remaining_requests = sys.maxsize
+
+        remaining_tokens = metadata.get(remaining_tokens_variable_name)
+        if remaining_tokens is None:
+            remaining_tokens = additional_headers.get(
+                "x-ratelimit-model_per_key-remaining-tokens"
+            )
+        if remaining_tokens is None:
+            remaining_tokens = additional_headers.get(
+                "x_ratelimit_model_per_key_remaining_tokens"
+            )
+        if remaining_tokens is None:
+            remaining_tokens = sys.maxsize
 
         self.litellm_remaining_api_key_requests_for_model.labels(
             _sanitize_prometheus_label_value(user_api_key),
