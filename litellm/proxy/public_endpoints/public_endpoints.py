@@ -5,7 +5,7 @@ from importlib.resources import files
 from typing import Any, Dict, List, Optional
 
 import litellm
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
@@ -14,8 +14,9 @@ from litellm.litellm_core_utils.get_blog_posts import (
     GetBlogPosts,
     get_blog_posts,
 )
-from litellm.proxy._types import CommonProxyErrors
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy._types import (
+    CommonProxyErrors,
+)
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -30,6 +31,7 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
 from litellm.types.utils import LlmProviders
 
 router = APIRouter()
+
 
 # ---------------------------------------------------------------------------
 # /public/endpoints — helpers
@@ -153,7 +155,6 @@ def _load_endpoints() -> List[Dict[str, Any]]:
 @router.get(
     "/public/model_hub",
     tags=["public", "model management"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=List[ModelGroupInfoProxy],
 )
 async def public_model_hub():
@@ -208,7 +209,6 @@ async def public_model_hub():
 @router.get(
     "/public/agent_hub",
     tags=["[beta] Agents", "public"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=List[AgentCard],
 )
 async def get_agents():
@@ -230,7 +230,6 @@ async def get_agents():
 @router.get(
     "/public/mcp_hub",
     tags=["[beta] MCP", "public"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=List[MCPPublicServer],
 )
 async def get_mcp_servers():
