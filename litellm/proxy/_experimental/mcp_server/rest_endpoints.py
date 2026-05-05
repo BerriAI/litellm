@@ -857,6 +857,7 @@ if MCP_AVAILABLE:
     ########################################################
     from litellm.proxy.management_endpoints.mcp_management_endpoints import (
         NewMCPServerRequest,
+        _inherit_credentials_from_existing_server,
     )
 
     def _extract_credentials(
@@ -1073,6 +1074,10 @@ if MCP_AVAILABLE:
                     "error": "User does not have permission to test MCP server tools. Only PROXY_ADMIN users can perform this action."
                 },
             )
+
+        new_mcp_server_request = _inherit_credentials_from_existing_server(
+            new_mcp_server_request
+        )
 
         # For OpenAPI spec servers, generate tools from the spec directly
         if new_mcp_server_request.spec_path:
