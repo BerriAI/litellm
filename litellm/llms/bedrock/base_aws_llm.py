@@ -66,8 +66,9 @@ class AwsAuthError(Exception):
 
 class BaseAWSLLM:
     # Process-wide IAM credential cache (shared across instances — Bedrock passthrough is per-request).
-    # Static keys / env vars and sts:AssumeRole results are cached with TTL; web identity token
-    # exchange stays uncached at this layer — see get_credentials.
+    # get_credentials caches only static access-key flows and ambient env (TTL from fetcher; see
+    # _get_or_set_cached_credentials). AssumeRole, web identity, profiles, and explicit session-token
+    # tuples are not cached here — see get_credentials and _get_or_set_cached_credentials docstrings.
     _shared_iam_cache: ClassVar[DualCache] = DualCache()
 
     def __init__(self) -> None:
@@ -132,6 +133,50 @@ class BaseAWSLLM:
         credentials, ttl = credential_fetcher()
         self.iam_cache.set_cache(cache_key, credentials, ttl=ttl)
         return credentials
+
+    @staticmethod
+    def _is_auth_with_web_identity_token(
+        aws_web_identity_token: Optional[str],
+        aws_role_name: Optional[str],
+        aws_session_name: Optional[str],
+    ) -> bool:
+        return (
+            aws_web_identity_token is not None
+            and aws_role_name is not None
+            and aws_session_name is not None
+        )
+
+    @staticmethod
+    def _is_auth_with_aws_role(aws_role_name: Optional[str]) -> bool:
+        return aws_role_name is not None
+
+    @staticmethod
+    def _is_auth_with_aws_profile(aws_profile_name: Optional[str]) -> bool:
+        return aws_profile_name is not None
+
+    @staticmethod
+    def _is_auth_with_aws_session_token_tuple(
+        aws_access_key_id: Optional[str],
+        aws_secret_access_key: Optional[str],
+        aws_session_token: Optional[str],
+    ) -> bool:
+        return (
+            aws_access_key_id is not None
+            and aws_secret_access_key is not None
+            and aws_session_token is not None
+        )
+
+    @staticmethod
+    def _is_auth_with_access_key_and_secret_key(
+        aws_access_key_id: Optional[str],
+        aws_secret_access_key: Optional[str],
+        aws_region_name: Optional[str],
+    ) -> bool:
+        return (
+            aws_access_key_id is not None
+            and aws_secret_access_key is not None
+            and aws_region_name is not None
+        )
 
     @tracer.wrap()
     def get_credentials(
@@ -230,21 +275,21 @@ class BaseAWSLLM:
         # iam_cache: static keys and ambient env only (including skip-AssumeRole path).
         # Do not cache AssumeRole / web identity / profile / explicit session-token paths here.
         #########################################################
-        if (
-            aws_web_identity_token is not None
-            and aws_role_name is not None
-            and aws_session_name is not None
+        if self._is_auth_with_web_identity_token(
+            aws_web_identity_token,
+            aws_role_name,
+            aws_session_name,
         ):
             credentials, _cache_ttl = self._auth_with_web_identity_token(
-                aws_web_identity_token=aws_web_identity_token,
-                aws_role_name=aws_role_name,
-                aws_session_name=aws_session_name,
+                aws_web_identity_token=cast(str, aws_web_identity_token),
+                aws_role_name=cast(str, aws_role_name),
+                aws_session_name=cast(str, aws_session_name),
                 aws_region_name=aws_region_name,
                 aws_sts_endpoint=aws_sts_endpoint,
                 aws_external_id=aws_external_id,
             )
             return credentials
-        elif aws_role_name is not None:
+        elif self._is_auth_with_aws_role(aws_role_name):
             # Peek only for ambient-env credentials cached under ``args`` (already-running-as-role
             # path uses ``_auth_with_env_vars``). AssumeRole results are never cached — see
             # ``_get_or_set_cached_credentials`` docstring.
@@ -255,7 +300,9 @@ class BaseAWSLLM:
 
             # Check if we're already running as the target role and can skip assumption
             # This handles IRSA (EKS), ECS task roles, and EC2 instance profiles
-            if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
+            if self._is_already_running_as_role(
+                cast(str, aws_role_name), ssl_verify=ssl_verify
+            ):
                 verbose_logger.debug(
                     "Already running as target role %s, using ambient credentials",
                     aws_role_name,
@@ -271,7 +318,7 @@ class BaseAWSLLM:
                 aws_access_key_id=aws_access_key_id,
                 aws_secret_access_key=aws_secret_access_key,
                 aws_session_token=aws_session_token,
-                aws_role_name=aws_role_name,
+                aws_role_name=cast(str, aws_role_name),
                 aws_session_name=aws_session_name,
                 aws_region_name=aws_region_name,
                 aws_sts_endpoint=aws_sts_endpoint,
@@ -280,31 +327,33 @@ class BaseAWSLLM:
             )
             return credentials
 
-        elif aws_profile_name is not None:  ### CHECK SESSION ###
-            credentials, _cache_ttl = self._auth_with_aws_profile(aws_profile_name)
-            return credentials
-        elif (
-            aws_access_key_id is not None
-            and aws_secret_access_key is not None
-            and aws_session_token is not None
-        ):
-            credentials, _cache_ttl = self._auth_with_aws_session_token(
-                aws_access_key_id=aws_access_key_id,
-                aws_secret_access_key=aws_secret_access_key,
-                aws_session_token=aws_session_token,
+        elif self._is_auth_with_aws_profile(aws_profile_name):
+            credentials, _cache_ttl = self._auth_with_aws_profile(
+                cast(str, aws_profile_name)
             )
             return credentials
-        elif (
-            aws_access_key_id is not None
-            and aws_secret_access_key is not None
-            and aws_region_name is not None
+        elif self._is_auth_with_aws_session_token_tuple(
+            aws_access_key_id,
+            aws_secret_access_key,
+            aws_session_token,
+        ):
+            credentials, _cache_ttl = self._auth_with_aws_session_token(
+                aws_access_key_id=cast(str, aws_access_key_id),
+                aws_secret_access_key=cast(str, aws_secret_access_key),
+                aws_session_token=cast(str, aws_session_token),
+            )
+            return credentials
+        elif self._is_auth_with_access_key_and_secret_key(
+            aws_access_key_id,
+            aws_secret_access_key,
+            aws_region_name,
         ):
             return self._get_or_set_cached_credentials(
                 args,
                 lambda: self._auth_with_access_key_and_secret_key(
-                    aws_access_key_id=aws_access_key_id,
-                    aws_secret_access_key=aws_secret_access_key,
-                    aws_region_name=aws_region_name,
+                    aws_access_key_id=cast(str, aws_access_key_id),
+                    aws_secret_access_key=cast(str, aws_secret_access_key),
+                    aws_region_name=cast(str, aws_region_name),
                 ),
             )
         else:
