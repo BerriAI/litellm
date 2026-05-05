@@ -265,6 +265,7 @@ class PrometheusLogger(CustomLogger):
             ########################################
             # LiteLLM Virtual API KEY metrics
             ########################################
+
             # Remaining MODEL RPM limit for API Key
             self.litellm_remaining_api_key_requests_for_model = self._gauge_factory(
                 "litellm_remaining_api_key_requests_for_model",
@@ -1408,19 +1409,40 @@ class PrometheusLogger(CustomLogger):
         )
 
         # Set remaining rpm/tpm for API Key + model
-        # see parallel_request_limiter.py - variables are set there
+        # see parallel_request_limiter.py - variables are set there (v1 limiter)
+        # see parallel_request_limiter_v3.py - written into
+        #     response._hidden_params["additional_headers"] (v3 limiter)
         model_group = get_model_group_from_litellm_kwargs(kwargs)
         remaining_requests_variable_name = (
             f"litellm-key-remaining-requests-{model_group}"
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
-        remaining_requests = (
-            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
-        )
-        remaining_tokens = (
-            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
-        )
+        remaining_requests = metadata.get(remaining_requests_variable_name)
+        remaining_tokens = metadata.get(remaining_tokens_variable_name)
+
+        # Fallback: parallel_request_limiter_v3 writes the per-key-per-model
+        # remaining values into response._hidden_params["additional_headers"]
+        # under "x-ratelimit-model_per_key-remaining-{tokens,requests}" instead
+        # of into request metadata. Read from there if metadata is empty so the
+        # gauge does not fall through to sys.maxsize (9.22e18 in DataDog).
+        if remaining_requests is None or remaining_tokens is None:
+            standard_logging_payload = kwargs.get("standard_logging_object") or {}
+            _hidden = standard_logging_payload.get("hidden_params") or {}
+            additional_headers = _hidden.get("additional_headers") or {}
+            if remaining_requests is None:
+                remaining_requests = additional_headers.get(
+                    "x-ratelimit-model_per_key-remaining-requests"
+                )
+            if remaining_tokens is None:
+                remaining_tokens = additional_headers.get(
+                    "x-ratelimit-model_per_key-remaining-tokens"
+                )
+
+        if remaining_requests is None:
+            remaining_requests = sys.maxsize
+        if remaining_tokens is None:
+            remaining_tokens = sys.maxsize
 
         self.litellm_remaining_api_key_requests_for_model.labels(
             _sanitize_prometheus_label_value(user_api_key),
@@ -1928,7 +1950,7 @@ class PrometheusLogger(CustomLogger):
             or _litellm_params_metadata.get("user_agent"),
         }
 
-    def set_llm_deployment_failure_metrics(self, request_kwargs: dict):
+    def set_llm_deployment_failure_metrics(self, request_kwargs: dict):  # noqa: PLR0915
         """
         Sets Failure metrics when an LLM API call fails
 
@@ -2006,17 +2028,32 @@ class PrometheusLogger(CustomLogger):
                     if code is not None:
                         exception_status = str(code)
 
-            # Create enum_values for the label factory (always create for use in different metrics)
+            # On LiteLLM-side rejects (no deployment picked), route request_kwargs["model"]
+            # into requested_model and leave deployment-scoped labels empty.
+            deployment_selected = bool(model_id)
+            if deployment_selected:
+                label_litellm_model_name = litellm_model_name
+                label_model_id = model_id
+                label_api_base = api_base
+                label_api_provider = llm_provider
+                label_requested_model = model_group or litellm_model_name
+            else:
+                label_litellm_model_name = ""
+                label_model_id = ""
+                label_api_base = ""
+                label_api_provider = ""
+                label_requested_model = litellm_model_name or model_group or ""
+
             enum_values = UserAPIKeyLabelValues(
-                litellm_model_name=litellm_model_name,
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=llm_provider,
+                litellm_model_name=label_litellm_model_name,
+                model_id=label_model_id,
+                api_base=label_api_base,
+                api_provider=label_api_provider,
                 exception_status=exception_status,
                 exception_class=(
                     self._get_exception_class_name(exception) if exception else None
                 ),
-                requested_model=model_group or litellm_model_name,
+                requested_model=label_requested_model,
                 hashed_api_key=hashed_api_key,
                 api_key_alias=api_key_alias,
                 team=team,
@@ -2030,12 +2067,14 @@ class PrometheusLogger(CustomLogger):
             log these labels
             ["litellm_model_name", "model_id", "api_base", "api_provider"]
             """
-            self.set_deployment_partial_outage(
-                litellm_model_name=litellm_model_name or "",
-                model_id=model_id,
-                api_base=api_base,
-                api_provider=llm_provider or "",
-            )
+            # Only mark a deployment outage when one was actually picked.
+            if deployment_selected:
+                self.set_deployment_partial_outage(
+                    litellm_model_name=litellm_model_name or "",
+                    model_id=model_id,
+                    api_base=api_base,
+                    api_provider=llm_provider or "",
+                )
             _deployment_label_ctx = PrometheusLabelFactoryContext(enum_values)
             if exception is not None:
                 PrometheusLogger._inc_labeled_counter(
