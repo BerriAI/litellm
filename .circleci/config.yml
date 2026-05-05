@@ -1475,7 +1475,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
+            uv run --no-sync python -m pytest -v tests/otel_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
             # Clean up first container
       - run:
