@@ -258,6 +258,13 @@ if MCP_AVAILABLE:
     # Without this, a leaked mcp-session-id could be driven (or terminated)
     # by any other authenticated proxy user.
     _stateful_session_owners: Dict[str, str] = {}
+    # Per-session lock that serializes ``handle_request`` for the same
+    # mcp-session-id. The stored ``MCPAuthenticatedUser`` is mutated in place
+    # by ``_update_auth_context`` each request; without this lock, two
+    # concurrent requests on the same session would clobber each other's
+    # auth headers / mcp_servers / oauth state while in-flight callbacks are
+    # still reading the shared object.
+    _stateful_session_locks: Dict[str, asyncio.Lock] = {}
 
     # Keep this alias so existing references to session_manager still work
     session_manager = session_manager_stateless
@@ -293,6 +300,7 @@ if MCP_AVAILABLE:
             _stateful_session_auth_contexts.pop(session_id, None)
             _stateful_session_auth_context_last_seen.pop(session_id, None)
             _stateful_session_owners.pop(session_id, None)
+            _stateful_session_locks.pop(session_id, None)
             transport = server_instances.pop(session_id, None)
             if transport is not None:
                 await transport.terminate()
@@ -301,6 +309,7 @@ if MCP_AVAILABLE:
             if session_id not in _stateful_session_auth_contexts:
                 _stateful_session_auth_context_last_seen.pop(session_id, None)
                 _stateful_session_owners.pop(session_id, None)
+                _stateful_session_locks.pop(session_id, None)
 
     async def _cleanup_expired_stateful_session_auth_contexts() -> None:
         while True:
@@ -3020,35 +3029,58 @@ if MCP_AVAILABLE:
 
                 receive = wrapped_receive
 
-            auth_user = _set_or_update_auth_context(
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=mcp_auth_header,
-                mcp_servers=mcp_servers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-                client_ip=_client_ip,
-                session_id=session_id if use_stateful else None,
-            )
-            if use_stateful and is_initialize:
-                send = _wrap_send_with_stateful_session_auth_context(
-                    send,
-                    auth_user,
-                    _owner_fingerprint_for(user_api_key_auth),
+            # Serialize requests on the same stateful session so concurrent
+            # callers don't clobber each other's auth context mid-flight.
+            session_lock: Optional[asyncio.Lock] = None
+            if use_stateful and session_id:
+                session_lock = _stateful_session_locks.setdefault(
+                    session_id, asyncio.Lock()
                 )
 
-            async with _gateway_initialize_instructions_request_scope(
-                user_api_key_auth,
-                mcp_servers,
-                _client_ip,
-            ):
-                try:
-                    await target_manager.handle_request(scope, receive, send)
-                finally:
-                    if use_stateful and session_id and scope.get("method") == "DELETE":
-                        _stateful_session_auth_contexts.pop(session_id, None)
-                        _stateful_session_auth_context_last_seen.pop(session_id, None)
-                        _stateful_session_owners.pop(session_id, None)
+            async def _dispatch() -> None:
+                auth_user = _set_or_update_auth_context(
+                    user_api_key_auth=user_api_key_auth,
+                    mcp_auth_header=mcp_auth_header,
+                    mcp_servers=mcp_servers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    oauth2_headers=oauth2_headers,
+                    raw_headers=raw_headers,
+                    client_ip=_client_ip,
+                    session_id=session_id if use_stateful else None,
+                )
+                local_send = send
+                if use_stateful and is_initialize:
+                    local_send = _wrap_send_with_stateful_session_auth_context(
+                        local_send,
+                        auth_user,
+                        _owner_fingerprint_for(user_api_key_auth),
+                    )
+
+                async with _gateway_initialize_instructions_request_scope(
+                    user_api_key_auth,
+                    mcp_servers,
+                    _client_ip,
+                ):
+                    try:
+                        await target_manager.handle_request(scope, receive, local_send)
+                    finally:
+                        if (
+                            use_stateful
+                            and session_id
+                            and scope.get("method") == "DELETE"
+                        ):
+                            _stateful_session_auth_contexts.pop(session_id, None)
+                            _stateful_session_auth_context_last_seen.pop(
+                                session_id, None
+                            )
+                            _stateful_session_owners.pop(session_id, None)
+                            _stateful_session_locks.pop(session_id, None)
+
+            if session_lock is not None:
+                async with session_lock:
+                    await _dispatch()
+            else:
+                await _dispatch()
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise

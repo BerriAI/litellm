@@ -1509,6 +1509,93 @@ async def test_stateful_mcp_session_owner_mismatch_returns_403():
 
 
 @pytest.mark.asyncio
+async def test_stateful_mcp_session_serializes_concurrent_requests():
+    """
+    Concurrent requests on the same stateful mcp-session-id must be
+    serialized so they cannot observe each other's mutation of the shared
+    MCPAuthenticatedUser while in-flight callbacks are still running.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "serialized-session-1"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    mcp_server._stateful_session_auth_contexts[session_id] = (
+        mcp_server.MCPAuthenticatedUser(user_api_key_auth=owner_auth)
+    )
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(
+        owner_auth
+    )
+
+    inside = 0
+    max_inside = 0
+    gate = asyncio.Event()
+
+    async def slow_handle(s, r, se):
+        nonlocal inside, max_inside
+        inside += 1
+        max_inside = max(max_inside, inside)
+        await gate.wait()
+        inside -= 1
+
+    async def make_request():
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [(b"mcp-session-id", session_id.encode())],
+        }
+        receive = AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+                "more_body": False,
+            }
+        )
+        send = AsyncMock()
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(owner_auth, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                session_manager_stateful, "handle_request", side_effect=slow_handle
+            ),
+            patch.object(
+                session_manager_stateful,
+                "_server_instances",
+                {session_id: MagicMock()},
+            ),
+        ):
+            tasks = [asyncio.create_task(make_request()) for _ in range(3)]
+            await asyncio.sleep(0.05)
+            gate.set()
+            await asyncio.gather(*tasks)
+    finally:
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_owners.pop(session_id, None)
+        mcp_server._stateful_session_locks.pop(session_id, None)
+
+    assert (
+        max_inside == 1
+    ), "concurrent requests on same stateful session must be serialized"
+
+
+@pytest.mark.asyncio
 @pytest.mark.no_parallel
 async def test_mcp_routing_with_conflicting_alias_and_group_name():
     """
