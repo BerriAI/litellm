@@ -1456,13 +1456,24 @@ if MCP_AVAILABLE:
         When absent, unauthenticated access is still allowed for **temp-cache**
         servers only (browser OAuth). When present, global-registry access
         follows admin / allowlist rules via ``_get_cached_temporary_mcp_server_or_404``.
+
+        Only non-empty **string** ``Authorization`` values trigger a full auth
+        pipeline import (tests and mocks may attach MagicMock headers).
         """
-        authorization = (
-            request.headers.get("authorization")
-            or request.headers.get("Authorization")
-            or ""
-        ).strip()
-        if not authorization:
+        try:
+            headers = request.headers
+        except Exception:
+            return None
+        raw: object = None
+        for key in ("authorization", "Authorization"):
+            try:
+                candidate = headers.get(key)
+            except Exception:
+                candidate = None
+            if isinstance(candidate, str) and candidate.strip():
+                raw = candidate
+                break
+        if not isinstance(raw, str) or not raw.strip():
             return None
         from litellm.proxy.auth.user_api_key_auth import (
             user_api_key_auth_from_request_headers,
