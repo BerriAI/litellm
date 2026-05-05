@@ -977,6 +977,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -1174,6 +1175,7 @@
         "supports_vision": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_tool_choice": true
     },
     "global.anthropic.claude-opus-4-7": {
@@ -1321,6 +1323,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
@@ -1350,6 +1353,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
@@ -1379,6 +1383,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
@@ -1407,6 +1412,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
@@ -1435,6 +1441,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
@@ -1929,6 +1936,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
@@ -2052,6 +2060,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
@@ -9219,6 +9228,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -9226,6 +9236,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
@@ -9361,6 +9372,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -9388,6 +9400,7 @@
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -9409,6 +9422,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -9442,6 +9456,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -9475,6 +9490,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -9491,7 +9507,6 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-opus-4-7-20260416": {
@@ -9510,6 +9525,7 @@
             "search_context_size_low": 0.01,
             "search_context_size_medium": 0.01
         },
+        "supports_adaptive_thinking": true,
         "supports_assistant_prefill": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
@@ -9526,7 +9542,6 @@
             "us": 1.1,
             "fast": 6.0
         },
-        "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true
     },
     "claude-sonnet-4-20250514": {
@@ -10804,6 +10819,7 @@
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_tool_choice": true
     },
     "databricks/databricks-claude-sonnet-4": {
@@ -17164,7 +17180,8 @@
         ],
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": true
     },
     "github_copilot/claude-opus-4.6-fast": {
         "litellm_provider": "github_copilot",
@@ -17677,7 +17694,8 @@
         "mode": "chat",
         "output_cost_per_token": 2.5e-05,
         "supports_function_calling": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_minimal_reasoning_effort": true
     },
     "gmi/anthropic/claude-sonnet-4.5": {
         "input_cost_per_token": 3e-06,
@@ -19942,7 +19960,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "gpt-5.5-2026-04-23": {
         "cache_read_input_token_cost": 5e-07,
@@ -19990,7 +20008,7 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": true,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false
     },
     "gpt-5.5-pro": {
         "cache_read_input_token_cost": 3e-06,
@@ -20033,7 +20051,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "gpt-5.5-pro-2026-04-23": {
         "cache_read_input_token_cost": 3e-06,
@@ -20076,7 +20095,8 @@
         "supports_web_search": true,
         "supports_none_reasoning_effort": false,
         "supports_xhigh_reasoning_effort": true,
-        "supports_minimal_reasoning_effort": true
+        "supports_minimal_reasoning_effort": false,
+        "supports_low_reasoning_effort": false
     },
     "gpt-5.4": {
         "cache_read_input_token_cost": 2.5e-07,
@@ -26093,6 +26113,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 159,
@@ -26111,6 +26132,7 @@
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
@@ -26132,6 +26154,7 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
@@ -26197,6 +26220,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
@@ -28076,7 +28100,8 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": true
     },
     "perplexity/anthropic/claude-sonnet-4-5": {
         "litellm_provider": "perplexity",
@@ -30555,6 +30580,7 @@
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -30583,6 +30609,7 @@
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -30610,6 +30637,7 @@
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -31190,6 +31218,7 @@
         "output_cost_per_token": 2.5e-05,
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -32382,6 +32411,7 @@
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -32408,6 +32438,7 @@
         "supports_assistant_prefill": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -32574,6 +32605,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,
@@ -39585,6 +39617,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
+        "supports_max_reasoning_effort": true,
         "supports_tool_choice": true,
         "supports_vision": true,
         "tool_use_system_prompt_tokens": 346,

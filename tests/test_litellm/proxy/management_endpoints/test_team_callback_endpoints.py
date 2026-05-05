@@ -1,71 +1,205 @@
 """
-Audit-log emission for the team-callback admin endpoints.
+Regression tests for team callback endpoint access control and audit logging.
 
-The endpoints in ``team_callback_endpoints.py`` mutate a team's logging
-callbacks (``add_team_callbacks``) or zero them out entirely
-(``disable_team_logging``).  Both are admin-only mutations, and the
-disable variant is itself a logging-control action, so when the operator
-has Enterprise audit logging enabled (``litellm.store_audit_logs = True``)
-each call must emit a row that captures who did it and what the metadata
-looked like before/after.
+The team callback endpoints mutate or expose callback credentials. They must
+enforce target-team management access and, when audit logging is enabled, emit
+redacted audit rows for callback mutations.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 import litellm
 from litellm.proxy._types import (
     AddTeamCallback,
     LitellmTableNames,
+    LitellmUserRoles,
     UserAPIKeyAuth,
 )
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     add_team_callbacks,
     disable_team_logging,
+    get_team_callbacks,
 )
+
+
+def _team_row(
+    *,
+    team_id: str = "team-victim",
+    metadata: dict | None = None,
+    admin_user_id: str = "victim_admin",
+    organization_id: str = "org-victim",
+) -> MagicMock:
+    row = MagicMock()
+    row.team_id = team_id
+    row.metadata = metadata or {}
+    row.model_dump.return_value = {
+        "team_id": team_id,
+        "team_alias": "victim-team",
+        "members_with_roles": [
+            {"role": "admin", "user_id": admin_user_id},
+        ],
+        "organization_id": organization_id,
+        "metadata": row.metadata,
+    }
+    return row
+
+
+def _patch_prisma(existing_team: MagicMock):
+    mock_prisma = MagicMock()
+    mock_prisma.get_data = AsyncMock(return_value=existing_team)
+
+    updated_row = MagicMock()
+    updated_row.team_id = existing_team.team_id
+    mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated_row)
+    return mock_prisma
 
 
 def _admin_auth() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(
         api_key="hashed",
         user_id="admin-user",
-        user_role="proxy_admin",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
     )
 
 
-def _existing_team_row(metadata: dict) -> MagicMock:
-    row = MagicMock()
-    row.team_id = "team-1"
-    row.metadata = metadata
-    return row
+@pytest.fixture
+def unauthorized_caller():
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="random_authenticated_user",
+        api_key="sk-random",
+    )
 
 
-def _patch_prisma(existing_metadata: dict):
-    """Build a context-manager that patches the proxy's ``prisma_client``
-    to return ``existing_metadata`` from ``get_data`` and a stub team row
-    from ``litellm_teamtable.update``."""
-    mock_prisma = MagicMock()
-    mock_prisma.get_data = AsyncMock(return_value=_existing_team_row(existing_metadata))
+@pytest.fixture
+def patched_prisma():
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_client,
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        mock_client.get_data = AsyncMock(return_value=_team_row())
+        mock_client.db.litellm_teamtable.update = AsyncMock()
+        yield mock_client
 
-    updated_row = MagicMock()
-    updated_row.team_id = "team-1"
-    mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated_row)
-    return mock_prisma
+
+@pytest.mark.asyncio
+async def test_add_team_callbacks_rejects_unauthorized_caller(
+    patched_prisma, unauthorized_caller
+):
+    data = AddTeamCallback(
+        callback_name="langfuse",
+        callback_type="success",
+        callback_vars={
+            "langfuse_public_key": "pk-attacker",
+            "langfuse_secret_key": "sk-attacker",
+        },
+    )
+    with pytest.raises(HTTPException) as exc:
+        await add_team_callbacks(
+            data=data,
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=unauthorized_caller,
+        )
+    assert exc.value.status_code == 403
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_disable_team_logging_rejects_unauthorized_caller(
+    patched_prisma, unauthorized_caller
+):
+    with pytest.raises(HTTPException) as exc:
+        await disable_team_logging(
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=unauthorized_caller,
+        )
+    assert exc.value.status_code == 403
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_team_callbacks_rejects_unauthorized_caller(
+    patched_prisma, unauthorized_caller
+):
+    with pytest.raises(HTTPException) as exc:
+        await get_team_callbacks(
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=unauthorized_caller,
+        )
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_can_add_team_callbacks(patched_prisma):
+    data = AddTeamCallback(
+        callback_name="langfuse",
+        callback_type="success",
+        callback_vars={
+            "langfuse_public_key": "pk-admin",
+            "langfuse_secret_key": "sk-admin",
+        },
+    )
+    await add_team_callbacks(
+        data=data,
+        http_request=Mock(spec=Request),
+        team_id="team-victim",
+        user_api_key_dict=_admin_auth(),
+    )
+    patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_team_admin_of_target_team_can_add_callbacks(patched_prisma):
+    patched_prisma.get_data = AsyncMock(
+        return_value=_team_row(admin_user_id="team_admin_user")
+    )
+
+    team_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="team_admin_user",
+        api_key="sk-team-admin",
+    )
+    data = AddTeamCallback(
+        callback_name="langfuse",
+        callback_type="success",
+        callback_vars={
+            "langfuse_public_key": "pk-team",
+            "langfuse_secret_key": "sk-team",
+        },
+    )
+    await add_team_callbacks(
+        data=data,
+        http_request=Mock(spec=Request),
+        team_id="team-victim",
+        user_api_key_dict=team_admin,
+    )
+    patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_disable_team_logging_emits_audit_log_when_enabled(monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", True)
     mock_prisma = _patch_prisma(
-        {
-            "callback_settings": {
-                "success_callback": ["langfuse"],
-                "failure_callback": [],
-            }
-        }
+        _team_row(
+            team_id="team-1",
+            metadata={
+                "callback_settings": {
+                    "success_callback": ["langfuse"],
+                    "failure_callback": [],
+                }
+            },
+        )
     )
 
     audit_calls = []
@@ -87,8 +221,6 @@ async def test_disable_team_logging_emits_audit_log_when_enabled(monkeypatch):
             user_api_key_dict=_admin_auth(),
             litellm_changed_by=None,
         )
-        # asyncio.create_task fires the coroutine eagerly; await one tick to let
-        # the audit-log emit run before the test exits.
         import asyncio
 
         for _ in range(3):
@@ -103,9 +235,7 @@ async def test_disable_team_logging_emits_audit_log_when_enabled(monkeypatch):
 
     before = json.loads(log.before_value)
     after = json.loads(log.updated_values)
-    # Before: the team's pre-existing success_callback survives in the snapshot.
     assert before["metadata"]["callback_settings"]["success_callback"] == ["langfuse"]
-    # After: callbacks zeroed out by the endpoint.
     assert after["metadata"]["callback_settings"]["success_callback"] == []
     assert after["metadata"]["callback_settings"]["failure_callback"] == []
 
@@ -114,12 +244,15 @@ async def test_disable_team_logging_emits_audit_log_when_enabled(monkeypatch):
 async def test_disable_team_logging_no_audit_when_disabled(monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", False)
     mock_prisma = _patch_prisma(
-        {
-            "callback_settings": {
-                "success_callback": ["langfuse"],
-                "failure_callback": [],
-            }
-        }
+        _team_row(
+            team_id="team-1",
+            metadata={
+                "callback_settings": {
+                    "success_callback": ["langfuse"],
+                    "failure_callback": [],
+                }
+            },
+        )
     )
 
     audit_calls = []
@@ -147,7 +280,7 @@ async def test_disable_team_logging_no_audit_when_disabled(monkeypatch):
 @pytest.mark.asyncio
 async def test_add_team_callbacks_emits_audit_log_when_enabled(monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", True)
-    mock_prisma = _patch_prisma({"logging": []})
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata={"logging": []}))
 
     audit_calls = []
 
@@ -186,7 +319,6 @@ async def test_add_team_callbacks_emits_audit_log_when_enabled(monkeypatch):
     assert log.table_name == LitellmTableNames.TEAM_TABLE_NAME
     assert log.object_id == "team-1"
     assert log.action == "updated"
-    # ``litellm_changed_by`` header takes precedence over the auth user_id.
     assert log.changed_by == "ops-on-call"
 
     before = json.loads(log.before_value)
@@ -195,34 +327,32 @@ async def test_add_team_callbacks_emits_audit_log_when_enabled(monkeypatch):
     assert len(after["metadata"]["logging"]) == 1
     assert after["metadata"]["logging"][0]["callback_name"] == "langfuse"
 
-    # Callback secrets MUST NOT leak into the audit log payload.
     callback_vars = after["metadata"]["logging"][0]["callback_vars"]
     assert callback_vars["langfuse_public_key"] != "pk"
     assert callback_vars["langfuse_secret_key"] != "sk"
-    # Key names are preserved so the auditor can see which fields changed.
     assert "langfuse_public_key" in callback_vars
     assert "langfuse_secret_key" in callback_vars
-    # And no plaintext secret should appear anywhere in the serialized row.
-    assert "sk" not in log.updated_values.replace("sk-", "")  # crude leak check
+    assert "sk" not in log.updated_values.replace("sk-", "")
     assert "pk" not in (log.updated_values.replace("pk-", "").replace("public_key", ""))
 
 
 @pytest.mark.asyncio
 async def test_disable_team_logging_redacts_existing_callback_secrets(monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", True)
-    # Existing team has populated callback_vars containing secrets — redaction
-    # must apply to the BEFORE snapshot too.
     mock_prisma = _patch_prisma(
-        {
-            "callback_settings": {
-                "success_callback": ["langfuse"],
-                "failure_callback": [],
-                "callback_vars": {
-                    "langfuse_public_key": "pk-real",
-                    "langfuse_secret_key": "sk-real-secret",
-                },
-            }
-        }
+        _team_row(
+            team_id="team-1",
+            metadata={
+                "callback_settings": {
+                    "success_callback": ["langfuse"],
+                    "failure_callback": [],
+                    "callback_vars": {
+                        "langfuse_public_key": "pk-real",
+                        "langfuse_secret_key": "sk-real-secret",
+                    },
+                }
+            },
+        )
     )
 
     audit_calls = []
@@ -251,8 +381,6 @@ async def test_disable_team_logging_redacts_existing_callback_secrets(monkeypatc
 
     assert len(audit_calls) == 1
     log = audit_calls[0]
-    # The pre-existing secret_key value must NOT appear in the serialized
-    # before_value or updated_values.
     assert "sk-real-secret" not in log.before_value
     assert "sk-real-secret" not in log.updated_values
     assert "pk-real" not in log.before_value
@@ -262,7 +390,7 @@ async def test_disable_team_logging_redacts_existing_callback_secrets(monkeypatc
 @pytest.mark.asyncio
 async def test_add_team_callbacks_no_audit_when_disabled(monkeypatch):
     monkeypatch.setattr(litellm, "store_audit_logs", False)
-    mock_prisma = _patch_prisma({"logging": []})
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata={"logging": []}))
 
     audit_calls = []
 

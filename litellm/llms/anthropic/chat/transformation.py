@@ -1,18 +1,31 @@
 import json
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    NoReturn,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 
 import litellm
 from litellm.constants import (
+    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -90,6 +103,22 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT: Dict[str, str] = {
+    "low": "low",
+    "minimal": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
+}
+
+DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING = (
+    "Dropping unsupported `output_config` for model=%s "
+    "(drop_params=True). Effort is only supported on Opus 4.5+, "
+    "Sonnet 4.6+, and Mythos Preview."
+)
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -202,17 +231,96 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _supports_effort_level(model: str, level: str) -> bool:
         """Check ``supports_{level}_reasoning_effort`` in the model map.
 
-        Mirrors the pattern used in ``openai/chat/gpt_5_transformation.py`` so
-        that adding support for a new effort level is a pure model-map change.
+        Strips bedrock/vertex prefixes so a provider-routed Claude still
+        resolves to the Anthropic model-map entry.
         """
+        key = f"supports_{level}_reasoning_effort"
         try:
-            return _supports_factory(
+            if _supports_factory(
                 model=model,
                 custom_llm_provider="anthropic",
-                key=f"supports_{level}_reasoning_effort",
-            )
+                key=key,
+            ):
+                return True
         except Exception:
-            return False
+            pass
+        candidates = [model]
+        for prefix in (
+            "bedrock/converse/",
+            "bedrock/invoke/",
+            "bedrock/",
+            "vertex_ai/",
+        ):
+            if model.startswith(prefix):
+                candidates.append(model[len(prefix) :])
+        try:
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            base = BedrockModelInfo.get_base_model(model)
+            if base:
+                candidates.append(base)
+                candidates.append(f"bedrock/{base}")
+        except Exception:
+            pass
+        try:
+            import litellm
+
+            for cand in candidates:
+                if cand in litellm.model_cost and (
+                    litellm.model_cost[cand].get(key) is True
+                ):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _validate_effort_for_model(model: str, effort: Optional[str]) -> Optional[str]:
+        """Return ``None`` if ``effort`` is allowed on ``model``, else an error message."""
+        if effort == "max" and not (
+            AnthropicConfig._is_claude_4_6_model(model)
+            or AnthropicConfig._is_claude_4_7_model(model)
+            or AnthropicConfig._supports_effort_level(model, "max")
+        ):
+            return f"effort='max' is not supported by this model. Got model: {model}"
+        if effort == "xhigh" and not AnthropicConfig._supports_effort_level(
+            model, "xhigh"
+        ):
+            return f"effort='xhigh' is not supported by this model. Got model: {model}"
+        return None
+
+    @staticmethod
+    def _model_supports_effort_param(model: str) -> bool:
+        """Whether the model accepts ``output_config.effort`` at all."""
+        return any(
+            AnthropicConfig._supports_effort_level(model, level)
+            for level in ("low", "minimal", "medium", "high", "xhigh", "max")
+        )
+
+    @staticmethod
+    def _raise_invalid_reasoning_effort(
+        model: str, value: Any, llm_provider: str
+    ) -> NoReturn:
+        """Raise a ``BadRequestError`` for an unrecognised ``reasoning_effort``.
+
+        Args:
+            model: The model id the request was routed to (surfaced in the error).
+            value: The offending ``reasoning_effort`` value supplied by the caller.
+            llm_provider: Provider tag for the raised exception (``"anthropic"``,
+                ``"bedrock_converse"``, ``"databricks"``, ...).
+
+        Raises:
+            litellm.exceptions.BadRequestError: Always.
+        """
+        raise litellm.exceptions.BadRequestError(
+            message=(
+                f"Invalid reasoning_effort: {value!r}. "
+                f"Must be one of: 'minimal', 'low', 'medium', "
+                f"'high', 'xhigh', 'max', 'none'"
+            ),
+            model=model,
+            llm_provider=llm_provider,
+        )
 
     def get_supported_openai_params(self, model: str):
         params = [
@@ -794,12 +902,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_reasoning_effort(
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
         model: str,
+        llm_provider: str = "anthropic",
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
-        if AnthropicConfig._is_claude_4_6_model(
-            model
-        ) or AnthropicConfig._is_claude_4_7_model(model):
+        if AnthropicConfig._is_adaptive_thinking_model(model):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
@@ -818,13 +925,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
             )
+        elif reasoning_effort == "xhigh":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "max":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+            )
         elif reasoning_effort == "minimal":
             return AnthropicThinkingParam(
                 type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+                budget_tokens=max(
+                    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+                    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+                ),
             )
         else:
-            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+            raise litellm.exceptions.BadRequestError(
+                message=(
+                    f"Unmapped reasoning effort: {reasoning_effort!r}. "
+                    f"Must be one of: 'minimal', 'low', 'medium', 'high', "
+                    f"'xhigh', 'max', 'none'."
+                ),
+                model=model,
+                llm_provider=llm_provider,
+            )
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
@@ -1088,24 +1216,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    reasoning_effort=value, model=model
+                mapped_thinking = AnthropicConfig._map_reasoning_effort(
+                    reasoning_effort=value,
+                    model=model,
+                    llm_provider=self.custom_llm_provider or "anthropic",
                 )
-                # For Claude 4.6+ models, effort is controlled via output_config,
-                # not thinking budget_tokens. Map reasoning_effort to output_config.
-                if AnthropicConfig._is_claude_4_6_model(
-                    model
-                ) or AnthropicConfig._is_claude_4_7_model(model):
-                    effort_map = {
-                        "low": "low",
-                        "minimal": "low",
-                        "medium": "medium",
-                        "high": "high",
-                        "xhigh": "xhigh",
-                        "max": "max",
-                    }
-                    mapped_effort = effort_map.get(value, value)
-                    optional_params["output_config"] = {"effort": mapped_effort}
+                if mapped_thinking is None:
+                    optional_params.pop("thinking", None)
+                    optional_params.pop("output_config", None)
+                else:
+                    optional_params["thinking"] = mapped_thinking
+                    if AnthropicConfig._is_adaptive_thinking_model(model):
+                        mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                            value
+                        )
+                        if mapped_effort is None:
+                            AnthropicConfig._raise_invalid_reasoning_effort(
+                                model=model,
+                                value=value,
+                                llm_provider=self.custom_llm_provider or "anthropic",
+                            )
+                        optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -1527,29 +1658,31 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         output_config = optional_params.get("output_config")
         if not output_config or not isinstance(output_config, dict):
             return
+        if litellm.drop_params is True and not self._model_supports_effort_param(model):
+            litellm.verbose_logger.warning(
+                DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
+                model,
+            )
+            optional_params.pop("output_config", None)
+            data.pop("output_config", None)
+            return
         effort = output_config.get("effort")
         valid_efforts = ["high", "medium", "low", "xhigh", "max"]
-        if effort and effort not in valid_efforts:
-            raise ValueError(
-                f"Invalid effort value: {effort}. Must be one of: "
-                f"'high', 'medium', 'low', 'xhigh', 'max'"
+        if effort is not None and effort not in valid_efforts:
+            raise litellm.exceptions.BadRequestError(
+                message=(
+                    f"Invalid effort value: {effort!r}. Must be one of: "
+                    f"'high', 'medium', 'low', 'xhigh', 'max'"
+                ),
+                model=model,
+                llm_provider=self.custom_llm_provider or "anthropic",
             )
-        # ``max`` is for Opus 4.6+ output effort (not Sonnet 4.6, not Opus 4.5).
-        # Accept known Opus 4.6/4.7 id patterns and/or ``supports_max_reasoning_effort``
-        # in the model map (same pattern as ``xhigh`` below).
-        if effort == "max" and not (
-            self._is_opus_4_6_model(model)
-            or self._is_opus_4_7_model(model)
-            or self._supports_effort_level(model, "max")
-        ):
-            raise ValueError(
-                f"effort='max' is not supported by this model. Got model: {model}"
-            )
-        # ``xhigh`` is data-driven via ``supports_xhigh_reasoning_effort`` so
-        # enabling it for a new model is a pure model-map change.
-        if effort == "xhigh" and not self._supports_effort_level(model, "xhigh"):
-            raise ValueError(
-                f"effort='xhigh' is not supported by this model. Got model: {model}"
+        gate_error = self._validate_effort_for_model(model, effort)
+        if gate_error is not None:
+            raise litellm.exceptions.BadRequestError(
+                message=gate_error,
+                model=model,
+                llm_provider=self.custom_llm_provider or "anthropic",
             )
         data["output_config"] = output_config
 
