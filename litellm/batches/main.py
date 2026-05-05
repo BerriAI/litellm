@@ -194,6 +194,12 @@ def create_batch(  # noqa: PLR0915
 
         _is_async = kwargs.pop("acreate_batch", False) is True
         litellm_params = dict(GenericLiteLLMParams(**kwargs))
+        batch_s3_bucket_overrides = kwargs.get("_litellm_batch_s3_bucket_overrides")
+        if isinstance(batch_s3_bucket_overrides, dict):
+            for key in ("s3_bucket_name", "s3_output_bucket_name"):
+                value = batch_s3_bucket_overrides.get(key)
+                if isinstance(value, str) and value.strip():
+                    litellm_params[key] = value.strip()
         litellm_logging_obj: LiteLLMLoggingObj = cast(
             LiteLLMLoggingObj, kwargs.get("litellm_logging_obj", None)
         )

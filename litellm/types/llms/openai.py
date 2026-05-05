@@ -434,6 +434,9 @@ class CreateBatchRequest(TypedDict, total=False):
 
 class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
     model: str
+    # Bedrock batch / proxy: optional request-level buckets (see _litellm_batch_s3_bucket_overrides)
+    s3_bucket_name: Optional[str]
+    s3_output_bucket_name: Optional[str]
 
 
 class RetrieveBatchRequest(TypedDict, total=False):

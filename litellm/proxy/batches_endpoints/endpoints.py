@@ -121,6 +121,12 @@ async def create_batch(  # noqa: PLR0915
             or "openai"
         )
         _create_batch_data = LiteLLMBatchCreateRequest(**data)
+        _create_batch_data["_litellm_batch_s3_bucket_overrides"] = {
+            key: value.strip()
+            for key in ("s3_bucket_name", "s3_output_bucket_name")
+            for value in [_create_batch_data.get(key)]
+            if isinstance(value, str) and value.strip()
+        }
 
         # Apply team-level batch output expiry enforcement
         team_metadata = user_api_key_dict.team_metadata or {}
