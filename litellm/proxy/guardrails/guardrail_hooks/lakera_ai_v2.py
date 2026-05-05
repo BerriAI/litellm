@@ -13,6 +13,11 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import (
+    apply_redacted_messages_back,
+    build_inspection_messages,
+    has_non_string_content,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues
@@ -214,18 +219,26 @@ class LakeraAIGuardrail(CustomGuardrail):
             )
             return data
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
-        if new_messages is None:
+        # Covers multimodal list content + Responses-API input.
+        new_messages = build_inspection_messages(data)
+        if not new_messages:
             verbose_proxy_logger.warning(
-                "Lakera AI: not running guardrail. No messages in data"
+                "Lakera AI: not running guardrail. No inspectable text in data"
             )
             return data
+
+        # Mask-in-place uses offsets returned by Lakera and can only
+        # preserve non-text parts (images, audio, …) when the original
+        # content is a plain string. For multimodal/Responses-API input
+        # we degrade to block-on-detect so we never silently strip image
+        # parts while attempting to redact text.
+        is_multimodal_input = has_non_string_content(data)
 
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
-            messages=new_messages,
+            messages=new_messages,  # type: ignore[arg-type]
             request_data=data,
             event_type=GuardrailEventHooks.pre_call,
         )
@@ -234,13 +247,20 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 2. Handle flagged content ##########
         #########################################################
         if lakera_guardrail_response.get("flagged") is True:
-            # If only PII violations exist, mask the PII
-            if self._is_only_pii_violation(lakera_guardrail_response):
-                data["messages"] = self._mask_pii_in_messages(
-                    messages=new_messages,
+            # If only PII violations exist, mask the PII (string input only).
+            if (
+                self._is_only_pii_violation(lakera_guardrail_response)
+                and not is_multimodal_input
+            ):
+                redacted_messages = self._mask_pii_in_messages(
+                    messages=new_messages,  # type: ignore[arg-type]
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
                 )
+                # Write back to ``messages`` AND ``input``. The Responses-API
+                # backend reads ``input``; writing only to ``messages``
+                # would let unredacted PII reach the LLM for /v1/responses.
+                apply_redacted_messages_back(data, list(redacted_messages))  # type: ignore[arg-type]
                 verbose_proxy_logger.debug(
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
@@ -252,7 +272,9 @@ class LakeraAIGuardrail(CustomGuardrail):
                     )
                     # Log violation but continue
                 elif self.on_flagged == "block":
-                    # If there are other violations or not set to mask PII, raise exception
+                    # Either non-PII violations, or PII on multimodal input
+                    # (which cannot be masked in place without dropping
+                    # image/audio parts) — raise the standard block error.
                     raise self._get_http_exception_for_blocked_guardrail(
                         lakera_guardrail_response
                     )
@@ -280,18 +302,22 @@ class LakeraAIGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        new_messages: Optional[List[AllMessageValues]] = data.get("messages")
-        if new_messages is None:
+        new_messages = build_inspection_messages(data)
+        if not new_messages:
             verbose_proxy_logger.warning(
-                "Lakera AI: not running guardrail. No messages in data"
+                "Lakera AI: not running guardrail. No inspectable text in data"
             )
             return
+
+        # See ``async_pre_call_hook`` — multimodal input degrades to
+        # block-on-detect because mask-in-place would drop image parts.
+        is_multimodal_input = has_non_string_content(data)
 
         #########################################################
         ########## 1. Make the Lakera AI v2 guard API request ##########
         #########################################################
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
-            messages=new_messages,
+            messages=new_messages,  # type: ignore[arg-type]
             request_data=data,
             event_type=GuardrailEventHooks.during_call,
         )
@@ -300,25 +326,28 @@ class LakeraAIGuardrail(CustomGuardrail):
         ########## 2. Handle flagged content ##########
         #########################################################
         if lakera_guardrail_response.get("flagged") is True:
-            # If only PII violations exist, mask the PII
-            if self._is_only_pii_violation(lakera_guardrail_response):
-                data["messages"] = self._mask_pii_in_messages(
-                    messages=new_messages,
+            if (
+                self._is_only_pii_violation(lakera_guardrail_response)
+                and not is_multimodal_input
+            ):
+                redacted_messages = self._mask_pii_in_messages(
+                    messages=new_messages,  # type: ignore[arg-type]
                     lakera_response=lakera_guardrail_response,
                     masked_entity_count=masked_entity_count,
                 )
+                # Write back to ``messages`` AND ``input``. The Responses-API
+                # backend reads ``input``; writing only to ``messages``
+                # would let unredacted PII reach the LLM for /v1/responses.
+                apply_redacted_messages_back(data, list(redacted_messages))  # type: ignore[arg-type]
                 verbose_proxy_logger.debug(
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
             else:
-                # Check on_flagged setting
                 if self.on_flagged == "monitor":
                     verbose_proxy_logger.warning(
                         "Lakera Guardrail: Monitoring mode - violation detected but allowing request"
                     )
-                    # Log violation but continue
                 elif self.on_flagged == "block":
-                    # If there are other violations or not set to mask PII, raise exception
                     raise self._get_http_exception_for_blocked_guardrail(
                         lakera_guardrail_response
                     )
