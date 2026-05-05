@@ -976,6 +976,7 @@ if MCP_AVAILABLE:
     async def _preview_openapi_tools(spec_path: str) -> dict:
         """Generate tool previews from an OpenAPI spec without creating a server."""
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _OPENAPI_TOOL_NAME_MAX_LEN,
             build_input_schema,
             load_openapi_spec_async,
             resolve_operation_params,
@@ -987,6 +988,7 @@ if MCP_AVAILABLE:
             paths = spec.get("paths", {})
             components = spec.get("components", {})
             tools: List[dict] = []
+            used_names: set = set()
             for path, path_item in paths.items():
                 for method in ("get", "post", "put", "patch", "delete"):
                     operation = path_item.get(method)
@@ -1003,6 +1005,17 @@ if MCP_AVAILABLE:
                     # registered (and shipped to LLM providers, which enforce
                     # ^[a-zA-Z0-9_-]+$). See sanitize_openapi_tool_name docstring.
                     op_id = sanitize_openapi_tool_name(raw_op_id)
+
+                    unique = op_id
+                    n = 1
+                    while unique in used_names:
+                        n += 1
+                        suffix = f"_{n}"
+                        unique = (
+                            op_id[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
+                        )
+                    op_id = unique
+                    used_names.add(op_id)
                     summary = operation.get("summary", "")
                     description = operation.get("description", summary)
                     input_schema = build_input_schema(resolved_op)
