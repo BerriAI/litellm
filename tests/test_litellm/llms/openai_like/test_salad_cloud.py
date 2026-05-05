@@ -35,20 +35,20 @@ class TestSaladCloudProviderConfig:
         salad_cloud = JSONProviderRegistry.get("salad_cloud")
         assert salad_cloud is not None
         assert salad_cloud.base_url == "https://ai.salad.cloud/v1"
-        assert salad_cloud.api_key_env == "SALAD_API_KEY"
+        assert salad_cloud.api_key_env == "SALAD_CLOUD_API_KEY"
 
     def test_salad_cloud_provider_resolution(self):
         """Test that provider resolution correctly routes salad_cloud models"""
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="salad_cloud/qwen3.5-35b-a3b",
+            model="salad_cloud/qwen3.6-35b-a3b",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
         )
 
-        assert model == "qwen3.5-35b-a3b"
+        assert model == "qwen3.6-35b-a3b"
         assert provider == "salad_cloud"
         assert api_base == "https://ai.salad.cloud/v1"
 
@@ -59,9 +59,9 @@ class TestSaladCloudProviderConfig:
         router = Router(
             model_list=[
                 {
-                    "model_name": "qwen3.5-35b",
+                    "model_name": "qwen3.6-35b",
                     "litellm_params": {
-                        "model": "salad_cloud/qwen3.5-35b-a3b",
+                        "model": "salad_cloud/qwen3.6-35b-a3b",
                         "api_key": "test-key",
                     },
                 }
@@ -69,7 +69,7 @@ class TestSaladCloudProviderConfig:
         )
 
         assert len(router.model_list) == 1
-        assert router.model_list[0]["model_name"] == "qwen3.5-35b"
+        assert router.model_list[0]["model_name"] == "qwen3.6-35b"
 
     def test_salad_cloud_models_in_pricing(self):
         """Test that all SaladCloud models are present in model_prices_and_context_window.json"""
@@ -84,9 +84,10 @@ class TestSaladCloudProviderConfig:
             model_cost = json.load(f)
 
         expected_models = [
-            "salad_cloud/qwen3.5-35b-a3b",
-            "salad_cloud/qwen3.5-27b",
+            "salad_cloud/qwen3.6-35b-a3b",
+            "salad_cloud/qwen3.6-27b",
             "salad_cloud/qwen3.5-9b",
+            "salad_cloud/gemma-4-26b-a4b-instruct",
         ]
 
         for model in expected_models:
