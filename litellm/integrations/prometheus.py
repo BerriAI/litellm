@@ -1396,6 +1396,59 @@ class PrometheusLogger(CustomLogger):
             amount=float(response_cost),
         )
 
+    @staticmethod
+    def _coerce_remaining_value(value):
+        """Return ``int(value)`` for non-empty numeric inputs, else ``None``.
+
+        The rate-limit headers added by parallel_request_limiter_v3 may be
+        ints, floats, or strings depending on the backing store. We treat
+        ``None``, empty string, and unparseable values as "not present" so
+        the caller can fall back to the next source instead of emitting
+        ``sys.maxsize`` (~9e18) to Prometheus / DataDog.
+        """
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _get_additional_headers_from_kwargs(kwargs: dict) -> dict:
+        """Pull ``additional_headers`` out of the response's hidden params.
+
+        parallel_request_limiter_v3 stamps the per-(key, model) remaining
+        values onto ``response._hidden_params["additional_headers"]`` under
+        the keys ``x-ratelimit-model_per_key-remaining-{requests,tokens}``.
+        Prefer the StandardLoggingPayload (it's already a plain dict), but
+        fall back to the raw response object so we still work when the
+        payload hasn't been populated yet.
+        """
+        slp = kwargs.get("standard_logging_object") or {}
+        hidden = slp.get("hidden_params") if isinstance(slp, dict) else None
+        if isinstance(hidden, dict):
+            ah = hidden.get("additional_headers")
+            if isinstance(ah, dict):
+                return ah
+
+        response = kwargs.get("response_obj") or kwargs.get("original_response")
+        hidden = getattr(response, "_hidden_params", None)
+        if hidden is None and isinstance(response, dict):
+            hidden = response.get("_hidden_params") or response.get("hidden_params")
+        if hidden is not None and not isinstance(hidden, dict):
+            try:
+                hidden = hidden.model_dump()
+            except Exception:
+                try:
+                    hidden = dict(hidden)
+                except Exception:
+                    hidden = None
+        if isinstance(hidden, dict):
+            ah = hidden.get("additional_headers")
+            if isinstance(ah, dict):
+                return ah
+        return {}
+
     def _set_virtual_key_rate_limit_metrics(
         self,
         user_api_key: Optional[str],
@@ -1409,19 +1462,39 @@ class PrometheusLogger(CustomLogger):
         )
 
         # Set remaining rpm/tpm for API Key + model
-        # see parallel_request_limiter.py - variables are set there
+        # see parallel_request_limiter.py - variables are set there (v1/v2 limiter)
+        # see parallel_request_limiter_v3.py - the v3 limiter writes the per-(key, model)
+        # remaining values into response._hidden_params.additional_headers under
+        # "x-ratelimit-model_per_key-remaining-{requests,tokens}" instead of into
+        # kwargs["metadata"], so we have to fall back to that to avoid emitting
+        # sys.maxsize (~9e18) gauges to Prometheus / DataDog.
         model_group = get_model_group_from_litellm_kwargs(kwargs)
         remaining_requests_variable_name = (
             f"litellm-key-remaining-requests-{model_group}"
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
-        remaining_requests = (
-            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
+        additional_headers = self._get_additional_headers_from_kwargs(kwargs)
+
+        remaining_requests = self._coerce_remaining_value(
+            metadata.get(remaining_requests_variable_name)
         )
-        remaining_tokens = (
-            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
+        if remaining_requests is None:
+            remaining_requests = self._coerce_remaining_value(
+                additional_headers.get("x-ratelimit-model_per_key-remaining-requests")
+            )
+        if remaining_requests is None:
+            remaining_requests = sys.maxsize
+
+        remaining_tokens = self._coerce_remaining_value(
+            metadata.get(remaining_tokens_variable_name)
         )
+        if remaining_tokens is None:
+            remaining_tokens = self._coerce_remaining_value(
+                additional_headers.get("x-ratelimit-model_per_key-remaining-tokens")
+            )
+        if remaining_tokens is None:
+            remaining_tokens = sys.maxsize
 
         self.litellm_remaining_api_key_requests_for_model.labels(
             _sanitize_prometheus_label_value(user_api_key),
