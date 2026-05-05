@@ -28,7 +28,6 @@ from ...base_llm.audio_transcription.transformation import (
 )
 from ..common_utils import NvidiaRivaException
 
-
 # Riva expects a fixed wire format for the audio chunks we stream in.
 RIVA_TARGET_SAMPLE_RATE_HZ = 16000
 RIVA_TARGET_NUM_CHANNELS = 1
@@ -110,16 +109,9 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             recognition_config["endpointing_config"] = endpointing_config
 
         request_payload: Dict[str, Any] = {
-            "audio_file": audio_file,
             "recognition_config": recognition_config,
             "response_format": optional_params.get("response_format") or "json",
             "timestamp_granularities": optional_params.get("timestamp_granularities"),
-            "auth": {
-                "api_base": litellm_params.get("api_base"),
-                "api_key": litellm_params.get("api_key"),
-                "nvcf_function_id": optional_params.get("nvcf_function_id"),
-                "use_ssl": optional_params.get("use_ssl"),
-            },
         }
 
         return AudioTranscriptionRequestData(data=request_payload, files=None)

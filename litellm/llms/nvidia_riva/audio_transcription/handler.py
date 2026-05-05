@@ -110,6 +110,7 @@ class NvidiaRivaAudioTranscription:
             api_key=api_key,
             api_base=api_base,
             provider_config=provider_config,
+            atranscription=atranscription,
         )
 
     async def async_audio_transcriptions(
@@ -139,6 +140,7 @@ class NvidiaRivaAudioTranscription:
             api_key=api_key,
             api_base=api_base,
             provider_config=provider_config or NvidiaRivaAudioTranscriptionConfig(),
+            atranscription=True,
         )
 
     def _run_sync(
@@ -153,6 +155,7 @@ class NvidiaRivaAudioTranscription:
         api_key: Optional[str],
         api_base: Optional[str],
         provider_config: NvidiaRivaAudioTranscriptionConfig,
+        atranscription: bool = False,
     ) -> TranscriptionResponse:
         if not api_base:
             raise NvidiaRivaException(
@@ -215,7 +218,7 @@ class NvidiaRivaAudioTranscription:
             api_key=api_key,
             additional_args={
                 "api_base": api_base,
-                "atranscription": True,
+                "atranscription": atranscription,
                 "complete_input_dict": {
                     "recognition_config": recognition_config_dict,
                     "nvcf_function_id_set": bool(

@@ -117,9 +117,8 @@ def test_transform_request_builds_recognition_config(cfg):
         payload["recognition_config"]["model"]
         == "parakeet-1.1b-en-US-asr-streaming-silero-vad-sortformer"
     )
-    assert payload["auth"]["api_base"] == "grpc.nvcf.nvidia.com:443"
-    assert payload["auth"]["nvcf_function_id"] == "abc-123"
-    assert payload["auth"]["use_ssl"] is True
+    assert "audio_file" not in payload
+    assert "auth" not in payload
 
 
 def test_transform_request_default_riva_model_is_empty_for_auto_select(cfg):

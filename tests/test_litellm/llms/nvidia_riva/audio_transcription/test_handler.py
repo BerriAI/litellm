@@ -200,6 +200,10 @@ def test_sync_path_aggregates_only_final_results(mock_riva, logging_obj):
     words = response["words"]
     assert words[0]["start"] == pytest.approx(0.0)
     assert words[1]["end"] == pytest.approx(0.87)
+    assert (
+        logging_obj.pre_call.call_args.kwargs["additional_args"]["atranscription"]
+        is False
+    )
 
 
 def test_auth_nvcf_defaults_use_ssl_and_attaches_function_id(mock_riva, logging_obj):
@@ -336,6 +340,10 @@ def test_async_path_uses_to_thread(mock_riva, logging_obj):
         )
     )
     assert response.text == "async ok"
+    assert (
+        logging_obj.pre_call.call_args.kwargs["additional_args"]["atranscription"]
+        is True
+    )
 
 
 def test_timeout_is_forwarded_to_streaming_generator_when_supported(
