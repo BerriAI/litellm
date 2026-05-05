@@ -4043,6 +4043,26 @@ def test_build_anthropic_tool_name_maps_reverse_order_collision():
     assert "foo_bar" not in reverse
 
 
+def test_build_anthropic_tool_name_maps_duplicate_originals():
+    """REGRESSION: duplicate originals must not corrupt the forward map.
+
+    Previously, the second occurrence of the same invalid name would
+    rewrite ``forward[original]`` to a suffixed name (``foo_bar_2``),
+    leaving ``foo_bar`` orphaned in ``used`` with no reverse mapping —
+    so when ``_sanitize_tool_names_in_request`` applied the forward
+    map, *both* tool entries got the suffixed name and Anthropic 400'd
+    on duplicates.
+    """
+    from litellm.llms.anthropic.chat.transformation import (
+        _build_anthropic_tool_name_maps,
+    )
+
+    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo/bar"])
+    # Same original sanitizes to the same target — no spurious suffix.
+    assert forward == {"foo/bar": "foo_bar"}
+    assert reverse == {"foo_bar": "foo/bar"}
+
+
 def test_map_openai_params_does_not_pollute_optional_params_with_internal_keys():
     """REGRESSION: ``optional_params`` is what becomes the JSON body sent to
     Anthropic (``data = {**optional_params}``). It MUST NOT carry LiteLLM-

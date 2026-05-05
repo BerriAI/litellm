@@ -192,6 +192,13 @@ def _build_anthropic_tool_name_maps(
         candidate = _basic_sanitize_anthropic_tool_name(original)
         if candidate == original:
             continue
+        # Skip duplicates of the same original name. Without this guard the
+        # second pass would assign a fresh suffix and overwrite the forward
+        # map entry, causing every reference to map to the suffixed name and
+        # leaving the original sanitized slot orphaned in `used` with no
+        # reverse mapping.
+        if original in forward:
+            continue
         # Disambiguate against names already chosen this request.
         unique = candidate
         n = 1
