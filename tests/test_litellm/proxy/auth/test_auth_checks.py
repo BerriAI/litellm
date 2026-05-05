@@ -17,7 +17,10 @@ import litellm
 from litellm.proxy._types import (
     CallInfo,
     Litellm_EntityType,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
     LiteLLM_ObjectPermissionTable,
+    LiteLLM_TagTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -29,10 +32,12 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _can_object_call_vector_stores,
+    _check_end_user_budget,
     _check_team_member_budget,
     _get_fuzzy_user_object,
     _get_team_db_check,
     _log_budget_lookup_failure,
+    _tag_max_budget_check,
     _team_max_budget_check,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
@@ -922,19 +927,21 @@ async def test_get_tag_objects_batch():
     # Simulate 5 tags: 2 cached, 3 uncached
     tag_names = ["cached-1", "uncached-1", "cached-2", "uncached-2", "uncached-3"]
 
-    # Mock cached tags
-    cached_tag_1 = {
-        "tag_name": "cached-1",
-        "spend": 10.0,
-        "models": [],
-        "litellm_budget_table": None,
-    }
-    cached_tag_2 = {
-        "tag_name": "cached-2",
-        "spend": 20.0,
-        "models": [],
-        "litellm_budget_table": None,
-    }
+    # Mock cached tags — must be LiteLLM_TagTable instances: the mocked async_get_cache
+    # bypasses UserApiKeyCache deserialization, so returning plain dicts would flow through
+    # as dict (production returns models after Codec.deserialize inside the cache).
+    cached_tag_1 = LiteLLM_TagTable(
+        tag_name="cached-1",
+        spend=10.0,
+        models=[],
+        litellm_budget_table=None,
+    )
+    cached_tag_2 = LiteLLM_TagTable(
+        tag_name="cached-2",
+        spend=20.0,
+        models=[],
+        litellm_budget_table=None,
+    )
 
     # Mock DB response for uncached tags
     uncached_tag_1 = MagicMock()
@@ -980,13 +987,13 @@ async def test_get_tag_objects_batch():
     )
 
     # Mock cache behavior - return cached tags, None for uncached
-    async def mock_get_cache(key):
+    async def mock_get_cache(*args, **kwargs):
+        key = kwargs.get("key")
         if key == "tag:cached-1":
             return cached_tag_1
-        elif key == "tag:cached-2":
+        if key == "tag:cached-2":
             return cached_tag_2
-        else:
-            return None
+        return None
 
     mock_cache.async_get_cache = AsyncMock(side_effect=mock_get_cache)
     mock_cache.async_set_cache = AsyncMock()
@@ -1963,6 +1970,67 @@ async def test_team_budget_check_reads_from_spend_counter():
 
 
 @pytest.mark.asyncio
+async def test_end_user_budget_check_reads_from_spend_counter():
+    """End-user budget check should use get_current_spend when counter exists."""
+    end_user_object = LiteLLM_EndUserTable(
+        user_id="customer-1",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:end_user:customer-1":
+            return 1.5
+        return fallback_spend
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_end_user_budget(
+                end_user_obj=end_user_object,
+                route="/chat/completions",
+            )
+        assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.max_budget == 1.0
+
+
+@pytest.mark.asyncio
+async def test_tag_budget_check_reads_from_spend_counter():
+    """Tag budget check should use get_current_spend when counter exists."""
+    from litellm.proxy.utils import ProxyLogging
+
+    tag_object = LiteLLM_TagTable(
+        tag_name="paid-tag",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:tag:paid-tag":
+            return 1.5
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+            new_callable=AsyncMock,
+            return_value={"paid-tag": tag_object},
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _tag_max_budget_check(
+                request_body={"metadata": {"tags": ["paid-tag"]}},
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+        assert exc_info.value.current_cost == 1.5
+        assert exc_info.value.max_budget == 1.0
+
+
+@pytest.mark.asyncio
 async def test_team_member_budget_check_reads_from_spend_counter():
     """Team member budget check should use get_current_spend when counter exists."""
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
@@ -2494,3 +2562,129 @@ async def test_team_member_budget_check_null_clone_with_null_default_skips_enfor
             user_api_key_cache=DualCache(),
             proxy_logging_obj=proxy_logging_obj,
         )
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_check_zero_team_default_treated_as_no_cap():
+    """A team default budget with max_budget=0.0 (likely a stale/accidental
+    write) must not block every member. The fallback path treats 0 as
+    "no cap"; per-member rows still respect 0 as an explicit disable."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata={"team_member_budget_id": "budget-default"},
+    )
+    user_object = LiteLLM_UserTable(user_id="test-user")
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    # No per-member row -> falls through to team default.
+    team_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=0.0,
+        budget_id=None,
+        litellm_budget_table=None,
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+
+    # Team default budget row with max_budget=0.0 (the regression trigger).
+    fake_default_row = MagicMock()
+    fake_default_row.max_budget = 0.0
+    fake_default_row.dict = MagicMock(
+        return_value={"budget_id": "budget-default", "max_budget": 0.0}
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=fake_default_row
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:team_member:test-user:test-team":
+            return 0.0
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
+    ):
+        # No raise: 0.0 cap is treated as "no cap configured".
+        await _check_team_member_budget(
+            team_object=team_object,
+            user_object=user_object,
+            valid_token=valid_token,
+            prisma_client=prisma_client,
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+
+@pytest.mark.asyncio
+async def test_team_member_budget_check_zero_per_member_row_still_blocks():
+    """A per-member row with max_budget=0.0 is treated as an explicit admin
+    disable - enforcement still blocks. Only the team-default fallback
+    path treats 0 as no cap."""
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership
+    from litellm.proxy.utils import ProxyLogging
+
+    team_object = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata={"team_member_budget_id": "budget-default"},
+    )
+    user_object = LiteLLM_UserTable(user_id="test-user")
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    # Per-member row with max_budget=0.0 - admin intent: disable this user.
+    team_membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="test-team",
+        spend=0.0,
+        budget_id="budget-disable",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.0),
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:team_member:test-user:test-team":
+            return 0.0
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new_callable=AsyncMock,
+            return_value=team_membership,
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_team_member_budget(
+                team_object=team_object,
+                user_object=user_object,
+                valid_token=valid_token,
+                prisma_client=prisma_client,
+                user_api_key_cache=DualCache(),
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    assert exc_info.value.max_budget == 0.0

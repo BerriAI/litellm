@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, s
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     LENGTH_OF_LITELLM_GENERATED_KEY,
     LITELLM_PROXY_ADMIN_NAME,
@@ -57,6 +57,7 @@ from litellm.proxy.management_endpoints.common_utils import (
     _is_user_org_admin_for_team,
     _is_user_team_admin,
     _set_object_metadata_field,
+    _team_member_has_permission,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
@@ -809,6 +810,20 @@ async def _common_key_generation_helper(  # noqa: PLR0915
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if prisma_client:
+            # Mirror the membership rule applied to /key/update: when the
+            # caller specifies an organization_id, require that they are a
+            # member of (or proxy admin over) the target organization.
+            _is_proxy_admin = (
+                user_api_key_dict.user_role is not None
+                and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+            )
+            if not _is_proxy_admin:
+                await _validate_caller_can_assign_key_org(
+                    user_api_key_dict=user_api_key_dict,
+                    organization_id=data.organization_id,
+                    prisma_client=prisma_client,
+                )
+
             org_table = await get_org_object(
                 org_id=data.organization_id,
                 user_api_key_cache=user_api_key_cache,
@@ -1059,7 +1074,7 @@ async def _check_project_key_limits(
     project_id: str,
     data: Union[GenerateKeyRequest, UpdateKeyRequest],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> None:
     """
     Validate that key's models and budget respect its project's limits.
@@ -1166,6 +1181,42 @@ def check_org_key_rpm_tpm_limits(
         entity_tpm_limit=entity_tpm_limit,
         entity_type="organization",
     )
+
+
+async def _validate_caller_can_assign_key_org(
+    user_api_key_dict: UserAPIKeyAuth,
+    organization_id: str,
+    prisma_client: PrismaClient,
+) -> None:
+    """Reject ``/key/update`` requests that point a key at an organization
+    the caller does not belong to.
+
+    Mirrors the org-membership rule already enforced on ``/key/list`` in
+    ``validate_key_list_check``. Proxy admins are checked at the call site.
+    """
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot assign a key to an organization without a user_id on the caller's token",
+        )
+
+    user_row = await prisma_client.db.litellm_usertable.find_unique(
+        where={"user_id": user_api_key_dict.user_id},
+        include={"organization_memberships": True},
+    )
+    memberships = (
+        getattr(user_row, "organization_memberships", None) if user_row else None
+    )
+    member_org_ids = {
+        membership.organization_id
+        for membership in (memberships or [])
+        if membership.organization_id is not None
+    }
+    if organization_id not in member_org_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Caller is not a member of organization_id={organization_id}",
+        )
 
 
 async def _check_org_key_limits(
@@ -1834,7 +1885,7 @@ async def _process_single_key_update(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: Any,
     llm_router: Optional[Router],
     user_custom_key_update: Optional[Callable] = None,
@@ -2168,10 +2219,26 @@ async def _validate_update_key_data(
             user_api_key_cache=user_api_key_cache,
         )
 
+    # When the caller asks to change the key's organization_id, require that
+    # they are a member of (or a proxy admin over) the target organization.
+    # Without this gate, any caller could assign their key to an arbitrary
+    # organization_id by passing it in the request body — VERIA-55 secondary
+    # IDOR. The check mirrors the membership rule already used on the
+    # `/key/list` filter path in `validate_key_list_check`.
+    _existing_org_id = getattr(existing_key_row, "organization_id", None)
+    if (
+        data.organization_id is not None
+        and data.organization_id != _existing_org_id
+        and not _is_proxy_admin
+    ):
+        await _validate_caller_can_assign_key_org(
+            user_api_key_dict=user_api_key_dict,
+            organization_id=data.organization_id,
+            prisma_client=prisma_client,
+        )
+
     # Check org key limits only when throughput-related fields or organization_id change
-    _org_id_to_check = data.organization_id or getattr(
-        existing_key_row, "organization_id", None
-    )
+    _org_id_to_check = data.organization_id or _existing_org_id
     _throughput_fields_changed = (
         data.organization_id is not None
         or data.tpm_limit is not None
@@ -3298,7 +3365,7 @@ async def _team_key_deletion_check(
     user_api_key_dict: UserAPIKeyAuth,
     key_info: LiteLLM_VerificationToken,
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ):
     is_team_key = _is_team_key(data=key_info)
 
@@ -3341,7 +3408,7 @@ async def _team_key_deletion_check(
 
 async def can_modify_verification_token(
     key_info: LiteLLM_VerificationToken,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
 ) -> bool:
@@ -3415,7 +3482,7 @@ async def can_modify_verification_token(
 
 async def delete_verification_tokens(
     tokens: List,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str] = None,
 ) -> Tuple[Optional[Dict], List[LiteLLM_VerificationToken]]:
@@ -3605,7 +3672,7 @@ async def _persist_deleted_verification_tokens(
 
 async def delete_key_aliases(
     key_aliases: List[str],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str] = None,
@@ -3862,11 +3929,27 @@ async def _execute_virtual_key_regeneration(
     data: Optional[RegenerateKeyRequest],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: Optional[str],
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> GenerateKeyResponse:
     """Generate new token, update DB, invalidate cache, and return response."""
     from litellm.proxy.proxy_server import hash_token
+
+    # Apply the same membership rule used on /key/update: when the caller
+    # asks to point the regenerated key at a different organization_id,
+    # require they are a member of (or proxy admin over) the target org.
+    if data is not None and data.organization_id is not None:
+        _existing_org_id = getattr(key_in_db, "organization_id", None)
+        _is_proxy_admin = (
+            user_api_key_dict.user_role is not None
+            and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        )
+        if data.organization_id != _existing_org_id and not _is_proxy_admin:
+            await _validate_caller_can_assign_key_org(
+                user_api_key_dict=user_api_key_dict,
+                organization_id=data.organization_id,
+                prisma_client=prisma_client,
+            )
 
     new_token = await get_new_token(data=data)
     new_token_hash = hash_token(new_token)
@@ -4152,7 +4235,7 @@ async def _check_proxy_or_team_admin_for_key(
     key_in_db: LiteLLM_VerificationToken,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
 ) -> None:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -4436,6 +4519,26 @@ def _get_admin_team_ids_from_objects(
     ]
 
 
+def _get_team_ids_with_key_list_permission_from_objects(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_objects: List[LiteLLM_TeamTable],
+) -> List[str]:
+    """Filter team objects to non-admin teams where the caller has /key/list
+    permission via team_member_permissions. These teams should grant the
+    caller full key visibility (same as a team admin), so other members'
+    keys and service account keys (user_id=NULL) are returned."""
+    return [
+        team.team_id
+        for team in team_objects
+        if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+        and _team_member_has_permission(
+            user_api_key_dict=user_api_key_dict,
+            team_obj=team,
+            permission=KeyManagementRoutes.KEY_LIST.value,
+        )
+    ]
+
+
 def _get_member_team_ids_from_objects(
     user_api_key_dict: UserAPIKeyAuth,
     team_objects: List[LiteLLM_TeamTable],
@@ -4589,6 +4692,17 @@ async def list_keys(
                 user_api_key_dict=user_api_key_dict,
                 team_objects=team_objects,
             )
+            # Non-admin members with /key/list permission get full team-key
+            # visibility for that team — matching the UI contract that
+            # granting this permission lets them see all keys within the team.
+            list_permission_team_ids = (
+                _get_team_ids_with_key_list_permission_from_objects(
+                    user_api_key_dict=user_api_key_dict,
+                    team_objects=team_objects,
+                )
+            )
+            if list_permission_team_ids:
+                admin_team_ids = list({*admin_team_ids, *list_permission_team_ids})
         else:
             admin_team_ids = None
 
@@ -5173,7 +5287,7 @@ async def _check_key_admin_access(
     user_api_key_dict: UserAPIKeyAuth,
     hashed_token: str,
     prisma_client: Any,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     route: str,
 ) -> None:
     """

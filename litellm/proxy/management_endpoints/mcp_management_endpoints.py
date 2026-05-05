@@ -477,6 +477,42 @@ if MCP_AVAILABLE:
         allowed_routes = getattr(user_api_key_dict, "allowed_routes", None)
         return isinstance(allowed_routes, list) and len(allowed_routes) > 0
 
+    def _sanitize_mcp_server_for_non_admin(
+        mcp_server: LiteLLM_MCPServerTable,
+    ) -> LiteLLM_MCPServerTable:
+        """Strip credential-bearing fields for non-admin viewers.
+
+        Non-admin users may legitimately need to discover MCP servers
+        their team has access to (so they can pick one in the UI), but
+        they must never see fields that can carry bearer tokens or
+        upstream API keys. ``_redact_mcp_credentials`` already clears
+        the explicit ``credentials`` field; this layers on top to catch
+        the URL+headers+env vectors that the virtual-key sanitizer also
+        strips. Reset values match each field's declared default on
+        ``LiteLLM_MCPServerTable`` (``None`` for Optional fields,
+        ``[]``/``{}`` for required list/dict fields).
+        """
+        sanitized = _redact_mcp_credentials(mcp_server)
+        # URL is the highest-impact vector: many MCP integrations embed
+        # the upstream API key directly in the path. spec_path can carry
+        # similar tokens in the OpenAPI spec URL.
+        sanitized.url = None
+        sanitized.spec_path = None
+        sanitized.static_headers = None
+        sanitized.extra_headers = []
+        sanitized.env = {}
+        sanitized.command = None
+        sanitized.args = []
+        sanitized.authorization_url = None
+        sanitized.token_url = None
+        sanitized.registration_url = None
+        return sanitized
+
+    def _sanitize_mcp_server_list_for_non_admin(
+        mcp_servers: Iterable[LiteLLM_MCPServerTable],
+    ) -> List[LiteLLM_MCPServerTable]:
+        return [_sanitize_mcp_server_for_non_admin(s) for s in mcp_servers]
+
     def _sanitize_mcp_server_for_virtual_key(
         mcp_server: LiteLLM_MCPServerTable,
     ) -> LiteLLM_MCPServerTable:
@@ -926,6 +962,12 @@ if MCP_AVAILABLE:
         if is_restricted_virtual_key:
             return _sanitize_mcp_server_list_for_virtual_key(redacted_mcp_servers)
 
+        # Non-admin authenticated users may see the server inventory but
+        # not credential-bearing fields like `url` (often contains bearer
+        # tokens) or headers/env (often contain Authorization).
+        if not _user_has_admin_view(user_api_key_dict):
+            return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
+
         return redacted_mcp_servers
 
     @router.get(
@@ -1293,6 +1335,8 @@ if MCP_AVAILABLE:
         redacted = _redact_mcp_credentials(mcp_server)
         if is_restricted_virtual_key:
             return _sanitize_mcp_server_for_virtual_key(redacted)
+        if not _user_has_admin_view(user_api_key_dict):
+            return _sanitize_mcp_server_for_non_admin(redacted)
         return redacted
 
     @router.post(
@@ -2120,7 +2164,8 @@ if MCP_AVAILABLE:
 
         Used by the UI to show a discovery grid when adding new MCP servers.
         """
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Admin Viewer follows the read-parity rule.
+        if not _user_has_admin_view(user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -2177,7 +2222,8 @@ if MCP_AVAILABLE:
     async def get_openapi_registry(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
-        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Admin Viewer follows the read-parity rule.
+        if not _user_has_admin_view(user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail={

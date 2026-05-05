@@ -268,7 +268,12 @@ async def test_aaauser_personal_budgets(key_ownership):
 
     test_user_cache = getattr(litellm.proxy.proxy_server, "user_api_key_cache")
 
-    assert test_user_cache.get_cache(key=hash_token(user_key)) == valid_token
+    assert (
+        test_user_cache.get_cache(
+            key=hash_token(user_key), model_type=UserAPIKeyAuth
+        )
+        == valid_token
+    )
 
     try:
         await user_api_key_auth(request=request, api_key="Bearer " + user_key)
