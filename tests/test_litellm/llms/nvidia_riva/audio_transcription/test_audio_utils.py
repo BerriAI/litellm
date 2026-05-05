@@ -8,6 +8,8 @@ format Riva's gRPC ASR expects: 16 kHz mono LINEAR_PCM (int16 LE).
 import io
 import os
 import sys
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
@@ -80,3 +82,49 @@ def test_unknown_format_raises_clear_error():
         resample_to_riva_pcm(b"\x00\x01\x02\x03")
     # Message must hint at what to do next.
     assert "Riva STT" in excinfo.value.message
+
+
+def test_audioread_fallback_writes_to_tempfile_path(monkeypatch):
+    """
+    The audioread fallback handles compressed formats (mp3, m4a, ...). Most
+    audioread backends call into a subprocess (FFmpeg, GStreamer) and
+    require a real filesystem path — passing a BytesIO blows up with a
+    TypeError in subprocess.Popen. This test would have caught that bug:
+    we assert ``audio_open`` is called with a string path that points at a
+    file containing exactly the input bytes.
+    """
+    payload = b"\xff\xfbfake-mp3-bytes-not-actually-decodable"
+    seen_paths = []
+
+    class FakeAudioSource:
+        samplerate = 22050
+        channels = 1
+
+        def __iter__(self):
+            yield np.array([0, 0, 0, 0], dtype=np.int16).tobytes()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_audio_open(path):
+        assert isinstance(path, str), "audioread requires a filesystem path"
+        seen_paths.append(path)
+        with open(path, "rb") as fh:
+            assert fh.read() == payload
+        return FakeAudioSource()
+
+    fake_audioread = SimpleNamespace(audio_open=fake_audio_open)
+    monkeypatch.setitem(sys.modules, "audioread", fake_audioread)
+
+    fake_sf = MagicMock()
+    fake_sf.read.side_effect = RuntimeError("libsndfile cannot decode mp3")
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
+    resampled = resample_to_riva_pcm(payload)
+    assert resampled.sample_rate_hz == 16000
+    assert seen_paths and seen_paths[0].endswith(".audio")
+    # Tempfile must be cleaned up after decode.
+    assert not os.path.exists(seen_paths[0])

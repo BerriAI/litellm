@@ -25,6 +25,7 @@ without the optional STT extras installed.
 """
 
 import asyncio
+import inspect
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -229,10 +230,18 @@ class NvidiaRivaAudioTranscription:
         try:
             asr_service = riva_asr_module.ASRService(auth_obj)
             audio_chunks = self._iter_audio_chunks(resampled.pcm_bytes)
-            stream = asr_service.streaming_response_generator(
-                audio_chunks=audio_chunks,
-                streaming_config=streaming_config,
-            )
+            stream_kwargs: Dict[str, Any] = {
+                "audio_chunks": audio_chunks,
+                "streaming_config": streaming_config,
+            }
+            # Forward the deadline so the stream cannot block forever if the
+            # server stalls. Older riva-client versions do not accept a
+            # ``timeout`` kwarg, so pass it only when supported.
+            if timeout is not None and self._supports_timeout_kwarg(
+                asr_service.streaming_response_generator
+            ):
+                stream_kwargs["timeout"] = float(timeout)
+            stream = asr_service.streaming_response_generator(**stream_kwargs)
             final_results = self._collect_final_results(stream)
         except NvidiaRivaException:
             raise
@@ -354,6 +363,17 @@ class NvidiaRivaAudioTranscription:
                 pass
 
         return config
+
+    @staticmethod
+    def _supports_timeout_kwarg(callable_obj: Any) -> bool:
+        try:
+            sig = inspect.signature(callable_obj)
+        except (TypeError, ValueError):
+            return False
+        params = sig.parameters
+        if "timeout" in params:
+            return True
+        return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
     @staticmethod
     def _iter_audio_chunks(pcm_bytes: bytes):

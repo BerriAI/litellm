@@ -13,6 +13,8 @@ the caller to convert the audio upstream.
 """
 
 import io
+import os
+import tempfile
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -62,7 +64,7 @@ def resample_to_riva_pcm(file_bytes: bytes) -> ResampledAudio:
     samples_float = np.asarray(samples_float, dtype=np.float32).ravel()
 
     if source_rate != RIVA_TARGET_SAMPLE_RATE_HZ:
-        samples_float = _linear_resample(
+        samples_float = _resample(
             samples_float, source_rate, RIVA_TARGET_SAMPLE_RATE_HZ
         )
 
@@ -120,44 +122,88 @@ def _decode_to_float32(file_bytes: bytes) -> Tuple["object", int]:
             ),
         ) from e
 
+    # audioread backends (FFmpeg subprocess, GStreamer, Core Audio) require a
+    # filesystem path, so spill the bytes to a temp file. mkstemp is portable
+    # to Windows where re-opening a NamedTemporaryFile is not allowed.
+    fd, tmp_path = tempfile.mkstemp(suffix=".audio")
     try:
-        with audioread.audio_open(io.BytesIO(file_bytes)) as src:  # type: ignore[arg-type]
-            source_rate = int(src.samplerate)
-            channels = int(src.channels)
-            chunks = []
-            for buf in src:
-                chunks.append(np.frombuffer(buf, dtype=np.int16))
-            if not chunks:
-                raise NvidiaRivaException(
-                    status_code=400,
-                    message="Audio decode produced no samples.",
-                )
-            interleaved = np.concatenate(chunks).astype(np.float32) / 32768.0
-            if channels > 1:
-                interleaved = interleaved.reshape(-1, channels)
-            return interleaved, source_rate
-    except NvidiaRivaException:
-        raise
-    except Exception as e:
-        raise NvidiaRivaException(
-            status_code=400,
-            message=(
-                "Could not decode audio for Riva STT. Convert your audio to "
-                f"wav/flac/ogg before calling the API. Underlying error: {e}"
-            ),
-        ) from e
+        with os.fdopen(fd, "wb") as tmp_file:
+            tmp_file.write(file_bytes)
+        try:
+            with audioread.audio_open(tmp_path) as src:
+                source_rate = int(src.samplerate)
+                channels = int(src.channels)
+                chunks = []
+                for buf in src:
+                    chunks.append(np.frombuffer(buf, dtype=np.int16))
+                if not chunks:
+                    raise NvidiaRivaException(
+                        status_code=400,
+                        message="Audio decode produced no samples.",
+                    )
+                interleaved = np.concatenate(chunks).astype(np.float32) / 32768.0
+                if channels > 1:
+                    interleaved = interleaved.reshape(-1, channels)
+                return interleaved, source_rate
+        except NvidiaRivaException:
+            raise
+        except Exception as e:
+            raise NvidiaRivaException(
+                status_code=400,
+                message=(
+                    "Could not decode audio for Riva STT. Convert your audio to "
+                    f"wav/flac/ogg before calling the API. Underlying error: {e}"
+                ),
+            ) from e
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
-def _linear_resample(samples, source_rate: int, target_rate: int):
+def _resample(samples, source_rate: int, target_rate: int):
     """
-    Linear-interpolation resampler. Sufficient for 16 kHz speech ASR where
-    we already downmix to mono and Riva tolerates moderate aliasing for
-    end-of-stream VAD.
+    Resample mono float32 ``samples`` from ``source_rate`` to ``target_rate``.
+
+    Prefers high-quality polyphase resampling when ``soxr`` or ``scipy`` is
+    available (anti-aliased, important for downsampling 44.1/48 kHz -> 16 kHz
+    where naive interpolation folds high frequencies back into the speech
+    band). Falls back to linear interpolation if neither is installed —
+    acceptable for speech-only mono input but lossy for wideband content.
     """
     import numpy as np  # type: ignore
 
     if source_rate == target_rate or samples.size == 0:
         return samples
+
+    try:
+        import soxr  # type: ignore
+
+        return np.asarray(
+            soxr.resample(samples, source_rate, target_rate), dtype=np.float32
+        )
+    except ImportError:
+        pass
+
+    try:
+        from math import gcd
+
+        from scipy.signal import resample_poly  # type: ignore
+
+        g = gcd(int(source_rate), int(target_rate))
+        up = int(target_rate) // g
+        down = int(source_rate) // g
+        return np.asarray(resample_poly(samples, up, down), dtype=np.float32)
+    except ImportError:
+        pass
+
+    return _linear_resample(samples, source_rate, target_rate)
+
+
+def _linear_resample(samples, source_rate: int, target_rate: int):
+    """Linear-interpolation fallback. See :func:`_resample` for caveats."""
+    import numpy as np  # type: ignore
 
     duration = samples.size / float(source_rate)
     target_length = int(round(duration * target_rate))

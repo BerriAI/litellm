@@ -229,7 +229,7 @@ class NvidiaRivaAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return language
         bare_to_bcp47 = {
             "en": "en-US",
-            "es": "es-US",
+            "es": "es-ES",
             "de": "de-DE",
             "fr": "fr-FR",
             "it": "it-IT",

@@ -338,6 +338,45 @@ def test_async_path_uses_to_thread(mock_riva, logging_obj):
     assert response.text == "async ok"
 
 
+def test_timeout_is_forwarded_to_streaming_generator_when_supported(
+    mock_riva, logging_obj
+):
+    """
+    Without a deadline the gRPC stream can block forever on a stalled Riva
+    server. The handler must forward the call-level ``timeout`` to
+    ``streaming_response_generator`` whenever the installed riva-client
+    accepts a ``timeout`` kwarg.
+    """
+    captured_kwargs = {}
+
+    def streaming_with_timeout(self, audio_chunks, streaming_config, timeout=None):
+        captured_kwargs["timeout"] = timeout
+        list(audio_chunks)
+        yield from [
+            _fake_response(
+                results=[
+                    _fake_result(is_final=True, alternatives=[_fake_alternative("ok")])
+                ]
+            )
+        ]
+
+    mock_riva.client.ASRService.streaming_response_generator = streaming_with_timeout
+
+    impl = NvidiaRivaAudioTranscription()
+    impl.audio_transcriptions(
+        model="m",
+        audio_file=_make_wav_bytes(),
+        optional_params={"language_code": "en-US"},
+        litellm_params={},
+        model_response=TranscriptionResponse(),
+        timeout=12.5,
+        logging_obj=logging_obj,
+        api_key=None,
+        api_base="localhost:50051",
+    )
+    assert captured_kwargs["timeout"] == pytest.approx(12.5)
+
+
 def test_grpc_error_is_wrapped_as_nvidia_riva_exception(mock_riva, logging_obj):
     class FakeGrpcError(Exception):
         def code(self):

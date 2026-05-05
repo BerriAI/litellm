@@ -53,6 +53,21 @@ def test_map_language_passes_through_bcp47(cfg):
     assert out["language_code"] == "de-DE"
 
 
+def test_map_language_es_defaults_to_castilian_spain(cfg):
+    """
+    Bare ``es`` is ISO-639 Spanish; in BCP-47 it conventionally resolves to
+    es-ES (Castilian / Spain), not es-US. Routing every Spanish caller to a
+    US-tuned Riva model would silently degrade accuracy.
+    """
+    out = cfg.map_openai_params(
+        non_default_params={"language": "es"},
+        optional_params={},
+        model="m",
+        drop_params=False,
+    )
+    assert out["language_code"] == "es-ES"
+
+
 def test_map_timestamp_granularities_word_enables_word_offsets(cfg):
     out = cfg.map_openai_params(
         non_default_params={"timestamp_granularities": ["word"]},
