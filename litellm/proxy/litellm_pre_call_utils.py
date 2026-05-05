@@ -39,13 +39,6 @@ _EXPLICIT_SESSION_HEADERS = frozenset({"x-litellm-trace-id", "x-litellm-session-
 # (covers UUIDs and most common session-id formats).
 _SESSION_ID_VALUE_RE = re.compile(r"^[a-zA-Z0-9_\-]{8,}$")
 
-# W3C Trace Context traceparent format:
-# {version}-{trace-id}-{parent-id}-{trace-flags}
-# e.g. 00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01
-_TRACEPARENT_RE = re.compile(
-    r"^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$", re.IGNORECASE
-)
-
 
 def _sanitize_for_log(value: Any) -> str:
     """
@@ -316,27 +309,6 @@ def _extract_generic_session_id_from_headers(
     return None
 
 
-def _extract_trace_id_from_traceparent(
-    normalized: Dict[str, str],
-) -> Optional[str]:
-    """
-    Extract the ``trace-id`` component from a W3C ``traceparent`` header.
-
-    The traceparent format is ``{version}-{trace-id}-{parent-id}-{trace-flags}``,
-    e.g. ``00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01``.
-
-    Returns the 32-hex-char trace-id if the header is present and well-formed,
-    otherwise ``None``.
-    """
-    traceparent = normalized.get("traceparent")
-    if not traceparent or not isinstance(traceparent, str):
-        return None
-    match = _TRACEPARENT_RE.match(traceparent.strip())
-    if match:
-        return match.group(1)
-    return None
-
-
 def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str]:
     """
     Extract chain id for call chaining from request headers.
@@ -346,9 +318,9 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
     2. ``x-litellm-session-id`` (explicit)
     3. Any ``x-<vendor>-session-id`` header whose value looks like a session id
        (alphanumeric / UUID, at least 8 chars).  E.g. ``x-claude-code-session-id``.
-    4. W3C ``traceparent`` header — the 32-hex-char trace-id is extracted and
-       used as the session id.  This allows chaining LLM calls that are part
-       of one agent / distributed-trace interaction.
+    4. W3C ``traceparent`` header — the full value is used as the session id.
+       This allows chaining LLM calls that are part of one agent /
+       distributed-trace interaction.
 
     Header keys are matched case-insensitively so this works with raw header
     dicts from any transport.
@@ -363,7 +335,8 @@ def get_chain_id_from_headers(headers: Optional[Dict[str, str]]) -> Optional[str
         normalized.get("x-litellm-trace-id")
         or normalized.get("x-litellm-session-id")
         or _extract_generic_session_id_from_headers(normalized)
-        or _extract_trace_id_from_traceparent(normalized)
+        or normalized.get("traceparent")
+        or None
     )
 
 
