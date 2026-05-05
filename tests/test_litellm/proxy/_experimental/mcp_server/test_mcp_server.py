@@ -1082,7 +1082,7 @@ async def test_streamable_http_session_manager_is_stateless():
     When stateless=False, the mcp library rejects non-initialize requests
     that lack an mcp-session-id header, breaking clients like MCP Inspector,
     curl, and any HTTP client without automatic session management.
-    
+
     Now we support both:
     - stateless manager for clients without session IDs (curl, Inspector)
     - stateful manager for clients with session IDs (Claude Code, Cursor, VSCode)
@@ -1253,37 +1253,45 @@ async def test_mcp_routing_chunked_initialize_to_stateful():
     async def stateful_handle(s, r, se):
         stateful_called.append(1)
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-        new_callable=AsyncMock,
-        return_value=(MagicMock(), None, ["progress_test"], None, None, None),
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
-    ), patch(
-        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-        True,
-    ), patch.object(
-        session_manager_stateless,
-        "handle_request",
-        side_effect=stateless_handle,
-    ), patch.object(
-        session_manager_stateful,
-        "handle_request",
-        side_effect=stateful_handle,
-    ), patch.object(
-        session_manager_stateless,
-        "_server_instances",
-        {},
-    ), patch.object(
-        session_manager_stateful,
-        "_server_instances",
-        {},
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager_stateless,
+            "handle_request",
+            side_effect=stateless_handle,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            side_effect=stateful_handle,
+        ),
+        patch.object(
+            session_manager_stateless,
+            "_server_instances",
+            {},
+        ),
+        patch.object(
+            session_manager_stateful,
+            "_server_instances",
+            {},
+        ),
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
-    assert stateful_called and not stateless_called, (
-        "chunked initialize (no session) should route to stateful, not stateless"
-    )
+    assert (
+        stateful_called and not stateless_called
+    ), "chunked initialize (no session) should route to stateful, not stateless"
 
 
 @pytest.mark.asyncio
@@ -1398,6 +1406,7 @@ async def test_stateful_mcp_auth_contexts_expire_with_idle_sessions():
     session_id = "expired-stateful-session"
     auth_user = UserAPIKeyAuth(api_key="expired-key", user_id="expired-user")
     transport = MagicMock()
+    transport.terminate = AsyncMock()
     now = 1000.0
 
     mcp_server._stateful_session_auth_contexts[session_id] = auth_user
@@ -1415,6 +1424,88 @@ async def test_stateful_mcp_auth_contexts_expire_with_idle_sessions():
     assert session_id not in mcp_server._stateful_session_auth_contexts
     assert session_id not in mcp_server._stateful_session_auth_context_last_seen
     transport.terminate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stateful_mcp_session_owner_mismatch_returns_403():
+    """
+    A stateful mcp-session-id is bound to its creator. A different
+    authenticated caller presenting the same session_id must be rejected
+    with 403, and the stateful manager must never be invoked.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "owned-session-1"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    intruder_auth = UserAPIKeyAuth(api_key="intruder-key", user_id="intruder")
+
+    mcp_server._stateful_session_auth_contexts[session_id] = MagicMock()
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(
+        owner_auth
+    )
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer intruder-key"),
+            (b"mcp-session-id", session_id.encode()),
+        ],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+            "more_body": False,
+        }
+    )
+    sent_messages: list = []
+
+    async def capture_send(message):
+        sent_messages.append(message)
+
+    handle_request_mock = AsyncMock()
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(intruder_auth, None, None, None, None, None),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            side_effect=handle_request_mock,
+        ),
+        patch.object(
+            session_manager_stateful,
+            "_server_instances",
+            {session_id: MagicMock()},
+        ),
+    ):
+        await handle_streamable_http_mcp(scope, receive, capture_send)
+
+    handle_request_mock.assert_not_awaited()
+    statuses = [
+        m["status"] for m in sent_messages if m.get("type") == "http.response.start"
+    ]
+    assert statuses == [403]
+
+    mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+    mcp_server._stateful_session_owners.pop(session_id, None)
 
 
 @pytest.mark.asyncio
@@ -3277,7 +3368,7 @@ async def test_list_tools_with_legacy_db_m2m_server_resolves_oauth2_flow():
     """
     P1 Regression: list_tools path must apply _resolve_oauth2_flow to legacy DB
     rows where oauth2_flow is NULL but M2M credentials are present.
-    
+
     Without this fix, has_client_credentials returns False and the caller's
     Authorization header is forwarded upstream instead of being blocked.
     """
@@ -3375,7 +3466,7 @@ async def test_call_tool_empty_extra_headers_returns_none():
     """
     P2 Regression: When all configured extra_headers are filtered out (e.g.
     Authorization for M2M), the resulting extra_headers should be None, not {}.
-    
+
     Downstream code that checks `if extra_headers is None` will behave
     differently if an empty dict is passed instead.
     """
@@ -3402,7 +3493,10 @@ async def test_call_tool_empty_extra_headers_returns_none():
         extra_headers=["Authorization"],  # Will be filtered out for M2M
     )
 
-    raw_headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    raw_headers = {
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json",
+    }
 
     captured_extra_headers = None
 
@@ -3439,7 +3533,8 @@ async def test_call_tool_empty_extra_headers_returns_none():
             pass  # We only care about the captured headers
 
     # With P2 fix: extra_headers should be None (not {}) when all headers filtered
-    assert captured_extra_headers is None, (
-        "P2 API consistency issue: expected None for empty extra_headers, got: "
-        + str(captured_extra_headers)
+    assert (
+        captured_extra_headers is None
+    ), "P2 API consistency issue: expected None for empty extra_headers, got: " + str(
+        captured_extra_headers
     )

@@ -253,6 +253,11 @@ if MCP_AVAILABLE:
     )
     _stateful_session_auth_contexts: Dict[str, MCPAuthenticatedUser] = {}
     _stateful_session_auth_context_last_seen: Dict[str, float] = {}
+    # Maps session_id -> owner identifier (hashed API key/token) so we can
+    # reject requests that supply a session_id created by a different caller.
+    # Without this, a leaked mcp-session-id could be driven (or terminated)
+    # by any other authenticated proxy user.
+    _stateful_session_owners: Dict[str, str] = {}
 
     # Keep this alias so existing references to session_manager still work
     session_manager = session_manager_stateless
@@ -287,6 +292,7 @@ if MCP_AVAILABLE:
         for session_id in expired_session_ids:
             _stateful_session_auth_contexts.pop(session_id, None)
             _stateful_session_auth_context_last_seen.pop(session_id, None)
+            _stateful_session_owners.pop(session_id, None)
             transport = server_instances.pop(session_id, None)
             if transport is not None:
                 await transport.terminate()
@@ -294,6 +300,7 @@ if MCP_AVAILABLE:
         for session_id in list(_stateful_session_auth_context_last_seen):
             if session_id not in _stateful_session_auth_contexts:
                 _stateful_session_auth_context_last_seen.pop(session_id, None)
+                _stateful_session_owners.pop(session_id, None)
 
     async def _cleanup_expired_stateful_session_auth_contexts() -> None:
         while True:
@@ -2654,6 +2661,23 @@ if MCP_AVAILABLE:
                 )
         return None
 
+    def _owner_fingerprint_for(
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> str:
+        """
+        Stable, non-reversible identifier for the caller used to bind an
+        mcp-session-id to its creator. ``api_key`` on UserAPIKeyAuth is
+        already hashed at construction time, so we can use it directly.
+        Falls back to user_id then to a sentinel so anonymous callers can
+        never share or hijack an owned session.
+        """
+        if user_api_key_auth is not None:
+            if user_api_key_auth.api_key:
+                return f"key:{user_api_key_auth.api_key}"
+            if user_api_key_auth.user_id:
+                return f"user:{user_api_key_auth.user_id}"
+        return "anonymous"
+
     def _is_initialize_request(body: bytes) -> bool:
         """
         Check if the request body is a JSON-RPC initialize method.
@@ -2953,6 +2977,27 @@ if MCP_AVAILABLE:
                 consumed_messages, body = await _read_request_body_for_routing(receive)
                 is_initialize = _is_initialize_request(body)
 
+            # Owner-binding: a live stateful session may only be driven by the
+            # caller that created it. Reject mismatches with 403 so a leaked
+            # mcp-session-id cannot be hijacked by another authenticated user.
+            if session_id:
+                expected_owner = _stateful_session_owners.get(session_id)
+                request_owner = _owner_fingerprint_for(user_api_key_auth)
+                if expected_owner is not None and expected_owner != request_owner:
+                    verbose_logger.warning(
+                        "Rejecting MCP request: session '%s' owner mismatch.",
+                        session_id,
+                    )
+                    forbidden_response = JSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "Forbidden",
+                            "details": "mcp-session-id is bound to a different caller.",
+                        },
+                    )
+                    await forbidden_response(scope, receive, send)
+                    return
+
             use_stateful = bool(session_id or is_initialize)
             target_manager = (
                 session_manager_stateful if use_stateful else session_manager_stateless
@@ -2986,7 +3031,11 @@ if MCP_AVAILABLE:
                 session_id=session_id if use_stateful else None,
             )
             if use_stateful and is_initialize:
-                send = _wrap_send_with_stateful_session_auth_context(send, auth_user)
+                send = _wrap_send_with_stateful_session_auth_context(
+                    send,
+                    auth_user,
+                    _owner_fingerprint_for(user_api_key_auth),
+                )
 
             async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
@@ -2999,6 +3048,7 @@ if MCP_AVAILABLE:
                     if use_stateful and session_id and scope.get("method") == "DELETE":
                         _stateful_session_auth_contexts.pop(session_id, None)
                         _stateful_session_auth_context_last_seen.pop(session_id, None)
+                        _stateful_session_owners.pop(session_id, None)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise
@@ -3006,7 +3056,6 @@ if MCP_AVAILABLE:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Try to send a graceful error response for non-HTTP exceptions
             try:
-                from starlette.responses import JSONResponse
                 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 
                 error_response = JSONResponse(
@@ -3201,6 +3250,7 @@ if MCP_AVAILABLE:
     def _wrap_send_with_stateful_session_auth_context(
         send: Send,
         auth_user: MCPAuthenticatedUser,
+        owner_fingerprint: str,
     ) -> Send:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
@@ -3211,6 +3261,7 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_context_last_seen[session_id] = (
                             time.monotonic()
                         )
+                        _stateful_session_owners[session_id] = owner_fingerprint
                         break
             await send(message)
 
