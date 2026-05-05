@@ -2,6 +2,7 @@ from typing import List, Optional, Union
 
 from httpx import Headers, Response
 
+from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -58,6 +59,7 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             "response_format",
             "temperature",
             "timestamp_granularities",
+            "stream",
         ]
 
     def map_openai_params(
@@ -103,20 +105,46 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
     ) -> AudioTranscriptionRequestData:
         """
-        Transform the audio transcription request
+        Transform the audio transcription request into multipart form-data.
+
+        Form fields (model + supported OpenAI params) go in `data`; the audio
+        file is normalized into `files={"file": (filename, bytes, content_type)}`
+        so the shared HTTP handler can build a proper multipart upload.
+
+        Only supported OpenAI params are forwarded — httpx multipart only
+        accepts str/bytes/int/float/None, so unrelated dicts (e.g. router
+        metadata) and bools (e.g. `stream=True`) would otherwise blow up
+        encoding. Bools get stringified to "true"/"false"; lists are
+        joined with commas (OpenAI accepts both forms).
         """
-        data = {"model": model, "file": audio_file, **optional_params}
+        # 'verbose_json' provides 'duration' for cost calc but is incompatible
+        # with streaming. Skip the override when stream=True; cost calc falls
+        # back to file-derived duration in litellm.main.transcription().
+        is_streaming = bool(optional_params.get("stream"))
+        effective_params = dict(optional_params)
+        if not is_streaming:
+            existing_format = effective_params.get("response_format")
+            if existing_format in (None, "text", "json"):
+                effective_params["response_format"] = "verbose_json"
 
-        if "response_format" not in data or (
-            data["response_format"] == "text" or data["response_format"] == "json"
-        ):
-            data["response_format"] = (
-                "verbose_json"  # ensures 'duration' is received - used for cost calculation
-            )
+        data: dict = {"model": model}
+        for key in self.get_supported_openai_params(model):
+            value = effective_params.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                data[key] = "true" if value else "false"
+            elif isinstance(value, (list, tuple)):
+                data[key] = ",".join(str(v) for v in value)
+            else:
+                data[key] = value
 
-        return AudioTranscriptionRequestData(
-            data=data,
-        )
+        processed = process_audio_file(audio_file)
+        files = {
+            "file": (processed.filename, processed.file_content, processed.content_type)
+        }
+
+        return AudioTranscriptionRequestData(data=data, files=files)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, Headers]

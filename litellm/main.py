@@ -127,6 +127,7 @@ from litellm.utils import (
     TextCompletionResponse,
     TextCompletionStreamWrapper,
     TranscriptionResponse,
+    TranscriptionStreamingResponse,
     Usage,
     _get_model_info_helper,
     add_provider_specific_params_to_optional_params,
@@ -6362,7 +6363,9 @@ async def amoderation(
 
 
 @client
-async def atranscription(*args, **kwargs) -> TranscriptionResponse:
+async def atranscription(
+    *args, **kwargs
+) -> Union[TranscriptionResponse, TranscriptionStreamingResponse]:
     """
     Calls openai + azure whisper endpoints.
 
@@ -6390,16 +6393,20 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         init_response = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict):
             response = TranscriptionResponse(**init_response)
-        elif isinstance(init_response, TranscriptionResponse):  ## CACHING SCENARIO
+        elif isinstance(
+            init_response, (TranscriptionResponse, TranscriptionStreamingResponse)
+        ):  ## CACHING / STREAMING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response  # type: ignore
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
-        if not isinstance(response, TranscriptionResponse):
+        if not isinstance(
+            response, (TranscriptionResponse, TranscriptionStreamingResponse)
+        ):
             raise ValueError(
-                f"Invalid response from transcription provider, expected TranscriptionResponse, but got {type(response)}"
+                f"Invalid response from transcription provider, expected TranscriptionResponse or TranscriptionStreamingResponse, but got {type(response)}"
             )
 
         # Store duration in _hidden_params for cost calculation without
@@ -6443,6 +6450,7 @@ def transcription(
     ] = None,
     timestamp_granularities: Optional[List[Literal["word", "segment"]]] = None,
     temperature: Optional[int] = None,  # openai defaults this to 0
+    stream: Optional[bool] = None,
     ## LITELLM PARAMS ##
     user: Optional[str] = None,
     timeout=600,  # default to 10 minutes
@@ -6452,7 +6460,11 @@ def transcription(
     max_retries: Optional[int] = None,
     custom_llm_provider=None,
     **kwargs,
-) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+) -> Union[
+    TranscriptionResponse,
+    TranscriptionStreamingResponse,
+    Coroutine[Any, Any, Union[TranscriptionResponse, TranscriptionStreamingResponse]],
+]:
     """
     Calls openai + azure whisper endpoints.
 
@@ -6503,6 +6515,7 @@ def transcription(
         response_format=response_format,
         timestamp_granularities=timestamp_granularities,
         temperature=temperature,
+        stream=stream,
         custom_llm_provider=custom_llm_provider,
         **non_default_params,
     )
@@ -6526,7 +6539,15 @@ def transcription(
     )
 
     response: Optional[
-        Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]
+        Union[
+            TranscriptionResponse,
+            TranscriptionStreamingResponse,
+            Coroutine[
+                Any,
+                Any,
+                Union[TranscriptionResponse, TranscriptionStreamingResponse],
+            ],
+        ]
     ] = None
 
     provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
@@ -6589,22 +6610,54 @@ def transcription(
         # set API KEY
 
         api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
-        response = openai_audio_transcriptions.audio_transcriptions(
-            model=model,
-            audio_file=file,
-            optional_params=optional_params,
-            model_response=model_response,
-            atranscription=atranscription,
-            client=client,
-            timeout=timeout,
-            logging_obj=litellm_logging_obj,
-            max_retries=max_retries,
-            api_base=api_base,
-            api_key=api_key,
-            provider_config=provider_config,
-            litellm_params=litellm_params_dict,
-            shared_session=shared_session,
-        )
+
+        # Streaming transcription bypasses the openai SDK (which surfaces
+        # parsed delta events) and goes through the http_handler so callers
+        # get raw SSE bytes from the upstream provider.
+        if optional_params.get("stream") and provider_config is not None:
+            response = base_llm_http_handler.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=(
+                    client
+                    if client is not None
+                    and (
+                        isinstance(client, HTTPHandler)
+                        or isinstance(client, AsyncHTTPHandler)
+                    )
+                    else None
+                ),
+                timeout=timeout,
+                max_retries=max_retries,
+                logging_obj=litellm_logging_obj,
+                api_base=api_base,
+                api_key=api_key,
+                custom_llm_provider=custom_llm_provider,
+                headers={},
+                provider_config=provider_config,
+                shared_session=shared_session,
+            )
+        else:
+            response = openai_audio_transcriptions.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=client,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                max_retries=max_retries,
+                api_base=api_base,
+                api_key=api_key,
+                provider_config=provider_config,
+                litellm_params=litellm_params_dict,
+                shared_session=shared_session,
+            )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
             model=model,

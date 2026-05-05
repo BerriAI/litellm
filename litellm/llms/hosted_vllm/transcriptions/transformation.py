@@ -6,6 +6,7 @@ from typing import Optional, Union
 
 import httpx
 
+from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
 )
@@ -55,11 +56,29 @@ class HostedVLLMAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
         litellm_params: dict,
     ) -> AudioTranscriptionRequestData:
         """
-        Transform the audio transcription request
+        Transform the audio transcription request into multipart form-data.
+
+        vLLM speaks the OpenAI transcription protocol but does not support
+        verbose_json output, so we skip the parent's verbose_json override and
+        pass through whatever response_format the caller specified.
+        Filtering / coercion of optional_params follows the same rules as the
+        parent (only supported params; bools → str; lists → comma-joined).
         """
+        data: dict = {"model": model}
+        for key in self.get_supported_openai_params(model):
+            value = optional_params.get(key)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                data[key] = "true" if value else "false"
+            elif isinstance(value, (list, tuple)):
+                data[key] = ",".join(str(v) for v in value)
+            else:
+                data[key] = value
 
-        data = {"model": model, "file": audio_file, **optional_params}
+        processed = process_audio_file(audio_file)
+        files = {
+            "file": (processed.filename, processed.file_content, processed.content_type)
+        }
 
-        return AudioTranscriptionRequestData(
-            data=data,
-        )
+        return AudioTranscriptionRequestData(data=data, files=files)

@@ -196,6 +196,7 @@ from litellm.types.utils import (
     TextChoices,
     TextCompletionResponse,
     TranscriptionResponse,
+    TranscriptionStreamingResponse,
     Usage,
     all_litellm_params,
 )
@@ -3025,6 +3026,7 @@ def get_optional_params_transcription(
     response_format: Optional[str] = None,
     temperature: Optional[int] = None,
     timestamp_granularities: Optional[List[Literal["word", "segment"]]] = None,
+    stream: Optional[bool] = None,
     drop_params: Optional[bool] = None,
     **kwargs,
 ):
@@ -3046,6 +3048,7 @@ def get_optional_params_transcription(
         "response_format": None,
         "temperature": None,  # openai defaults this to 0
         "timestamp_granularities": None,
+        "stream": None,
     }
 
     non_default_params = {

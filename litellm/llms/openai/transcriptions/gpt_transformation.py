@@ -22,6 +22,7 @@ class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
             "response_format",
             "temperature",
             "include",
+            "stream",
         ]
 
     def transform_audio_transcription_request(
