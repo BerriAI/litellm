@@ -44,7 +44,7 @@ def test_azure_finalize_image_edit_strips_model_after_openai_transform():
         api_base=litellm_params.api_base,
         litellm_params=litellm_params.model_dump(exclude_none=True),
     )
-    data_out = config.finalize_image_edit_multipart_data(data, resolved)
+    data_out = config.finalize_image_edit_request_data(data, resolved)
     assert "model" not in data_out
     assert data_out.get("prompt") == prompt
     assert data_out.get("n") == 1

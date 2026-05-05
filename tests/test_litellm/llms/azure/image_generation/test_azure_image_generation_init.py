@@ -12,6 +12,9 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 import litellm
 from litellm.llms.azure.azure import AzureChatCompletion
+from litellm.llms.azure.image_generation.http_utils import (
+    azure_deployment_image_generation_json_body,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.azure.image_generation import (
     AzureDallE3ImageGenerationConfig,
@@ -41,7 +44,7 @@ def test_azure_deployment_image_generation_json_body():
         "images/generations?api-version=2025-04-01-preview"
     )
     data = {"model": "my-dep", "prompt": "x", "n": 1}
-    out = AzureChatCompletion.azure_deployment_image_generation_json_body(api, data)
+    out = azure_deployment_image_generation_json_body(api, data)
     assert "model" not in out
     assert out == {"prompt": "x", "n": 1}
 
@@ -50,7 +53,7 @@ def test_azure_providers_image_generation_json_body_keeps_model():
     """Non-deployment routes (e.g. FLUX on Azure AI) keep the payload unchanged."""
     api = "https://example.services.ai.azure.com/providers/blackforestlabs/v1/flux-2-pro?api-version=preview"
     data = {"model": "flux.2-pro", "prompt": "x"}
-    out = AzureChatCompletion.azure_deployment_image_generation_json_body(api, data)
+    out = azure_deployment_image_generation_json_body(api, data)
     assert out == data
 
 

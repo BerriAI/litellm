@@ -97,7 +97,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
         return str(final_url)
 
-    def finalize_image_edit_multipart_data(
+    def finalize_image_edit_request_data(
         self, data: dict, resolved_request_url: str
     ) -> dict:
         return self.azure_deployment_image_edit_form_data(data, resolved_request_url)

@@ -102,12 +102,15 @@ class BaseImageEditConfig(ABC):
     ) -> Tuple[Dict, RequestFiles]:
         pass
 
-    def finalize_image_edit_multipart_data(
+    def finalize_image_edit_request_data(
         self, data: dict, resolved_request_url: str
     ) -> dict:
         """
-        Adjust non-file form fields after ``transform_image_edit_request`` using the
-        exact URL that will be used for the HTTP POST (same string as ``get_complete_url``).
+        Last pass on the request dict after ``transform_image_edit_request``, using the
+        exact URL string used for the HTTP POST (same as ``get_complete_url`` output).
+
+        The handler sends this dict as ``data=`` for multipart providers or ``json=``
+        for JSON-only providers; default implementation returns ``data`` unchanged.
         """
         return data
 

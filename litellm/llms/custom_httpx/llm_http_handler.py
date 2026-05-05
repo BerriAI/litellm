@@ -5579,7 +5579,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        data = image_edit_provider_config.finalize_image_edit_multipart_data(
+        data = image_edit_provider_config.finalize_image_edit_request_data(
             data, api_base
         )
 
@@ -5680,7 +5680,7 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
-        data = image_edit_provider_config.finalize_image_edit_multipart_data(
+        data = image_edit_provider_config.finalize_image_edit_request_data(
             data, api_base
         )
 
