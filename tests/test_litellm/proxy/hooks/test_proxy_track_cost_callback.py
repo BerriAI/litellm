@@ -990,3 +990,80 @@ async def test_async_post_call_failure_hook_uses_actual_start_time():
         # Duration should be approximately 60 seconds, not 0
         duration = (call_args["end_time"] - call_args["start_time"]).total_seconds()
         assert duration >= 55, f"Duration should be ~60s, got {duration}s"
+
+
+async def _invoke_failure_hook_with_raised_exception():
+    """Run the failure hook with an exception that has a real ``__traceback__``.
+
+    Returns the metadata dict that was forwarded to ``update_database`` so the
+    caller can assert on its ``error_information`` payload.
+    """
+    logger = _ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="u",
+        team_id="t",
+    )
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {},
+        "proxy_server_request": {},
+    }
+
+    try:
+        raise RuntimeError("boom-with-traceback")
+    except RuntimeError as exc:
+        original_exception = exc
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=user_api_key_dict,
+        )
+        call_args = mock_update_database.call_args[1]
+        return call_args["kwargs"]["litellm_params"]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_keeps_error_information_traceback_by_default(monkeypatch):
+    """Without the opt-in env var, the SpendLogs row carries the full traceback."""
+    monkeypatch.delenv("LITELLM_SUPPRESS_SPEND_LOG_TRACEBACKS", raising=False)
+
+    metadata = await _invoke_failure_hook_with_raised_exception()
+
+    error_information = metadata["error_information"]
+    assert error_information["error_class"] == "RuntimeError"
+    assert error_information["error_message"] == "boom-with-traceback"
+    assert error_information["traceback"], "expected a non-empty traceback by default"
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_drops_error_information_traceback_when_env_set(
+    monkeypatch,
+):
+    """With the opt-in env var, the traceback key is omitted from the
+    SpendLogs row entirely so the per-row Metadata pane in the UI (which
+    renders ``error_information`` as a JSON blob) doesn't show a noisy empty
+    ``"traceback": ""`` line. The other fields (error_class / error_message /
+    error_code) are preserved."""
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setenv("LITELLM_SUPPRESS_SPEND_LOG_TRACEBACKS", "true")
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.INFO)
+    try:
+        metadata = await _invoke_failure_hook_with_raised_exception()
+    finally:
+        verbose_proxy_logger.setLevel(original_level)
+
+    error_information = metadata["error_information"]
+    assert "traceback" not in error_information
+    assert error_information["error_class"] == "RuntimeError"
+    assert error_information["error_message"] == "boom-with-traceback"

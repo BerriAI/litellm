@@ -19,6 +19,10 @@ from litellm.proxy.auth.auth_checks import (
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.spend_log_error_logger import (
+    should_suppress_spend_log_tracebacks,
+    spend_log_error,
+)
 from litellm.proxy.utils import ProxyUpdateSpend
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_end_user_id_for_cost_tracking
@@ -74,12 +78,18 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata["error_information"] = (
-            StandardLoggingPayloadSetup.get_error_information(
-                original_exception=original_exception,
-                traceback_str=traceback_str,
-            )
+        _error_information = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=original_exception,
+            traceback_str=traceback_str,
         )
+        if should_suppress_spend_log_tracebacks():
+            # Drop the traceback key entirely so the per-row Metadata pane in
+            # the UI (which renders the JSON blob verbatim) doesn't show a
+            # noisy ``"traceback": ""`` line. Downstream consumers all use
+            # ``.get("traceback")`` / truthy checks, and the TypedDict marks
+            # the field as optional, so omitting is type-safe.
+            _error_information.pop("traceback", None)
+        _metadata["error_information"] = _error_information
 
         _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
             metadata=_metadata,
@@ -302,9 +312,7 @@ class _ProxyDBLogger(CustomLogger):
                 )
             )
 
-            verbose_proxy_logger.exception(
-                "Error in tracking cost callback - %s", str(e)
-            )
+            spend_log_error("Error in tracking cost callback - %s", str(e), exc=e)
 
     @staticmethod
     async def _enrich_failure_metadata_with_key_info(metadata: dict) -> dict:
