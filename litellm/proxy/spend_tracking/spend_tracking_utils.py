@@ -806,6 +806,16 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = dict(_request_body)
                     _request_body["tools"] = realtime_tools
 
+            # Transform Anthropic format to OpenAI format if this is an Anthropic request
+            #
+            # Note that we normalize Anthropic requests first so redaction operates on the
+            # same OpenAI-style shape that gets serialized into spend logs.
+            _request_uri = _proxy_server_request.get("url") or ""
+            if "/v1/messages" in _request_uri:
+                _request_body = _transform_anthropic_request_to_openai_format(
+                    _request_body
+                )
+
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
@@ -825,13 +835,6 @@ def _get_proxy_server_request_for_spend_logs_payload(
                 if should_redact_message_logging(model_call_details=model_call_details):
                     _request_body = _convert_to_json_serializable_dict(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
-
-            # Transform Anthropic format to OpenAI format if this is an Anthropic request
-            _request_uri = _proxy_server_request.get("url") or ""
-            if "/v1/messages" in _request_uri:
-                _request_body = _transform_anthropic_request_to_openai_format(
-                    _request_body
-                )
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)

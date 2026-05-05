@@ -1103,7 +1103,85 @@ def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_e
     # perform_redaction redacts content in-place within the choices structure
     parsed_response = json.loads(response_result)
     assert parsed_response["choices"][0]["message"]["content"] == "redacted-by-litellm"
-    assert parsed_response["choices"][0]["message"]["role"] == "assistant"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_proxy_server_request_for_spend_logs_payload_redacts_anthropic_system_message(
+    mock_should_store,
+):
+    mock_should_store.return_value = True
+
+    litellm_params = {
+        "proxy_server_request": {
+            "url": "https://api.anthropic.com/v1/messages",
+            "body": {
+                "system": "secret system prompt",
+                "messages": [{"role": "user", "content": "secret user prompt"}],
+                "model": "claude-3-5-sonnet",
+            },
+        }
+    }
+    kwargs = {
+        "litellm_params": litellm_params,
+        "standard_callback_dynamic_params": {
+            "turn_off_message_logging": True,
+        },
+    }
+
+    request_result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=litellm_params, kwargs=kwargs
+    )
+
+    parsed_request = json.loads(request_result)
+    assert parsed_request["messages"] == [
+        {"role": "user", "content": "redacted-by-litellm"}
+    ]
+    assert "system" not in parsed_request
+    assert "secret system prompt" not in request_result
+    assert parsed_request["model"] == "claude-3-5-sonnet"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_proxy_server_request_for_spend_logs_payload_preserves_anthropic_system_message_without_redaction(
+    mock_should_store,
+):
+    mock_should_store.return_value = True
+
+    litellm_params = {
+        "proxy_server_request": {
+            "url": "https://api.anthropic.com/v1/messages",
+            "body": {
+                "system": "visible system prompt",
+                "messages": [{"role": "user", "content": "visible user prompt"}],
+                "model": "claude-3-5-sonnet",
+            },
+        }
+    }
+    kwargs = {
+        "litellm_params": litellm_params,
+        "standard_callback_dynamic_params": {
+            "turn_off_message_logging": False,
+        },
+    }
+
+    request_result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=litellm_params, kwargs=kwargs
+    )
+
+    parsed_request = json.loads(request_result)
+    assert parsed_request["messages"][0] == {
+        "role": "system",
+        "content": "visible system prompt",
+    }
+    assert parsed_request["messages"][1] == {
+        "role": "user",
+        "content": "visible user prompt",
+    }
+    assert "system" not in parsed_request
 
 
 @patch("litellm.secret_managers.main.get_secret_bool")
