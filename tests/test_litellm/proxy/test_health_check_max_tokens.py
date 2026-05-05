@@ -240,6 +240,12 @@ def test_update_litellm_params_health_check_reasoning_effort():
     )
     assert out.get("reasoning_effort") == "none"
 
+    model_info = {"mode": "completion", "health_check_reasoning_effort": "low"}
+    out = _update_litellm_params_for_health_check(
+        model_info, {"model": "openai/gpt-5", "api_key": "x"}
+    )
+    assert out.get("reasoning_effort") == "low"
+
     model_info = {
         "health_check_reasoning_effort": {"effort": "none", "summary": "auto"},
     }
