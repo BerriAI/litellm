@@ -652,9 +652,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         except (TypeError, ValueError):
             output_index = len(recovered_text_only_items)
 
-        item = recovered_output_items.get(
-            output_index
-        ) or recovered_text_only_items.get(output_index)
+        if output_index in recovered_output_items:
+            return
+
+        item = recovered_text_only_items.get(output_index)
         if item is None:
             item = {
                 "type": "message",

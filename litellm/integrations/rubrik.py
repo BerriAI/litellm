@@ -384,23 +384,22 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         if not self.log_queue:
             return
 
-        await self._log_batch_to_rubrik(
-            data=list(self.log_queue),
+        log_queue_snapshot = list(self.log_queue)
+        verbose_logger.debug(
+            "Rubrik: Flushing batch of %s events", len(log_queue_snapshot)
         )
+        await self._log_batch_to_rubrik(
+            data=log_queue_snapshot,
+        )
+        del self.log_queue[: len(log_queue_snapshot)]
+        self.last_flush_time = time.time()
 
     async def flush_queue(self):
         if self.flush_lock is None:
             return
 
         async with self.flush_lock:
-            if self.log_queue:
-                log_queue_snapshot = list(self.log_queue)
-                verbose_logger.debug(
-                    "Rubrik: Flushing batch of %s events", len(log_queue_snapshot)
-                )
-                await self._log_batch_to_rubrik(data=log_queue_snapshot)
-                del self.log_queue[: len(log_queue_snapshot)]
-                self.last_flush_time = time.time()
+            await self.async_send_batch()
 
     # -- Tool blocking service -------------------------------------------------
 
