@@ -636,6 +636,84 @@ class TestUnifiedLLMGuardrails:
                 )
 
         @pytest.mark.asyncio
+        async def test_action_mode_end_of_stream_only_blocks_before_emit(
+            self,
+        ):
+            """
+            With `streaming_end_of_stream_only=True`, action-mode guardrails
+            must not emit any content past cursor before the EOS decision.
+            A BLOCKED at is_final=true terminates the stream cleanly without
+            anything having reached the client mid-stream.
+            """
+            from litellm.exceptions import GuardrailRaisedException
+
+            handler = UnifiedLLMGuardrails()
+            guardrail = TestUnifiedLLMGuardrails.TestActionMode._ScriptedActionGuardrail(
+                # Only one decision — should only be called once at EOS.
+                [("BLOCKED", None, "policy violation at EOS")],
+                sampling_rate=1,  # would normally fire every chunk
+            )
+            guardrail.streaming_end_of_stream_only = True
+
+            user = UserAPIKeyAuth(
+                api_key="k", request_route="/v1/chat/completions"
+            )
+            with pytest.raises(
+                GuardrailRaisedException, match="policy violation at EOS"
+            ):
+                await TestUnifiedLLMGuardrails.TestActionMode._collect(
+                    handler.async_post_call_streaming_iterator_hook(
+                        user_api_key_dict=user,
+                        response=TestUnifiedLLMGuardrails.TestActionMode._content_chunks(
+                            ["ab", "cd", "ef", "gh"]
+                        ),
+                        request_data={"guardrail_to_apply": guardrail},
+                    )
+                )
+            # Single guardrail call, at is_final=True. Mid-stream calls
+            # were suppressed by end_of_stream_only.
+            assert len(guardrail.calls) == 1, (
+                f"expected single EOS call, got {len(guardrail.calls)}: "
+                f"{guardrail.calls}"
+            )
+            assert guardrail.calls[0]["is_final"] is True
+
+        @pytest.mark.asyncio
+        async def test_action_mode_end_of_stream_only_emits_modified_at_eos(
+            self,
+        ):
+            """
+            With `streaming_end_of_stream_only=True`, mid-stream samples are
+            suppressed. A successful GUARDRAIL_INTERVENED at is_final=true
+            emits the modified text in one delta and terminates.
+            """
+            handler = UnifiedLLMGuardrails()
+            guardrail = TestUnifiedLLMGuardrails.TestActionMode._ScriptedActionGuardrail(
+                [("GUARDRAIL_INTERVENED", "REWRITTEN", None)],
+                sampling_rate=1,
+            )
+            guardrail.streaming_end_of_stream_only = True
+
+            user = UserAPIKeyAuth(
+                api_key="k", request_route="/v1/chat/completions"
+            )
+            out = await TestUnifiedLLMGuardrails.TestActionMode._collect(
+                handler.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user,
+                    response=TestUnifiedLLMGuardrails.TestActionMode._content_chunks(
+                        ["ab", "cd", "ef", "gh"]
+                    ),
+                    request_data={"guardrail_to_apply": guardrail},
+                )
+            )
+            text = "".join(c.choices[0].delta.content or "" for c in out)
+            assert text == "REWRITTEN", text
+            assert out[-1].choices[0].finish_reason == "stop"
+            # Single guardrail call, at is_final=True.
+            assert len(guardrail.calls) == 1
+            assert guardrail.calls[0]["is_final"] is True
+
+        @pytest.mark.asyncio
         async def test_action_mode_eos_shrink_does_not_leak_raw_tail(self):
             """At EOS, a guardrail returning text shorter than the cursor
             must not cause the raw, unmodified tail to leak.

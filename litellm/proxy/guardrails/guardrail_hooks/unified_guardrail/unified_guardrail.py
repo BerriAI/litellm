@@ -587,6 +587,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 request_data=request_data,
                 user_api_key_dict=user_api_key_dict,
                 sampling_rate=max(1, int(sampling_rate)),
+                end_of_stream_only=bool(end_of_stream_only),
             ):
                 yield chunk
             return
@@ -811,6 +812,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         request_data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         sampling_rate: int,
+        end_of_stream_only: bool = False,
     ) -> AsyncGenerator[Any, None]:
         """
         Streaming action protocol state machine.
@@ -819,6 +821,15 @@ class UnifiedLLMGuardrails(CustomLogger):
         on every chunk while in WAIT state), emits delta chunks past the
         cursor on NONE/GUARDRAIL_INTERVENED, terminates on BLOCKED, and
         always makes a final is_final=True call after upstream EOS.
+
+        When `end_of_stream_only=True`, the per-sample mid-stream calls are
+        skipped entirely: chunks accumulate without invoking the guardrail
+        and without emitting anything to the client; a single is_final=True
+        call decides the whole response. This preserves the operator's
+        `streaming_end_of_stream_only` config flag for action-mode
+        guardrails — without it, an action-mode guardrail would still be
+        sampled mid-stream and could emit content past the cursor before
+        the final inspection had a chance to BLOCK.
         """
         cursor = 0
         in_wait_state = False
@@ -837,6 +848,12 @@ class UnifiedLLMGuardrails(CustomLogger):
             all_chunks.append(item)
             if template_chunk is None:
                 template_chunk = item
+
+            # end_of_stream_only forces buffer-all behavior: skip per-sample
+            # guardrail calls and per-sample emissions; a single is_final=True
+            # call below decides the whole response.
+            if end_of_stream_only:
+                continue
 
             sample_due = (chunk_counter % sampling_rate == 0) or in_wait_state
             if not sample_due:
