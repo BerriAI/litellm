@@ -446,6 +446,40 @@ async def google_login(
         return HTMLResponse(content=html_form, status_code=200)
 
 
+def _to_plain_dict(obj: Any) -> dict:
+    """
+    Convert an SSO/OpenID-style object (or dict) to a plain JSON-serializable
+    dict, preserving lists and nested dicts so the /sso/debug/callback page
+    can show every field the proxy actually parsed.
+    """
+    if obj is None:
+        return {}
+    if isinstance(obj, dict):
+        d = obj
+    elif hasattr(obj, "model_dump"):
+        try:
+            return {k: v for k, v in obj.model_dump().items() if not k.startswith("_")}
+        except Exception:
+            d = getattr(obj, "__dict__", {}) or {}
+    elif hasattr(obj, "__dict__"):
+        d = obj.__dict__
+    else:
+        return {"value": str(obj)}
+
+    out: dict = {}
+    for key, value in d.items():
+        if key.startswith("_"):
+            continue
+        if value is None or isinstance(value, (str, int, float, bool, list, dict)):
+            out[key] = value
+        else:
+            try:
+                out[key] = str(value)
+            except Exception as e:
+                out[key] = f"Complex value (not displayable): {e}"
+    return out
+
+
 def generic_response_convertor(
     response,
     jwt_handler: JWTHandler,
@@ -3774,30 +3808,71 @@ async def debug_sso_callback(request: Request):
     else:
         redirect_url += "/sso/debug/callback"
 
-    result = None
+    result: Any = None
+    raw_claims: Optional[dict] = None
+    parsed_fields: Optional[dict] = None
+
     if google_client_id is not None:
-        result = await GoogleSSOHandler.get_google_callback_response(
+        raw_result = await GoogleSSOHandler.get_google_callback_response(
             request=request,
             google_client_id=google_client_id,
             redirect_url=redirect_url,
             return_raw_sso_response=True,
         )
+        raw_claims = (
+            dict(raw_result) if isinstance(raw_result, dict) else _to_plain_dict(raw_result)
+        )
+        # Build parsed view from raw claims using Google's standard mapping
+        parsed_fields = {
+            "id": raw_claims.get("sub"),
+            "email": raw_claims.get("email"),
+            "first_name": raw_claims.get("given_name"),
+            "last_name": raw_claims.get("family_name"),
+            "display_name": raw_claims.get("name"),
+            "picture": raw_claims.get("picture"),
+            "provider": "google",
+        }
+        result = parsed_fields
     elif microsoft_client_id is not None:
-        result = await MicrosoftSSOHandler.get_microsoft_callback_response(
+        raw_result = await MicrosoftSSOHandler.get_microsoft_callback_response(
             request=request,
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
             return_raw_sso_response=True,
         )
-
+        raw_claims = (
+            dict(raw_result) if isinstance(raw_result, dict) else _to_plain_dict(raw_result)
+        )
+        # Re-derive what the proxy would have parsed out of these raw claims
+        ms_team_ids = raw_claims.get(MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY) or []
+        ms_app_roles = raw_claims.get("app_roles") or []
+        ms_user_role: Optional[LitellmUserRoles] = None
+        for role_str in ms_app_roles:
+            role = get_litellm_user_role(role_str)
+            if role is not None:
+                ms_user_role = role
+                break
+        try:
+            parsed_openid = MicrosoftSSOHandler.openid_from_response(
+                response=raw_claims,
+                team_ids=list(ms_team_ids),
+                user_role=ms_user_role,
+            )
+            parsed_fields = _to_plain_dict(parsed_openid)
+        except Exception as e:
+            parsed_fields = {"error": f"Failed to parse OpenID: {e}"}
+        result = parsed_fields
     elif generic_client_id is not None:
-        result, _, _ = await get_generic_sso_response(
+        parsed_openid, received_response, _ = await get_generic_sso_response(
             request=request,
             jwt_handler=jwt_handler,
             generic_client_id=generic_client_id,
             redirect_url=redirect_url,
             sso_jwt_handler=sso_jwt_handler,
         )
+        raw_claims = received_response or {}
+        parsed_fields = _to_plain_dict(parsed_openid)
+        result = parsed_openid
 
     # If result is None, return a basic error message
     if result is None:
@@ -3806,29 +3881,15 @@ async def debug_sso_callback(request: Request):
             status_code=400,
         )
 
-    # Convert the OpenID object to a dictionary
-    if hasattr(result, "__dict__"):
-        result_dict = result.__dict__
-    else:
-        result_dict = dict(result)
-
-    # Filter out any None values and convert to JSON serializable format
-    filtered_result = {}
-    for key, value in result_dict.items():
-        if value is not None and not key.startswith("_"):
-            if isinstance(value, (str, int, float, bool)) or value is None:
-                filtered_result[key] = value
-            else:
-                try:
-                    # Try to convert to string or another JSON serializable format
-                    filtered_result[key] = str(value)
-                except Exception as e:
-                    filtered_result[key] = f"Complex value (not displayable): {str(e)}"
+    debug_payload = {
+        "parsed_by_proxy": parsed_fields or {},
+        "raw_claims": raw_claims or {},
+    }
 
     # Replace the placeholder in the template with the actual data
     html_content = jwt_display_template.replace(
         "const userData = SSO_DATA;",
-        f"const userData = {json.dumps(filtered_result, indent=2)};",
+        f"const userData = {json.dumps(debug_payload, indent=2, default=str)};",
     )
 
     return HTMLResponse(content=html_content)
