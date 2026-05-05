@@ -8,6 +8,7 @@ Returns a UserAPIKeyAuth object if the API key is valid
 """
 
 import asyncio
+import importlib
 import re
 import secrets
 from datetime import datetime, timezone
@@ -1876,7 +1877,7 @@ async def _reserve_budget_after_common_checks(
     team_object: Optional[LiteLLM_TeamTableCachedObj],
     user_object: Optional[LiteLLM_UserTable],
     prisma_client: Optional[PrismaClient],
-    user_api_key_cache: UserApiKeyCache,
+    user_api_key_cache: DualCache,
     proxy_logging_obj: ProxyLogging,
     skip_budget_checks: bool,
     end_user_id: Optional[str] = None,
@@ -1886,9 +1887,19 @@ async def _reserve_budget_after_common_checks(
     if skip_budget_checks:
         return
 
-    from litellm.proxy.spend_tracking.budget_reservation import (
-        reserve_budget_for_request,
-    )
+    try:
+        budget_reservation_module = importlib.import_module(
+            "litellm.proxy.spend_tracking.budget_reservation"
+        )
+        reserve_budget_for_request = getattr(
+            budget_reservation_module, "reserve_budget_for_request"
+        )
+    except (ImportError, AttributeError):
+        # Older stable branches may not include budget reservation support.
+        verbose_proxy_logger.debug(
+            "Skipping budget reservation: spend_tracking.budget_reservation unavailable"
+        )
+        return
 
     user_api_key_auth_obj.budget_reservation = await reserve_budget_for_request(
         request_body=request_data,
@@ -1919,6 +1930,29 @@ def _should_skip_budget_checks(
     if model is not None and llm_router is not None:
         return _is_model_cost_zero(model=model, llm_router=llm_router)
     return False
+
+
+def _get_model_from_request_context(
+    request_data: dict,
+    route: str,
+    request: Optional[Request],
+) -> Optional[Union[str, List[str]]]:
+    """
+    Best-effort model extraction for budget-skip checks.
+
+    Newer branches may attach model info to request state; older stable branches
+    rely on request body + route parsing.
+    """
+    model = get_model_from_request(request_data=request_data, route=route)
+    if model is not None:
+        return model
+
+    if request is not None and hasattr(request, "state"):
+        state_model = getattr(request.state, "model", None)
+        if state_model is not None:
+            return cast(Optional[Union[str, List[str]]], state_model)
+
+    return None
 
 
 async def run_user_api_key_auth_pipeline(
