@@ -7331,7 +7331,7 @@ class Router:
                 # Multiple aliases can point at the same provider/model backend,
                 # but their deployment-level overrides should not downgrade the
                 # backend from responses -> chat via last-write-wins registration.
-                _shared_model_info.pop("mode", None)
+                _shared_model_info["mode"] = _existing_shared_mode
             _backend_alias_cost = {_model_name: _shared_model_info}
             if "responses/" in _model_name:
                 _stripped_model_name = _model_name.replace("responses/", "")

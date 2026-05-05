@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 import pytest
 
+from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.integrations.rubrik import RubrikLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -236,7 +237,7 @@ class TestBatchLogging:
 
         assert handler.log_queue == [{"msg": "c"}]
 
-    async def test_async_send_batch_drains_sent_events(self, handler):
+    async def test_async_send_batch_does_not_drain_events(self, handler):
         handler.log_queue = [{"msg": "a"}, {"msg": "b"}]
 
         async def mock_post(*_args, **_kwargs):
@@ -249,6 +250,22 @@ class TestBatchLogging:
         handler.async_httpx_client.post = mock_post
 
         await handler.async_send_batch()
+
+        assert handler.log_queue == [{"msg": "a"}, {"msg": "b"}, {"msg": "c"}]
+
+    async def test_parent_flush_queue_preserves_events_added_during_send(self, handler):
+        handler.log_queue = [{"msg": "a"}, {"msg": "b"}]
+
+        async def mock_post(*_args, **_kwargs):
+            handler.log_queue.append({"msg": "c"})
+            mock_response = Mock()
+            mock_response.raise_for_status = Mock()
+            return mock_response
+
+        handler.async_httpx_client = AsyncMock()
+        handler.async_httpx_client.post = mock_post
+
+        await CustomBatchLogger.flush_queue(handler)
 
         assert handler.log_queue == [{"msg": "c"}]
 

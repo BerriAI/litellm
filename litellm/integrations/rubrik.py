@@ -48,6 +48,8 @@ class BlockedToolsResult:
 
 
 class RubrikLogger(CustomGuardrail, CustomBatchLogger):
+    preserve_events_added_during_flush = True
+
     def __init__(
         self,
         api_key: str | None = None,
@@ -391,15 +393,6 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         await self._log_batch_to_rubrik(
             data=log_queue_snapshot,
         )
-        del self.log_queue[: len(log_queue_snapshot)]
-        self.last_flush_time = time.time()
-
-    async def flush_queue(self):
-        if self.flush_lock is None:
-            return
-
-        async with self.flush_lock:
-            await self.async_send_batch()
 
     # -- Tool blocking service -------------------------------------------------
 

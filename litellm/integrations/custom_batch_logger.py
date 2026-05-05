@@ -14,6 +14,8 @@ from litellm.integrations.custom_logger import CustomLogger
 
 
 class CustomBatchLogger(CustomLogger):
+    preserve_events_added_during_flush = False
+
     def __init__(
         self,
         flush_lock: Optional[asyncio.Lock] = None,
@@ -47,11 +49,15 @@ class CustomBatchLogger(CustomLogger):
 
         async with self.flush_lock:
             if self.log_queue:
+                log_queue_length = len(self.log_queue)
                 verbose_logger.debug(
                     "CustomLogger: Flushing batch of %s events", len(self.log_queue)
                 )
                 await self.async_send_batch()
-                self.log_queue.clear()
+                if self.preserve_events_added_during_flush:
+                    del self.log_queue[:log_queue_length]
+                else:
+                    self.log_queue.clear()
                 self.last_flush_time = time.time()
 
     async def async_send_batch(self, *args, **kwargs):
