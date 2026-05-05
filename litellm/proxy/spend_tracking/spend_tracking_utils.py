@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
     CostBreakdown,
@@ -471,9 +472,7 @@ def get_logging_payload(  # noqa: PLR0915
 
         return payload
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "Error creating spendlogs object - {}".format(str(e))
-        )
+        spend_log_error("Error creating spendlogs object - %s", str(e), exc=e)
         raise e
 
 

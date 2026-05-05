@@ -300,6 +300,18 @@ def test_process_items_basic():
     process_items(schema)
     assert schema["items"] == {"type": "object"}
 
+    # Test array missing items inside anyOf branch
+    schema = {
+        "type": "object",
+        "properties": {
+            "callbacks": {
+                "anyOf": [{"type": "array"}, {"type": "object"}],
+            }
+        },
+    }
+    process_items(schema)
+    assert schema["properties"]["callbacks"]["anyOf"][0]["items"] == {"type": "object"}
+
 
 def test_build_vertex_schema_array_branch_missing_items_in_anyof():
     """

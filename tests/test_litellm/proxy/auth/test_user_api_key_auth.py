@@ -1,8 +1,7 @@
-import asyncio
 import json
 import os
 import sys
-from typing import Tuple
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 sys.path.insert(
@@ -11,10 +10,14 @@ sys.path.insert(
 
 import pytest
 
+import litellm
 import litellm.proxy.proxy_server
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
+    LiteLLMRoutes,
     LiteLLM_JWTAuth,
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyErrorTypes,
@@ -23,13 +26,23 @@ from litellm.proxy._types import (
     JWTRoutingOverride,
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
+    _route_requires_auth_despite_public,
+    _reserve_budget_after_common_checks,
     _run_centralized_common_checks,
     _run_post_custom_auth_checks,
     get_api_key,
     user_api_key_auth,
 )
+
+
+class _RoutingRequest:
+    def __init__(self, headers=None, query_params=None):
+        self.headers = headers or {}
+        self.query_params = query_params or {}
+        self.state = SimpleNamespace()
 
 
 def test_get_api_key():
@@ -47,6 +60,97 @@ def test_get_api_key():
         route="",
         request=MagicMock(),
     ) == (api_key, passed_in_key)
+
+
+def test_route_requires_auth_despite_public_for_metrics(monkeypatch):
+    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
+
+    assert _route_requires_auth_despite_public("/metrics", {}) is True
+    assert _route_requires_auth_despite_public("/metrics/", {}) is True
+
+    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", False)
+
+    assert _route_requires_auth_despite_public("/metrics", {}) is False
+
+
+def test_public_ai_hub_routes_remain_public():
+    for route in (
+        "/public/model_hub",
+        "/public/model_hub/info",
+        "/public/agent_hub",
+        "/public/mcp_hub",
+        "/public/skill_hub",
+    ):
+        assert route in LiteLLMRoutes.public_routes.value
+        assert _route_requires_auth_despite_public(route, {}) is False
+
+
+@pytest.mark.asyncio
+async def test_should_clear_stale_budget_reservation_when_budget_checks_skip():
+    user_api_key_auth_obj = UserAPIKeyAuth(
+        token="test_token",
+        budget_reservation={
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": "spend:key:test_token"}],
+        },
+    )
+
+    await _reserve_budget_after_common_checks(
+        user_api_key_auth_obj=user_api_key_auth_obj,
+        request_data={"model": "free-model"},
+        route="/v1/chat/completions",
+        llm_router=None,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        skip_budget_checks=True,
+    )
+
+    assert user_api_key_auth_obj.budget_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_should_not_reuse_cached_key_object_for_request_state():
+    key_cache = DualCache()
+    cached_key = UserAPIKeyAuth(
+        token="cached-token",
+        request_route="/old-route",
+        budget_reservation={
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": "spend:key:cached-token"}],
+        },
+    )
+
+    await _cache_key_object(
+        hashed_token="cached-token",
+        user_api_key_obj=cached_key,
+        user_api_key_cache=key_cache,
+        proxy_logging_obj=None,
+    )
+
+    first_request_key = await get_key_object(
+        hashed_token="cached-token",
+        prisma_client=MagicMock(),
+        user_api_key_cache=key_cache,
+    )
+    first_request_key.budget_reservation = {
+        "reserved_cost": 0.9,
+        "entries": [{"counter_key": "spend:key:cached-token"}],
+    }
+    first_request_key.request_route = "/chat/completions"
+
+    second_request_key = await get_key_object(
+        hashed_token="cached-token",
+        prisma_client=MagicMock(),
+        user_api_key_cache=key_cache,
+    )
+
+    assert first_request_key is not cached_key
+    assert second_request_key is not first_request_key
+    assert second_request_key.budget_reservation is None
+    assert second_request_key.request_route is None
 
 
 @pytest.mark.asyncio
@@ -101,6 +205,39 @@ async def test_custom_auth_honors_key_level_model_access_restriction_allowed_wit
         )
         mock_can_key.assert_awaited_once_with(
             model="gpt-4o-mini",
+            llm_model_list=ANY,
+            valid_token=valid_token,
+            llm_router=ANY,
+        )
+
+
+@pytest.mark.asyncio
+async def test_custom_auth_enforces_key_model_access_from_file_route_header_with_opt_in():
+    valid_token = UserAPIKeyAuth(token="test_token", models=["allowed-model"])
+    request = _RoutingRequest(headers={"x-litellm-model": "restricted-model"})
+
+    with (
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new_callable=AsyncMock,
+        ) as mock_can_key,
+        patch(
+            "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"custom_auth_run_common_checks": True},
+        ),
+    ):
+        await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=request,
+            request_data={},
+            route="/v1/files",
+            parent_otel_span=None,
+        )
+        mock_can_key.assert_awaited_once_with(
+            model="restricted-model",
             llm_model_list=ANY,
             valid_token=valid_token,
             llm_router=ANY,
@@ -1752,7 +1889,11 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
     from starlette.datastructures import URL
     from starlette.requests import Request
 
-    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._types import (
+        LiteLLM_TeamTableCachedObj,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
     from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
 
     api_key = "sk-test-team-metadata-refresh"
@@ -1833,16 +1974,17 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
                 request_data={},
             )
 
-        assert result.team_metadata == {"guardrails": ["test-guardrail-333"]}, (
-            f"team_metadata was not updated from fresh team object. Got: {result.team_metadata}"
-        )
+        assert result.team_metadata == {
+            "guardrails": ["test-guardrail-333"]
+        }, f"team_metadata was not updated from fresh team object. Got: {result.team_metadata}"
 
     finally:
         for k, v in _originals.items():
             setattr(_proxy_server_mod, k, v)
-            
+
+
 # ---------------------------------------------------------------------------
-            
+
 # _run_centralized_common_checks — centralized authz gate
 # ---------------------------------------------------------------------------
 
@@ -1859,7 +2001,7 @@ def _proxy_attrs_for_centralized_checks(
     """
     return {
         "prisma_client": None,
-        "user_api_key_cache": MagicMock(),
+        "user_api_key_cache": DualCache(),
         "proxy_logging_obj": MagicMock(),
         "general_settings": ({"custom_auth_run_common_checks": True} if flag else {}),
         "llm_router": None,
@@ -2121,6 +2263,81 @@ async def test_centralized_common_checks_propagates_end_user_budget_error():
 
 
 @pytest.mark.asyncio
+async def test_centralized_common_checks_reserves_request_end_user_budget():
+    """Regression: reservation runs before user_api_key_auth() copies the
+    request end-user onto the token, so centralized checks must pass the
+    locally extracted end_user_id/end_user_object into reservation."""
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    token = UserAPIKeyAuth(api_key="sk-test", user_id="u")
+    request = Request(scope={"type": "http", "headers": []})
+    request._url = URL(url="/chat/completions")
+    request_data = {
+        "model": "gpt-4o",
+        "messages": [{"role": "user", "content": "hello"}],
+        "user": "alice",
+    }
+    end_user_object = LiteLLM_EndUserTable(
+        user_id="alice",
+        blocked=False,
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    counter_cache = DualCache()
+    attrs["spend_counter_cache"] = counter_cache
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_end_user_object",
+                new_callable=AsyncMock,
+                return_value=end_user_object,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+                return_value=0.6,
+            ),
+        ):
+            assert token.end_user_id is None
+
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=token,
+                request=request,
+                request_data=request_data,
+                route="/chat/completions",
+            )
+
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+    assert token.end_user_id is None
+    assert token.budget_reservation is not None
+    assert token.budget_reservation["entries"] == [
+        {
+            "counter_key": "spend:end_user:alice",
+            "entity_type": "EndUser",
+            "entity_id": "alice",
+            "reserved_cost": 0.6,
+            "applied_adjustment": 0.0,
+        }
+    ]
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:end_user:alice"
+    ) == pytest.approx(0.6)
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_short_circuits_when_master_key_unset():
     """master_key=None is no-auth dev mode — admin-only routes and
     common_checks must not run. Deployments in this mode have no proxy-
@@ -2161,18 +2378,18 @@ async def test_centralized_common_checks_short_circuits_when_master_key_unset():
 
 @pytest.mark.asyncio
 async def test_centralized_common_checks_skips_public_routes():
-    """Regression: public routes (e.g. /health/readiness) are exempted
+    """Regression: public routes (e.g. /health/liveness) are exempted
     by the builder fast-path. The wrapper must not retroactively run
     common_checks on top — the synthetic INTERNAL_USER_VIEW_ONLY token
     has no user_id, so common_checks would reject the request as
-    admin-only. Breaks k8s readiness probes when master_key is set."""
+    admin-only."""
     import litellm.proxy.proxy_server as _proxy_server_mod
     from fastapi import Request
     from starlette.datastructures import URL
 
     token = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
     request = Request(scope={"type": "http"})
-    request._url = URL(url="/health/readiness")
+    request._url = URL(url="/health/liveness")
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
     originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
@@ -2187,7 +2404,7 @@ async def test_centralized_common_checks_skips_public_routes():
                 user_api_key_auth_obj=token,
                 request=request,
                 request_data={},
-                route="/health/readiness",
+                route="/health/liveness",
             )
             mock_checks.assert_not_awaited()
     finally:

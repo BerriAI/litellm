@@ -5,6 +5,7 @@ from typing import AsyncIterator, Iterator, List, Optional, Union
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import encode_url_path_segments
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import (
     BaseConfig,
@@ -89,7 +90,8 @@ class CloudflareChatConfig(BaseConfig):
             api_base = (
                 f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/"
             )
-        return api_base + model
+        encoded_model = encode_url_path_segments(model, field_name="model")
+        return api_base + encoded_model
 
     def get_supported_openai_params(self, model: str) -> List[str]:
         return [
@@ -147,9 +149,9 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        model_response.choices[0].message.content = completion_response["result"][  # type: ignore
-            "response"
-        ]
+        # Support both "response" and "response_text" keys (newer models like Nemotron use "response_text")
+        result = completion_response["result"]
+        model_response.choices[0].message.content = result.get("response") if result.get("response") is not None else result.get("response_text", "")  # type: ignore
 
         prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
         completion_tokens = len(
@@ -199,8 +201,10 @@ class CloudflareChatResponseIterator(BaseModelResponseIterator):
 
             index = int(chunk.get("index", 0))
 
-            if "response" in chunk:
+            if "response" in chunk and chunk["response"] is not None:
                 text = chunk["response"]
+            elif "response_text" in chunk and chunk["response_text"] is not None:
+                text = chunk["response_text"]
 
             returned_chunk = GenericStreamingChunk(
                 text=text,
