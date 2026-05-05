@@ -197,11 +197,20 @@ jwt_display_template = """
                 </svg>
                 Authentication Successful
             </div>
-            <p>The SSO authentication completed successfully. Below is the information returned by the provider.</p>
+            <p>The SSO authentication completed successfully. Two sections are shown below:
+            <strong>Parsed by proxy</strong> (the fields LiteLLM extracted using your config-driven mappings — e.g. <code>team_id</code>, <code>team_alias</code>, <code>user_role</code>, <code>extra_fields</code>) and <strong>Raw claims</strong> (the complete claim set returned by your IdP / id_token).</p>
         </div>
         
-        <div class="data-container" id="userData">
-            <!-- Data will be inserted here by JavaScript -->
+        <h3 style="margin:20px 0 8px 0;color:#1e293b;">Parsed by proxy</h3>
+        <p class="subtitle" style="text-align:left;margin:0 0 8px 0;">What LiteLLM mapped out of the IdP response using your SSO config (env vars, role/team mappings, JWT claim paths).</p>
+        <div class="data-container" id="parsedData">
+            <!-- Parsed fields go here -->
+        </div>
+
+        <h3 style="margin:20px 0 8px 0;color:#1e293b;">Raw claims from IdP</h3>
+        <p class="subtitle" style="text-align:left;margin:0 0 8px 0;">The full unmodified claim set returned by the IdP (userinfo endpoint and/or id_token). Use this to confirm which fields are actually being delivered.</p>
+        <div class="data-container" id="rawData">
+            <!-- Raw claims go here -->
         </div>
         
         <div class="info-box">
@@ -233,38 +242,74 @@ jwt_display_template = """
     </div>
 
     <script>
-        // This will be populated with the actual data from the server
+        // This will be populated with the actual data from the server.
+        // Shape: { parsed_by_proxy: {...}, raw_claims: {...} }
+        // (legacy shape — a flat object — is also handled for backwards compat).
         const userData = SSO_DATA;
-        
+
+        function formatValue(value) {
+            if (value === null || value === undefined) return 'null';
+            if (typeof value === 'object') return JSON.stringify(value, null, 2);
+            return String(value);
+        }
+
+        function renderInto(containerId, dataObj) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = '';
+            if (!dataObj || typeof dataObj !== 'object') {
+                container.textContent = '(empty)';
+                return;
+            }
+            const entries = Object.entries(dataObj);
+            if (entries.length === 0) {
+                container.textContent = '(no fields)';
+                return;
+            }
+            for (const [key, value] of entries) {
+                const row = document.createElement('div');
+                row.className = 'data-row';
+
+                const label = document.createElement('div');
+                label.className = 'data-label';
+                label.textContent = key;
+
+                const dataValue = document.createElement('div');
+                dataValue.className = 'data-value';
+                if (value !== null && typeof value === 'object') {
+                    const pre = document.createElement('pre');
+                    pre.style.margin = '0';
+                    pre.style.whiteSpace = 'pre-wrap';
+                    pre.style.wordBreak = 'break-word';
+                    pre.textContent = JSON.stringify(value, null, 2);
+                    dataValue.appendChild(pre);
+                } else {
+                    dataValue.textContent = formatValue(value);
+                }
+
+                row.appendChild(label);
+                row.appendChild(dataValue);
+                container.appendChild(row);
+            }
+        }
+
         function renderUserData() {
-            const container = document.getElementById('userData');
             const jsonDisplay = document.getElementById('jsonData');
-            
             // Format JSON with indentation for display
             jsonDisplay.textContent = JSON.stringify(userData, null, 2);
-            
-            // Clear container
-            container.innerHTML = '';
-            
-            // Add each key-value pair to the UI
-            for (const [key, value] of Object.entries(userData)) {
-                if (typeof value !== 'object' || value === null) {
-                    const row = document.createElement('div');
-                    row.className = 'data-row';
-                    
-                    const label = document.createElement('div');
-                    label.className = 'data-label';
-                    label.textContent = key;
-                    
-                    const dataValue = document.createElement('div');
-                    dataValue.className = 'data-value';
-                    dataValue.textContent = value !== null ? value : 'null';
-                    
-                    row.appendChild(label);
-                    row.appendChild(dataValue);
-                    container.appendChild(row);
-                }
+
+            let parsed, raw;
+            if (userData && (Object.prototype.hasOwnProperty.call(userData, 'parsed_by_proxy')
+                || Object.prototype.hasOwnProperty.call(userData, 'raw_claims'))) {
+                parsed = userData.parsed_by_proxy || {};
+                raw = userData.raw_claims || {};
+            } else {
+                // Legacy flat shape — show it under "Parsed by proxy".
+                parsed = userData || {};
+                raw = {};
             }
+            renderInto('parsedData', parsed);
+            renderInto('rawData', raw);
         }
         
         function copyToClipboard(elementId) {
