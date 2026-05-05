@@ -20,13 +20,13 @@ class PrometheusAuthMiddleware:
     """
     Middleware to authenticate requests to the metrics endpoint.
 
-    By default, auth is not run on the metrics endpoint.
+    By default, auth is run on the metrics endpoint.
 
-    Enabled by setting the following in proxy_config.yaml:
+    To allow unauthenticated metrics in proxy_config.yaml:
 
     ```yaml
     litellm_settings:
-        require_auth_for_metrics_endpoint: true
+        require_auth_for_metrics_endpoint: false
     ```
     """
 
@@ -39,8 +39,8 @@ class PrometheusAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Only run auth if configured to do so
-        if litellm.require_auth_for_metrics_endpoint is True:
+        # Run auth by default; allow legacy public metrics only when explicitly disabled.
+        if litellm.require_auth_for_metrics_endpoint is not False:
             # user_api_key_auth reads the request body, which consumes ASGI `receive`.
             # Buffer those messages and replay them for the inner app; otherwise a
             # successful auth would forward an exhausted receive and /metrics hangs.
@@ -52,10 +52,29 @@ class PrometheusAuthMiddleware:
                 return message
 
             request = Request(scope, receive_for_auth)
-            api_key = request.headers.get(_AUTHORIZATION_HEADER) or ""
 
             try:
-                await user_api_key_auth(request=request, api_key=api_key)
+                await user_api_key_auth(
+                    request=request,
+                    api_key=request.headers.get(_AUTHORIZATION_HEADER) or "",
+                    azure_api_key_header=request.headers.get(
+                        SpecialHeaders.azure_authorization.value
+                    )
+                    or "",
+                    anthropic_api_key_header=request.headers.get(
+                        SpecialHeaders.anthropic_authorization.value
+                    ),
+                    google_ai_studio_api_key_header=request.headers.get(
+                        SpecialHeaders.google_ai_studio_authorization.value
+                    ),
+                    azure_apim_header=request.headers.get(
+                        SpecialHeaders.azure_apim_authorization.value
+                    )
+                    or "",
+                    custom_litellm_key_header=request.headers.get(
+                        SpecialHeaders.custom_litellm_api_key.value
+                    ),
+                )
             except Exception as e:
                 # Send 401 response directly via ASGI protocol
                 error_message = getattr(e, "message", str(e))

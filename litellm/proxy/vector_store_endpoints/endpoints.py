@@ -8,6 +8,9 @@ from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    _resolve_embedding_config,
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
@@ -56,6 +59,30 @@ async def _update_request_data_with_litellm_managed_vector_store_registry(
 
         if "litellm_params" in vector_store_to_run:
             litellm_params = vector_store_to_run.get("litellm_params", {}) or {}
+            # Resolve ``litellm_embedding_config`` here, at request-handling
+            # time, instead of at row-creation time. The resolved
+            # ``api_key`` / ``api_base`` / ``api_version`` lives only in
+            # this per-request ``data`` dict and is never persisted.
+            # Legacy rows that already carry a resolved (cleartext)
+            # ``litellm_embedding_config`` skip the lookup and pass through
+            # unchanged so the embed call keeps working.
+            embedding_model = litellm_params.get("litellm_embedding_model")
+            if embedding_model and not litellm_params.get("litellm_embedding_config"):
+                from litellm.proxy.proxy_server import prisma_client
+
+                resolved_config = await _resolve_embedding_config(
+                    embedding_model=embedding_model, prisma_client=prisma_client
+                )
+                if resolved_config:
+                    # Build a fresh dict via spread instead of mutating
+                    # ``litellm_params`` in place — the registry hands back
+                    # a reference to its cached object, so an in-place
+                    # update would persist the resolved cleartext into the
+                    # in-memory cache for the lifetime of the process.
+                    litellm_params = {
+                        **litellm_params,
+                        "litellm_embedding_config": resolved_config,
+                    }
             data.update(litellm_params)
     return data
 

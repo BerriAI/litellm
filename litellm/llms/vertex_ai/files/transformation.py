@@ -12,6 +12,15 @@ from openai.types.file_deleted import FileDeleted
 import litellm
 from litellm._uuid import uuid
 from litellm.files.utils import FilesAPIUtils
+from litellm.litellm_core_utils.cloud_storage_security import (
+    VERTEX_AI_MANAGED_GCS_PREFIX,
+    build_managed_cloud_object_name,
+    encode_gcs_object_name_for_url,
+    sanitize_cloud_object_path,
+    should_allow_legacy_cloud_file_ids,
+    split_configured_cloud_bucket_name,
+    validate_managed_cloud_file_id,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -248,7 +257,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         _model = openai_jsonl_content[0].get("body", {}).get("model", "")
         if "publishers/google/models" not in _model:
             _model = f"publishers/google/models/{_model}"
-        object_name = f"litellm-vertex-files/{_model}/{uuid.uuid4()}"
+        safe_model_path = sanitize_cloud_object_path(_model, fallback="model")
+        object_name = f"{VERTEX_AI_MANAGED_GCS_PREFIX}{safe_model_path}/{uuid.uuid4()}"
         return object_name
 
     def get_object_name(
@@ -275,12 +285,19 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             if len(openai_jsonl_content) > 0:
                 return self._get_gcs_object_name_from_batch_jsonl(openai_jsonl_content)
 
-        ## 2. If not jsonl, return the filename
+        ## 2. If not jsonl, store under a server-generated managed object name
         filename = extracted_file_data.get("filename")
-        if filename:
-            return filename
-        ## 3. If no file name, return timestamp
-        return str(int(time.time()))
+        return build_managed_cloud_object_name(
+            prefix=f"{VERTEX_AI_MANAGED_GCS_PREFIX}uploads/",
+            filename=filename,
+            fallback_filename="file",
+        )
+
+    def _get_configured_bucket_name(self, litellm_params: Dict) -> str:
+        bucket_name = litellm_params.get("bucket_name") or os.getenv("GCS_BUCKET_NAME")
+        if not bucket_name:
+            raise ValueError("GCS bucket_name is required")
+        return bucket_name
 
     def get_complete_file_url(
         self,
@@ -294,13 +311,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Get the complete url for the request
         """
-        bucket_name = (
-            litellm_params.get("bucket_name")
-            or litellm_params.get("litellm_metadata", {}).pop("gcs_bucket_name", None)
-            or os.getenv("GCS_BUCKET_NAME")
-        )
-        if not bucket_name:
-            raise ValueError("GCS bucket_name is required")
+        bucket_name = self._get_configured_bucket_name(litellm_params)
+        bucket_name, object_prefix = split_configured_cloud_bucket_name(bucket_name)
         file_data = data.get("file")
         purpose = data.get("purpose")
         if file_data is None:
@@ -309,9 +321,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("purpose is required")
         extracted_file_data = extract_file_data(file_data)
         object_name = self.get_object_name(extracted_file_data, purpose)
-        endpoint = (
-            f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={object_name}"
-        )
+        if object_prefix:
+            object_name = f"{object_prefix}/{object_name}"
+        encoded_object_name = encode_gcs_object_name_for_url(object_name)
+        endpoint = f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}"
         api_base = api_base or "https://storage.googleapis.com"
         if not api_base:
             raise ValueError("api_base is required")
@@ -450,27 +463,23 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             status_code=status_code, message=error_message, headers=headers
         )
 
-    def _parse_gcs_uri(self, file_id: str) -> Tuple[str, str]:
+    def _parse_gcs_uri(
+        self, file_id: str, litellm_params: Optional[Dict] = None
+    ) -> Tuple[str, str]:
         """
-        Parse a GCS URI (gs://bucket/path/to/object) into (bucket, url-encoded-object-path).
-        Handles both raw and URL-encoded input.
+        Validate a managed GCS file_id and return (bucket, url-encoded-object-path).
         """
-        import urllib.parse
-
-        decoded = urllib.parse.unquote(file_id)
-        if decoded.startswith("gs://"):
-            full_path = decoded[5:]
-        else:
-            full_path = decoded
-
-        if "/" in full_path:
-            bucket_name, object_path = full_path.split("/", 1)
-        else:
-            bucket_name = full_path
-            object_path = ""
-
-        encoded_object = urllib.parse.quote(object_path, safe="")
-        return bucket_name, encoded_object
+        configured_bucket_name = self._get_configured_bucket_name(litellm_params or {})
+        bucket_name, object_path = validate_managed_cloud_file_id(
+            file_id=file_id,
+            scheme="gs://",
+            configured_bucket_name=configured_bucket_name,
+            allowed_object_prefixes=(VERTEX_AI_MANAGED_GCS_PREFIX,),
+            allow_legacy_cloud_file_ids=should_allow_legacy_cloud_file_ids(
+                litellm_params
+            ),
+        )
+        return bucket_name, encode_gcs_object_name_for_url(object_path)
 
     def transform_retrieve_file_request(
         self,
@@ -478,7 +487,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        bucket, encoded_object = self._parse_gcs_uri(file_id)
+        bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
         return url, {}
 
@@ -510,7 +519,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        bucket, encoded_object = self._parse_gcs_uri(file_id)
+        bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}"
         return url, {}
 
@@ -554,7 +563,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         litellm_params: dict,
     ) -> tuple[str, dict]:
         file_id = file_content_request.get("file_id", "")
-        bucket, encoded_object = self._parse_gcs_uri(file_id)
+        bucket, encoded_object = self._parse_gcs_uri(file_id, litellm_params)
         url = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{encoded_object}?alt=media"
         return url, {}
 
@@ -842,7 +851,8 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
         _model = openai_jsonl_content[0].get("body", {}).get("model", "")
         if "publishers/google/models" not in _model:
             _model = f"publishers/google/models/{_model}"
-        object_name = f"litellm-vertex-files/{_model}/{uuid.uuid4()}"
+        safe_model_path = sanitize_cloud_object_path(_model, fallback="model")
+        object_name = f"{VERTEX_AI_MANAGED_GCS_PREFIX}{safe_model_path}/{uuid.uuid4()}"
         return object_name
 
     def _map_openai_to_vertex_params(
