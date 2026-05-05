@@ -1475,7 +1475,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/otel_tests -x --junitxml=test-results/junit.xml --durations=5
+            uv run --no-sync python -m pytest -v tests/otel_tests --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 15m
             # Clean up first container
       - run:
@@ -1935,7 +1935,7 @@ jobs:
           name: Run Vertex AI, Google AI Studio Node.js tests
           command: |
             cd tests/pass_through_tests
-            npx jest . --verbose
+            NODE_OPTIONS=--experimental-vm-modules npx jest . --verbose
           no_output_timeout: 30m
       - run:
           name: Run tests
