@@ -16,7 +16,7 @@ import io
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Tuple, cast
+from typing import Any, Tuple, cast
 
 from litellm.llms.nvidia_riva.audio_transcription.transformation import (
     RIVA_TARGET_NUM_CHANNELS,
@@ -24,13 +24,10 @@ from litellm.llms.nvidia_riva.audio_transcription.transformation import (
 )
 from litellm.llms.nvidia_riva.common_utils import NvidiaRivaException
 
-if TYPE_CHECKING:
-    import numpy as np
-    import numpy.typing as npt
-
-    FloatArray = npt.NDArray[np.float32]
-else:
-    FloatArray = object
+# Keep this as Any: the module intentionally avoids importing numpy at module
+# import time (optional dependency), and project-wide mypy config evaluates this
+# file in contexts where conditional type aliases can degrade to "FloatArray?".
+FloatArray = Any
 
 
 _INSTALL_HINT = (
