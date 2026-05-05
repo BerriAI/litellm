@@ -4026,6 +4026,23 @@ def test_build_anthropic_tool_name_maps_three_way_collision():
     assert reverse == {"foo_bar_2": "foo/bar", "foo_bar_3": "foo.bar"}
 
 
+def test_build_anthropic_tool_name_maps_reverse_order_collision():
+    """REGRESSION: when the invalid name appears *before* the valid name that
+    its sanitized form collides with, both must still end up with distinct
+    names on the wire."""
+    from litellm.llms.anthropic.chat.transformation import (
+        _build_anthropic_tool_name_maps,
+    )
+
+    forward, reverse = _build_anthropic_tool_name_maps(["foo/bar", "foo_bar"])
+    # The valid name keeps its slot untouched.
+    assert "foo_bar" not in forward
+    # The rewritten one gets a disambiguating suffix.
+    assert forward["foo/bar"] == "foo_bar_2"
+    assert reverse == {"foo_bar_2": "foo/bar"}
+    assert "foo_bar" not in reverse
+
+
 def test_map_openai_params_does_not_pollute_optional_params_with_internal_keys():
     """REGRESSION: ``optional_params`` is what becomes the JSON body sent to
     Anthropic (``data = {**optional_params}``). It MUST NOT carry LiteLLM-

@@ -175,14 +175,22 @@ def _build_anthropic_tool_name_maps(
     """
     forward: Dict[str, str] = {}
     used: set = set()
+
+    # First pass: reserve slots for names that are already valid so they
+    # always have priority regardless of input order.
     for original in original_names:
         if not isinstance(original, str) or not original:
             continue
         candidate = _basic_sanitize_anthropic_tool_name(original)
         if candidate == original:
-            # Already valid. Reserve the slot but don't put it in `forward`
-            # -- we want untouched names to skip translation entirely.
             used.add(candidate)
+
+    # Second pass: sanitize/disambiguate names that need rewriting.
+    for original in original_names:
+        if not isinstance(original, str) or not original:
+            continue
+        candidate = _basic_sanitize_anthropic_tool_name(original)
+        if candidate == original:
             continue
         # Disambiguate against names already chosen this request.
         unique = candidate
@@ -197,6 +205,8 @@ def _build_anthropic_tool_name_maps(
         used.add(unique)
     reverse = {v: k for k, v in forward.items()}
     return forward, reverse
+
+
 REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT: Dict[str, str] = {
     "low": "low",
     "minimal": "low",
