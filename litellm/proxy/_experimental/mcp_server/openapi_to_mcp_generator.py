@@ -11,7 +11,6 @@ from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
-
 # Tool names emitted from OpenAPI specs must work across all major LLM providers.
 # OpenAI/Anthropic/Bedrock all enforce a character class roughly equivalent to
 # ^[a-zA-Z0-9_-]+$ on tool names. Many specs (notably GitHub's REST API) use
@@ -424,6 +423,7 @@ def create_tool_function(
 def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):
     """Register MCP tools from OpenAPI specification."""
     paths = spec.get("paths", {})
+    used_names: set = set()
 
     for path, path_item in paths.items():
         for method in ["get", "post", "put", "delete", "patch"]:
@@ -437,6 +437,22 @@ def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):
                 # contain '/' and would 400 at the LLM provider boundary.
                 operation_id = operation.get("operationId", f"{method}_{path}")
                 tool_name = sanitize_openapi_tool_name(operation_id)
+
+                # Disambiguate collisions: two operationIds that differ only
+                # by sanitized characters (e.g. "foo/list" and "foo.list")
+                # would both become "foo_list". Append _2, _3, … to keep
+                # every tool reachable, mirroring the Anthropic-side logic
+                # in _build_anthropic_tool_name_maps.
+                unique = tool_name
+                n = 1
+                while unique in used_names:
+                    n += 1
+                    suffix = f"_{n}"
+                    unique = (
+                        tool_name[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
+                    )
+                tool_name = unique
+                used_names.add(tool_name)
 
                 # Get description
                 description = operation.get(
