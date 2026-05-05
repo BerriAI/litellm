@@ -20,24 +20,24 @@ class TestFilterAnthropicOutputSchema:
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 150,
-                    "description": "Person's age"
+                    "description": "Person's age",
                 },
                 "score": {
                     "type": "number",
                     "exclusiveMinimum": 0,
-                    "exclusiveMaximum": 100
-                }
-            }
+                    "exclusiveMaximum": 100,
+                },
+            },
         }
-        
+
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
-        
+
         # minimum/maximum should be removed
         assert "minimum" not in result["properties"]["age"]
         assert "maximum" not in result["properties"]["age"]
         assert "exclusiveMinimum" not in result["properties"]["score"]
         assert "exclusiveMaximum" not in result["properties"]["score"]
-        
+
         # Other fields preserved
         assert result["properties"]["age"]["type"] == "integer"
         # Description should be updated with removed constraint info
@@ -45,24 +45,25 @@ class TestFilterAnthropicOutputSchema:
         assert "minimum value: 0" in result["properties"]["age"]["description"]
         assert "maximum value: 150" in result["properties"]["age"]["description"]
         # Score had no description, should get one from constraints
-        assert "exclusive minimum value: 0" in result["properties"]["score"]["description"]
-        assert "exclusive maximum value: 100" in result["properties"]["score"]["description"]
+        assert (
+            "exclusive minimum value: 0" in result["properties"]["score"]["description"]
+        )
+        assert (
+            "exclusive maximum value: 100"
+            in result["properties"]["score"]["description"]
+        )
 
     def test_removes_string_constraints(self):
         """Test that minLength/maxLength are removed from string schemas."""
         schema = {
             "type": "object",
             "properties": {
-                "name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 100
-                }
-            }
+                "name": {"type": "string", "minLength": 1, "maxLength": 100}
+            },
         }
-        
+
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
-        
+
         assert "minLength" not in result["properties"]["name"]
         assert "maxLength" not in result["properties"]["name"]
         assert result["properties"]["name"]["type"] == "string"
@@ -76,11 +77,11 @@ class TestFilterAnthropicOutputSchema:
             "type": "array",
             "items": {"type": "string"},
             "minItems": 1,
-            "maxItems": 10
+            "maxItems": 10,
         }
-        
+
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
-        
+
         assert "minItems" not in result
         assert "maxItems" not in result
         assert result["type"] == "array"
@@ -102,20 +103,20 @@ class TestFilterAnthropicOutputSchema:
                             "quantity": {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 100
+                                "maximum": 100,
                             }
-                        }
+                        },
                     },
-                    "minItems": 1
+                    "minItems": 1,
                 }
-            }
+            },
         }
-        
+
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
-        
+
         # Top level array constraint removed
         assert "minItems" not in result["properties"]["items"]
-        
+
         # Nested numeric constraints removed
         nested_props = result["properties"]["items"]["items"]["properties"]
         assert "minimum" not in nested_props["quantity"]
@@ -126,12 +127,12 @@ class TestFilterAnthropicOutputSchema:
         schema = {
             "anyOf": [
                 {"type": "integer", "minimum": 0},
-                {"type": "string", "minLength": 1}
+                {"type": "string", "minLength": 1},
             ]
         }
-        
+
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
-        
+
         assert "minimum" not in result["anyOf"][0]
         assert "minLength" not in result["anyOf"][1]
 
@@ -143,13 +144,13 @@ class TestFilterAnthropicOutputSchema:
                 "status": {
                     "type": "string",
                     "enum": ["active", "inactive"],
-                    "description": "Current status"
+                    "description": "Current status",
                 }
             },
             "required": ["status"],
-            "additionalProperties": False
+            "additionalProperties": False,
         }
-        
+
         result = AnthropicConfig.filter_anthropic_output_schema(schema)
-        
+
         assert result == schema  # Should be unchanged

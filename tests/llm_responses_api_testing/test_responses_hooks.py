@@ -126,8 +126,12 @@ async def test_responses_streaming_calls_post_streaming_deployment_hook(monkeypa
     )
 
     # Call hook helper directly to verify chunk is modified/flagged
-    chunk = SimpleNamespace(type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, response=None)
-    chunk = await streaming_module.call_post_streaming_hooks_for_testing(iterator, chunk)
+    chunk = SimpleNamespace(
+        type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, response=None
+    )
+    chunk = await streaming_module.call_post_streaming_hooks_for_testing(
+        iterator, chunk
+    )
     assert getattr(chunk, "_post_streaming_hooks_ran", False) is True
     assert getattr(chunk, "tagged", False) is True
 

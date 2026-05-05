@@ -55,11 +55,11 @@ class _ProxyDBLogger(CustomLogger):
         )
         _metadata["user_api_key"] = user_api_key_dict.api_key
         _metadata["status"] = "failure"
-        _metadata[
-            "error_information"
-        ] = StandardLoggingPayloadSetup.get_error_information(
-            original_exception=original_exception,
-            traceback_str=traceback_str,
+        _metadata["error_information"] = (
+            StandardLoggingPayloadSetup.get_error_information(
+                original_exception=original_exception,
+                traceback_str=traceback_str,
+            )
         )
 
         _metadata = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(
@@ -213,6 +213,7 @@ class _ProxyDBLogger(CustomLogger):
                         team_id=team_id,
                         user_id=user_id,
                         response_cost=response_cost,
+                        org_id=org_id,
                     )
 
                     # update cache (fire-and-forget for backward compat:

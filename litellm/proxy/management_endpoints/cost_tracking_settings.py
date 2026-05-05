@@ -69,9 +69,11 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
                     return (
                         str(base_model),
-                        str(custom_llm_provider)
-                        if custom_llm_provider is not None
-                        else None,
+                        (
+                            str(custom_llm_provider)
+                            if custom_llm_provider is not None
+                            else None
+                        ),
                     )
 
                 resolved_model = litellm_params.get("model")
@@ -83,9 +85,11 @@ def _resolve_model_for_cost_lookup(model: str) -> Tuple[str, Optional[str]]:
                     custom_llm_provider = litellm_params.get("custom_llm_provider")
                     return (
                         str(resolved_model),
-                        str(custom_llm_provider)
-                        if custom_llm_provider is not None
-                        else None,
+                        (
+                            str(custom_llm_provider)
+                            if custom_llm_provider is not None
+                            else None
+                        ),
                     )
         except Exception as e:
             verbose_proxy_logger.debug(

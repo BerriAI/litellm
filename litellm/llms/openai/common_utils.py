@@ -227,9 +227,9 @@ class BaseOpenAILLM:
         return httpx.AsyncClient(
             verify=ssl_config,
             transport=AsyncHTTPHandler._create_async_transport(
-                ssl_context=ssl_config
-                if isinstance(ssl_config, ssl.SSLContext)
-                else None,
+                ssl_context=(
+                    ssl_config if isinstance(ssl_config, ssl.SSLContext) else None
+                ),
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
                 shared_session=shared_session,
             ),

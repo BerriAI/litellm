@@ -4,7 +4,7 @@
     "deploy": "wrangler deploy --minify src/index.ts"
   },
   "dependencies": {
-    "hono": "4.1.4",
+    "hono": "4.12.12",
     "openai": "4.29.2"
   },
   "devDependencies": {

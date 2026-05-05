@@ -11,6 +11,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import (
@@ -542,6 +543,57 @@ class TestOpenAIResponsesAPIConfig:
         assert result.output_index == 0
         assert result.content_index == 0
 
+    def test_base_strip_custom_tool_call_namespace_all_providers(self):
+        """Base helper strips ``namespace`` from custom_tool_call for every provider path."""
+        inp = [
+            {"type": "function_call", "call_id": "a", "name": "f", "namespace": "keep"},
+            {"type": "custom_tool_call", "call_id": "b", "name": "c", "namespace": "drop"},
+        ]
+        out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
+            inp
+        )
+        assert out[0]["namespace"] == "keep"
+        assert "namespace" not in out[1]
+
+        body = {"model": "x", "input": inp}
+        norm = BaseResponsesAPIConfig.normalize_responses_api_request_dict(body)
+        assert norm["input"][0]["namespace"] == "keep"
+        assert "namespace" not in norm["input"][1]
+
+    def test_openai_transform_then_normalize_strips_custom_tool_call_namespace(self):
+        """``transform_responses_api_request`` leaves input as validated; HTTP layer ``normalize_*`` strips."""
+        input_items = [
+            {
+                "type": "function_call",
+                "call_id": "c1",
+                "name": "t",
+                "arguments": "{}",
+                "namespace": "my_tools",
+            },
+            {
+                "type": "custom_tool_call",
+                "call_id": "c2",
+                "name": "agent",
+                "input": "x",
+                "namespace": "None",
+                "status": "completed",
+            },
+        ]
+        body = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"][0].get("namespace") == "my_tools"
+        assert body["input"][1].get("namespace") == "None"
+
+        norm = BaseResponsesAPIConfig.normalize_responses_api_request_dict(body)
+        assert norm["input"][0].get("namespace") == "my_tools"
+        assert norm["input"][1]["type"] == "custom_tool_call"
+        assert "namespace" not in norm["input"][1]
+
 
 class TestAzureResponsesAPIConfig:
     def setup_method(self):
@@ -582,6 +634,50 @@ class TestAzureResponsesAPIConfig:
             result_date
             == "https://litellm8397336933.openai.azure.com/openai/responses?api-version=2025-01-01"
         )
+
+    def test_azure_transform_then_normalize_strips_custom_tool_call_namespace(self):
+        """Same as OpenAI path: ``normalize_responses_api_request_dict`` strips custom_tool_call only."""
+        input_items = [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Hi"}],
+            },
+            {
+                "type": "custom_tool_call",
+                "call_id": "call_1",
+                "input": "do thing",
+                "name": "my_tool",
+                "id": "ctc_1",
+                "namespace": "None",
+                "status": "completed",
+            },
+            {
+                "type": "function_call",
+                "call_id": "call_2",
+                "name": "get_weather",
+                "arguments": "{}",
+                "id": "fc_1",
+                "namespace": "tools",
+                "status": "completed",
+            },
+        ]
+        body = self.config.transform_responses_api_request(
+            model=self.model,
+            input=input_items,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"][1].get("namespace") == "None"
+        assert body["input"][2].get("namespace") == "tools"
+
+        norm = BaseResponsesAPIConfig.normalize_responses_api_request_dict(body)
+        assert norm["input"][1]["type"] == "custom_tool_call"
+        assert "namespace" not in norm["input"][1]
+        assert norm["input"][2]["type"] == "function_call"
+        assert norm["input"][2].get("namespace") == "tools"
+        assert norm["input"][2]["name"] == "get_weather"
 
 
 class TestTransformListInputItemsRequest:

@@ -187,7 +187,8 @@ class DeleteContainerFileResponse(BaseModel):
     """Response object for delete container file request."""
 
     id: str
-    object: Literal["container_file.deleted"]
+    # OpenAI / Azure wire format uses dots; keep underscore variant for compatibility.
+    object: Literal["container.file.deleted", "container_file.deleted"]
     deleted: bool
 
     def __contains__(self, key):

@@ -3,6 +3,7 @@ LiteLLM Search API Types
 
 This module defines types for the unified search API across different providers.
 """
+
 from typing import List, Optional
 
 from typing_extensions import Required, TypedDict

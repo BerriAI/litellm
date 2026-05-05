@@ -399,7 +399,9 @@ class TestMCPServerManagerSigV4:
         server = next(iter(manager.config_mcp_servers.values()))
         assert server.auth_type == MCPAuth.aws_sigv4
         assert server.aws_access_key_id == "AKIAIOSFODNN7EXAMPLE"
-        assert server.aws_secret_access_key == "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        assert (
+            server.aws_secret_access_key == "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        )
         assert server.aws_region_name == "us-east-1"
         assert server.aws_service_name == "bedrock-agentcore"
 
@@ -529,7 +531,9 @@ class TestMCPServerManagerSigV4:
             "aws_session_name": "my-session",
         }
 
-        result = manager._extract_aws_credentials(creds, credentials_are_encrypted=False)
+        result = manager._extract_aws_credentials(
+            creds, credentials_are_encrypted=False
+        )
         assert result["aws_role_name"] == "arn:aws:iam::123456789012:role/TestRole"
         assert result["aws_session_name"] == "my-session"
 
@@ -615,12 +619,15 @@ class TestCredentialMergeOnUpdate:
             credentials={"aws_region_name": "eu-west-1"},
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value=None,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: value,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: value,
+            ),
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
 
@@ -685,12 +692,15 @@ class TestCredentialMergeOnUpdate:
             credentials={"aws_region_name": "us-east-1"},
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value=None,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: value,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: value,
+            ),
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
 
@@ -728,12 +738,15 @@ class TestCredentialMergeOnUpdate:
             credentials={"auth_value": "my-key"},
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value=None,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: f"enc:{value}",
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: f"enc:{value}",
+            ),
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
 
@@ -772,12 +785,15 @@ class TestCredentialMergeOnUpdate:
             credentials={"scopes": ["read", "write"]},
         )
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value=None,
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: value,
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: value,
+            ),
         ):
             await update_mcp_server(mock_prisma, data, "test-user")
 
@@ -803,7 +819,9 @@ class TestSigV4BuildFromTable:
         table_record.server_name = "sigv4_server"
         table_record.alias = None
         table_record.description = None
-        table_record.url = "https://bedrock-agentcore.us-east-1.amazonaws.com/invocations"
+        table_record.url = (
+            "https://bedrock-agentcore.us-east-1.amazonaws.com/invocations"
+        )
         table_record.spec_path = None
         table_record.transport = "http"
         table_record.auth_type = "aws_sigv4"
@@ -838,6 +856,7 @@ class TestSigV4BuildFromTable:
         table_record.tool_name_to_description = None
         table_record.byok_api_key_help_url = None
         table_record.oauth2_flow = None
+        table_record.instructions = None
 
         manager = MCPServerManager()
 
@@ -895,6 +914,7 @@ class TestSigV4BuildFromTable:
         table_record.tool_name_to_description = None
         table_record.byok_api_key_help_url = None
         table_record.oauth2_flow = None
+        table_record.instructions = None
 
         manager = MCPServerManager()
 
@@ -934,7 +954,9 @@ class TestDecryptCredentials:
 
         with patch(
             "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
-            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace("enc:", ""),
+            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace(
+                "enc:", ""
+            ),
         ):
             result = decrypt_credentials(credentials=creds)
 
@@ -956,7 +978,9 @@ class TestDecryptCredentials:
 
         with patch(
             "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
-            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace("enc:", ""),
+            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace(
+                "enc:", ""
+            ),
         ):
             result = decrypt_credentials(credentials=creds)
 
@@ -988,15 +1012,21 @@ class TestRotateCredentials:
         )
         mock_prisma.db.litellm_mcpservertable.update = AsyncMock()
 
-        with patch(
-            "litellm.proxy._experimental.mcp_server.db._get_salt_key",
-            return_value="old-key",
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
-            side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace("enc_old:", ""),
-        ), patch(
-            "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
-            side_effect=lambda value, new_encryption_key: f"enc_new:{value}",
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.db._get_salt_key",
+                return_value="old-key",
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.decrypt_value_helper",
+                side_effect=lambda value, key, exception_type="error", return_original_value=False: value.replace(
+                    "enc_old:", ""
+                ),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.db.encrypt_value_helper",
+                side_effect=lambda value, new_encryption_key: f"enc_new:{value}",
+            ),
         ):
             await rotate_mcp_server_credentials_master_key(
                 mock_prisma, "admin", "new-key"

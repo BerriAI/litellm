@@ -2,6 +2,10 @@
 
 <!-- e.g. "Fixes #000" -->
 
+## Linear ticket
+
+<!-- if you are an internal contributor, add the Linear ticket e.g. "Resolves LIT-1234" to magically link the Linear ticket to the GitHub PR -->
+
 ## Pre-Submission checklist
 
 **Please complete all items before asking a LiteLLM maintainer to review your PR**
@@ -31,6 +35,13 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 
 - [ ] **Merge / cherry-pick CI run**  
        Links:
+
+## Screenshots / Proof of Fix
+
+<!-- Include screenshots, screen recordings, or log output demonstrating that your changes work as expected.
+     For bug fixes: show reproduction before the fix and passing behavior after.
+     For new features: show the feature working end-to-end.
+     For UI changes: include before/after screenshots. -->
 
 ## Type
 

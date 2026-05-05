@@ -63,7 +63,7 @@ class TestHostedVLLMEmbeddingTransformation:
         """Test embedding request with dimensions parameter."""
         input_data = ["hello world"]
         optional_params = {"dimensions": 384}
-        
+
         result = self.config.transform_embedding_request(
             model=self.model,
             input=input_data,
@@ -78,12 +78,12 @@ class TestHostedVLLMEmbeddingTransformation:
     def test_encoding_format_not_included_when_not_provided(self):
         """
         Test that encoding_format is NOT included in the request when not provided.
-        
+
         This is critical because vLLM rejects requests with encoding_format=None or
         encoding_format="" with error: "unknown variant ``, expected float or base64"
         """
         input_data = ["hello world"]
-        
+
         # Test with no encoding_format in optional_params
         result = self.config.transform_embedding_request(
             model=self.model,
@@ -92,9 +92,9 @@ class TestHostedVLLMEmbeddingTransformation:
             headers={},
         )
 
-        assert "encoding_format" not in result, (
-            "encoding_format should not be in request when not provided"
-        )
+        assert (
+            "encoding_format" not in result
+        ), "encoding_format should not be in request when not provided"
 
     def test_encoding_format_not_included_when_none(self):
         """
@@ -102,7 +102,7 @@ class TestHostedVLLMEmbeddingTransformation:
         """
         input_data = ["hello world"]
         optional_params = {"encoding_format": None}
-        
+
         result = self.config.transform_embedding_request(
             model=self.model,
             input=input_data,
@@ -118,7 +118,7 @@ class TestHostedVLLMEmbeddingTransformation:
         """Test that encoding_format is included when set to 'float'."""
         input_data = ["hello world"]
         optional_params = {"encoding_format": "float"}
-        
+
         result = self.config.transform_embedding_request(
             model=self.model,
             input=input_data,
@@ -132,7 +132,7 @@ class TestHostedVLLMEmbeddingTransformation:
         """Test that encoding_format is included when set to 'base64'."""
         input_data = ["hello world"]
         optional_params = {"encoding_format": "base64"}
-        
+
         result = self.config.transform_embedding_request(
             model=self.model,
             input=input_data,
@@ -145,7 +145,7 @@ class TestHostedVLLMEmbeddingTransformation:
     def test_get_supported_openai_params(self):
         """Test that supported OpenAI parameters are correctly listed."""
         supported = self.config.get_supported_openai_params(self.model)
-        
+
         assert "timeout" in supported
         assert "dimensions" in supported
         assert "encoding_format" in supported
@@ -158,7 +158,7 @@ class TestHostedVLLMEmbeddingTransformation:
             "encoding_format": "float",
             "user": "test-user",
         }
-        
+
         result = self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
@@ -176,7 +176,7 @@ class TestHostedVLLMEmbeddingTransformation:
             "dimensions": 512,
             "unsupported_param": "value",
         }
-        
+
         result = self.config.map_openai_params(
             non_default_params=non_default_params,
             optional_params={},
@@ -190,7 +190,7 @@ class TestHostedVLLMEmbeddingTransformation:
     def test_get_complete_url(self):
         """Test URL construction for embeddings endpoint."""
         api_base = "https://test-vllm.example.com/v1"
-        
+
         url = self.config.get_complete_url(
             api_base=api_base,
             api_key="test-key",
@@ -204,7 +204,7 @@ class TestHostedVLLMEmbeddingTransformation:
     def test_get_complete_url_adds_embeddings_suffix(self):
         """Test that /embeddings is added if not present."""
         api_base = "https://test-vllm.example.com"
-        
+
         url = self.config.get_complete_url(
             api_base=api_base,
             api_key="test-key",
@@ -218,7 +218,7 @@ class TestHostedVLLMEmbeddingTransformation:
     def test_validate_environment_with_api_key(self):
         """Test environment validation with API key."""
         headers = {}
-        
+
         result = self.config.validate_environment(
             headers=headers,
             model=self.model,
@@ -283,11 +283,12 @@ class TestHostedVLLMEmbeddingTransformation:
             sent_data = json.loads(call_kwargs["data"])
 
             # Assert that encoding_format is NOT in the sent data
-            assert "encoding_format" not in sent_data, (
-                "encoding_format should not be in request when not provided"
-            )
+            assert (
+                "encoding_format" not in sent_data
+            ), "encoding_format should not be in request when not provided"
             assert sent_data["model"] == "BAAI/bge-small-en-v1.5"
             assert sent_data["input"] == ["Hello world"]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

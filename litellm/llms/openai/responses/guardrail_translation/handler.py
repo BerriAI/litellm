@@ -43,6 +43,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.openai import (
+    AllMessageValues,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
 )
@@ -70,6 +71,24 @@ class OpenAIResponsesHandler(BaseTranslation):
     Methods can be overridden to customize behavior for different message formats.
     """
 
+    def get_structured_messages(self, data: dict) -> Optional[List[AllMessageValues]]:
+        """
+        Convert Responses API request data to OpenAI-spec structured messages.
+
+        Transforms `input` (string or ResponseInputParam) and optional
+        `instructions` into chat completion messages.
+        """
+        input_data = data.get("input")
+        if input_data is None:
+            return None
+        messages = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=input_data,
+                responses_api_request=data,
+            )
+        )
+        return cast(List[AllMessageValues], messages) if messages else None
+
     async def process_input_messages(
         self,
         data: dict,
@@ -86,12 +105,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         if input_data is None:
             return data
 
-        structured_messages = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
-                input=input_data,
-                responses_api_request=data,
-            )
-        )
+        structured_messages = self.get_structured_messages(data)
 
         # Handle simple string input
         if isinstance(input_data, str):

@@ -16,6 +16,7 @@ from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _extract_reasoning_content,
     convert_content_list_to_str,
@@ -264,8 +265,9 @@ class OllamaChatConfig(BaseConfig):
             ):  # avoid message serialization issues - https://github.com/BerriAI/litellm/issues/5319
                 m = m.model_dump(exclude_none=True)
             tool_calls = m.get("tool_calls")
+            new_tools: Optional[List[OllamaToolCall]] = None
             if tool_calls is not None and isinstance(tool_calls, list):
-                new_tools: List[OllamaToolCall] = []
+                new_tools = []
                 for tool in tool_calls:
                     typed_tool = ChatCompletionAssistantToolCall(**tool)  # type: ignore
                     if typed_tool["type"] == "function":
@@ -279,7 +281,6 @@ class OllamaChatConfig(BaseConfig):
                             )
                         )
                         new_tools.append(ollama_tool_call)
-                cast(dict, m)["tool_calls"] = new_tools
             reasoning_content, parsed_content = _extract_reasoning_content(
                 cast(dict, m)
             )
@@ -295,6 +296,11 @@ class OllamaChatConfig(BaseConfig):
                 ollama_message["content"] = content_str
             if images is not None:
                 ollama_message["images"] = images
+            if new_tools is not None:
+                ollama_message["tool_calls"] = new_tools
+            tool_call_id = m.get("tool_call_id")
+            if tool_call_id is not None:
+                ollama_message["tool_call_id"] = cast(str, tool_call_id)
 
             new_messages.append(ollama_message)
 
@@ -349,7 +355,8 @@ class OllamaChatConfig(BaseConfig):
         response_json = raw_response.json()
 
         ## RESPONSE OBJECT
-        model_response.choices[0].finish_reason = "stop"
+        _done_reason = map_finish_reason(response_json.get("done_reason") or "stop")
+        model_response.choices[0].finish_reason = _done_reason
         response_json_message = response_json.get("message")
         if response_json_message is not None:
             if "thinking" in response_json_message:
@@ -535,7 +542,7 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
             )
 
             if chunk["done"] is True:
-                finish_reason = chunk.get("done_reason", "stop")
+                finish_reason = chunk.get("done_reason") or "stop"
                 # Override finish_reason when tool_calls are present
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
                 if tool_calls is not None:

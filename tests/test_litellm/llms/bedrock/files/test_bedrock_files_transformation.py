@@ -1,6 +1,7 @@
 """
 Test bedrock files transformation functionality
 """
+
 import json
 import os
 from typing import Any, Dict, List

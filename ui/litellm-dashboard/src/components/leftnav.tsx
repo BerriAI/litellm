@@ -3,6 +3,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
+  ApartmentOutlined,
   AppstoreOutlined,
   AuditOutlined,
   BankOutlined,
@@ -120,17 +121,44 @@ const menuGroups: MenuGroup[] = [
         roles: rolesWithWriteAccess,
       },
       {
-        key: "agents",
-        page: "agents",
-        label: "Agents",
+        key: "agentic",
+        page: "agentic",
+        label: "Agentic",
         icon: <RobotOutlined />,
-        roles: rolesWithWriteAccess,
+        children: [
+          {
+            key: "agents",
+            page: "agents",
+            label: "Agents",
+            icon: <RobotOutlined />,
+            roles: rolesWithWriteAccess,
+          },
+          {
+            key: "workflows",
+            page: "workflows",
+            label: "Workflow Runs",
+            icon: <ApartmentOutlined />,
+          },
+          {
+            key: "memory",
+            page: "memory",
+            label: "Memory",
+            icon: <BookOutlined />,
+          },
+        ],
       },
       {
         key: "mcp-servers",
         page: "mcp-servers",
         label: "MCP Servers",
         icon: <ToolOutlined />,
+      },
+      {
+        key: "skills",
+        page: "skills",
+        label: "Skills",
+        icon: <ApiOutlined />,
+        roles: all_admin_roles,
       },
       {
         key: "guardrails",
@@ -267,6 +295,7 @@ const menuGroups: MenuGroup[] = [
         label: "AI Hub",
         icon: <AppstoreOutlined />,
       },
+
       {
         key: "learning-resources",
         page: "learning-resources",
@@ -306,13 +335,6 @@ const menuGroups: MenuGroup[] = [
             page: "tag-management",
             label: "Tag Management",
             icon: <TagsOutlined />,
-            roles: all_admin_roles,
-          },
-          {
-            key: "claude-code-plugins",
-            page: "claude-code-plugins",
-            label: "Claude Code Plugins",
-            icon: <ToolOutlined />,
             roles: all_admin_roles,
           },
           {

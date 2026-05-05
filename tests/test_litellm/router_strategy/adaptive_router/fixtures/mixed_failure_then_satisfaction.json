@@ -1,0 +1,31 @@
+[
+  {
+    "user_content": "please read the config file",
+    "assistant_content": "Trying to read it now.",
+    "tool_calls": [
+      {"id": "c1", "name": "read_file", "arguments": {"path": "config.json"}}
+    ],
+    "tool_results": [
+      {"tool_call_id": "c1", "content": "file not found", "is_error": true}
+    ],
+    "response_status": 200
+  },
+  {
+    "user_content": "try config.yaml instead",
+    "assistant_content": "Here are the contents of config.yaml.",
+    "tool_calls": [
+      {"id": "c2", "name": "read_file", "arguments": {"path": "config.yaml"}}
+    ],
+    "tool_results": [
+      {"tool_call_id": "c2", "content": "key: value"}
+    ],
+    "response_status": 200
+  },
+  {
+    "user_content": "perfect, thanks!",
+    "assistant_content": "You're welcome.",
+    "tool_calls": [],
+    "tool_results": [],
+    "response_status": 200
+  }
+]

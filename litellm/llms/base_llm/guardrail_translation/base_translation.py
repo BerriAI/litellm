@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.llms.openai import AllMessageValues
 
 
 class BaseTranslation(ABC):
@@ -100,6 +101,16 @@ class BaseTranslation(ABC):
         Optional to override in subclasses.
         """
         return responses_so_far
+
+    def get_structured_messages(self, data: dict) -> Optional[List["AllMessageValues"]]:
+        """
+        Convert request data to OpenAI-spec structured messages.
+
+        Override in subclasses for format-specific conversion.
+
+        Returns None if no convertible content is found.
+        """
+        return None
 
     def extract_request_tool_names(self, data: dict) -> List[str]:
         """
