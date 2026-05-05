@@ -46,6 +46,7 @@ class RealTimeStreaming:
         model: str = "",
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
+        backend_uses_beta_protocol: Optional[bool] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -58,6 +59,11 @@ class RealTimeStreaming:
 
         # Detect whether the client is explicitly opting into the beta protocol.
         self._client_wants_beta = self._detect_beta_header(websocket)
+        self._backend_uses_beta_protocol = (
+            self._client_wants_beta
+            if backend_uses_beta_protocol is None
+            else backend_uses_beta_protocol
+        )
 
         _logged_real_time_event_types = litellm.logged_real_time_event_types
 
@@ -261,7 +267,7 @@ class RealTimeStreaming:
 
     def _make_disable_auto_response_message(self) -> str:
         """Return a session.update that disables VAD auto-response."""
-        if self._client_wants_beta:
+        if self._backend_uses_beta_protocol:
             session: Dict[str, Any] = {
                 "turn_detection": {"create_response": False},
             }
@@ -821,7 +827,10 @@ class RealTimeStreaming:
                     # GA compatibility: remap beta-style session fields only when
                     # the upstream is in GA mode. Beta upstreams expect the flat
                     # session shape unchanged.
-                    if msg_type == "session.update" and not self._client_wants_beta:
+                    if (
+                        msg_type == "session.update"
+                        and not self._backend_uses_beta_protocol
+                    ):
                         session = msg_obj.get("session", {})
                         if isinstance(session, dict):
                             session = self._remap_beta_session_to_ga(session)

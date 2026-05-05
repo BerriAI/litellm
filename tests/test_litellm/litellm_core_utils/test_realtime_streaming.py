@@ -189,6 +189,45 @@ async def test_client_ack_messages_keeps_beta_session_shape_for_beta_clients():
     assert "audio" not in session
 
 
+@pytest.mark.asyncio
+async def test_client_ack_messages_keeps_beta_session_shape_for_beta_backend():
+    client_ws = MagicMock()
+    session_update = json.dumps(
+        {
+            "type": "session.update",
+            "session": {
+                "modalities": ["audio", "text"],
+                "voice": "alloy",
+                "turn_detection": {"create_response": False},
+            },
+        }
+    )
+    client_ws.receive_text = AsyncMock(
+        side_effect=[
+            session_update,
+            Exception("connection closed"),
+        ]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+    logging_obj.pre_call = MagicMock()
+    streaming = RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, backend_uses_beta_protocol=True
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_to_backend = json.loads(backend_ws.send.call_args_list[0].args[0])
+    session = sent_to_backend["session"]
+    assert session["modalities"] == ["audio", "text"]
+    assert session["voice"] == "alloy"
+    assert session["turn_detection"] == {"create_response": False}
+    assert "type" not in session
+    assert "output_modalities" not in session
+    assert "audio" not in session
+
+
 def test_translate_event_to_beta_renames_delta_types():
     ev = RealTimeStreaming._translate_event_to_beta(
         {"type": "response.output_audio.delta", "delta": "abc", "event_id": "e1"}
