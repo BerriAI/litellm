@@ -53,7 +53,20 @@ class CustomBatchLogger(CustomLogger):
                 verbose_logger.debug(
                     "CustomLogger: Flushing batch of %s events", len(self.log_queue)
                 )
-                await self.async_send_batch()
+                try:
+                    await self.async_send_batch()
+                except Exception:
+                    # If the underlying batch send raised, do NOT drop the
+                    # in-flight events. They will be retried on the next flush.
+                    # Most existing async_send_batch implementations swallow
+                    # their own errors, so this only affects loggers that opt
+                    # in to surfacing failures (e.g. Rubrik).
+                    verbose_logger.exception(
+                        "CustomLogger: async_send_batch raised; preserving "
+                        "%s events in queue for retry",
+                        log_queue_length,
+                    )
+                    return
                 if self.preserve_events_added_during_flush:
                     del self.log_queue[:log_queue_length]
                 else:
