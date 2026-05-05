@@ -1,5 +1,26 @@
 [
   {
+    "id": "tickerr",
+    "displayName": "Tickerr",
+    "logo": "tickerr.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "TICKERR_CLIENT_TIER": {
+        "type": "text",
+        "ui_name": "Client Tier",
+        "description": "Optional. Your LLM plan tier: free, pro, team, enterprise, or api_pay_as_you_go. Used to correlate signals by tier.",
+        "required": false
+      },
+      "TICKERR_REGION": {
+        "type": "text",
+        "ui_name": "Region",
+        "description": "Optional. Your deployment region, e.g. us-east-1. Used for regional signal breakdown.",
+        "required": false
+      }
+    },
+    "description": "Outage radar for AI agents. Reports LLM API failures anonymously to Tickerr and returns live signal from other agents — how many are hitting the same issue and which model to fall back to. No API key required."
+  },
+  {
     "id": "arize",
     "displayName": "Arize",
     "logo": "arize.png",
