@@ -174,7 +174,8 @@ def _accumulate_tool_calls(chunks: List[Any]) -> List[dict]:
             if idx is None:
                 continue
             slot = by_index.setdefault(
-                idx, {"id": None, "type": None, "function": {"name": None, "arguments": ""}}
+                idx,
+                {"id": None, "type": None, "function": {"name": None, "arguments": ""}},
             )
 
             def _g(obj: Any, key: str) -> Any:
@@ -855,9 +856,8 @@ class UnifiedLLMGuardrails(CustomLogger):
 
             if action == GENERIC_GUARDRAIL_ACTION_BLOCKED:
                 error_message = (
-                    (decision.blocked_reason if decision is not None else None)
-                    or "Content violates policy"
-                )
+                    decision.blocked_reason if decision is not None else None
+                ) or "Content violates policy"
                 verbose_proxy_logger.warning(
                     "UnifiedLLMGuardrails action mode: BLOCKED mid-stream by %s: %s",
                     guardrail_name,
@@ -910,9 +910,8 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         if action == GENERIC_GUARDRAIL_ACTION_BLOCKED:
             error_message = (
-                (decision.blocked_reason if decision is not None else None)
-                or "Content violates policy"
-            )
+                decision.blocked_reason if decision is not None else None
+            ) or "Content violates policy"
             verbose_proxy_logger.warning(
                 "UnifiedLLMGuardrails action mode: BLOCKED at EOS by %s: %s",
                 guardrail_name,
@@ -985,10 +984,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         if decision is None:
             return accumulated_text, GENERIC_GUARDRAIL_ACTION_NONE
         action = decision.action or GENERIC_GUARDRAIL_ACTION_NONE
-        if (
-            action == GENERIC_GUARDRAIL_ACTION_GUARDRAIL_INTERVENED
-            and decision.texts
-        ):
+        if action == GENERIC_GUARDRAIL_ACTION_GUARDRAIL_INTERVENED and decision.texts:
             return decision.texts[0], action
         if action not in (
             GENERIC_GUARDRAIL_ACTION_NONE,
