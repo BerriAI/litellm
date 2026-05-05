@@ -277,6 +277,7 @@ class VertexAIPartnerModels(VertexBase):
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
+        system=None,
     ):
         """
         Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
@@ -318,6 +319,8 @@ class VertexAIPartnerModels(VertexBase):
                 "model": model,
                 "messages": messages,
             }
+            if system is not None:
+                request_data["system"] = system
 
             # Prepare litellm_params with credentials
             _litellm_params = litellm_params.copy()
