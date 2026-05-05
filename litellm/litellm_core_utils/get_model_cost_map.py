@@ -11,6 +11,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import json
 import os
 from importlib.resources import files
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import httpx
@@ -35,13 +36,18 @@ class GetModelCostMap:
 
     @staticmethod
     def load_local_model_cost_map() -> dict:
-        """Load the local backup model cost map bundled with the package."""
-        content = json.loads(
+        """Load the local model cost map: repo-root JSON in a source checkout, bundled package copy in an installed wheel."""
+        repo_root_json = (
+            Path(__file__).resolve().parents[2] / "model_prices_and_context_window.json"
+        )
+        if repo_root_json.is_file():
+            return json.loads(repo_root_json.read_text(encoding="utf-8"))
+
+        return json.loads(
             files("litellm")
             .joinpath("model_prices_and_context_window_backup.json")
             .read_text(encoding="utf-8")
         )
-        return content
 
     @classmethod
     def _get_backup_model_count(cls) -> int:

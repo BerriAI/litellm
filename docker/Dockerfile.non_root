@@ -52,6 +52,9 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
 # Copy full source tree
 COPY . .
 
+# Generate the model-cost backup artefact inside the package before the wheel build (mirrors publish_to_pypi.yml).
+RUN cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+
 # Set non-root flag for build time consistency
 ENV LITELLM_NON_ROOT=true
 

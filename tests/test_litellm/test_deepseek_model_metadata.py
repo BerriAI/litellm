@@ -18,6 +18,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.utils import (
     _supports_factory,
     supports_response_schema,
@@ -30,13 +31,8 @@ from litellm.utils import (
 
 
 def _load_backup_json() -> dict:
-    """Load the backup JSON directly from disk."""
-    backup_path = os.path.join(
-        os.path.dirname(litellm.__file__),
-        "model_prices_and_context_window_backup.json",
-    )
-    with open(backup_path, encoding="utf-8") as f:
-        return json.load(f)
+    """Load the local model-cost JSON via the public helper (resolves to repo root in dev, bundled copy in wheel)."""
+    return GetModelCostMap.load_local_model_cost_map()
 
 
 class TestDeepSeekModelCostEntries:
