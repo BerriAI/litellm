@@ -170,6 +170,7 @@ from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.passthrough.stream_flush_buffer import StreamBuffer
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -1954,12 +1955,13 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _flush_passthrough_collected_chunks_helper(
         self,
-        raw_bytes: List[bytes],
+        stream_flush_buffer: "StreamBuffer",
         provider_config: "BasePassthroughConfig",
     ) -> Optional["CostResponseTypes"]:
-        all_chunks = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
+        # Consume-once iterator (e.g. Bedrock EventStreamBuffer); flush path invokes once per buffer.
+        chunk_iter = stream_flush_buffer.iter_chunks_for_logging(provider_config)
         complete_streaming_response = provider_config.handle_logging_collected_chunks(
-            all_chunks=all_chunks,
+            chunks=chunk_iter,
             litellm_logging_obj=self,
             model=self.model,
             custom_llm_provider=self.model_call_details.get("custom_llm_provider", ""),
@@ -1969,20 +1971,20 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def flush_passthrough_collected_chunks(
         self,
-        raw_bytes: List[bytes],
+        stream_flush_buffer: "StreamBuffer",
         provider_config: "BasePassthroughConfig",
     ):
         """
         Flush collected chunks from the logging object
         This is used to log the collected chunks once streaming is done on passthrough endpoints
 
-        1. Decode the raw bytes to string lines
+        1. Decode buffered stream data to string payloads (provider-specific)
         2. Get the complete streaming response from the provider config
         3. Log the complete streaming response (trigger success handler)
         This is used for passthrough endpoints
         """
         complete_streaming_response = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
+            stream_flush_buffer=stream_flush_buffer,
             provider_config=provider_config,
         )
 
@@ -1992,11 +1994,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
     async def async_flush_passthrough_collected_chunks(
         self,
-        raw_bytes: List[bytes],
+        stream_flush_buffer: "StreamBuffer",
         provider_config: "BasePassthroughConfig",
     ):
         complete_streaming_response = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
+            stream_flush_buffer=stream_flush_buffer,
             provider_config=provider_config,
         )
 

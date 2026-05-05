@@ -1,5 +1,5 @@
 import json
-from typing import TYPE_CHECKING, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Iterable, List, Optional, Tuple, cast
 
 from httpx import Response
 
@@ -10,17 +10,22 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockEventStreamDecoderBase, BedrockModelInfo
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.utils import CostResponseTypes
-
-
-if TYPE_CHECKING:
     from httpx import URL
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.passthrough.stream_flush_buffer import StreamBuffer
+    from litellm.types.utils import CostResponseTypes
 
 
 class BedrockPassthroughConfig(
     BaseAWSLLM, BedrockModelInfo, BedrockEventStreamDecoderBase, BasePassthroughConfig
 ):
+    def build_stream_flush_buffer(self) -> "StreamBuffer":
+        """Bedrock streaming uses AWS binary event-stream framing on the wire."""
+        from litellm.passthrough.stream_flush_buffer import BedrockEventStreamBuffer
+
+        return BedrockEventStreamBuffer()
+
     def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
         return "stream" in endpoint
 
@@ -177,14 +182,14 @@ class BedrockPassthroughConfig(
 
     def handle_logging_collected_chunks(
         self,
-        all_chunks: List[str],
+        chunks: Iterable[str],
         litellm_logging_obj: "LiteLLMLoggingObj",
         model: str,
         custom_llm_provider: str,
         endpoint: str,
     ) -> Optional["CostResponseTypes"]:
         """
-        1. Convert all_chunks to a ModelResponseStream
+        1. Convert streamed chunk payloads to a ModelResponseStream
         2. combine model_response_stream to model_response
         3. Return the model_response
         """
@@ -223,7 +228,7 @@ class BedrockPassthroughConfig(
         else:
             return None
 
-        for chunk in all_chunks:
+        for chunk in chunks:
             message = json.loads(chunk)
             translated_chunk = obj._chunk_parser(chunk_data=message)
 

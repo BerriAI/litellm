@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import TYPE_CHECKING, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Iterable, List, Optional, Tuple, Union
 
 from ..base_utils import BaseLLMModelInfo
 
@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from httpx import URL, Headers, Response
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.passthrough.stream_flush_buffer import StreamBuffer
     from litellm.types.utils import CostResponseTypes
 
     from ..chat.transformation import BaseLLMException
@@ -112,7 +113,7 @@ class BasePassthroughConfig(BaseLLMModelInfo):
 
     def handle_logging_collected_chunks(
         self,
-        all_chunks: List[str],
+        chunks: Iterable[str],
         litellm_logging_obj: "LiteLLMLoggingObj",
         model: str,
         custom_llm_provider: str,
@@ -137,3 +138,9 @@ class BasePassthroughConfig(BaseLLMModelInfo):
         lines = [line.strip() for line in combined_str.split("\n") if line.strip()]
 
         return lines
+
+    def build_stream_flush_buffer(self) -> "StreamBuffer":
+        """Collect streaming response bytes until passthrough flush (default: raw chunks)."""
+        from litellm.passthrough.stream_flush_buffer import RawBytesStreamBuffer
+
+        return RawBytesStreamBuffer()
