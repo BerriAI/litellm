@@ -53,12 +53,16 @@ def clear_token() -> None:
         os.remove(token_file)
 
 
-def get_stored_api_key() -> Optional[str]:
-    """Get the stored API key from token file"""
-    # Use the SDK-level utility
+def get_stored_api_key(expected_base_url: Optional[str] = None) -> Optional[str]:
+    """Get the stored API key from token file.
+
+    If expected_base_url is provided, the key is only returned when it was
+    originally issued for that URL. This prevents credential leakage when the
+    CLI is pointed at a different (possibly malicious) server.
+    """
     from litellm.litellm_core_utils.cli_token_utils import get_litellm_gateway_api_key
 
-    return get_litellm_gateway_api_key()
+    return get_litellm_gateway_api_key(expected_base_url=expected_base_url)
 
 
 # Team selection utilities
@@ -572,9 +576,11 @@ def login(ctx: click.Context):
             api_key = auth_result["api_key"]
             user_id = auth_result["user_id"]
 
-            # Save token data (simplified for CLI - we just need the key)
+            # Save token data. base_url is stored so we can verify origin
+            # before reusing the key on a subsequent CLI invocation.
             save_token(
                 {
+                    "base_url": base_url.rstrip("/"),
                     "key": api_key,
                     "user_id": user_id or "cli-user",
                     "user_email": "unknown",

@@ -158,7 +158,7 @@ def test_aaparallel_function_call(model):
 @pytest.mark.parametrize(
     "model",
     [
-        "anthropic/claude-4-sonnet-20250514",
+        "anthropic/claude-haiku-4-5-20251001",
         "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     ],
 )

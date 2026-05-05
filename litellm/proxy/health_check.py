@@ -29,8 +29,17 @@ ILLEGAL_DISPLAY_PARAMS = [
     "exception",  # internal; not JSON-serializable, never for display
     "litellm_metadata",  # internal tracking metadata with auth objects; not for display
 ]
+# Provider routing fields. Allowed for proxy admins so they can see which
+# region/version a deployment is checking; gated at the endpoint layer for
+# non-admin callers (see _strip_admin_only_fields_from_health_result).
+ADMIN_ONLY_HEALTH_DISPLAY_PARAMS = ("api_base", "api_version")
 
 MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
+
+# Health-check modes that forward `reasoning_effort` to the provider (chat-style calls).
+_HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT = frozenset(
+    (None, "chat", "completion")
+)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -370,6 +379,12 @@ def _update_litellm_params_for_health_check(
     _resolved_max_tokens = _resolve_health_check_max_tokens(model_info, litellm_params)
     if _resolved_max_tokens is not None:
         litellm_params["max_tokens"] = _resolved_max_tokens
+
+    # Per-model reasoning effort for health checks only (e.g. reasoning_effort=none).
+    if model_info.get("mode", None) in _HEALTH_CHECK_MODES_SUPPORTING_REASONING_EFFORT:
+        _hc_reasoning_effort = model_info.get("health_check_reasoning_effort", None)
+        if _hc_reasoning_effort is not None:
+            litellm_params["reasoning_effort"] = _hc_reasoning_effort
 
     _health_check_model = model_info.get("health_check_model", None)
     if _health_check_model is not None:
