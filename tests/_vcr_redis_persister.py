@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from typing import Any, Optional
 
 from vcr.persisters.filesystem import CassetteNotFoundError
@@ -17,6 +18,74 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _log = logging.getLogger(__name__)
 _passed_by_cassette_key: dict[str, bool] = {}
+
+
+class VCRCassetteCacheWarning(UserWarning):
+    """Emitted when the cassette Redis cache fails to load or save.
+
+    Surfaced in pytest's session-end warnings summary so failures are
+    visible in CI logs even when the underlying tests pass.
+    """
+
+
+# Per-process counters; surfaced via :func:`cassette_cache_health` so
+# conftests can emit a session-end banner when failures occurred.
+_cache_health = {
+    "save_failures": 0,
+    "save_failure_last_error": "",
+    "load_failures": 0,
+    "load_failure_last_error": "",
+}
+
+
+def _record_cache_failure(kind: str, exc: BaseException) -> None:
+    err = f"{type(exc).__name__}: {exc}"
+    if kind == "save":
+        _cache_health["save_failures"] = int(_cache_health["save_failures"]) + 1
+        _cache_health["save_failure_last_error"] = err
+    elif kind == "load":
+        _cache_health["load_failures"] = int(_cache_health["load_failures"]) + 1
+        _cache_health["load_failure_last_error"] = err
+
+
+def cassette_cache_health() -> dict:
+    return dict(_cache_health)
+
+
+def reset_cassette_cache_health() -> None:
+    _cache_health["save_failures"] = 0
+    _cache_health["save_failure_last_error"] = ""
+    _cache_health["load_failures"] = 0
+    _cache_health["load_failure_last_error"] = ""
+
+
+def cassette_cache_capacity_snapshot(client: Optional[Any] = None) -> Optional[dict]:
+    """Probe Redis ``INFO memory`` and return used/max bytes and percent.
+
+    Returns ``None`` if Redis is unreachable, the server didn't report
+    ``maxmemory``, or ``maxmemory`` is 0 (uncapped). Best-effort: any
+    exception turns into ``None`` so this never breaks a test session.
+    """
+    try:
+        if client is None:
+            client = _build_default_client()
+        info = client.info(section="memory")
+    except Exception:  # pragma: no cover - best-effort probe
+        return None
+    used = info.get("used_memory")
+    maxmem = info.get("maxmemory")
+    try:
+        used = int(used) if used is not None else None
+        maxmem = int(maxmem) if maxmem is not None else None
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
+    if not used or not maxmem or maxmem <= 0:
+        return None
+    return {
+        "used_memory_bytes": used,
+        "maxmemory_bytes": maxmem,
+        "used_pct": (used / maxmem) * 100.0,
+    }
 
 
 def mark_test_outcome_for_cassette(cassette_path: str, passed: bool) -> None:
@@ -70,24 +139,23 @@ def make_redis_persister(
     redis_client = client if client is not None else _build_default_client()
 
     try:
-        from redis.exceptions import ConnectionError as RedisConnectionError
-        from redis.exceptions import TimeoutError as RedisTimeoutError
-
-        _transient_errors: tuple = (RedisConnectionError, RedisTimeoutError)
+        from redis.exceptions import RedisError
     except ImportError:  # pragma: no cover - redis is a hard test dep
-        _transient_errors = ()
+        RedisError = Exception  # type: ignore[assignment,misc]
 
     class _RedisPersister:
         @staticmethod
         def load_cassette(cassette_path, serializer):
             try:
                 data = redis_client.get(redis_key_for(cassette_path))
-            except _transient_errors as exc:
-                _log.warning(
-                    "VCR redis load failed for %s; treating as cache miss: %s",
-                    cassette_path,
-                    exc,
+            except RedisError as exc:
+                _record_cache_failure("load", exc)
+                msg = (
+                    f"VCR redis load failed for {cassette_path}; treating "
+                    f"as cache miss: {type(exc).__name__}: {exc}"
                 )
+                _log.warning(msg)
+                warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
                 raise CassetteNotFoundError() from exc
             if data is None:
                 raise CassetteNotFoundError()
@@ -123,12 +191,21 @@ def make_redis_persister(
             payload = data.encode("utf-8") if isinstance(data, str) else data
             try:
                 redis_client.set(key, payload, ex=ttl_seconds)
-            except _transient_errors as exc:
-                _log.warning(
-                    "VCR redis save failed for %s; cassette not persisted: %s",
-                    cassette_path,
-                    exc,
+            except RedisError as exc:
+                # Cassette persistence is strictly best-effort: connection
+                # blips, timeouts, OOM at the maxmemory cap, READONLY
+                # replicas, etc. should all degrade gracefully to "test
+                # passed but cassette not cached" rather than failing the
+                # test on teardown. We still want a loud signal so the
+                # failure shows up in pytest's warnings summary at the
+                # end of the session and feeds the session-end banner.
+                _record_cache_failure("save", exc)
+                msg = (
+                    f"VCR redis save failed for {cassette_path}; cassette "
+                    f"not persisted: {type(exc).__name__}: {exc}"
                 )
+                _log.warning(msg)
+                warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
 
     return _RedisPersister
 
