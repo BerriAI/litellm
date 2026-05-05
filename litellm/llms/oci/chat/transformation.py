@@ -2,6 +2,7 @@ import base64
 import datetime
 import hashlib
 import json
+import uuid
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -1001,6 +1002,16 @@ class OCIChatConfig(BaseConfig):
         raw_response: httpx.Response,
     ) -> ModelResponse:
         """Handle generic OCI response format."""
+        # OCI GENERIC apiFormat (Gemini, Meta, xAI) may not return 'id' on tool calls
+        chat_response = json.get("chatResponse", {})
+        for choice in chat_response.get("choices", []):
+            message = choice.get("message", {})
+            for tool_call in message.get("toolCalls") or []:
+                if "id" not in tool_call:
+                    tool_call["id"] = f"call_{uuid.uuid4().hex[:24]}"
+                if "arguments" not in tool_call:
+                    tool_call["arguments"] = ""
+
         try:
             completion_response = OCICompletionResponse(**json)
         except TypeError as e:

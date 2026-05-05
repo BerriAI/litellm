@@ -591,6 +591,85 @@ class TestOCIChatConfig:
         assert usage.completion_tokens == 20  # type: ignore
         assert usage.total_tokens == 30  # type: ignore
 
+    def test_transform_response_with_tool_calls_missing_id(self):
+        """
+        Tests that a response with tool calls missing the 'id' field is handled correctly.
+        OCI GENERIC apiFormat (Gemini, Meta, xAI) may not return 'id' on tool calls.
+        The fix should generate a synthetic id to avoid Pydantic validation errors.
+        """
+        config = OCIChatConfig()
+        created_time = (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        mock_oci_response = {
+            "modelId": TEST_MODEL_NAME,
+            "modelVersion": "1.0",
+            "chatResponse": {
+                "apiFormat": "GENERIC",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "ASSISTANT",
+                            "content": None,
+                            "toolCalls": [
+                                {
+                                    # Note: 'id' field is intentionally missing
+                                    "type": "FUNCTION",
+                                    "name": "get_weather",
+                                    "arguments": '{"location": "São Paulo, BR"}',
+                                }
+                            ],
+                        },
+                        "finishReason": "stop",
+                    }
+                ],
+                "timeCreated": created_time,
+                "usage": {
+                    "promptTokens": 10,
+                    "completionTokens": 20,
+                    "totalTokens": 30,
+                },
+            },
+        }
+        response = httpx.Response(status_code=200, json=mock_oci_response)
+        model_response = ModelResponse(
+            choices=[litellm.Choices(index=0, message=litellm.Message())]
+        )
+
+        result = config.transform_response(
+            model=TEST_MODEL_NAME,
+            raw_response=response,
+            model_response=model_response,
+            logging_obj={},  # type: ignore
+            request_data={},
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            encoding={},
+        )
+
+        # Should not raise an exception
+        assert isinstance(result, ModelResponse)
+        assert len(result.choices) == 1
+
+        choice = result.choices[0]
+        message = choice.message
+        assert hasattr(message, "tool_calls")
+        assert isinstance(message.tool_calls, list)
+        assert len(message.tool_calls) == 1
+
+        # The tool_call should have a generated id (starting with "call_")
+        tool_call = message.tool_calls[0]
+        assert isinstance(tool_call, litellm.utils.ChatCompletionMessageToolCall)
+        assert tool_call.id is not None
+        assert tool_call.id.startswith("call_")
+        assert tool_call.type == "function"
+        assert tool_call.function["name"] == "get_weather"
+        assert tool_call.function["arguments"] == '{"location": "São Paulo, BR"}'
+
 
 class TestOCISignerSupport:
     """Tests for OCI SDK Signer integration."""
