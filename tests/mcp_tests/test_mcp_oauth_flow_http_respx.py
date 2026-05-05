@@ -295,7 +295,8 @@ async def test_token_exchange_applies_token_validation_rules(
 #      not be able to invoke the OAuth broker for globally configured servers,
 #      as doing so would use the proxy's stored client_secret)
 #   3. Temp-session server + no API key → passes access check (browser OAuth
-#      flow; temp sessions are admin-created and scoped to this flow)
+#      flow; temp sessions are admin-created and scoped to this flow).
+#      Covered by test_management_broker_authorize_unauthenticated_temp_session_passes.
 # ---------------------------------------------------------------------------
 
 
@@ -415,3 +416,68 @@ async def test_management_broker_rejects_unauthenticated_access_to_global_regist
         )
     finally:
         global_mcp_server_manager.registry.pop("global-oauth-srv", None)
+
+
+@pytest.mark.asyncio
+async def test_management_broker_authorize_unauthenticated_temp_session_passes(
+    management_asgi_app: FastAPI,
+) -> None:
+    """
+    Positive path: a temp-cached MCP OAuth server must allow GET /authorize with
+    no API key (browser redirect), yielding a redirect to the upstream IdP — not
+    401/403 from the broker gate.
+    """
+    from litellm.proxy.management_endpoints import mcp_management_endpoints as mcp_mod
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+        _cache_temporary_mcp_server,
+    )
+
+    server_id = "temp-broker-oauth-success-001"
+    server = MCPServer(
+        server_id=server_id,
+        name="temp_oauth",
+        server_name="temp_oauth",
+        alias="temp_oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="upstream-client",
+        client_secret="upstream-secret",
+        authorization_url="https://idp.example/oauth/authorize",
+        token_url="https://idp.example/oauth/token",
+    )
+    _cache_temporary_mcp_server(server, ttl_seconds=300)
+    try:
+        transport = ASGITransport(app=management_asgi_app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://test",
+            follow_redirects=False,
+        ) as client:
+            r = await client.get(
+                f"/v1/mcp/server/oauth/{server_id}/authorize",
+                params={
+                    "redirect_uri": "http://127.0.0.1:8080/callback",
+                    "state": "browser-oauth-state",
+                    "response_type": "code",
+                    "code_challenge": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+                    "code_challenge_method": "S256",
+                    "client_id": "upstream-client",
+                },
+            )
+        assert r.status_code != 401, (
+            "Unauthenticated temp-session authorize must not hit master-key 401. "
+            f"body={r.text}"
+        )
+        assert r.status_code != 403, (
+            "Unauthenticated temp-session authorize must not be blocked as global. "
+            f"body={r.text}"
+        )
+        assert r.status_code in (
+            302,
+            303,
+            307,
+        ), f"expected redirect to upstream IdP, got {r.status_code}: {r.text}"
+        location = r.headers.get("location") or ""
+        assert "idp.example" in location
+    finally:
+        mcp_mod._temporary_mcp_servers.pop(server_id, None)

@@ -1448,6 +1448,29 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    async def _try_resolve_mcp_oauth_broker_user(
+        request: Request,
+    ) -> Optional[UserAPIKeyAuth]:
+        """
+        Optional proxy credentials for ``/authorize`` and ``/token``.
+
+        When absent, unauthenticated access is still allowed for **temp-cache**
+        servers only (browser OAuth). When present, global-registry access
+        follows admin / allowlist rules via ``_get_cached_temporary_mcp_server_or_404``.
+        """
+        authorization = (
+            request.headers.get("authorization")
+            or request.headers.get("Authorization")
+            or ""
+        ).strip()
+        if not authorization:
+            return None
+        from litellm.proxy.auth.user_api_key_auth import (
+            user_api_key_auth_from_request_headers,
+        )
+
+        return await user_api_key_auth_from_request_headers(request)
+
     async def _get_cached_temporary_mcp_server_or_404(
         server_id: str,
         user_api_key_dict: Optional[UserAPIKeyAuth] = None,
@@ -1535,8 +1558,9 @@ if MCP_AVAILABLE:
         response_type: Optional[str] = None,
         scope: Optional[str] = None,
     ):
+        user_api_key_dict = await _try_resolve_mcp_oauth_broker_user(request)
         mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, request=request
+            server_id, user_api_key_dict=user_api_key_dict, request=request
         )
         # Use the server's stored client_id when the caller doesn't supply one
         resolved_client_id = mcp_server.client_id or client_id or ""
@@ -1579,8 +1603,9 @@ if MCP_AVAILABLE:
         refresh_token: Optional[str] = Form(None),
         scope: Optional[str] = Form(None),
     ):
+        user_api_key_dict = await _try_resolve_mcp_oauth_broker_user(request)
         mcp_server = await _get_cached_temporary_mcp_server_or_404(
-            server_id, request=request
+            server_id, user_api_key_dict=user_api_key_dict, request=request
         )
         resolved_client_id = mcp_server.client_id or client_id or ""
         if not resolved_client_id:
