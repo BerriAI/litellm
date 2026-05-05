@@ -298,16 +298,8 @@ class BaseAWSLLM:
             )
             return credentials
         elif self._is_auth_with_aws_role(aws_role_name):
-            # Peek only for ambient-env credentials cached under ``args`` (already-running-as-role
-            # path uses ``_auth_with_env_vars``). AssumeRole results are never cached — see
-            # ``_get_or_set_cached_credentials`` docstring.
-            role_branch_cache_key = self.get_cache_key(args)
-            _cached_role_branch = self.iam_cache.get_cache(role_branch_cache_key)
-            if _cached_role_branch:
-                return _cached_role_branch
-
-            # Check if we're already running as the target role and can skip assumption
-            # This handles IRSA (EKS), ECS task roles, and EC2 instance profiles
+            # Same role (IRSA/ECS/EC2): ambient creds via _get_or_set_cached_credentials like the
+            # default env branch; never pre-read cache (must run _is_already_running_as_role first).
             if self._is_already_running_as_role(
                 cast(str, aws_role_name), ssl_verify=ssl_verify
             ):

@@ -1816,7 +1816,7 @@ def test_get_credentials_ecs_same_role_skips_assume_role():
         base_aws_llm,
         "_is_already_running_as_role",
         return_value=True,
-    ):
+    ) as mock_already_running:
         with patch.object(
             base_aws_llm,
             "_auth_with_env_vars",
@@ -1830,11 +1830,69 @@ def test_get_credentials_ecs_same_role_skips_assume_role():
                     aws_role_name="arn:aws:iam::123456789012:role/MyEcsTaskRole",
                     aws_region_name="us-east-1",
                 )
+                base_aws_llm.get_credentials(
+                    aws_role_name="arn:aws:iam::123456789012:role/MyEcsTaskRole",
+                    aws_region_name="us-east-1",
+                )
 
-                # Should use env vars, NOT role assumption
+                # Each get_credentials must check identity first; second call still checks before
+                # taking the iam_cache hit (no pre-peek that bypasses _is_already_running_as_role).
+                assert mock_already_running.call_count == 2
+                # Cached env resolution: second call hits iam_cache, not _auth_with_env_vars again.
                 mock_env_auth.assert_called_once()
                 mock_role_auth.assert_not_called()
                 assert credentials.access_key == "ecs-access-key"
+
+
+def test_get_credentials_role_second_call_not_same_role_uses_assume_not_env_cache():
+    """
+    First request: already target role -> env path fills iam_cache.
+    Second request (e.g. identity changed): not same role -> AssumeRole path; must not reuse
+    cached env resolution from the first call.
+    """
+    base_aws_llm = BaseAWSLLM()
+
+    env_creds = MagicMock()
+    env_creds.access_key = "ambient-key"
+    env_creds.secret_key = "ambient-secret"
+    env_creds.token = "ambient-token"
+
+    assumed_creds = MagicMock()
+    assumed_creds.access_key = "assumed-key"
+    assumed_creds.secret_key = "assumed-secret"
+    assumed_creds.token = "assumed-token"
+
+    role_arn = "arn:aws:iam::123456789012:role/TargetRole"
+
+    with patch.object(
+        base_aws_llm,
+        "_is_already_running_as_role",
+        side_effect=[True, False],
+    ) as mock_already:
+        with patch.object(
+            base_aws_llm,
+            "_auth_with_env_vars",
+            return_value=(env_creds, None),
+        ) as mock_env_auth:
+            with patch.object(
+                base_aws_llm,
+                "_auth_with_aws_role",
+                return_value=(assumed_creds, 3600),
+            ) as mock_role_auth:
+                first = base_aws_llm.get_credentials(
+                    aws_role_name=role_arn,
+                    aws_region_name="us-east-1",
+                )
+                second = base_aws_llm.get_credentials(
+                    aws_role_name=role_arn,
+                    aws_region_name="us-east-1",
+                )
+
+                assert mock_already.call_count == 2
+                mock_env_auth.assert_called_once()
+                mock_role_auth.assert_called_once()
+                assert first.access_key == "ambient-key"
+                assert second.access_key == "assumed-key"
 
 
 def test_parse_arn_account_and_role_name():
