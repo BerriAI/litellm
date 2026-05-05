@@ -367,6 +367,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     # -- Batch logging ---------------------------------------------------------
 
     async def _log_batch_to_rubrik(self, data):
+        # NOTE: this method intentionally re-raises on failure so the parent
+        # CustomBatchLogger.flush_queue keeps the unsent events in the queue
+        # for the next flush attempt instead of silently dropping them.
         try:
             response = await self.async_httpx_client.post(
                 url=self.logging_endpoint,
@@ -378,8 +381,10 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             verbose_logger.exception(
                 f"Rubrik HTTP Error: {e.response.status_code} - {e.response.text}"
             )
+            raise
         except Exception:
             verbose_logger.exception("Rubrik Layer Error")
+            raise
 
     async def async_send_batch(self):
         """Handles sending batches of responses to Rubrik."""
