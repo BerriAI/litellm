@@ -1624,6 +1624,97 @@ async def test_stateful_mcp_session_serializes_concurrent_requests():
 
 
 @pytest.mark.asyncio
+async def test_stateful_mcp_get_stream_does_not_block_post():
+    """
+    A long-lived GET (server-to-client SSE stream) on a stateful session
+    must NOT hold the per-session lock — otherwise subsequent POSTs on the
+    same mcp-session-id hang for the lifetime of the stream.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "stream-session-1"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    mcp_server._stateful_session_auth_contexts[session_id] = (
+        mcp_server.MCPAuthenticatedUser(user_api_key_auth=owner_auth)
+    )
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(
+        owner_auth
+    )
+
+    stream_release = asyncio.Event()
+    post_finished = asyncio.Event()
+
+    async def handle(s, r, se):
+        if s.get("method") == "GET":
+            await stream_release.wait()
+        else:
+            post_finished.set()
+
+    async def call(method: str, body: bytes = b""):
+        scope = {
+            "type": "http",
+            "method": method,
+            "path": "/mcp",
+            "headers": [(b"mcp-session-id", session_id.encode())],
+        }
+        receive = AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": body,
+                "more_body": False,
+            }
+        )
+        await handle_streamable_http_mcp(scope, receive, AsyncMock())
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(owner_auth, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                session_manager_stateful, "handle_request", side_effect=handle
+            ),
+            patch.object(
+                session_manager_stateful,
+                "_server_instances",
+                {session_id: MagicMock()},
+            ),
+        ):
+            stream_task = asyncio.create_task(call("GET"))
+            await asyncio.sleep(0.05)
+            assert not stream_task.done(), "GET stream should still be open"
+
+            post_task = asyncio.create_task(
+                call(
+                    "POST",
+                    body=b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+                )
+            )
+            await asyncio.wait_for(post_finished.wait(), timeout=1.0)
+            await post_task
+
+            stream_release.set()
+            await stream_task
+    finally:
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_owners.pop(session_id, None)
+        mcp_server._stateful_session_locks.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 @pytest.mark.no_parallel
 async def test_mcp_routing_with_conflicting_alias_and_group_name():
     """

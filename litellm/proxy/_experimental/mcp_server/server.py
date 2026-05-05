@@ -3044,8 +3044,16 @@ if MCP_AVAILABLE:
 
             # Serialize requests on the same stateful session so concurrent
             # callers don't clobber each other's auth context mid-flight.
+            #
+            # Skip the lock for streaming GETs (SSE channels held open for the
+            # life of the session): holding a per-session lock for a long-lived
+            # stream would block every subsequent POST on the same session.
+            # POST/DELETE are the methods that actually mutate the shared
+            # auth context, so serializing those is sufficient for the
+            # clobbering race between concurrent JSON-RPC calls.
             session_lock: Optional[asyncio.Lock] = None
-            if use_stateful and session_id:
+            request_method = (scope.get("method") or "").upper()
+            if use_stateful and session_id and request_method in ("POST", "DELETE"):
                 session_lock = _stateful_session_locks.setdefault(
                     session_id, asyncio.Lock()
                 )
