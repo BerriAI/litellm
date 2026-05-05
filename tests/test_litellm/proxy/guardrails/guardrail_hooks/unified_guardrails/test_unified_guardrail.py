@@ -714,6 +714,66 @@ class TestUnifiedLLMGuardrails:
             assert guardrail.calls[0]["is_final"] is True
 
         @pytest.mark.asyncio
+        async def test_action_mode_none_after_expansion_keeps_stream_alive(
+            self,
+        ):
+            """
+            A guardrail that previously returned an expanded
+            GUARDRAIL_INTERVENED (modified text longer than raw accumulated
+            text) and then returns NONE must not terminate the stream.
+
+            The protocol must defer the NONE-with-shrink call (no emission,
+            cursor stays put) and let a later GUARDRAIL_INTERVENED refine
+            cleanly. Raising on this edge would terminate an otherwise
+            healthy stream when a guardrail momentarily lacks the context
+            needed to reproduce its earlier expansion.
+            """
+            handler = UnifiedLLMGuardrails()
+            guardrail = TestUnifiedLLMGuardrails.TestActionMode._ScriptedActionGuardrail(
+                [
+                    # Sample 1 (after chunks 1+2, accumulated="aabb", 4 chars):
+                    # guardrail expands to 18 chars. Cursor 0 → 18.
+                    ("GUARDRAIL_INTERVENED", "AABB-EXPANDED-MORE", None),
+                    # Sample 2 (after chunks 3+4, accumulated="aabbccdd",
+                    # 8 chars): NONE on raw text shorter than cursor.
+                    # Must defer, not raise.
+                    ("NONE", None, None),
+                    # EOS (is_final=True): guardrail returns expanded text
+                    # again. 24 >= 18 → emit "-FINAL".
+                    (
+                        "GUARDRAIL_INTERVENED",
+                        "AABB-EXPANDED-MORE-FINAL",
+                        None,
+                    ),
+                ],
+                sampling_rate=2,
+            )
+            user = UserAPIKeyAuth(
+                api_key="k", request_route="/v1/chat/completions"
+            )
+            out = await TestUnifiedLLMGuardrails.TestActionMode._collect(
+                handler.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=user,
+                    response=TestUnifiedLLMGuardrails.TestActionMode._content_chunks(
+                        ["aa", "bb", "cc", "dd"]
+                    ),
+                    request_data={"guardrail_to_apply": guardrail},
+                )
+            )
+            text = "".join(c.choices[0].delta.content or "" for c in out)
+            # Stream did not terminate; final delta extends the established
+            # expanded-text trajectory.
+            assert text == "AABB-EXPANDED-MORE-FINAL", text
+            assert out[-1].choices[0].finish_reason == "stop"
+            # All three scripted decisions consumed (sample 1, sample 2 NONE
+            # which deferred, EOS).
+            assert [c["is_final"] for c in guardrail.calls] == [
+                False,
+                False,
+                True,
+            ]
+
+        @pytest.mark.asyncio
         async def test_action_mode_eos_shrink_does_not_leak_raw_tail(self):
             """At EOS, a guardrail returning text shorter than the cursor
             must not cause the raw, unmodified tail to leak.

@@ -895,6 +895,30 @@ class UnifiedLLMGuardrails(CustomLogger):
 
             # NONE or GUARDRAIL_INTERVENED — emit delta past cursor and
             # replay any buffered tool_call deltas accumulated since last emit.
+            #
+            # Edge case: NONE with `len(new_text) < cursor` happens when an
+            # earlier call returned an *expanded* GUARDRAIL_INTERVENED text
+            # and a subsequent call returns NONE on raw accumulated text
+            # that's now shorter than what's already been emitted. The bytes
+            # through `cursor` are committed; emitting raw shorter text past
+            # cursor isn't possible (already covered) and raising would
+            # terminate an otherwise healthy stream. Defer to the next call
+            # instead — cursor and tool-call replay marker stay put, so a
+            # later GUARDRAIL_INTERVENED can refine cleanly.
+            if action == GENERIC_GUARDRAIL_ACTION_NONE and len(new_text) < cursor:
+                verbose_proxy_logger.debug(
+                    "UnifiedLLMGuardrails action mode: %s returned NONE "
+                    "with len=%d < cursor=%d; deferring emission to next "
+                    "call",
+                    guardrail_name,
+                    len(new_text),
+                    cursor,
+                )
+                in_wait_state = False
+                continue
+
+            # GUARDRAIL_INTERVENED with shrink IS a real protocol violation:
+            # the guardrail tried to retract its own modifications.
             self._validate_cursor_monotonic(
                 new_text=new_text,
                 cursor=cursor,
