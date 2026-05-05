@@ -1564,6 +1564,10 @@ class TestTemporaryMCPSessionEndpoints:
         authorize_response = MagicMock()
         with (
             patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._try_resolve_mcp_oauth_broker_user",
+                AsyncMock(return_value=None),
+            ),
+            patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
                 return_value=server,
             ) as get_server,
@@ -1585,7 +1589,9 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is authorize_response
-        get_server.assert_awaited_once_with("server-1", request=request)
+        get_server.assert_awaited_once_with(
+            "server-1", user_api_key_dict=None, request=request
+        )
         authorize_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1610,6 +1616,10 @@ class TestTemporaryMCPSessionEndpoints:
 
         with (
             patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._try_resolve_mcp_oauth_broker_user",
+                AsyncMock(return_value=None),
+            ),
+            patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
                 return_value=server,
             ) as get_server,
@@ -1632,7 +1642,9 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is exchange_response
-        get_server.assert_awaited_once_with("server-1", request=request)
+        get_server.assert_awaited_once_with(
+            "server-1", user_api_key_dict=None, request=request
+        )
         exchange_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
@@ -1658,6 +1670,10 @@ class TestTemporaryMCPSessionEndpoints:
 
         with (
             patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._try_resolve_mcp_oauth_broker_user",
+                AsyncMock(return_value=None),
+            ),
+            patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._get_cached_temporary_mcp_server_or_404",
                 return_value=server,
             ) as get_server,
@@ -1680,7 +1696,9 @@ class TestTemporaryMCPSessionEndpoints:
             )
 
         assert result is exchange_response
-        get_server.assert_awaited_once_with("server-1", request=request)
+        get_server.assert_awaited_once_with(
+            "server-1", user_api_key_dict=None, request=request
+        )
         exchange_mock.assert_awaited_once_with(
             request=request,
             mcp_server=server,
