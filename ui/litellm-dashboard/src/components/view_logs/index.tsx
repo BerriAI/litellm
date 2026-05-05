@@ -24,7 +24,7 @@ import { ConfigInfoMessage } from "./ConfigInfoMessage";
 import { AGENT_CALL_TYPES, ERROR_CODE_OPTIONS, MCP_CALL_TYPES, QUICK_SELECT_OPTIONS } from "./constants";
 import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import { ErrorViewer } from "./ErrorViewer";
-import { useLogFilterLogic } from "./log_filter_logic";
+import { FILTER_KEYS, useLogFilterLogic } from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { RequestResponsePanel } from "./RequestResponsePanel";
@@ -414,6 +414,11 @@ export default function SpendLogsTable({
       name: "Model",
       label: "Model",
       customComponent: PaginatedModelSelect,
+    },
+    {
+      name: FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL,
+      label: "Public model / search tool",
+      isSearchable: false,
     },
     {
       name: "Key Alias",

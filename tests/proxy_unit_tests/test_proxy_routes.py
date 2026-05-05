@@ -39,6 +39,23 @@ def test_routes_on_litellm_proxy():
 
     this prevents accidentelly deleting /threads, or /batches etc
     """
+    # Force-load lazy features so the test sees the full route set. Continue
+    # on per-feature import failure — the assertion below still catches
+    # missing-route regressions.
+    import importlib
+
+    from litellm.proxy._lazy_features import LAZY_FEATURES
+
+    registered_paths = [getattr(r, "path", "") for r in app.routes]
+    for feat in LAZY_FEATURES:
+        if any(rp.startswith(p) for p in feat.path_prefixes for rp in registered_paths):
+            continue
+        try:
+            module = importlib.import_module(feat.module_path)
+            feat.register_fn(app, module)
+        except Exception as exc:
+            print(f"warning: failed to force-load {feat.name}: {exc}")
+
     _all_routes = []
     for route in app.routes:
 

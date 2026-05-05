@@ -117,7 +117,10 @@ class MCPRequestHandler:
             return b"{}"
 
         request.body = mock_body  # type: ignore
-        if ".well-known" in str(request.url):  # public routes
+        # Only OAuth metadata routes registered under /.well-known/ are public.
+        # Match on request.url.path (path-only, exact prefix) so the substring
+        # cannot be smuggled via query string, hostname, or a deeper URL segment.
+        if request.url.path.startswith("/.well-known/"):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif has_explicit_litellm_key:
             # Explicit x-litellm-api-key provided - always validate normally
@@ -126,27 +129,37 @@ class MCPRequestHandler:
             )
         elif oauth2_headers:
             # No x-litellm-api-key, but Authorization header present.
-            # Could be a LiteLLM key (backward compat) OR an OAuth2 token
-            # from an upstream MCP provider (e.g. Atlassian).
-            # Try LiteLLM auth first; on auth failure, treat as OAuth2 passthrough.
+            # Could be a LiteLLM key (backward compat) OR an opaque OAuth2 token
+            # the operator wants forwarded to an upstream OAuth2-mode MCP server.
+            # Try LiteLLM auth first; on auth failure, only fall back to anonymous
+            # passthrough when the request actually targets a server whose operator
+            # configured ``auth_type=oauth2``. For any other server (api_key,
+            # bearer_token, basic, etc.), a failed LiteLLM auth is a real failure
+            # and must propagate — otherwise an attacker can exchange any garbage
+            # bearer for an anonymous session.
             try:
                 validated_user_api_key_auth = await user_api_key_auth(
                     api_key=litellm_api_key, request=request
                 )
-            except HTTPException as e:
-                if e.status_code in (401, 403):
+            except (HTTPException, ProxyException) as e:
+                # HTTPException.status_code is int; ProxyException.code is
+                # normalized to str in its __init__ but can be ``"None"`` or any
+                # non-numeric string when the caller didn't supply a numeric
+                # code, so we compare against both int and str forms rather
+                # than coercing (``int("None")`` would raise ValueError and
+                # rewrite the auth error as a 500).
+                status = e.status_code if isinstance(e, HTTPException) else e.code
+                if status in (
+                    401,
+                    403,
+                    "401",
+                    "403",
+                ) and MCPRequestHandler._target_servers_use_oauth2(
+                    path=request.url.path, mcp_servers=mcp_servers
+                ):
                     verbose_logger.debug(
-                        "MCP OAuth2: Authorization header is not a valid LiteLLM key, "
-                        "treating as OAuth2 token passthrough"
-                    )
-                    validated_user_api_key_auth = UserAPIKeyAuth()
-                else:
-                    raise
-            except ProxyException as e:
-                if str(e.code) in ("401", "403"):
-                    verbose_logger.debug(
-                        "MCP OAuth2: Authorization header is not a valid LiteLLM key, "
-                        "treating as OAuth2 token passthrough"
+                        "MCP OAuth2: target server is OAuth2-mode, treating "
+                        "Authorization as upstream OAuth2 token passthrough"
                     )
                     validated_user_api_key_auth = UserAPIKeyAuth()
                 else:
@@ -164,6 +177,62 @@ class MCPRequestHandler:
             oauth2_headers,
             dict(headers),
         )
+
+    @staticmethod
+    def _extract_target_server_names_from_path(path: str) -> List[str]:
+        """
+        Extract the target MCP server name from the standard MCP transport
+        URL patterns: ``/mcp/{server_name}[/...]`` and
+        ``/{server_name}/mcp[/...]``. Returns ``[]`` for any other path so
+        callers fail closed when the target cannot be resolved.
+
+        REST/admin endpoints, OAuth2 server endpoints
+        (``/{server_name}/authorize``, ``/token`` etc.), and ``.well-known``
+        discovery routes intentionally fall through — those flows do not need
+        OAuth2 token passthrough. Clients aggregating multiple servers should
+        use ``x-mcp-servers``, which takes precedence over path parsing.
+        """
+        segments = [s for s in path.split("/") if s]
+        if len(segments) >= 2 and segments[0] == "mcp":
+            return [segments[1]]
+        if len(segments) >= 2 and segments[1] == "mcp":
+            return [segments[0]]
+        return []
+
+    @staticmethod
+    def _target_servers_use_oauth2(path: str, mcp_servers: Optional[List[str]]) -> bool:
+        """
+        True only when EVERY MCP server the request targets is configured for
+        ``auth_type == oauth2``. If any target is non-OAuth2 — or if the target
+        cannot be resolved at all — return False so the caller fails closed.
+
+        Used to gate the "treat Authorization as opaque OAuth2 token" fallback
+        in :meth:`process_mcp_request` so a failed LiteLLM-auth cannot be
+        exchanged for an anonymous session against a non-OAuth2 server.
+        """
+        # Inline imports avoid a circular dependency: mcp_server_manager imports
+        # from this module.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.types.mcp import MCPAuth
+
+        # Use the x-mcp-servers header verbatim when present (including the
+        # explicitly-empty list, which means "no targets" → fail closed).
+        # Only fall back to path parsing when the header was absent entirely.
+        target_names = (
+            mcp_servers
+            if mcp_servers is not None
+            else MCPRequestHandler._extract_target_server_names_from_path(path)
+        )
+        if not target_names:
+            return False
+
+        for name in target_names:
+            server = global_mcp_server_manager.get_mcp_server_by_name(name)
+            if server is None or server.auth_type != MCPAuth.oauth2:
+                return False
+        return True
 
     @staticmethod
     def _get_mcp_auth_header_from_headers(headers: Headers) -> Optional[str]:
@@ -340,9 +409,12 @@ class MCPRequestHandler:
 
         Permission hierarchy (all rules are intersections):
         1. Get allowed servers from key permissions
-        2. Get allowed servers from team permissions
-        3. Get allowed servers from end_user permissions
-        4. Final result = intersection of key/team AND end_user (if end_user has permissions set)
+        2. Get allowed servers from team permissions (key inherits from team, or intersection)
+        3. Get allowed servers from end_user permissions (intersected if set)
+        4. Get allowed servers from agent permissions (intersected if set)
+        5. Get allowed servers from org permissions — org acts as a ceiling: if the org
+           has an explicit MCP server list, the combined key/team/end_user/agent result is
+           capped to that list.  If the org has no list, no extra restriction is applied.
 
         Returns:
             List[str]: List of allowed MCP servers by server id
@@ -366,6 +438,10 @@ class MCPRequestHandler:
             # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
             allowed_mcp_servers: List[str] = []
+            has_lower_level_mcp_restrictions = (
+                len(allowed_mcp_servers_for_key) > 0
+                or len(allowed_mcp_servers_for_team) > 0
+            )
             if len(allowed_mcp_servers_for_team) > 0:
                 if len(allowed_mcp_servers_for_key) > 0:
                     # Key has its own MCP permissions - use intersection with team permissions
@@ -390,6 +466,7 @@ class MCPRequestHandler:
 
                 # If end_user has explicit MCP server permissions, apply intersection
                 if len(allowed_mcp_servers_for_end_user) > 0:
+                    has_lower_level_mcp_restrictions = True
                     verbose_logger.debug(
                         f"End user {user_api_key_auth.end_user_id} has explicit MCP permissions: {allowed_mcp_servers_for_end_user}"
                     )
@@ -421,6 +498,7 @@ class MCPRequestHandler:
                     )
                 )
                 if len(allowed_mcp_servers_for_agent) > 0:
+                    has_lower_level_mcp_restrictions = True
                     # Intersect: agent can only use servers allowed by BOTH key/team AND agent config
                     allowed_mcp_servers = [
                         s
@@ -429,6 +507,30 @@ class MCPRequestHandler:
                     ]
                     verbose_logger.debug(
                         f"Applied agent intersection filter. Final allowed servers: {allowed_mcp_servers}"
+                    )
+
+            #########################################################
+            # Apply org-level ceiling if org_id is set
+            #########################################################
+            if user_api_key_auth and user_api_key_auth.org_id:
+                allowed_mcp_servers_for_org = (
+                    await MCPRequestHandler._get_allowed_mcp_servers_for_org(
+                        user_api_key_auth
+                    )
+                )
+                if len(allowed_mcp_servers_for_org) > 0:
+                    if has_lower_level_mcp_restrictions:
+                        # Lower-level restrictions exist, so org can only cap them.
+                        allowed_mcp_servers = [
+                            s
+                            for s in allowed_mcp_servers
+                            if s in allowed_mcp_servers_for_org
+                        ]
+                    else:
+                        # No lower-level restrictions → org list becomes the ceiling
+                        allowed_mcp_servers = allowed_mcp_servers_for_org
+                    verbose_logger.debug(
+                        f"Applied org ceiling filter. Final allowed servers: {allowed_mcp_servers}"
                     )
 
             return list(set(allowed_mcp_servers))
@@ -569,6 +671,27 @@ class MCPRequestHandler:
                         allowed_tools = list(set(allowed_tools) & set(agent_tools))
                     else:
                         allowed_tools = agent_tools
+
+            # Apply org-level tool ceiling if org_id is set
+            if user_api_key_auth.org_id:
+                # _get_org_object_permission uses user_api_key_cache, so this is not a
+                # fresh DB round-trip when get_allowed_mcp_servers was already called.
+                org_obj_perm = await MCPRequestHandler._get_org_object_permission(
+                    user_api_key_auth
+                )
+                org_tools = (
+                    global_mcp_server_manager.expand_tool_permissions(
+                        org_obj_perm.mcp_tool_permissions
+                    ).get(server_id)
+                    if org_obj_perm and org_obj_perm.mcp_tool_permissions
+                    else None
+                )
+                if org_tools is not None:
+                    if allowed_tools is not None:
+                        allowed_tools = list(set(allowed_tools) & set(org_tools))
+                    else:
+                        allowed_tools = list(org_tools)
+
             return allowed_tools
 
         except Exception as e:
@@ -733,6 +856,120 @@ class MCPRequestHandler:
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for team: {str(e)}"
+            )
+            return []
+
+    # Sentinel stored in cache when an org has no object_permission, so we
+    # don't re-query the DB on every MCP request for that org.
+    _ORG_NO_PERMISSION_SENTINEL = "__org_no_mcp_permission__"
+
+    @staticmethod
+    async def _get_org_object_permission(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ):
+        """
+        Get org object_permission, using user_api_key_cache to avoid DB hits on every request.
+
+        Caches both positive results and the absence of an object_permission so that orgs
+        with no MCP permissions configured (the common default) do not trigger a DB query
+        on every request.
+        """
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if not user_api_key_auth or not user_api_key_auth.org_id:
+            return None
+
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
+            return None
+
+        org_id = user_api_key_auth.org_id
+        cache_key = f"org_object_permission:{org_id}"
+
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        try:
+            cached = await user_api_key_cache.async_get_cache(key=cache_key)
+            if cached is not None:
+                # Sentinel means the DB confirmed no object_permission for this org
+                if cached == MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL:
+                    return None
+                # Redis deserialises to a plain dict; reconstruct the Pydantic model
+                # so callers can access .mcp_servers / .mcp_tool_permissions as attrs.
+                if isinstance(cached, dict):
+                    return LiteLLM_ObjectPermissionTable(**cached)
+                return cached
+
+            org_row = await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": org_id},
+                include={"object_permission": True},
+            )
+
+            if org_row is None or org_row.object_permission is None:
+                # Cache the negative result so subsequent calls skip the DB
+                await user_api_key_cache.async_set_cache(
+                    key=cache_key,
+                    value=MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL,
+                )
+                return None
+
+            # Convert raw Prisma model → Pydantic before caching.  Caching the
+            # Pydantic .dict() ensures the value survives a Redis JSON round-trip
+            # as a plain dict that we can reconstruct above (same pattern used by
+            # get_end_user_object / get_team_object in auth_checks.py).
+            obj_perm = LiteLLM_ObjectPermissionTable(**org_row.object_permission.dict())
+            await user_api_key_cache.async_set_cache(
+                key=cache_key, value=obj_perm.dict()
+            )
+            return obj_perm
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get org object permission: {str(e)}")
+            return None
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_org(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get allowed MCP servers for an organization.
+
+        Returns the MCP servers from the org's object_permission.
+        An empty result means the org places no restriction (allow-all from this level).
+        """
+        try:
+            object_permissions = await MCPRequestHandler._get_org_object_permission(
+                user_api_key_auth
+            )
+
+            if object_permissions is None:
+                return []
+
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            # Expand names/aliases to canonical server IDs (consistent with key/team/end-user path)
+            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
+                object_permissions.mcp_servers or []
+            )
+
+            access_group_servers = (
+                await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    object_permissions.mcp_access_groups or []
+                )
+            )
+
+            tool_perm_servers = list(
+                global_mcp_server_manager.expand_tool_permissions(
+                    object_permissions.mcp_tool_permissions
+                ).keys()
+            )
+
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            return list(set(all_servers))
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get allowed MCP servers for org: {str(e)}"
             )
             return []
 

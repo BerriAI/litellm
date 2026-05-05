@@ -1,5 +1,7 @@
 import asyncio
+import inspect
 import os
+import socket
 import ssl
 import sys
 import time
@@ -29,6 +31,10 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
     AIOHTTP_NEEDS_CLEANUP_CLOSED,
+    AIOHTTP_SO_KEEPALIVE,
+    AIOHTTP_TCP_KEEPCNT,
+    AIOHTTP_TCP_KEEPIDLE,
+    AIOHTTP_TCP_KEEPINTVL,
     AIOHTTP_TTL_DNS_CACHE,
     COMPLETION_HTTP_FALLBACK_SECONDS,
     DEFAULT_SSL_CIPHERS,
@@ -52,6 +58,57 @@ try:
     from litellm._version import version
 except Exception:
     version = "0.0.0"
+
+
+# aiohttp 3.10+ exposes a `socket_factory` kwarg on TCPConnector. Older
+# versions don't — detect once and skip the keep-alive wiring there.
+# https://docs.aiohttp.org/en/stable/client_reference.html#aiohttp.TCPConnector
+_AIOHTTP_SUPPORTS_SOCKET_FACTORY = (
+    "socket_factory" in inspect.signature(TCPConnector.__init__).parameters
+)
+
+
+def _build_aiohttp_keepalive_socket_factory() -> (
+    Optional[Callable[[Tuple[Any, ...]], socket.socket]]
+):
+    """
+    Build a socket_factory that enables SO_KEEPALIVE on aiohttp TCP sockets.
+
+    Why: by default, aiohttp creates sockets without SO_KEEPALIVE, so the kernel
+    sends nothing during a long idle TCP connection. NAT/LB hops (e.g. AWS NAT
+    Gateway, 350s idle timeout) reap the flow well before slow provider
+    responses (OpenAI/Azure: up to 600s) arrive. Enabling SO_KEEPALIVE makes
+    the kernel emit TCP probes that reset the NAT idle timer.
+
+    Returns None when AIOHTTP_SO_KEEPALIVE is disabled or aiohttp is too old.
+    """
+    if not AIOHTTP_SO_KEEPALIVE or not _AIOHTTP_SUPPORTS_SOCKET_FACTORY:
+        return None
+
+    def factory(addr_info: Tuple[Any, ...]) -> socket.socket:
+        family, type_, proto = addr_info[0], addr_info[1], addr_info[2]
+        sock = socket.socket(family=family, type=type_, proto=proto)
+        sock.setblocking(False)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        # Linux: TCP_KEEPIDLE is idle-before-first-probe.
+        # macOS/Darwin: TCP_KEEPALIVE is the equivalent.
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, AIOHTTP_TCP_KEEPIDLE
+            )
+        elif hasattr(socket, "TCP_KEEPALIVE"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, AIOHTTP_TCP_KEEPIDLE
+            )
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            sock.setsockopt(
+                socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, AIOHTTP_TCP_KEEPINTVL
+            )
+        if hasattr(socket, "TCP_KEEPCNT"):
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, AIOHTTP_TCP_KEEPCNT)
+        return sock
+
+    return factory
 
 
 def get_default_headers() -> dict:
@@ -935,6 +992,11 @@ class AsyncHTTPHandler:
             transport_connector_kwargs["limit_per_host"] = (
                 AIOHTTP_CONNECTOR_LIMIT_PER_HOST
             )
+        # Returns None when SO_KEEPALIVE is disabled or aiohttp is too old to
+        # accept socket_factory — version detection lives inside the builder.
+        socket_factory = _build_aiohttp_keepalive_socket_factory()
+        if socket_factory is not None:
+            transport_connector_kwargs["socket_factory"] = socket_factory
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
