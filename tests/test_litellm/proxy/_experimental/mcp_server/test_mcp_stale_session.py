@@ -202,7 +202,8 @@ async def test_stale_mcp_session_id_is_stripped():
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             handle_streamable_http_mcp,
-            session_manager,
+            session_manager_stateful,
+            session_manager_stateless,
         )
     except ImportError:
         pytest.skip("MCP server not available")
@@ -225,8 +226,9 @@ async def test_stale_mcp_session_id_is_stripped():
 
     # Simulate: session manager has NO sessions (the stale one was cleaned up)
     captured_scope = {}
+    stateful_handle_request = AsyncMock()
 
-    async def mock_handle_request(s, r, se):
+    async def stateless_handle_request(s, r, se):
         # Capture the scope that was actually passed
         captured_scope.update(s)
 
@@ -244,12 +246,22 @@ async def test_stale_mcp_session_id_is_stripped():
             True,
         ),
         patch.object(
-            session_manager,
+            session_manager_stateless,
             "handle_request",
-            side_effect=mock_handle_request,
+            side_effect=stateless_handle_request,
         ),
         patch.object(
-            session_manager,
+            session_manager_stateless,
+            "_server_instances",
+            {},
+        ),
+        patch.object(
+            session_manager_stateful,
+            "handle_request",
+            side_effect=stateful_handle_request,
+        ),
+        patch.object(
+            session_manager_stateful,
             "_server_instances",
             {},  # Empty dict = no active sessions
         ),
@@ -261,6 +273,12 @@ async def test_stale_mcp_session_id_is_stripped():
     assert (
         b"mcp-session-id" not in header_names
     ), "Stale mcp-session-id header should have been stripped from the scope"
+    assert (
+        stateless_handle_request.called
+    ), "Stale non-initialize requests should route stateless"
+    assert (
+        not stateful_handle_request.called
+    ), "Stale non-initialize requests should not route stateful"
 
 
 @pytest.mark.asyncio

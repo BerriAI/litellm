@@ -1135,7 +1135,13 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
                 (b"authorization", b"Bearer test-key"),
             ],
         }
-        receive = AsyncMock(return_value={"type": "http.request", "body": method_body, "more_body": False})
+        receive = AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": method_body,
+                "more_body": False,
+            }
+        )
         send = AsyncMock()
 
         stateless_called = []
@@ -1189,6 +1195,85 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless():
     stateless_called, stateful_called = await make_request(tools_body)
     assert stateless_called and not stateful_called, (
         "tools/list (no session) should route to stateless, not stateful"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_routing_chunked_initialize_to_stateful():
+    """
+    Test that chunked initialize requests route to the stateful manager.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+            session_manager_stateless,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/progress_test",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    messages = [
+        {
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,',
+            "more_body": True,
+        },
+        {
+            "type": "http.request",
+            "body": b'"method":"initialize","params":{}}',
+            "more_body": False,
+        },
+    ]
+    receive = AsyncMock(side_effect=messages)
+    send = AsyncMock()
+    stateless_called = []
+    stateful_called = []
+
+    async def stateless_handle(s, r, se):
+        stateless_called.append(1)
+
+    async def stateful_handle(s, r, se):
+        stateful_called.append(1)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        new_callable=AsyncMock,
+        return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server.set_auth_context",
+    ), patch(
+        "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+        True,
+    ), patch.object(
+        session_manager_stateless,
+        "handle_request",
+        side_effect=stateless_handle,
+    ), patch.object(
+        session_manager_stateful,
+        "handle_request",
+        side_effect=stateful_handle,
+    ), patch.object(
+        session_manager_stateless,
+        "_server_instances",
+        {},
+    ), patch.object(
+        session_manager_stateful,
+        "_server_instances",
+        {},
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert stateful_called and not stateless_called, (
+        "chunked initialize (no session) should route to stateful, not stateless"
     )
 
 

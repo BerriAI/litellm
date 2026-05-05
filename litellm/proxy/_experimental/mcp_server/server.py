@@ -28,7 +28,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 from litellm._logging import verbose_logger
 from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
@@ -2617,9 +2617,6 @@ if MCP_AVAILABLE:
         """
         Check if the request body is a JSON-RPC initialize method.
         Returns True if method is "initialize", False otherwise or on parse error.
-
-        Note: Assumes the body fits in a single ASGI receive() chunk. MCP initialize
-        requests are typically small; large chunked bodies may not be fully parsed.
         """
         if not body:
             return False
@@ -2628,6 +2625,31 @@ if MCP_AVAILABLE:
             return isinstance(data, dict) and data.get("method") == "initialize"
         except (json.JSONDecodeError, TypeError):
             return False
+
+    async def _read_request_body_for_routing(
+        receive: Receive,
+    ) -> Tuple[List[Message], bytes]:
+        """
+        Consume request body messages for routing, returning them for replay.
+        """
+        consumed_messages: List[Message] = []
+        body_chunks: List[bytes] = []
+
+        while True:
+            message = await receive()
+            consumed_messages.append(message)
+
+            if message.get("type") != "http.request":
+                break
+
+            body = message.get("body", b"") or b""
+            if body:
+                body_chunks.append(body)
+
+            if not message.get("more_body", False):
+                break
+
+        return consumed_messages, b"".join(body_chunks)
 
     async def _handle_stale_mcp_session(
         scope: Scope,
@@ -2883,12 +2905,22 @@ if MCP_AVAILABLE:
             # - No session ID + other → stateless (curl, Inspector, Notion)
             session_id = _get_session_id_from_scope(scope)
             is_initialize = False
-            first_msg = None
+            consumed_messages: List[Message] = []
+
+            # Handle stale session IDs before choosing a target manager. Stale
+            # non-DELETE requests have their session header stripped and should
+            # be routed as no-session requests.
+            if session_id:
+                handled = await _handle_stale_mcp_session(
+                    scope, receive, send, session_manager_stateful
+                )
+                if handled:
+                    # Request was fully handled (e.g., DELETE on non-existent session)
+                    return
+                session_id = _get_session_id_from_scope(scope)
 
             if scope.get("method") == "POST" and not session_id:
-                # Peek at first chunk to detect initialize (assumes body fits in one chunk)
-                first_msg = await receive()
-                body = first_msg.get("body", b"") or b""
+                consumed_messages, body = await _read_request_body_for_routing(receive)
                 is_initialize = _is_initialize_request(body)
 
             use_stateful = bool(session_id or is_initialize)
@@ -2902,27 +2934,16 @@ if MCP_AVAILABLE:
                 + (" (initialize)" if is_initialize else "")
             )
 
-            # Replay first message if we consumed it for peeking
+            # Replay body messages if we consumed them for peeking
             original_receive = receive
-            if first_msg is not None:
+            if consumed_messages:
 
                 async def wrapped_receive():
-                    nonlocal first_msg
-                    if first_msg is not None:
-                        msg, first_msg = first_msg, None
-                        return msg
+                    if consumed_messages:
+                        return consumed_messages.pop(0)
                     return await original_receive()
 
                 receive = wrapped_receive
-
-            # Handle stale session IDs - either strip them for reconnection
-            # or return success for idempotent DELETE operations
-            handled = await _handle_stale_mcp_session(
-                scope, receive, send, target_manager
-            )
-            if handled:
-                # Request was fully handled (e.g., DELETE on non-existent session)
-                return
 
             async with _gateway_initialize_instructions_request_scope(
                 user_api_key_auth,
