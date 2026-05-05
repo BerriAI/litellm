@@ -2007,6 +2007,81 @@ class TestTemporaryMCPSessionEndpoints:
         assert result is None
 
 
+class TestTryResolveMcpOAuthBrokerUser:
+    """Unit tests for _try_resolve_mcp_oauth_broker_user."""
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_auth_headers_present(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _try_resolve_mcp_oauth_broker_user,
+        )
+
+        request = MagicMock()
+        request.headers = {}
+        result = await _try_resolve_mcp_oauth_broker_user(request)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_auth_for_standard_authorization_header(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _try_resolve_mcp_oauth_broker_user,
+        )
+
+        request = MagicMock()
+        request.headers = {"authorization": "Bearer sk-test"}
+        mock_auth = generate_mock_user_api_key_auth()
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_from_request_headers",
+            AsyncMock(return_value=mock_auth),
+        ):
+            result = await _try_resolve_mcp_oauth_broker_user(request)
+
+        assert result is mock_auth
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "header_name,header_value",
+        [
+            ("api-key", "sk-azure-key"),
+            ("x-api-key", "sk-anthropic-key"),
+            ("x-goog-api-key", "sk-google-key"),
+            ("ocp-apim-subscription-key", "sk-apim-key"),
+            ("x-litellm-api-key", "sk-litellm-key"),
+        ],
+    )
+    async def test_returns_auth_for_alternative_auth_headers(
+        self, header_name: str, header_value: str
+    ):
+        """Callers using non-Authorization auth headers must not be treated as unauthenticated."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _try_resolve_mcp_oauth_broker_user,
+        )
+
+        request = MagicMock()
+        request.headers = {header_name: header_value}
+        mock_auth = generate_mock_user_api_key_auth()
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth_from_request_headers",
+            AsyncMock(return_value=mock_auth),
+        ):
+            result = await _try_resolve_mcp_oauth_broker_user(request)
+
+        assert result is mock_auth
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_auth_header_value_is_empty_string(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _try_resolve_mcp_oauth_broker_user,
+        )
+
+        request = MagicMock()
+        request.headers = {"authorization": "   ", "api-key": ""}
+        result = await _try_resolve_mcp_oauth_broker_user(request)
+        assert result is None
+
+
 class TestUpdateMCPServer:
     """Test suite for update MCP server functionality"""
 
