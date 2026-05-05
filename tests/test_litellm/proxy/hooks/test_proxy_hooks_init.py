@@ -14,16 +14,20 @@ silently swallowed the ImportError in `hooks/__init__.py`, leaving
 ``managed_files`` unregistered and the /files endpoint returning 500.
 """
 
+import pytest
+
 from litellm.proxy.hooks import PROXY_HOOKS, get_proxy_hook
 
 
 def test_managed_files_hook_registered():
+    pytest.importorskip("litellm_enterprise")
     assert "managed_files" in PROXY_HOOKS
     hook_cls = get_proxy_hook("managed_files")
     assert hook_cls.__name__ == "_PROXY_LiteLLMManagedFiles"
 
 
 def test_managed_vector_stores_hook_registered():
+    pytest.importorskip("litellm_enterprise")
     assert "managed_vector_stores" in PROXY_HOOKS
     hook_cls = get_proxy_hook("managed_vector_stores")
     assert hook_cls.__name__ == "_PROXY_LiteLLMManagedVectorStores"

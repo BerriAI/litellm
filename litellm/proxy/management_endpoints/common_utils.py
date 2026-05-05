@@ -16,19 +16,13 @@ from litellm.proxy._types import (
     NewProjectRequest,
     UpdateProjectRequest,
     UserAPIKeyAuth,
+    user_api_key_has_admin_view as _user_has_admin_view,
 )
 from litellm.proxy.utils import _premium_user_check
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
-
-
-def _user_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    return (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-    )
 
 
 def require_caller_user_id_for_non_admin(

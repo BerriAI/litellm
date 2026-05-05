@@ -11,14 +11,10 @@ unscoped query.
 
 from typing import Any, Dict, List, Optional
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-
-
-def _user_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    return user_api_key_dict.user_role in (
-        LitellmUserRoles.PROXY_ADMIN,
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    )
+from litellm.proxy._types import (
+    UserAPIKeyAuth,
+    user_api_key_has_admin_view as _user_has_admin_view,
+)
 
 
 def build_list_page(items: List[Any], has_more: bool = False) -> Dict[str, Any]:
