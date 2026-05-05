@@ -1667,7 +1667,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     if tags is not None and _admin_allow_client_tags:
-        data[_metadata_variable_name]["tags"] = tags
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=tags,
+        )
     elif tags is not None:
         verbose_proxy_logger.warning(
             "Ignored caller-supplied tags from header/root body: this "
