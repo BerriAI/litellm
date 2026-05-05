@@ -54,7 +54,10 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
 #   We scrub auth headers from cassettes (so the bad-key request matches the
 #   prior good-key request), and vcrpy replays the recorded 200 — so the
 #   failure callback never fires and the assertion flips.
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES = ("::test_async_embedding_azure",)
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES = (
+    "::test_async_chat_azure",
+    "::test_async_embedding_azure",
+)
 
 
 _verbose_state = VerboseReporterState()

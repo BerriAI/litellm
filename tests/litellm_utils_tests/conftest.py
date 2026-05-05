@@ -23,6 +23,26 @@ from tests._vcr_conftest_common import (  # noqa: E402
 _verbose_state = VerboseReporterState()
 
 
+# Files where VCR replay actively breaks the test:
+# - ``test_litellm_overhead.py`` measures ``litellm_overhead_time_ms`` as a
+#   percentage of total wall-clock time. With cached responses the upstream
+#   "network" time collapses to microseconds, so the overhead percentage
+#   blows past the 40% threshold the test asserts on.
+_VCR_INCOMPATIBLE_FILES = frozenset(
+    {
+        "test_litellm_overhead.py",
+    }
+)
+
+# Specific tests where VCR replay actively breaks the test:
+# - ``test_get_valid_models_from_dynamic_api_key`` deliberately calls
+#   ``GET /v1/models`` with ``api_key="123"`` to assert the result is empty.
+#   We scrub auth headers from cassettes (so the bad-key request matches
+#   the prior good-key request), and vcrpy replays the recorded list of
+#   models — flipping ``len(...) == 0`` to a long list.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES = ("::test_get_valid_models_from_dynamic_api_key",)
+
+
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown():
     """
@@ -77,7 +97,11 @@ def pytest_runtest_logreport(report):
 
 
 def pytest_collection_modifyitems(config, items):
-    apply_vcr_auto_marker_to_items(items)
+    apply_vcr_auto_marker_to_items(
+        items,
+        skip_files=_VCR_INCOMPATIBLE_FILES,
+        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
+    )
 
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
     custom_logger_tests = [

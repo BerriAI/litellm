@@ -49,19 +49,30 @@ _RESPX_CONFLICTING_FILES = frozenset(
 #   ``record_mode="new_episodes"`` does well. The result in CI is that
 #   every run effectively re-records, blowing past the 15-minute step
 #   timeout for ``litellm_assistants_api_testing``.
+# - ``test_router_caching.py`` asserts on litellm's own router-level
+#   response cache by comparing ``response1.id`` to ``response2.id``
+#   across repeat upstream calls (the test bypasses litellm's cache via
+#   ``ttl=0`` and expects the upstream to return a *new* id each time).
+#   With VCR replay both upstream calls return the same cassette body,
+#   so the ids are identical and ``response1.id != response2.id`` flips.
 _VCR_INCOMPATIBLE_FILES = frozenset(
     {
         "test_assistants.py",
+        "test_router_caching.py",
     }
 )
 
 # Specific tests where VCR replay actively breaks the test:
-# - ``test_amazing_sync_embedding`` deliberately calls the embedding API
-#   with ``api_key="my-bad-key"`` to assert the failure callback fires.
-#   We scrub auth headers from cassettes (so the bad-key request matches
-#   the prior good-key request), and vcrpy replays the recorded 200 — so
-#   the failure callback never fires and the assertion flips.
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES = ("::test_amazing_sync_embedding",)
+# - These tests deliberately call the LLM API with ``api_key="my-bad-key"``
+#   to assert that the failure callback fires. We scrub auth headers from
+#   cassettes (so the bad-key request matches the prior good-key request),
+#   and vcrpy replays the recorded 200 — so the failure callback never
+#   fires and the assertion flips.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES = (
+    "::test_amazing_sync_embedding",
+    "::test_async_custom_handler_completion",
+    "::test_async_custom_handler_embedding",
+)
 
 
 _verbose_state = VerboseReporterState()
