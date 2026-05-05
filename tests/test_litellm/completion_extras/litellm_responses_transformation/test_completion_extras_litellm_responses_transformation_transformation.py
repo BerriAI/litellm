@@ -743,6 +743,36 @@ def test_transform_response_preserves_output_item_when_text_done_arrives_later()
     assert result.choices[0].message.content == "Complete output item text"
 
 
+def test_recover_output_items_merges_text_only_items_at_distinct_indices():
+    """When OUTPUT_ITEM_DONE covers some indices and OUTPUT_TEXT_DONE covers
+    others, both must be preserved instead of treating them as mutually
+    exclusive fallbacks."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_item_0","role":"assistant","status":"completed","content":[{"type":"output_text","text":"From OUTPUT_ITEM_DONE","annotations":[]}]}}',
+            'data: {"type":"response.output_text.done","output_index":1,"content_index":0,"item_id":"msg_text_1","text":"From OUTPUT_TEXT_DONE only"}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    recovered = (
+        LiteLLMResponsesTransformationHandler._recover_output_items_from_raw_sse(
+            raw_sse
+        )
+    )
+
+    assert len(recovered) == 2
+    assert recovered[0]["id"] == "msg_item_0"
+    assert recovered[0]["content"][0]["text"] == "From OUTPUT_ITEM_DONE"
+    assert recovered[1]["id"] == "msg_text_1"
+    assert recovered[1]["content"][0]["text"] == "From OUTPUT_TEXT_DONE only"
+
+
 def test_transform_response_prefers_completed_output_from_raw_sse():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,

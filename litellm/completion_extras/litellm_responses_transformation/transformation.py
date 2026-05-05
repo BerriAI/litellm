@@ -753,11 +753,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     recovered_text_only_items=recovered_text_only_items,
                 )
 
-        if recovered_output_items:
-            return [item for _, item in sorted(recovered_output_items.items())]
+        # Merge text-only items into the recovered output items. Real
+        # OUTPUT_ITEM_DONE events take precedence at any given output_index,
+        # but text-only items at indices without a matching OUTPUT_ITEM_DONE
+        # must still be preserved (e.g. multi-output responses where some
+        # indices only emitted OUTPUT_TEXT_DONE).
+        merged_items: Dict[int, Dict[str, Any]] = {**recovered_text_only_items}
+        merged_items.update(recovered_output_items)
 
-        if recovered_text_only_items:
-            return [item for _, item in sorted(recovered_text_only_items.items())]
+        if merged_items:
+            return [item for _, item in sorted(merged_items.items())]
 
         return []
 
