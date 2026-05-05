@@ -3,6 +3,7 @@ Test client disconnection detection functionality.
 """
 
 import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,12 +12,9 @@ from litellm.proxy.common_request_processing import _check_request_disconnection
 
 @pytest.mark.asyncio
 async def test_check_request_disconnection_with_disconnect():
-    """Test that _check_request_disconnection cancels task and sets event when client disconnects."""
-    mock_request = AsyncMock()
-    mock_request.receive.side_effect = [
-        {"type": "http.request"},  # First call
-        {"type": "http.disconnect"},  # Second call - disconnect
-    ]
+    """Disconnect path: polling sees disconnected only after is_disconnected becomes True."""
+    mock_request = MagicMock(spec=["is_disconnected"])
+    mock_request.is_disconnected = AsyncMock(side_effect=[False, True])
 
     mock_llm_task = MagicMock()  # sync mock so .cancel() doesn't return a coroutine
     disconnect_event = asyncio.Event()
@@ -30,13 +28,14 @@ async def test_check_request_disconnection_with_disconnect():
 
     mock_llm_task.cancel.assert_called_once()
     assert disconnect_event.is_set()
+    assert mock_request.is_disconnected.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_check_request_disconnection_no_disconnect():
-    """Test that _check_request_disconnection does not cancel task during normal operation."""
-    mock_request = AsyncMock()
-    mock_request.receive.return_value = {"type": "http.request"}
+    """Cancel watcher mid-flight: LLM task must not be cancelled like a disconnect."""
+    mock_request = MagicMock(spec=["is_disconnected"])
+    mock_request.is_disconnected = AsyncMock(return_value=False)
 
     mock_llm_task = MagicMock()  # sync mock so .cancel() doesn't return a coroutine
     disconnect_event = asyncio.Event()
@@ -44,7 +43,7 @@ async def test_check_request_disconnection_no_disconnect():
     task = asyncio.create_task(
         _check_request_disconnection(mock_request, mock_llm_task, disconnect_event)
     )
-    await asyncio.sleep(0.1)  # Let it run briefly
+    await asyncio.sleep(0.1)
     task.cancel()
 
     try:
