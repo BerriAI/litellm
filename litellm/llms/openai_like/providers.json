@@ -94,7 +94,7 @@
   "ambient": {
     "base_url": "https://api.ambient.xyz/v1",
     "api_key_env": "AMBIENT_API_KEY"
-  }.
+  },
   "assemblyai": {
     "base_url": "https://llm-gateway.assemblyai.com/v1",
     "api_key_env": "ASSEMBLYAI_API_KEY"
