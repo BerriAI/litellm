@@ -6,6 +6,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import time
 import types
@@ -2672,19 +2673,29 @@ if MCP_AVAILABLE:
 
     def _owner_fingerprint_for(
         user_api_key_auth: Optional[UserAPIKeyAuth],
+        oauth2_headers: Optional[Dict[str, str]] = None,
     ) -> str:
         """
         Stable, non-reversible identifier for the caller used to bind an
         mcp-session-id to its creator. ``api_key`` on UserAPIKeyAuth is
         already hashed at construction time, so we can use it directly.
-        Falls back to user_id then to a sentinel so anonymous callers can
-        never share or hijack an owned session.
+
+        For OAuth2 passthrough (``UserAPIKeyAuth()`` with no key/user_id),
+        the caller's identity is the upstream OAuth bearer; hash it so two
+        OAuth callers with different tokens don't both fingerprint to
+        ``anonymous`` and end up sharing a session.
         """
         if user_api_key_auth is not None:
             if user_api_key_auth.api_key:
                 return f"key:{user_api_key_auth.api_key}"
             if user_api_key_auth.user_id:
                 return f"user:{user_api_key_auth.user_id}"
+        if oauth2_headers:
+            authz = oauth2_headers.get("Authorization") or oauth2_headers.get(
+                "authorization"
+            )
+            if authz:
+                return f"oauth:{hashlib.sha256(authz.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
     def _is_initialize_request(body: bytes) -> bool:
@@ -2991,7 +3002,9 @@ if MCP_AVAILABLE:
             # mcp-session-id cannot be hijacked by another authenticated user.
             if session_id:
                 expected_owner = _stateful_session_owners.get(session_id)
-                request_owner = _owner_fingerprint_for(user_api_key_auth)
+                request_owner = _owner_fingerprint_for(
+                    user_api_key_auth, oauth2_headers
+                )
                 if expected_owner is not None and expected_owner != request_owner:
                     verbose_logger.warning(
                         "Rejecting MCP request: session '%s' owner mismatch.",
@@ -3053,7 +3066,7 @@ if MCP_AVAILABLE:
                     local_send = _wrap_send_with_stateful_session_auth_context(
                         local_send,
                         auth_user,
-                        _owner_fingerprint_for(user_api_key_auth),
+                        _owner_fingerprint_for(user_api_key_auth, oauth2_headers),
                     )
 
                 async with _gateway_initialize_instructions_request_scope(

@@ -1427,6 +1427,34 @@ async def test_stateful_mcp_auth_contexts_expire_with_idle_sessions():
 
 
 @pytest.mark.asyncio
+async def test_owner_fingerprint_distinguishes_oauth_callers():
+    """
+    OAuth2 passthrough callers all share `UserAPIKeyAuth()` with no api_key
+    or user_id. Without folding the upstream bearer into the fingerprint
+    they would all collapse to a single 'anonymous' owner and one OAuth
+    user could hijack another's mcp-session-id.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _owner_fingerprint_for,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    anon_auth = UserAPIKeyAuth()
+    fp_a = _owner_fingerprint_for(anon_auth, {"Authorization": "Bearer token-A"})
+    fp_b = _owner_fingerprint_for(anon_auth, {"Authorization": "Bearer token-B"})
+    fp_a_again = _owner_fingerprint_for(anon_auth, {"authorization": "Bearer token-A"})
+    fp_no_oauth = _owner_fingerprint_for(anon_auth, None)
+
+    assert fp_a != fp_b
+    assert fp_a == fp_a_again
+    assert fp_a.startswith("oauth:")
+    assert fp_no_oauth == "anonymous"
+    assert "Bearer token-A" not in fp_a
+
+
+@pytest.mark.asyncio
 async def test_stateful_mcp_session_owner_mismatch_returns_403():
     """
     A stateful mcp-session-id is bound to its creator. A different
