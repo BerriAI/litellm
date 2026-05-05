@@ -50,6 +50,11 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import (
+    apply_redacted_messages_back,
+    build_inspection_messages,
+    has_non_string_content,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 import litellm
 
@@ -366,16 +371,19 @@ class LassoGuardrail(CustomGuardrail):
             LassoGuardrailAPIError: If the Lasso API call fails
             HTTPException: If blocking violations are detected
         """
-        messages: List[Dict[str, str]] = data.get("messages", [])
+        # Covers multimodal list content + Responses-API input.
+        messages: List[Dict[str, str]] = build_inspection_messages(data)
         if not messages:
             return data
 
-        if self.mask:
+        # Lasso's classifix endpoint returns masked text that we copy back
+        # into ``data["messages"]``. For multimodal/Responses-API input we
+        # would silently strip image/audio parts, so fall back to the
+        # classify endpoint (which still raises on BLOCK actions) and
+        # leave the original payload intact.
+        if self.mask and not has_non_string_content(data):
             return await self._handle_masking(data, cache, message_type, messages)
-        else:
-            return await self._handle_classification(
-                data, cache, message_type, messages
-            )
+        return await self._handle_classification(data, cache, message_type, messages)
 
     async def _handle_classification(
         self,
@@ -413,8 +421,9 @@ class LassoGuardrail(CustomGuardrail):
             self._process_lasso_response(response)
 
             # Apply masking to messages if violations detected and masked messages are available
-            if response.get("violations_detected") and response.get("messages"):
-                data["messages"] = response["messages"]
+            redacted_messages = response.get("messages")
+            if response.get("violations_detected") and redacted_messages:
+                apply_redacted_messages_back(data, list(redacted_messages))
                 self._log_masking_applied(message_type, dict(response))
 
             return data
