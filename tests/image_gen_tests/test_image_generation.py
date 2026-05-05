@@ -393,6 +393,7 @@ async def test_aiml_image_generation_with_dynamic_api_key():
 
 @pytest.mark.asyncio
 async def test_azure_image_generation_request_body():
+    """Azure deployment URL selects the model; JSON body omits ``model`` (#26316)."""
     from litellm import aimage_generation
 
     test_dir = os.path.dirname(__file__)

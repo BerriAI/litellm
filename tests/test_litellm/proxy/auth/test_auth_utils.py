@@ -2,6 +2,7 @@
 Unit tests for auth_utils functions related to rate limiting and customer ID extraction.
 """
 
+import base64
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -10,11 +11,12 @@ import pytest
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
+    abbreviate_api_key,
     check_complete_credentials,
     get_end_user_id_from_request_body,
-    get_model_from_request,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_model_from_request,
     get_project_model_rpm_limit,
     get_project_model_tpm_limit,
     is_request_body_safe,
@@ -256,6 +258,206 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
 def test_get_model_from_request_vertex_passthrough_still_works():
     route = "/vertex_ai/v1/projects/p/locations/l/publishers/google/models/gemini-1.5-pro:generateContent"
     assert get_model_from_request(request_data={}, route=route) == "gemini-1.5-pro"
+
+
+def test_get_model_from_request_openai_deployment_route_still_works():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/openai/deployments/my-azure-deployment/chat/completions",
+        )
+        == "my-azure-deployment"
+    )
+
+
+def test_get_model_from_request_includes_file_endpoint_header_model():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/v1/files",
+            request_headers={"X-LiteLLM-Model": "restricted-model"},
+        )
+        == "restricted-model"
+    )
+
+
+def test_get_model_from_request_ignores_routing_header_on_standard_llm_routes():
+    assert (
+        get_model_from_request(
+            request_data={"model": "allowed-model"},
+            route="/v1/chat/completions",
+            request_headers={"x-litellm-model": "restricted-model"},
+        )
+        == "allowed-model"
+    )
+
+
+def test_get_model_from_request_authorizes_all_file_routing_model_sources():
+    models = get_model_from_request(
+        request_data={"model": "body-model"},
+        route="/v1/files",
+        request_headers={"x-litellm-model": "header-model"},
+        request_query_params={"target_model_names": "query-model-a,query-model-b"},
+    )
+    assert isinstance(models, list)
+    assert set(models) == {
+        "body-model",
+        "query-model-a",
+        "query-model-b",
+        "header-model",
+    }
+
+
+def test_get_model_from_request_extracts_simple_encoded_file_id_model():
+    from litellm.proxy.openai_files_endpoints.common_utils import (
+        encode_file_id_with_model,
+    )
+
+    file_id = encode_file_id_with_model(
+        file_id="file-provider-id",
+        model="restricted-model",
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"file_id": file_id},
+            route="/v1/files/{file_id}",
+        )
+        == "restricted-model"
+    )
+
+
+def test_get_model_from_request_extracts_unified_file_id_models():
+    raw_unified_file_id = (
+        "litellm_proxy:application/octet-stream;unified_id,test-id;"
+        "target_model_names,model-a,model-b;llm_output_file_id,file-provider-id"
+    )
+    encoded_unified_file_id = (
+        base64.urlsafe_b64encode(raw_unified_file_id.encode()).decode().rstrip("=")
+    )
+
+    assert get_model_from_request(
+        request_data={"file_id": encoded_unified_file_id},
+        route="/v1/files/{file_id}",
+    ) == ["model-a", "model-b"]
+
+
+def test_get_model_from_request_extracts_eval_completion_model():
+    assert (
+        get_model_from_request(
+            request_data={"completion": {"model": "judge-model"}},
+            route="/v1/evals/{eval_id}/runs",
+        )
+        == "judge-model"
+    )
+
+
+def test_get_model_from_request_includes_fine_tuning_target_model_query():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/v1/fine_tuning/jobs",
+            request_query_params={"target_model_names": "fine-tune-model"},
+        )
+        == "fine-tune-model"
+    )
+
+
+def test_get_model_from_request_extracts_video_id_model():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    video_id = encode_video_id_with_provider(
+        video_id="video-provider-id",
+        provider="openai",
+        model_id="video-model",
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+        )
+        == "video-model"
+    )
+
+
+def test_get_model_from_request_only_runs_media_decoders_for_matching_fields():
+    with (
+        patch(
+            "litellm.types.videos.utils.decode_video_id_with_provider",
+            return_value={"model_id": "video-model"},
+        ) as video_decoder,
+        patch(
+            "litellm.types.videos.utils.decode_character_id_with_provider",
+            return_value={"model_id": "character-model"},
+        ) as character_decoder,
+    ):
+        assert (
+            get_model_from_request(
+                request_data={"file_id": "file-provider-id"},
+                route="/v1/files/{file_id}",
+            )
+            is None
+        )
+        video_decoder.assert_not_called()
+        character_decoder.assert_not_called()
+
+        assert (
+            get_model_from_request(
+                request_data={"video_id": "video-provider-id"},
+                route="/v1/videos/{video_id}",
+            )
+            == "video-model"
+        )
+        video_decoder.assert_called_once_with("video-provider-id")
+        character_decoder.assert_not_called()
+
+        video_decoder.reset_mock()
+        character_decoder.reset_mock()
+        assert (
+            get_model_from_request(
+                request_data={"character_id": "character-provider-id"},
+                route="/v1/videos/{character_id}",
+            )
+            == "character-model"
+        )
+        video_decoder.assert_not_called()
+        character_decoder.assert_called_once_with("character-provider-id")
+
+
+def test_get_model_from_request_handles_managed_id_decoder_failures():
+    with (
+        patch(
+            "litellm.proxy.openai_files_endpoints.common_utils.decode_model_from_file_id",
+            side_effect=Exception("decode failed"),
+        ),
+        patch(
+            "litellm.llms.base_llm.managed_resources.utils.parse_unified_id",
+            side_effect=Exception("parse failed"),
+        ),
+        patch(
+            "litellm.types.videos.utils.decode_video_id_with_provider",
+            side_effect=Exception("video decode failed"),
+        ),
+    ):
+        assert (
+            get_model_from_request(
+                request_data={"file_id": "not-a-managed-resource-id"},
+                route="/v1/files/{file_id}",
+            )
+            is None
+        )
+        assert (
+            get_model_from_request(
+                request_data={"video_id": "not-a-managed-resource-id"},
+                route="/v1/videos/{video_id}",
+            )
+            is None
+        )
+
+
+def test_abbreviate_api_key():
+    assert abbreviate_api_key("sk-test-1234") == "sk-...1234"
 
 
 def test_get_customer_user_header_returns_none_when_no_customer_role():
@@ -963,4 +1165,352 @@ class TestIsRequestBodySafeBlocksEndpointTargetingFields:
                 model="gpt-4",
             )
             is True
+        )
+
+
+# ── is_request_body_safe nested-config recursion (VERIA-6) ────────────────────
+
+
+class TestIsRequestBodySafeNestedConfig:
+    """The Milvus vector store transformer unpacks
+    ``litellm_embedding_config`` as ``**kwargs`` into ``litellm.embedding(...)``
+    — same SSRF / credential-exfil surface as a top-level ``api_base`` in
+    the request body. ``is_request_body_safe`` must recurse into this
+    nested dict so a banned param can't be smuggled in via nesting."""
+
+    def test_root_level_api_base_blocked_when_no_opt_in(self):
+        """Sanity check: pre-existing root-level enforcement still works."""
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={"api_base": "https://attacker.example.com"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
+    def test_nested_api_base_in_embedding_config_blocked(self):
+        """Smuggling ``api_base`` inside ``litellm_embedding_config`` is
+        the VERIA-6 bypass — must be blocked by the recursive check."""
+        with pytest.raises(ValueError, match="api_base"):
+            is_request_body_safe(
+                request_body={
+                    "litellm_embedding_config": {
+                        "api_base": "https://attacker.example.com",
+                        "api_key": "leaked-key",
+                    }
+                },
+                general_settings={},
+                llm_router=None,
+                model="milvus-store",
+            )
+
+    def test_nested_langfuse_host_in_embedding_config_blocked(self):
+        """The recursion uses the *full* banned-param list, not a special
+        subset — so any flag that's banned at the root is also banned
+        when nested."""
+        with pytest.raises(ValueError, match="langfuse_host"):
+            is_request_body_safe(
+                request_body={
+                    "litellm_embedding_config": {
+                        "langfuse_host": "https://attacker.example.com"
+                    }
+                },
+                general_settings={},
+                llm_router=None,
+                model="milvus-store",
+            )
+
+    def test_nested_api_base_allowed_when_admin_opts_in(self):
+        """Admins who explicitly enable client-side credential passthrough
+        keep the existing escape hatch — same UX as for root-level."""
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "litellm_embedding_config": {
+                        "api_base": "https://my-azure.example.com"
+                    }
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="milvus-store",
+            )
+            is True
+        )
+
+    def test_safe_nested_config_accepted(self):
+        """A nested config without any banned params passes — there's no
+        false-positive on legitimate ``api_version`` / model params."""
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "litellm_embedding_config": {
+                        "api_version": "2024-02-15-preview",
+                    }
+                },
+                general_settings={},
+                llm_router=None,
+                model="milvus-store",
+            )
+            is True
+        )
+
+    def test_non_dict_nested_config_does_not_break_check(self):
+        """A bogus type for ``litellm_embedding_config`` (string, list,
+        None) must not crash the validator — it should just fall through."""
+        assert (
+            is_request_body_safe(
+                request_body={"litellm_embedding_config": "not-a-dict"},
+                general_settings={},
+                llm_router=None,
+                model="x",
+            )
+            is True
+        )
+
+    def test_deeply_nested_config_does_not_recurse(self):
+        """Greptile P1: ``is_request_body_safe`` is iterative single-level —
+        a deeply-nested ``litellm_embedding_config`` cannot exhaust the
+        Python call stack to trigger a 500 ``RecursionError``. Build a
+        body 1000 levels deep; the validator must complete in O(1)
+        descent."""
+        body = {"litellm_embedding_config": {}}
+        cur = body["litellm_embedding_config"]
+        for _ in range(1000):
+            cur["litellm_embedding_config"] = {}
+            cur = cur["litellm_embedding_config"]
+        # Banned param at the deepest level shouldn't be reached — single
+        # level only.
+        cur["api_base"] = "https://attacker.example.com"
+
+        # No exception raised: deeper levels aren't checked.
+        assert (
+            is_request_body_safe(
+                request_body=body,
+                general_settings={},
+                llm_router=None,
+                model="x",
+            )
+            is True
+        )
+
+
+# ── observability-callback ban (root + metadata) ───────────────────────────
+
+
+class TestObservabilityCallbackBans:
+    """The proxy must reject observability credentials, hosts, and project
+    identifiers regardless of whether they arrive at the request body root,
+    in ``metadata`` / ``litellm_metadata``, or in a JSON-string-encoded
+    metadata blob (multipart/``extra_body`` path).
+
+    The ban list is derived from
+    ``litellm.litellm_core_utils.initialize_dynamic_callback_params._supported_callback_params``
+    minus a small ``_SAFE_CLIENT_CALLBACK_PARAMS`` allow-list, plus
+    ``_EXTRA_BANNED_OBSERVABILITY_PARAMS`` for fields integrations read but
+    that are not yet in the canonical allow-list. The derivation keeps the
+    proxy in sync as new integrations are added.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _disable_url_validation(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr(litellm, "user_url_validation", False, raising=False)
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "langfuse_public_key",
+            "langfuse_secret",
+            "langfuse_secret_key",
+            "langsmith_api_key",
+            "langsmith_project",
+            "langsmith_tenant_id",
+            "arize_api_key",
+            "arize_space_key",
+            "arize_space_id",
+            "posthog_api_key",
+            "posthog_api_url",
+            "braintrust_api_key",
+            "braintrust_project",
+            "phoenix_project_name",
+            "wandb_api_key",
+            "weave_project_id",
+            "gcs_bucket_name",
+            "gcs_path_service_account",
+            "humanloop_api_key",
+            "lunary_public_key",
+        ],
+    )
+    def test_observability_field_in_request_body_root_is_rejected(self, field):
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={"model": "gpt-4", field: "attacker-value"},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert field in str(exc.value)
+
+    @pytest.mark.parametrize(
+        "metadata_key",
+        ["metadata", "litellm_metadata"],
+    )
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "langfuse_host",
+            "langfuse_secret_key",
+            "langsmith_api_key",
+            "posthog_api_url",
+            "braintrust_project",
+            "phoenix_project_name",
+        ],
+    )
+    def test_observability_field_in_metadata_dict_is_rejected(
+        self, metadata_key, field
+    ):
+        # Verifies the metadata walk: a value smuggled inside ``metadata``
+        # or ``litellm_metadata`` is just as dangerous as the same field
+        # at the body root, and must hit the same gate.
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    metadata_key: {field: "attacker-value"},
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert field in str(exc.value)
+
+    @pytest.mark.parametrize(
+        "metadata_key",
+        ["metadata", "litellm_metadata"],
+    )
+    def test_observability_field_in_json_string_metadata_is_rejected(
+        self, metadata_key
+    ):
+        # Multipart/form-data and ``extra_body`` callers send metadata as a
+        # JSON-encoded string. The bouncer parses it before applying the
+        # banned-params check so the JSON-string path can't smuggle past
+        # the ``isinstance(dict)`` guard.
+        import json
+
+        with pytest.raises(ValueError) as exc:
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    metadata_key: json.dumps(
+                        {"langfuse_host": "https://attacker.example"}
+                    ),
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+        assert "langfuse_host" in str(exc.value)
+
+    def test_admin_opt_in_allows_metadata_credential_passthrough(self):
+        # The opt-in gate covers the metadata path the same way it covers
+        # the root path — operators running BYO observability with
+        # clientside creds flip a single flag and both paths work.
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "metadata": {
+                        "langfuse_host": "https://my-langfuse.example",
+                        "langfuse_public_key": "pk-mine",
+                        "langfuse_secret_key": "sk-mine",
+                    },
+                },
+                general_settings={"allow_client_side_credentials": True},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    def test_safe_per_request_observability_metadata_is_allowed(self):
+        # Informational fields (sampling rate, prompt version) describe
+        # the request being logged — they don't choose the destination or
+        # credentials, so they must remain accepted from clients without
+        # the opt-in flag.
+        assert (
+            is_request_body_safe(
+                request_body={
+                    "model": "gpt-4",
+                    "metadata": {
+                        "langfuse_prompt_version": "v2",
+                        "langsmith_sampling_rate": 0.1,
+                    },
+                },
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+
+def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
+    """Greptile P1: ``_check_banned_params`` previously ``return``-ed when a
+    deployment's ``configurable_clientside_auth_params`` permitted one
+    banned field, exiting before any later banned field in the same body
+    was checked. The metadata walk this PR adds multiplies the surface
+    where that bypass matters: a body pairing a model-level-allowed
+    ``api_base`` with an observability credential like ``langfuse_host``
+    must still reject on the second field, not silently pass."""
+    from litellm.proxy.auth import auth_utils
+
+    monkeypatch.setattr(
+        auth_utils,
+        "_allow_model_level_clientside_configurable_parameters",
+        lambda model, param, request_body_value, llm_router: param == "api_base",
+    )
+
+    with pytest.raises(ValueError) as exc:
+        is_request_body_safe(
+            request_body={
+                "model": "gpt-4",
+                "api_base": "https://allowed-by-deployment.example",
+                "langfuse_host": "https://attacker.example",
+            },
+            general_settings={},
+            llm_router=None,
+            model="gpt-4",
+        )
+    assert "langfuse_host" in str(exc.value)
+
+
+def test_observability_ban_covers_canonical_supported_callback_params():
+    """Guard test: every entry in the canonical
+    ``_supported_callback_params`` allow-list must end up either banned by
+    the proxy or explicitly safe-listed. New integrations added to that
+    list are banned by default (the safe failure mode); flagging them as
+    safe is an explicit decision recorded in
+    ``_SAFE_CLIENT_CALLBACK_PARAMS``."""
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        _request_blocked_callback_params,
+        _supported_callback_params,
+    )
+    from litellm.proxy.auth.auth_utils import (
+        _BANNED_REQUEST_BODY_PARAMS,
+        _SAFE_CLIENT_CALLBACK_PARAMS,
+    )
+
+    banned = set(_BANNED_REQUEST_BODY_PARAMS)
+    for param in _supported_callback_params:
+        assert param in banned or param in _SAFE_CLIENT_CALLBACK_PARAMS, (
+            f"{param} is in _supported_callback_params but neither banned nor "
+            f"safe-listed. Add it to _SAFE_CLIENT_CALLBACK_PARAMS if it is an "
+            f"informational per-request field; otherwise the derivation will "
+            f"ban it automatically."
+        )
+    for param in _request_blocked_callback_params:
+        assert param in banned, (
+            f"{param} is in _request_blocked_callback_params but is not banned "
+            "at the proxy request-body boundary."
         )

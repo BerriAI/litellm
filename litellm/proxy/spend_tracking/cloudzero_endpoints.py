@@ -6,6 +6,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -127,10 +128,10 @@ async def get_cloudzero_settings(
     Only the first 4 and last 4 characters of the API key are shown.
     Returns null/empty values when settings are not configured (consistent with other settings endpoints).
 
-    Only admin users can view CloudZero settings.
+    Only admin users (Proxy Admin or Admin Viewer) can view CloudZero settings.
     """
-    # Validation
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    # Validation — Admin Viewer follows the read-parity rule.
+    if not _user_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},

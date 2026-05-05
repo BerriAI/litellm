@@ -66,21 +66,6 @@ function LoginPageContent() {
       return;
     }
 
-    // Backwards compat: handle direct token in URL (legacy flow)
-    const urlToken = params.get("token");
-    if (urlToken && !isJwtExpired(urlToken)) {
-      document.cookie = `token=${urlToken}; path=/; SameSite=Lax`;
-      params.delete("token");
-      const cleanSearch = params.toString();
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""),
-      );
-      router.replace("/ui/?login=success");
-      return;
-    }
-
     // If switching workers on a control plane, clear the old token and show login
     const switchingWorker = params.has("worker");
     if (switchingWorker && uiConfig?.is_control_plane) {

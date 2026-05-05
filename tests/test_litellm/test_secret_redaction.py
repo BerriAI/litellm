@@ -9,11 +9,11 @@ from litellm._logging import (
     JsonFormatter,
     _redact_string,
     _secret_filter,
-    _setup_json_exception_handlers,
     verbose_logger,
     verbose_proxy_logger,
     verbose_router_logger,
 )
+from litellm.litellm_core_utils.secret_redaction import redact_string
 
 SECRET = "sk-proj-abc123def456ghi789jklmnopqrst"
 
@@ -57,12 +57,12 @@ def test_redact_string_catches_secret_patterns():
         SECRET,
     ]
     for secret in cases:
-        result = _redact_string("msg: " + secret)
+        result = redact_string("msg: " + secret)
         assert secret not in result, f"{secret!r} was not redacted"
         assert "REDACTED" in result
 
     normal = "Loaded model gpt-4 with 3 replicas on us-east-1"
-    assert _redact_string(normal) == normal
+    assert redact_string(normal) == normal
 
 
 def test_filter_redacts_secrets_in_logger_output():
@@ -155,7 +155,7 @@ def test_x_api_key_regex_does_not_consume_json_delimiters():
     """x-api-key pattern must stop before closing quotes/braces so JSON stays valid."""
     # Simulates a JSON log line containing an x-api-key header value
     json_line = '{"headers": {"x-api-key": "secret123"}, "status": 200}'
-    result = _redact_string(json_line)
+    result = redact_string(json_line)
     # The secret value should be redacted
     assert "secret123" not in result
     assert "REDACTED" in result
@@ -234,12 +234,12 @@ def test_key_name_redaction_catches_secrets_in_dict_repr():
         "'slack_webhook_url': 'https://hooks.slack.com/services/T00/B00/xxx'",
     ]
     for secret_line in cases:
-        result = _redact_string(secret_line)
+        result = redact_string(secret_line)
         assert "REDACTED" in result, f"Key-name redaction missed: {secret_line!r}"
 
     # Non-sensitive keys should NOT be redacted
     safe = "'enable_jwt_auth': True, 'store_model_in_db': True"
-    assert _redact_string(safe) == safe
+    assert redact_string(safe) == safe
 
 
 def test_key_name_redaction_in_general_settings_dict():
@@ -277,7 +277,7 @@ _SAMPLE_SA_JSON = (
 
 
 def test_pem_private_key_redacted_in_json():
-    result = _redact_string(_SAMPLE_SA_JSON)
+    result = redact_string(_SAMPLE_SA_JSON)
     assert "MIIEvQIBADA" not in result
     assert "-----BEGIN" not in result
 
@@ -286,12 +286,12 @@ def test_pem_private_key_redacted_in_dict_repr():
     import json
 
     sa = json.loads(_SAMPLE_SA_JSON)
-    result = _redact_string(str(sa))
+    result = redact_string(str(sa))
     assert "MIIEvQIBADA" not in result
 
 
 def test_service_account_blob_fully_redacted():
-    result = _redact_string(f"Got={_SAMPLE_SA_JSON}")
+    result = redact_string(f"Got={_SAMPLE_SA_JSON}")
     assert "my-proj-123" not in result
     assert "sa@my-proj.iam.gserviceaccount.com" not in result
     assert "abc123def" not in result
@@ -320,22 +320,22 @@ def test_vertex_traceback_redacts_pem():
         "Unable to load vertex credentials from environment. "
         f"Got={_SAMPLE_SA_JSON}"
     )
-    result = _redact_string(traceback_text)
+    result = redact_string(traceback_text)
     assert "MIIEvQIBADA" not in result
     assert "-----BEGIN" not in result
 
 
 def test_gcp_oauth_token_redacted():
-    result = _redact_string("access token ya29.c.c0ASRK0GZvXlongtokenhere")
+    result = redact_string("access token ya29.c.c0ASRK0GZvXlongtokenhere")
     assert "ya29." not in result
     assert "REDACTED" in result
 
 
 def test_non_pem_private_key_value_redacted():
-    result = _redact_string("'private_key': 'some-non-pem-secret-value'")
+    result = redact_string("'private_key': 'some-non-pem-secret-value'")
     assert "some-non-pem-secret" not in result
 
 
 def test_normal_vertex_log_not_redacted():
     msg = "Vertex: Loading vertex credentials, is_file_path=True, current dir /app"
-    assert _redact_string(msg) == msg
+    assert redact_string(msg) == msg

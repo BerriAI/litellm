@@ -1049,3 +1049,159 @@ def test_reset_budget_windows_query_error_does_not_break_team_path(monkeypatch):
     asyncio.run(job.reset_budget_windows())  # must not raise
 
     prisma_client.db.litellm_teamtable.update.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# Counter invalidation on budget reset
+# ---------------------------------------------------------------------------
+
+
+def _make_counter_invalidation_job(monkeypatch):
+    """Stub spend_counter_cache so we can observe invalidation calls."""
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.set_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    return spend_counter_cache
+
+
+def test_reset_budget_for_team_members_invalidates_redis_counter(monkeypatch):
+    """Team-member budget reset clears the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    membership = type(
+        "Membership",
+        (),
+        {"user_id": "alice", "team_id": "team-x", "budget_id": "budget-1"},
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[membership]
+    )
+    prisma_client.db.litellm_teammembership.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_litellm_team_members([expired_budget]))
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team_member:alice:team-x", value=0.0, ttl=60
+    )
+    counter_cache.redis_cache.async_set_cache.assert_any_await(
+        key="spend:team_member:alice:team-x", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_keys_invalidates_redis_counter(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Key budget reset must clear the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["key"] = [
+        type(
+            "Key",
+            (),
+            {
+                "spend": 100.0,
+                "budget_duration": "30d",
+                "budget_reset_at": now,
+                "id": "key-1",
+                "token": "sk-abc",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_keys())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:key:sk-abc", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_users_invalidates_redis_counter(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """User budget reset must clear the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["user"] = [
+        type(
+            "User",
+            (),
+            {
+                "spend": 50.0,
+                "budget_duration": "7d",
+                "budget_reset_at": now,
+                "id": "user-1",
+                "user_id": "alice",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_users())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:user:alice", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_teams_invalidates_redis_counter(
+    reset_budget_job, mock_prisma_client, monkeypatch
+):
+    """Team budget reset must clear the Redis spend counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    now = datetime.now(timezone.utc)
+    mock_prisma_client.data["team"] = [
+        type(
+            "Team",
+            (),
+            {
+                "spend": 200.0,
+                "budget_duration": "1mo",
+                "budget_reset_at": now,
+                "id": "team-1",
+                "team_id": "team-x",
+            },
+        )
+    ]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_teams())
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:team:team-x", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_keys_linked_to_budgets_invalidates_redis_counter(monkeypatch):
+    """Resetting keys via budget tier must clear each linked key's counter."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_key = type("Key", (), {"token": "sk-linked"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[linked_key]
+    )
+    prisma_client.db.litellm_verificationtoken.update_many = AsyncMock(
+        return_value={"count": 1}
+    )
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_keys_linked_to_budgets([expired_budget]))
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:key:sk-linked", value=0.0, ttl=60
+    )

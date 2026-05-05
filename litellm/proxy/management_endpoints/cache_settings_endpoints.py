@@ -8,14 +8,23 @@ POST /cache/settings/test - Test cache connection with provided credentials
 POST /cache/settings - Save cache settings to database
 """
 
+import asyncio
 import json
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Mapping, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
+import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm._uuid import uuid
+from litellm.proxy._types import (
+    AUDIT_ACTIONS,
+    LiteLLM_AuditLogs,
+    LitellmTableNames,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.management_endpoints import (
     CACHE_SETTINGS_FIELDS,
@@ -24,6 +33,85 @@ from litellm.types.management_endpoints import (
 )
 
 router = APIRouter()
+
+
+_REDACTED_VALUE = "***REDACTED***"
+
+
+def _redact_settings(settings: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Replace every value in a settings map with a fixed marker.
+
+    Cache config carries Redis credentials (passwords, connection strings).
+    The audit-log row preserves the field names so a reader can see *which*
+    fields changed, but values are stripped so the audit table can't itself
+    become a credential-harvest sink.
+    """
+    if not settings:
+        return {}
+    return {k: _REDACTED_VALUE for k in settings.keys()}
+
+
+def _log_audit_task_exception(task: "asyncio.Task[None]") -> None:
+    """Surface a fire-and-forget audit-log task failure as a warning.
+
+    ``asyncio.create_task`` swallows exceptions silently — if the audit
+    write fails we'd otherwise lose the row without any signal.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        verbose_proxy_logger.warning(
+            "Failed to write cache-settings audit log: %s", exc
+        )
+
+
+async def _emit_cache_settings_audit_log(
+    *,
+    action: AUDIT_ACTIONS,
+    before_settings: Optional[Mapping[str, Any]],
+    after_settings: Optional[Mapping[str, Any]],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str],
+) -> None:
+    """Emit an audit-log row for a /cache/settings mutation.
+
+    Mirrors the ``store_audit_logs``-gated pattern used in
+    ``team_callback_endpoints.py``: fire-and-forget, no-op when audit
+    logging is disabled, with a done-callback that surfaces any task
+    exception.  Captured under ``LiteLLM_CacheConfig`` so the row
+    co-locates with the table it mutates.
+    """
+    if litellm.store_audit_logs is not True:
+        return
+
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_audit_log_for_update,
+    )
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    task = asyncio.create_task(
+        create_audit_log_for_update(
+            request_data=LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=litellm_changed_by
+                or user_api_key_dict.user_id
+                or litellm_proxy_admin_name,
+                changed_by_api_key=user_api_key_dict.api_key,
+                table_name=LitellmTableNames.CACHE_CONFIG_TABLE_NAME,
+                object_id="cache_config",
+                action=action,
+                updated_values=json.dumps(
+                    {"settings": _redact_settings(after_settings)}, default=str
+                ),
+                before_value=json.dumps(
+                    {"settings": _redact_settings(before_settings)}, default=str
+                ),
+            )
+        )
+    )
+    task.add_done_callback(_log_audit_task_exception)
 
 
 class CacheSettingsManager:
@@ -282,6 +370,10 @@ async def test_cache_connection(
 async def update_cache_settings(
     request: CacheSettingsUpdateRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
 ):
     """
     Save cache settings to database and initialize cache.
@@ -313,6 +405,19 @@ async def update_cache_settings(
 
     try:
         cache_settings = request.cache_settings.copy()
+
+        # Snapshot the prior settings (key set only — values get redacted in
+        # the audit row) so the audit-log entry shows which fields changed.
+        existing_row = await prisma_client.db.litellm_cacheconfig.find_unique(
+            where={"id": "cache_config"}
+        )
+        before_settings: Optional[Dict[str, Any]] = None
+        if existing_row is not None and existing_row.cache_settings:
+            try:
+                before_settings = json.loads(existing_row.cache_settings)
+            except (TypeError, ValueError):
+                before_settings = None
+        action: AUDIT_ACTIONS = "updated" if existing_row is not None else "created"
 
         # Encrypt sensitive fields (keep redis_type for storage)
         encrypted_settings = proxy_config._encrypt_env_variables(
@@ -352,6 +457,18 @@ async def update_cache_settings(
 
         # Switch on LLM response caching
         proxy_config.switch_on_llm_response_caching()
+
+        # Cache settings carry Redis credentials and connection strings that
+        # control where LLM responses are cached.  An admin (or compromised
+        # admin) flipping the cache backend silently is a data-routing
+        # pivot; emit an audit-log row so the action is traceable.
+        await _emit_cache_settings_audit_log(
+            action=action,
+            before_settings=before_settings,
+            after_settings=cache_settings,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
 
         return {
             "message": "Cache settings updated successfully",

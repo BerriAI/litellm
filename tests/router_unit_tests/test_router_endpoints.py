@@ -1110,7 +1110,7 @@ def test_initialize_skills_endpoints():
 async def test_init_containers_api_endpoints():
     """
     Test that _init_containers_api_endpoints calls the original function
-    directly without model-based routing.
+    directly when there is no managed container ID (no embedded model_id).
     """
     router = Router(model_list=[])
 
@@ -1127,3 +1127,112 @@ async def test_init_containers_api_endpoints():
         custom_llm_provider="openai", name="Test Container"
     )
     assert result == mock_response
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_managed_id_routes_via_generic_fallbacks():
+    """
+    Managed ``cntr_`` IDs embed ``model_id``; router should decode and use
+    ``_ageneric_api_call_with_fallbacks`` so deployment credentials apply.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "azure-router-model",
+                "litellm_params": {
+                    "model": "azure/gpt-4",
+                    "api_key": "fake-key",
+                    "api_base": "https://westus.api.cognitive.microsoft.com",
+                },
+            }
+        ]
+    )
+    router._ageneric_api_call_with_fallbacks = AsyncMock()
+
+    managed_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id="azure-router-model",
+        container_id="cfile_upstream_abc",
+    )
+
+    await router._init_containers_api_endpoints(
+        original_function=AsyncMock(),
+        custom_llm_provider="openai",
+        container_id=managed_id,
+        file_id="cfile_xyz",
+    )
+
+    router._ageneric_api_call_with_fallbacks.assert_called_once()
+    call_kw = router._ageneric_api_call_with_fallbacks.call_args.kwargs
+    assert call_kw["model"] == "azure-router-model"
+    assert call_kw["container_id"] == "cfile_upstream_abc"
+    assert call_kw["file_id"] == "cfile_xyz"
+    assert call_kw["custom_llm_provider"] == "azure"
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_managed_id_without_model_id_unwraps():
+    """
+    Managed ``cntr_`` IDs may be encoded with an empty ``model_id`` (e.g. when a
+    streaming response had no router metadata). The router must still unwrap the
+    managed ID before calling the upstream provider — otherwise the raw
+    ``cntr_...`` token leaks downstream and the provider rejects it.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(model_list=[])
+    mock_original_function = AsyncMock(return_value={"ok": True})
+
+    managed_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="openai",
+        model_id=None,
+        container_id="cfile_upstream_abc",
+    )
+
+    await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        container_id=managed_id,
+        file_id="cfile_xyz",
+    )
+
+    mock_original_function.assert_called_once()
+    call_kw = mock_original_function.call_args.kwargs
+    assert call_kw["container_id"] == "cfile_upstream_abc"
+    assert call_kw["file_id"] == "cfile_xyz"
+    assert call_kw["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_init_containers_api_endpoints_managed_id_without_model_id_applies_decoded_provider():
+    """
+    A managed ``cntr_`` ID can encode a non-OpenAI provider (e.g. ``azure``) with
+    an empty ``model_id`` (streaming events without router ``model_info.id``).
+    The router must still apply the decoded provider so the request routes to
+    the correct upstream — not stay on the default ``openai``.
+    """
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    router = Router(model_list=[])
+    mock_original_function = AsyncMock(return_value={"ok": True})
+
+    managed_id = ResponsesAPIRequestUtils._build_container_id(
+        custom_llm_provider="azure",
+        model_id=None,
+        container_id="cfile_upstream_abc",
+    )
+
+    await router._init_containers_api_endpoints(
+        original_function=mock_original_function,
+        custom_llm_provider="openai",
+        container_id=managed_id,
+        file_id="cfile_xyz",
+    )
+
+    mock_original_function.assert_called_once()
+    call_kw = mock_original_function.call_args.kwargs
+    assert call_kw["container_id"] == "cfile_upstream_abc"
+    assert call_kw["file_id"] == "cfile_xyz"
+    assert call_kw["custom_llm_provider"] == "azure"

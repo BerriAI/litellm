@@ -1,4 +1,5 @@
 import base64
+import binascii
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
@@ -498,6 +499,82 @@ async def rotate_mcp_server_credentials_master_key(
         )
 
 
+def _decode_user_credential(stored: str) -> Optional[str]:
+    """Read back a value persisted in ``LiteLLM_MCPUserCredentials.credential_b64``.
+
+    Tries nacl decryption first (current write format).  Falls back to a
+    plain ``urlsafe_b64decode`` for rows persisted by older code that wrote
+    the credential without encryption.  Returns ``None`` when neither path
+    yields a valid string.
+    """
+    decrypted = decrypt_value_helper(
+        value=stored,
+        key="mcp_user_credential",
+        exception_type="debug",
+        return_original_value=False,
+    )
+    if decrypted is not None:
+        return decrypted
+    try:
+        return base64.urlsafe_b64decode(stored).decode()
+    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError):
+        return None
+
+
+def _decode_oauth_payload(stored: str) -> Optional[Dict[str, Any]]:
+    """Return the OAuth2 payload dict if ``stored`` holds one, else ``None``.
+
+    A row is considered an OAuth2 credential iff its decoded value parses as
+    a JSON object with ``"type": "oauth2"``.  Plain BYOK credentials (which
+    share the same column) decode to a non-JSON string and return ``None``.
+    """
+    decoded = _decode_user_credential(stored)
+    if decoded is None:
+        return None
+    try:
+        parsed = json.loads(decoded)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict) and parsed.get("type") == "oauth2":
+        return parsed
+    return None
+
+
+async def rotate_mcp_user_credentials_master_key(
+    prisma_client: PrismaClient, new_master_key: str
+):
+    """Re-encrypt every ``LiteLLM_MCPUserCredentials`` row with ``new_master_key``.
+
+    Reads each ``credential_b64`` with the current salt key (falling back to
+    legacy plain base64 for unmigrated rows) and writes it back encrypted
+    under the new master key.  Rows that are unreadable under both paths
+    are logged and skipped so one corrupt row does not abort the rotation.
+    """
+    rows = await prisma_client.db.litellm_mcpusercredentials.find_many()
+    for row in rows:
+        plaintext = _decode_user_credential(row.credential_b64)
+        if plaintext is None:
+            verbose_proxy_logger.warning(
+                "rotate_mcp_user_credentials_master_key: could not decode "
+                "credential for user_id=%s server_id=%s, skipping",
+                row.user_id,
+                row.server_id,
+            )
+            continue
+        re_encrypted = encrypt_value_helper(
+            plaintext, new_encryption_key=new_master_key
+        )
+        await prisma_client.db.litellm_mcpusercredentials.update(
+            where={
+                "user_id_server_id": {
+                    "user_id": row.user_id,
+                    "server_id": row.server_id,
+                }
+            },
+            data={"credential_b64": re_encrypted},
+        )
+
+
 async def store_user_credential(
     prisma_client: PrismaClient,
     user_id: str,
@@ -506,7 +583,7 @@ async def store_user_credential(
 ) -> None:
     """Store a user credential for a BYOK MCP server."""
 
-    encoded = base64.urlsafe_b64encode(credential.encode()).decode()
+    encoded = encrypt_value_helper(credential)
     await prisma_client.db.litellm_mcpusercredentials.upsert(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
         data={
@@ -532,16 +609,7 @@ async def get_user_credential(
     )
     if row is None:
         return None
-    try:
-        return base64.urlsafe_b64decode(row.credential_b64).decode()
-    except Exception:
-        # Fall back to nacl decryption for credentials stored by older code
-        return decrypt_value_helper(
-            value=row.credential_b64,
-            key="byok_credential",
-            exception_type="debug",
-            return_original_value=False,
-        )
+    return _decode_user_credential(row.credential_b64)
 
 
 async def has_user_credential(
@@ -582,7 +650,7 @@ async def store_user_oauth_credential(
 ) -> None:
     """Persist an OAuth2 access token for a user+server pair.
 
-    The payload is JSON-serialised and stored base64-encoded in the same
+    The payload is JSON-serialised and stored encrypted in the same
     ``credential_b64`` column used by BYOK.  A ``"type": "oauth2"`` key
     differentiates it from plain BYOK API keys.
     """
@@ -606,29 +674,27 @@ async def store_user_oauth_credential(
         payload["scopes"] = scopes
 
     # Guard against silently overwriting a BYOK credential with an OAuth token.
-    # BYOK credentials lack a "type" field (or use a non-"oauth2" type).
     # Skip the guard when the caller knows the row is already an OAuth2 credential
     # (e.g. during token refresh), saving an extra DB round-trip.
     if not skip_byok_guard:
         existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
             where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
         )
-        if existing is not None:
-            _byok_error = ValueError(
-                f"A non-OAuth2 credential already exists for user {user_id} "
-                f"and server {server_id}. Refusing to overwrite."
+        if (
+            existing is not None
+            and _decode_oauth_payload(existing.credential_b64) is None
+        ):
+            # Existing row is either a BYOK secret or an OAuth2 row that no
+            # longer decrypts (e.g. after a salt-key rotation).  In either
+            # case, refuse to overwrite — the caller would clobber data
+            # that may still be recoverable.
+            raise ValueError(
+                f"Existing credential for user {user_id} and server "
+                f"{server_id} could not be verified as an OAuth2 token. "
+                f"Refusing to overwrite."
             )
-            try:
-                raw = json.loads(
-                    base64.urlsafe_b64decode(existing.credential_b64).decode()
-                )
-            except Exception:
-                # Credential is not base64+JSON — it's a plain-text BYOK key.
-                raise _byok_error
-            if raw.get("type") != "oauth2":
-                raise _byok_error
 
-    encoded = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    encoded = encrypt_value_helper(json.dumps(payload))
     await prisma_client.db.litellm_mcpusercredentials.upsert(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
         data={
@@ -672,15 +738,7 @@ async def get_user_oauth_credential(
     )
     if row is None:
         return None
-    try:
-        decoded = base64.urlsafe_b64decode(row.credential_b64).decode()
-        parsed = json.loads(decoded)
-        if isinstance(parsed, dict) and parsed.get("type") == "oauth2":
-            return parsed
-        # Row exists but is a BYOK (plain string), not an OAuth token
-        return None
-    except Exception:
-        return None
+    return _decode_oauth_payload(row.credential_b64)
 
 
 async def list_user_oauth_credentials(
@@ -694,14 +752,11 @@ async def list_user_oauth_credentials(
     )
     results: List[Dict[str, Any]] = []
     for row in rows:
-        try:
-            decoded = base64.urlsafe_b64decode(row.credential_b64).decode()
-            parsed = json.loads(decoded)
-            if isinstance(parsed, dict) and parsed.get("type") == "oauth2":
-                parsed["server_id"] = row.server_id
-                results.append(parsed)
-        except Exception:
-            pass  # Skip non-OAuth rows (BYOK plain strings)
+        payload = _decode_oauth_payload(row.credential_b64)
+        if payload is None:
+            continue
+        payload["server_id"] = row.server_id
+        results.append(payload)
     return results
 
 

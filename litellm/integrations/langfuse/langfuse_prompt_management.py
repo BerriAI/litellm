@@ -20,7 +20,7 @@ from ...litellm_core_utils.specialty_caches.dynamic_logging_cache import (
     DynamicLoggingCache,
 )
 from ..prompt_management_base import PromptManagementBase
-from .langfuse import LangFuseLogger
+from .langfuse import LangFuseLogger, resolve_langfuse_credentials
 from .langfuse_handler import LangFuseHandler
 
 if TYPE_CHECKING:
@@ -46,6 +46,7 @@ def langfuse_client_init(
     langfuse_secret_key=None,
     langfuse_host=None,
     flush_interval=1,
+    allow_env_credentials: bool = True,
 ) -> LangfuseClass:
     """
     Initialize Langfuse client with caching to prevent multiple initializations.
@@ -70,14 +71,12 @@ def langfuse_client_init(
             f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\n\033[0m"
         )
 
-    # Instance variables
-
-    secret_key = (
-        langfuse_secret or langfuse_secret_key or os.getenv("LANGFUSE_SECRET_KEY")
-    )
-    public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
-    langfuse_host = langfuse_host or os.getenv(
-        "LANGFUSE_HOST", "https://cloud.langfuse.com"
+    public_key, secret_key, langfuse_host = resolve_langfuse_credentials(
+        langfuse_public_key=langfuse_public_key,
+        langfuse_secret=langfuse_secret,
+        langfuse_secret_key=langfuse_secret_key,
+        langfuse_host=langfuse_host,
+        allow_env_credentials=allow_env_credentials,
     )
 
     if not (
@@ -222,6 +221,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
             langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
+            allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
         )
         langfuse_prompt_client = self._get_prompt_from_id(
             langfuse_prompt_id=prompt_id,
@@ -246,6 +246,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_secret=dynamic_callback_params.get("langfuse_secret"),
             langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
+            allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
         )
         langfuse_prompt_client = self._get_prompt_from_id(
             langfuse_prompt_id=prompt_id,

@@ -47,6 +47,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "inference_geo",
             "speed",
             "output_config",
+            "reasoning_effort",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
@@ -167,6 +168,62 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         return headers, api_base
 
     @staticmethod
+    def _translate_reasoning_effort_to_anthropic(
+        model: str, optional_params: Dict
+    ) -> None:
+        """Map OpenAI-style ``reasoning_effort`` to native Anthropic params.
+
+        Caller-supplied ``thinking`` / ``output_config`` win over the alias.
+        ``effort='none'`` clears both. Invalid efforts raise a 400.
+        """
+        from litellm.exceptions import BadRequestError as _BadRequestError
+        from litellm.llms.anthropic.chat.transformation import (
+            REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT,
+            AnthropicConfig,
+        )
+
+        reasoning_effort = optional_params.pop("reasoning_effort", None)
+        if not isinstance(reasoning_effort, str):
+            return
+
+        try:
+            mapped_thinking = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort=reasoning_effort, model=model
+            )
+        except _BadRequestError as e:
+            raise AnthropicError(message=str(e.message), status_code=400)
+
+        if mapped_thinking is None:
+            optional_params.pop("thinking", None)
+            optional_params.pop("output_config", None)
+            return
+
+        optional_params.setdefault("thinking", mapped_thinking)
+        if AnthropicModelInfo._is_adaptive_thinking_model(model):
+            mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                reasoning_effort
+            )
+            if mapped_effort is None:
+                raise AnthropicError(
+                    message=(
+                        f"Invalid reasoning_effort: {reasoning_effort!r}. "
+                        f"Must be one of: 'minimal', 'low', 'medium', 'high', "
+                        f"'xhigh', 'max', 'none'"
+                    ),
+                    status_code=400,
+                )
+            gate_error = AnthropicConfig._validate_effort_for_model(
+                model, mapped_effort
+            )
+            if gate_error is not None:
+                raise AnthropicError(message=gate_error, status_code=400)
+            existing_output_config = optional_params.get("output_config")
+            if not isinstance(existing_output_config, dict):
+                existing_output_config = {}
+            existing_output_config.setdefault("effort", mapped_effort)
+            optional_params["output_config"] = existing_output_config
+
+    @staticmethod
     def _translate_legacy_thinking_for_adaptive_model(
         model: str, optional_params: Dict
     ) -> None:
@@ -216,6 +273,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 message="max_tokens is required for Anthropic /v1/messages API",
                 status_code=400,
             )
+
+        self._translate_reasoning_effort_to_anthropic(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+        )
 
         self._translate_legacy_thinking_for_adaptive_model(
             model=model,

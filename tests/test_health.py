@@ -73,8 +73,27 @@ async def test_health_readiness():
             response_json = await response.json()
 
             print(response_json)
-            assert "litellm_version" in response_json
             assert "status" in response_json
+
+            if status != 200:
+                raise Exception(f"Request did not return a 200 status code: {status}")
+
+
+@pytest.mark.asyncio
+async def test_health_readiness_details():
+    """
+    Check if authenticated readiness diagnostics expose version metadata.
+    """
+    async with aiohttp.ClientSession() as session:
+        url = "http://0.0.0.0:4000/health/readiness/details"
+        headers = {"Authorization": "Bearer sk-1234"}
+        async with session.get(url, headers=headers) as response:
+            status = response.status
+            response_json = await response.json()
+
+            print(response_json)
+            assert "status" in response_json
+            assert "litellm_version" in response_json
 
             if status != 200:
                 raise Exception(f"Request did not return a 200 status code: {status}")

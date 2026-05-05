@@ -47,6 +47,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.utils import is_known_model
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_user_can_access_vector_store,
+    get_litellm_managed_vector_store,
     is_allowed_to_call_vector_store_endpoint,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -533,6 +535,10 @@ async def milvus_proxy_route(
     )
     if vector_store is None:
         raise Exception(f"Vector store not found for {vector_store_name}")
+    await assert_user_can_access_vector_store(
+        vector_store=vector_store,
+        user_api_key_dict=user_api_key_dict,
+    )
     litellm_params = vector_store.get("litellm_params") or {}
     auth_credentials = provider_config.get_auth_credentials(
         litellm_params=litellm_params
@@ -1438,6 +1444,10 @@ async def azure_proxy_route(
                 )
                 if vector_store is None:
                     raise Exception(f"Vector store not found for {vector_store_name}")
+                await assert_user_can_access_vector_store(
+                    vector_store=vector_store,
+                    user_api_key_dict=user_api_key_dict,
+                )
                 litellm_params = vector_store.get("litellm_params") or {}
                 auth_credentials = provider_config.get_auth_credentials(
                     litellm_params=litellm_params
@@ -1777,6 +1787,11 @@ async def _base_vertex_proxy_route(
             request=request,
             api_key=api_key_to_use,
         )
+    if router_credentials is not None:
+        await assert_user_can_access_vector_store(
+            vector_store=router_credentials,
+            user_api_key_dict=user_api_key_dict,
+        )
 
     vertex_project: Optional[str] = get_vertex_project_id_from_url(endpoint)
     vertex_location: Optional[str] = get_vertex_location_from_url(endpoint)
@@ -1913,11 +1928,11 @@ async def vertex_discovery_proxy_route(
             "Extracted vector store ID from endpoint: %s", vector_store_id
         )
 
-        # Retrieve vector store credentials from the registry
-        vector_store_credentials = (
-            passthrough_endpoint_router.get_vector_store_credentials(
-                vector_store_id=vector_store_id
-            )
+        # Retrieve LiteLLM-managed vector store credentials if the datastore id
+        # is registered with LiteLLM. Unknown datastore ids keep the existing
+        # direct Vertex pass-through behavior.
+        vector_store_credentials = await get_litellm_managed_vector_store(
+            vector_store_id=vector_store_id
         )
 
         if vector_store_credentials:
@@ -1925,7 +1940,7 @@ async def vertex_discovery_proxy_route(
                 "Found vector store credentials for ID: %s", vector_store_id
             )
         else:
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.debug(
                 "Vector store ID %s found in endpoint but no credentials found in registry",
                 vector_store_id,
             )

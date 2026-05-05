@@ -41,6 +41,7 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
@@ -167,6 +168,37 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
 
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
+
+    @staticmethod
+    def _resolve_oauth2_flow(
+        *,
+        auth_type: Optional[MCPAuthType],
+        oauth2_flow: Optional[str],
+        token_url: Optional[str],
+        authorization_url: Optional[str],
+        client_id: Optional[str],
+        client_secret: Optional[str],
+    ) -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """Infer oauth2_flow for legacy records that omit the field.
+
+        DB rows created before oauth2_flow support may have OAuth2 client
+        credentials + token_url but a null oauth2_flow. Treat these as M2M,
+        unless authorization_url is present (interactive OAuth).
+        """
+        if oauth2_flow in ("client_credentials", "authorization_code"):
+            return cast(
+                Literal["client_credentials", "authorization_code"], oauth2_flow
+            )
+        if oauth2_flow:
+            # Ignore unknown/untyped values and continue legacy inference.
+            return None
+        if auth_type != MCPAuth.oauth2:
+            return None
+        if authorization_url:
+            return None
+        if token_url and client_id and client_secret:
+            return "client_credentials"
+        return None
 
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
@@ -341,7 +373,14 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
-                oauth2_flow=server_config.get("oauth2_flow", None),
+                oauth2_flow=self._resolve_oauth2_flow(
+                    auth_type=auth_type,
+                    oauth2_flow=server_config.get("oauth2_flow", None),
+                    token_url=resolved_token_url,
+                    authorization_url=resolved_authorization_url,
+                    client_id=server_config.get("client_id", None),
+                    client_secret=server_config.get("client_secret", None),
+                ),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -678,7 +717,17 @@ class MCPServerManager:
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
-            oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
+            oauth2_flow=self._resolve_oauth2_flow(
+                auth_type=auth_type,
+                oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
+                token_url=mcp_server.token_url
+                or getattr(mcp_oauth_metadata, "token_url", None),
+                authorization_url=mcp_server.authorization_url
+                or getattr(mcp_oauth_metadata, "authorization_url", None),
+                client_id=client_id_value or getattr(mcp_server, "client_id", None),
+                client_secret=client_secret_value
+                or getattr(mcp_server, "client_secret", None),
+            ),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url
             or getattr(mcp_oauth_metadata, "authorization_url", None),
@@ -1499,6 +1548,47 @@ class MCPServerManager:
         )
         return await client.get_prompt(get_prompt_request_params)
 
+    @staticmethod
+    def _is_same_authority_metadata_url(url: str, server_url: str) -> bool:
+        """
+        Whether ``url`` shares scheme, host, and port with ``server_url``.
+
+        Same-authority metadata URLs are produced by our well-known discovery
+        construction and by resource servers that publish protected-resource
+        metadata on the resource origin. These must keep working for
+        administrator-configured internal MCP servers, so they are fetched
+        directly. Cross-origin URLs are fetched through ``async_safe_get``.
+        """
+        try:
+            target = urlparse(url)
+            base = urlparse(server_url)
+        except Exception:
+            return False
+
+        if target.scheme not in ("http", "https") or not target.hostname:
+            return False
+
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        base_port = base.port or (443 if base.scheme == "https" else 80)
+        return (
+            base.scheme == target.scheme
+            and (base.hostname or "").lower() == target.hostname.lower()
+            and base_port == target_port
+        )
+
+    async def _fetch_oauth_discovery_url(self, url: str, server_url: str) -> Any:
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.MCP,
+            params={"timeout": MCP_METADATA_TIMEOUT},
+        )
+        if self._is_same_authority_metadata_url(url, server_url):
+            # Same-authority URLs may point at administrator-configured
+            # internal MCP servers. Do not run them through user URL
+            # validation, but also do not follow redirects because the
+            # redirect target would not inherit the same-authority guarantee.
+            return await client.get(url, follow_redirects=False)
+        return await async_safe_get(client, url)
+
     async def _descovery_metadata(
         self,
         server_url: str,
@@ -1514,7 +1604,7 @@ class MCPServerManager:
                 resource_scopes,
             ) = await self._attempt_well_known_discovery(server_url)
             metadata = await self._fetch_authorization_server_metadata(
-                authorization_servers
+                authorization_servers, server_url
             )
             if (
                 metadata is None
@@ -1555,7 +1645,7 @@ class MCPServerManager:
                     authorization_servers,
                     resource_scopes,
                 ) = await self._fetch_oauth_metadata_from_resource(
-                    resource_metadata_url
+                    resource_metadata_url, server_url
                 )
             else:
                 (
@@ -1576,7 +1666,7 @@ class MCPServerManager:
 
             if authorization_servers:
                 metadata = await self._fetch_authorization_server_metadata(
-                    authorization_servers
+                    authorization_servers, server_url
                 )
 
             preferred_scopes = scopes or resource_scopes
@@ -1616,19 +1706,26 @@ class MCPServerManager:
         return resource_metadata_url, scopes
 
     async def _fetch_oauth_metadata_from_resource(
-        self, resource_metadata_url: str
+        self, resource_metadata_url: str, server_url: str
     ) -> Tuple[List[str], Optional[List[str]]]:
         if not resource_metadata_url:
             return [], None
 
         try:
-            client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": MCP_METADATA_TIMEOUT},
+            response = await self._fetch_oauth_discovery_url(
+                resource_metadata_url, server_url
             )
-            response = await client.get(resource_metadata_url)
             response.raise_for_status()
             data = response.json()
+        except SSRFError as exc:
+            verbose_logger.warning(
+                "MCP OAuth discovery: refusing to fetch resource metadata from %s "
+                "(rejected by SSRF guard for server %s): %s",
+                resource_metadata_url,
+                server_url,
+                exc,
+            )
+            return [], None
         except Exception as exc:  # pragma: no cover - network issues
             verbose_logger.debug(
                 "Failed to fetch MCP OAuth metadata from %s: %s",
@@ -1677,23 +1774,25 @@ class MCPServerManager:
             (
                 authorization_servers,
                 scopes,
-            ) = await self._fetch_oauth_metadata_from_resource(url)
+            ) = await self._fetch_oauth_metadata_from_resource(url, server_url)
             if authorization_servers:
                 return authorization_servers, scopes
 
         return [], None
 
     async def _fetch_authorization_server_metadata(
-        self, authorization_servers: List[str]
+        self, authorization_servers: List[str], server_url: str
     ) -> Optional[MCPOAuthMetadata]:
         for issuer in authorization_servers:
-            metadata = await self._fetch_single_authorization_server_metadata(issuer)
+            metadata = await self._fetch_single_authorization_server_metadata(
+                issuer, server_url
+            )
             if metadata is not None:
                 return metadata
         return None
 
     async def _fetch_single_authorization_server_metadata(
-        self, issuer_url: str
+        self, issuer_url: str, server_url: str
     ) -> Optional[MCPOAuthMetadata]:
         try:
             parsed = urlparse(issuer_url)
@@ -1721,13 +1820,18 @@ class MCPServerManager:
 
         for url in candidate_urls:
             try:
-                client = get_async_httpx_client(
-                    llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": MCP_METADATA_TIMEOUT},
-                )
-                response = await client.get(url)
+                response = await self._fetch_oauth_discovery_url(url, server_url)
                 response.raise_for_status()
                 data = response.json()
+            except SSRFError as exc:
+                verbose_logger.warning(
+                    "MCP OAuth discovery: refusing to fetch authorization-server "
+                    "metadata from %s (rejected by SSRF guard for server %s): %s",
+                    url,
+                    server_url,
+                    exc,
+                )
+                continue
             except Exception as exc:  # pragma: no cover - network issues
                 verbose_logger.debug(
                     "Failed to fetch authorization metadata from %s: %s",
@@ -2370,7 +2474,7 @@ class MCPServerManager:
             )
         )
 
-    async def _call_regular_mcp_tool(
+    async def _call_regular_mcp_tool(  # noqa: PLR0915
         self,
         mcp_server: MCPServer,
         original_tool_name: str,
@@ -2433,7 +2537,11 @@ class MCPServerManager:
         # oauth2 headers
         extra_headers: Optional[Dict[str, str]] = None
         if mcp_server.auth_type == MCPAuth.oauth2:
-            extra_headers = oauth2_headers
+            if mcp_server.has_client_credentials:
+                # For M2M OAuth servers, Authorization must come from token fetch.
+                extra_headers = None
+            else:
+                extra_headers = oauth2_headers
 
         if mcp_server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -2444,6 +2552,11 @@ class MCPServerManager:
             }
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
+                    continue
+                if (
+                    mcp_server.has_client_credentials
+                    and header.lower() == "authorization"
+                ):
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
@@ -2479,6 +2592,10 @@ class MCPServerManager:
                         mcp_server.server_name or mcp_server.name,
                     )
             extra_headers.update(hook_extra_headers)
+
+        # Reset to None if no headers were actually added
+        if extra_headers is not None and len(extra_headers) == 0:
+            extra_headers = None
 
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
 

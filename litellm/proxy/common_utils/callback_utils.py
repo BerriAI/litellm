@@ -14,6 +14,8 @@ from litellm.types.utils import (
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
 
+TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY = "_pillar_response_headers_trusted"
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
@@ -417,10 +419,19 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
     if "semantic-similarity" in _metadata:
         headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
 
+    is_trusted_pillar_metadata = (
+        _metadata.get(TRUSTED_PILLAR_RESPONSE_HEADERS_METADATA_KEY) is True
+    )
     pillar_headers = _metadata.get("pillar_response_headers")
-    if isinstance(pillar_headers, dict):
-        headers.update(pillar_headers)
-    elif "pillar_flagged" in _metadata:
+    if is_trusted_pillar_metadata and isinstance(pillar_headers, dict):
+        headers.update(
+            {
+                key: str(value)
+                for key, value in pillar_headers.items()
+                if isinstance(key, str) and key.lower().startswith("x-pillar-")
+            }
+        )
+    elif is_trusted_pillar_metadata and "pillar_flagged" in _metadata:
         headers["x-pillar-flagged"] = str(_metadata["pillar_flagged"]).lower()
 
     return headers

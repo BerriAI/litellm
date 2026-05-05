@@ -185,3 +185,6 @@ test-llm-translation-single: install-test-deps
 	$(UV_RUN) pytest tests/llm_translation/$(FILE) \
 		--junitxml=test-results/junit.xml \
 		-v --tb=short --maxfail=100 --timeout=300
+
+test-llm-translation-flush-vcr-cache:
+	$(UV_RUN) python tests/_flush_vcr_cache.py

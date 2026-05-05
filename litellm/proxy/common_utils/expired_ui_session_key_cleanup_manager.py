@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
     LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE,
@@ -31,7 +31,7 @@ class ExpiredUISessionKeyCleanupManager:
     def __init__(
         self,
         prisma_client: PrismaClient,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         pod_lock_manager=None,
     ):
         self.prisma_client = prisma_client

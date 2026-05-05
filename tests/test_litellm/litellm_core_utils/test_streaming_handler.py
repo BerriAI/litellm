@@ -878,6 +878,39 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
     assert "invalid maxOutputTokens" in str(excinfo.value)
 
 
+@pytest.mark.asyncio
+async def test_async_streaming_read_timeout_triggers_midstream_fallback(
+    logging_obj: Logging,
+):
+    """A mid-stream httpx.ReadTimeout must wrap into MidStreamFallbackError so
+    the Router's FallbackStreamWrapper can switch to a fallback model.
+
+    Previously __anext__ caught httpx.TimeoutException and re-raised it raw,
+    which bypassed _handle_stream_fallback_error and prevented stream_timeout
+    from triggering fallbacks the way connection-phase timeout does.
+    """
+    import httpx
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    async def _raise_read_timeout(**kwargs):
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        make_call=_raise_read_timeout,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert isinstance(excinfo.value.original_exception, Exception)
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):

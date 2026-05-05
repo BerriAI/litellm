@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
@@ -44,6 +45,28 @@ _LITELLM_PARAMS_MASKER = SensitiveDataMasker()
 
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH = 10
+
+# Use-time embedding-config resolution runs on every vector-store request
+# whose persisted row carries only a model reference (the post-fix shape).
+# Without a cache, that's one ``litellm_proxymodeltable.find_first`` per
+# request — the no-DB-in-critical-path rule. Hold the resolved config in
+# memory for a short TTL so a hot model name pays the DB lookup at most
+# once per ``_EMBEDDING_CONFIG_CACHE_TTL`` seconds. Cleartext credentials
+# only ever live in process memory (never persisted, never echoed in
+# management responses), so the cache doesn't widen the disclosure surface.
+_EMBEDDING_CONFIG_CACHE_TTL = 60
+_EMBEDDING_CONFIG_CACHE_MAX_SIZE = 256
+_embedding_config_cache: Optional[InMemoryCache] = None
+
+
+def _get_embedding_config_cache() -> InMemoryCache:
+    global _embedding_config_cache
+    if _embedding_config_cache is None:
+        _embedding_config_cache = InMemoryCache(
+            max_size_in_memory=_EMBEDDING_CONFIG_CACHE_MAX_SIZE,
+            default_ttl=_EMBEDDING_CONFIG_CACHE_TTL,
+        )
+    return _embedding_config_cache
 
 
 def _redact_sensitive_litellm_params(litellm_params: Any, _depth: int = 0) -> Any:
@@ -303,6 +326,11 @@ async def _resolve_embedding_config(
     This function first checks the router for config-defined models, then falls back
     to the database. This allows users to use models defined in either location.
 
+    Results are cached in process memory for ``_EMBEDDING_CONFIG_CACHE_TTL``
+    seconds so the request-handling path doesn't hit the database on every
+    vector-store call. Negative results (model not found) are intentionally
+    not cached to avoid blocking a freshly-added model behind the TTL.
+
     Args:
         embedding_model: The embedding model string (e.g., "text-embedding-ada-002" or "azure/text-embedding-3-large")
         prisma_client: The Prisma client instance
@@ -313,6 +341,11 @@ async def _resolve_embedding_config(
     """
     if not embedding_model:
         return None
+
+    cache = _get_embedding_config_cache()
+    cached = cache.get_cache(embedding_model)
+    if cached is not None:
+        return cached
 
     # Import llm_router if not provided
     if llm_router is None:
@@ -330,6 +363,7 @@ async def _resolve_embedding_config(
             verbose_proxy_logger.debug(
                 f"Resolved embedding config from router for model {embedding_model}"
             )
+            cache.set_cache(embedding_model, router_config)
             return router_config
 
     # Fall back to database
@@ -341,6 +375,7 @@ async def _resolve_embedding_config(
             verbose_proxy_logger.debug(
                 f"Resolved embedding config from database for model {embedding_model}"
             )
+            cache.set_cache(embedding_model, db_config)
             return db_config
 
     verbose_proxy_logger.debug(
@@ -432,20 +467,17 @@ async def create_vector_store_in_db(
     if user_id is not None:
         data_to_create["user_id"] = user_id
 
-    # Handle litellm_params - always provide at least an empty dict
+    # Handle litellm_params - always provide at least an empty dict.
+    # The earlier behaviour resolved ``litellm_embedding_config`` from the
+    # admin-configured router/DB model and persisted the cleartext result
+    # (``api_key``, ``api_base``, ``api_version``) into this row. That
+    # exposed every env-stored embedding-model credential on the
+    # ``/vector_store/{new,info,update,list}`` responses. Keep the user's
+    # raw ``litellm_embedding_model`` reference; resolution now happens in
+    # ``_update_request_data_with_litellm_managed_vector_store_registry``
+    # at request-handling time so the cleartext config exists only in
+    # per-request memory and never reaches the database.
     if litellm_params:
-        # Auto-resolve embedding config if embedding model is provided but config is not
-        embedding_model = litellm_params.get("litellm_embedding_model")
-        if embedding_model and not litellm_params.get("litellm_embedding_config"):
-            resolved_config = await _resolve_embedding_config(
-                embedding_model=embedding_model, prisma_client=prisma_client
-            )
-            if resolved_config:
-                litellm_params["litellm_embedding_config"] = resolved_config
-                verbose_proxy_logger.info(
-                    f"Auto-resolved embedding config for model {embedding_model}"
-                )
-
         litellm_params_dict = GenericLiteLLMParams(**litellm_params).model_dump(
             exclude_none=True
         )
@@ -531,10 +563,19 @@ async def new_vector_store(
             user_id=user_api_key_dict.user_id,
         )
 
+        # Apply the same litellm_params redaction the list / info / update
+        # endpoints already use, so a caller-supplied credential or a
+        # cleartext value persisted by an earlier proxy version doesn't
+        # come back in the response.
+        response_vs = LiteLLM_ManagedVectorStore(**new_vector_store)
+        response_vs["litellm_params"] = _redact_sensitive_litellm_params(
+            new_vector_store.get("litellm_params")
+        )
+
         return {
             "status": "success",
             "message": f"Vector store {vector_store.get('vector_store_id')} created successfully",
-            "vector_store": new_vector_store,
+            "vector_store": response_vs,
         }
     except Exception as e:
         verbose_proxy_logger.exception(f"Error creating vector store: {str(e)}")
@@ -865,24 +906,15 @@ async def update_vector_store(
                 update_data["vector_store_metadata"]
             )
 
-        # Handle litellm_params if provided
+        # Handle litellm_params if provided. As with the create path, the
+        # embedding-config auto-resolve previously persisted cleartext
+        # credentials into the row; resolution now happens at request-
+        # handling time in
+        # ``_update_request_data_with_litellm_managed_vector_store_registry``
+        # so this row only ever stores the user-supplied
+        # ``litellm_embedding_model`` reference.
         if "litellm_params" in update_data:
             _input_litellm_params: dict = update_data.get("litellm_params", {}) or {}
-
-            # Auto-resolve embedding config if embedding model is provided but config is not
-            embedding_model = _input_litellm_params.get("litellm_embedding_model")
-            if embedding_model and not _input_litellm_params.get(
-                "litellm_embedding_config"
-            ):
-                resolved_config = await _resolve_embedding_config(
-                    embedding_model=embedding_model, prisma_client=prisma_client
-                )
-                if resolved_config:
-                    _input_litellm_params["litellm_embedding_config"] = resolved_config
-                    verbose_proxy_logger.info(
-                        f"Auto-resolved embedding config for model {embedding_model}"
-                    )
-
             litellm_params_dict = GenericLiteLLMParams(
                 **_input_litellm_params
             ).model_dump(exclude_none=True)

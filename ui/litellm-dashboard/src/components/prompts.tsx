@@ -8,7 +8,7 @@ import PromptInfoView from "./prompts/prompt_info";
 import AddPromptForm from "./prompts/add_prompt_form";
 import PromptEditorView from "./prompts/prompt_editor_view";
 import NotificationsManager from "./molecules/notifications_manager";
-import { isAdminRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 
 interface PromptsProps {
   accessToken: string | null;
@@ -27,6 +27,8 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   const [promptToDelete, setPromptToDelete] = useState<{ id: string; name: string } | null>(null);
 
   const isAdmin = userRole ? isAdminRole(userRole) : false;
+  // Admin Viewer follows the read-parity rule: see prompts, no writes.
+  const canModify = userRole ? isProxyAdminRole(userRole) : false;
 
   const fetchPrompts = async () => {
     if (!accessToken) {
@@ -128,7 +130,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
           promptId={selectedPromptId}
           onClose={() => setSelectedPromptId(null)}
           accessToken={accessToken}
-          isAdmin={isAdmin}
+          isAdmin={canModify}
           onDelete={fetchPrompts}
           onEdit={handleEditPrompt}
         />
@@ -136,12 +138,16 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
         <>
           <div className="flex justify-between items-center mb-4">
             <div className="flex gap-2">
-              <Button onClick={handleAddPrompt} disabled={!accessToken}>
-                + Add New Prompt
-              </Button>
-              <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
-                Upload .prompt File
-              </Button>
+              {canModify && (
+                <>
+                  <Button onClick={handleAddPrompt} disabled={!accessToken}>
+                    + Add New Prompt
+                  </Button>
+                  <Button onClick={handleAddPromptFromFile} disabled={!accessToken} variant="secondary">
+                    Upload .prompt File
+                  </Button>
+                </>
+              )}
             </div>
             <Select
               placeholder="All Environments"
@@ -163,7 +169,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
             onPromptClick={handlePromptClick}
             onDeleteClick={handleDeleteClick}
             accessToken={accessToken}
-            isAdmin={isAdmin}
+            isAdmin={canModify}
           />
         </>
       )}

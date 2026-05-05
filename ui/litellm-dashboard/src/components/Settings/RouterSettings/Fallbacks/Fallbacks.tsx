@@ -8,6 +8,7 @@ import DeleteResourceModal from "../../../common_components/DeleteResourceModal"
 import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
 import NotificationsManager from "../../../molecules/notifications_manager";
 import { getCallbacksCall, setCallbacksCall } from "../../../networking";
+import { isProxyAdminRole } from "@/utils/roles";
 import AddFallbacks from "./AddFallbacks";
 
 type FallbackEntry = { [modelName: string]: string[] };
@@ -243,15 +244,19 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
   };
 
   const hasFallbacks = Array.isArray(routerSettings.fallbacks) && routerSettings.fallbacks.length > 0;
+  // Admin Viewer follows the read-parity rule: see fallbacks, no writes.
+  const canModify = isProxyAdminRole(userRole ?? "");
 
   return (
     <>
-      <AddFallbacks
-        models={modelData?.data ? modelData.data.map((data: any) => data.model_name) : []}
-        accessToken={accessToken || ""}
-        value={routerSettings.fallbacks || []}
-        onChange={handleFallbacksChange}
-      />
+      {canModify && (
+        <AddFallbacks
+          models={modelData?.data ? modelData.data.map((data: any) => data.model_name) : []}
+          accessToken={accessToken || ""}
+          value={routerSettings.fallbacks || []}
+          onChange={handleFallbacksChange}
+        />
+      )}
       {!hasFallbacks ? (
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-6 text-center">
           <Typography.Text type="secondary">
@@ -280,30 +285,34 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
                     {renderFallbacksChain(key, Array.isArray(value) ? value : [], getProviderFromModel)}
                   </TableCell>
                   <TableCell className="align-top">
-                    <Tooltip title="Test fallback">
-                      <Icon
-                        icon={PlayIcon}
-                        size="sm"
-                        onClick={() => testFallbackModelResponse(Object.keys(item)[0], accessToken || "")}
-                        className="cursor-pointer hover:text-blue-600"
-                      />
-                    </Tooltip>
-                    <Tooltip title="Delete fallback">
-                      <span
-                        data-testid="delete-fallback-button"
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => handleDeleteClick(item)}
-                        onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
-                        className="cursor-pointer inline-flex"
-                      >
-                        <Icon
-                          icon={TrashIcon}
-                          size="sm"
-                          className="hover:text-red-600"
-                        />
-                      </span>
-                    </Tooltip>
+                    {canModify && (
+                      <>
+                        <Tooltip title="Test fallback">
+                          <Icon
+                            icon={PlayIcon}
+                            size="sm"
+                            onClick={() => testFallbackModelResponse(Object.keys(item)[0], accessToken || "")}
+                            className="cursor-pointer hover:text-blue-600"
+                          />
+                        </Tooltip>
+                        <Tooltip title="Delete fallback">
+                          <span
+                            data-testid="delete-fallback-button"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleDeleteClick(item)}
+                            onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
+                            className="cursor-pointer inline-flex"
+                          >
+                            <Icon
+                              icon={TrashIcon}
+                              size="sm"
+                              className="hover:text-red-600"
+                            />
+                          </span>
+                        </Tooltip>
+                      </>
+                    )}
                   </TableCell>
                 </TableRow>
               )),

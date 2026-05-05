@@ -8,6 +8,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import (
+    is_text_content_call_type,
+    iter_message_text,
+)
 
 
 class _PROXY_AzureContentSafety(
@@ -118,10 +122,9 @@ class _PROXY_AzureContentSafety(
     ):
         verbose_proxy_logger.debug("Inside Azure Content-Safety Pre-Call Hook")
         try:
-            if call_type == "completion" and "messages" in data:
-                for m in data["messages"]:
-                    if "content" in m and isinstance(m["content"], str):
-                        await self.test_violation(content=m["content"], source="input")
+            if is_text_content_call_type(call_type):
+                for text in iter_message_text(data):
+                    await self.test_violation(content=text, source="input")
 
         except HTTPException as e:
             raise e
@@ -140,12 +143,16 @@ class _PROXY_AzureContentSafety(
         response,
     ):
         verbose_proxy_logger.debug("Inside Azure Content-Safety Post-Call Hook")
-        if isinstance(response, litellm.ModelResponse) and isinstance(
-            response.choices[0], litellm.utils.Choices
-        ):
-            await self.test_violation(
-                content=response.choices[0].message.content or "", source="output"
-            )
+        if not isinstance(response, litellm.ModelResponse):
+            return
+
+        for choice in response.choices:
+            if not isinstance(choice, litellm.utils.Choices):
+                continue
+            message = getattr(choice, "message", None)
+            content = getattr(message, "content", None)
+            if isinstance(content, str):
+                await self.test_violation(content=content, source="output")
 
     # async def async_post_call_streaming_hook(
     #    self,

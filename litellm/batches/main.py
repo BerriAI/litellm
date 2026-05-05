@@ -543,15 +543,17 @@ def _handle_retrieve_batch_providers_without_provider_config(
         )
     else:
         raise litellm.exceptions.BadRequestError(
-            message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
-                custom_llm_provider
-            ),
+            message=(
+                "LiteLLM doesn't support custom_llm_provider={} for 'retrieve_batch' without a `model` kwarg. "
+                "Supported via this path: 'openai', 'azure', 'vertex_ai', 'anthropic'. "
+                "'bedrock' is supported but requires `model` to be passed so the provider config can be loaded."
+            ).format(custom_llm_provider),
             model="n/a",
             llm_provider=custom_llm_provider,
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="retrieve_batch", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
         )
     return response

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+import urllib.parse
 from datetime import datetime
 from typing import Literal, Optional
 from urllib.parse import urlparse
@@ -203,8 +204,16 @@ class AssemblyAIPassthroughLoggingHandler:
         )
         if _api_key is None:
             raise ValueError("AssemblyAI API key not found")
+        if (
+            any(c in transcript_id for c in ("/", "\\", "#", "?"))
+            or ".." in transcript_id
+        ):
+            raise ValueError(
+                f"Invalid transcript_id {transcript_id!r}: contains disallowed characters"
+            )
+        safe_transcript_id = urllib.parse.quote(transcript_id, safe="")
         try:
-            url = f"{_base_url}/v2/transcript/{transcript_id}"
+            url = f"{_base_url}/v2/transcript/{safe_transcript_id}"
             headers = {
                 "Authorization": f"Bearer {_api_key}",
                 "Content-Type": "application/json",

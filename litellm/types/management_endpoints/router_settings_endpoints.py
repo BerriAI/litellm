@@ -113,6 +113,14 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         ui_field_name="Routing Strategy Args",
     ),
     RouterSettingsField(
+        field_name="routing_groups",
+        field_type="List",
+        field_value=None,
+        field_description="Named subsets of model_names that share a routing strategy. Models not claimed by an explicit group fall through to the top-level routing_strategy.",
+        field_default=[],
+        ui_field_name="Routing Groups",
+    ),
+    RouterSettingsField(
         field_name="num_retries",
         field_type="Integer",
         field_value=None,

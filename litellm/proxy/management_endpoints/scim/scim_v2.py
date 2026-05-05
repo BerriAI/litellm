@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import _delete_cache_key_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
@@ -334,6 +335,118 @@ async def _handle_team_membership_changes(
             teams_ids_to_add_user_to=list(teams_to_add),
             teams_ids_to_remove_user_from=list(teams_to_remove),
         )
+
+
+SCIM_BLOCKED_METADATA_KEY = "scim_blocked"
+
+
+def _key_was_scim_blocked(metadata: Any) -> bool:
+    """True if a verification token carries the SCIM-block marker in metadata."""
+    return (
+        isinstance(metadata, dict) and metadata.get(SCIM_BLOCKED_METADATA_KEY) is True
+    )
+
+
+async def _set_user_keys_blocked(user_id: str, blocked: bool) -> int:
+    """
+    Block or unblock virtual keys owned by a user and invalidate them in the
+    in-memory/redis caches so the change takes effect immediately.
+
+    Each key SCIM blocks is tagged with ``metadata.scim_blocked = True``. On
+    reactivation we only unblock keys carrying that marker, so a key an admin
+    blocked manually for unrelated reasons is left alone.
+
+    Returns the number of keys whose state was flipped.
+    """
+    from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
+
+    prisma_client = await _get_prisma_client_or_raise_exception()
+
+    if blocked:
+        # `blocked` is a nullable column with no default, so existing rows
+        # typically hold NULL; treat NULL as "not blocked" since SQL equality
+        # on NULL would otherwise silently skip them.
+        candidates = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={
+                "user_id": user_id,
+                "OR": [{"blocked": False}, {"blocked": None}],
+            },
+        )
+        affected_keys = candidates
+    else:
+        candidates = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"user_id": user_id, "blocked": True},
+        )
+        affected_keys = [k for k in candidates if _key_was_scim_blocked(k.metadata)]
+
+    if not affected_keys:
+        return 0
+
+    for key_row in affected_keys:
+        current_metadata: Dict[str, Any] = (
+            dict(key_row.metadata) if isinstance(key_row.metadata, dict) else {}
+        )
+        if blocked:
+            new_metadata = {**current_metadata, SCIM_BLOCKED_METADATA_KEY: True}
+        else:
+            new_metadata = {
+                k: v
+                for k, v in current_metadata.items()
+                if k != SCIM_BLOCKED_METADATA_KEY
+            }
+        await prisma_client.db.litellm_verificationtoken.update(
+            where={"token": key_row.token},
+            data={"blocked": blocked, "metadata": safe_dumps(new_metadata)},
+        )
+
+    for key_row in affected_keys:
+        await _delete_cache_key_object(
+            hashed_token=key_row.token,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    verbose_proxy_logger.info(
+        "SCIM: %s %d virtual key(s) for user_id=%s",
+        "blocked" if blocked else "unblocked",
+        len(affected_keys),
+        user_id,
+    )
+    return len(affected_keys)
+
+
+async def _delete_rows_referencing_user(prisma_client: Any, *, user_id: str) -> None:
+    """Drop rows whose foreign keys reference ``LiteLLM_UserTable.user_id``.
+
+    Required before deleting the user row itself, otherwise Postgres rejects
+    the user delete with an FK constraint violation (e.g.
+    ``LiteLLM_InvitationLink_user_id_fkey``).
+    """
+    await prisma_client.db.litellm_invitationlink.delete_many(
+        where={
+            "OR": [
+                {"user_id": user_id},
+                {"created_by": user_id},
+                {"updated_by": user_id},
+            ]
+        }
+    )
+    await prisma_client.db.litellm_organizationmembership.delete_many(
+        where={"user_id": user_id}
+    )
+    await prisma_client.db.litellm_teammembership.delete_many(
+        where={"user_id": user_id}
+    )
+
+
+def _scim_active_value(metadata: Optional[Dict[str, Any]]) -> Optional[bool]:
+    """Read the SCIM active flag from a user's metadata dict, if present."""
+    if not metadata:
+        return None
+    value = metadata.get("scim_active")
+    if value is None:
+        return None
+    return bool(value)
 
 
 async def _create_user_if_not_exists(
@@ -928,40 +1041,51 @@ async def update_user(
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_user = await _check_user_exists(user_id)
 
-        # Extract data from SCIM user
+        prev_active = _scim_active_value(existing_user.metadata)
+
         user_data = _extract_scim_user_data(user)
 
-        # Build metadata with SCIM data
-        metadata = _build_scim_metadata(
-            user_data["given_name"], user_data["family_name"], user_data["active"]
+        # SCIM PUT may legally omit `active` (full-replace with the field absent).
+        # Pydantic fills the model default, so distinguish "client sent active"
+        # from "client omitted it" via model_fields_set, and preserve the prior
+        # SCIM active state when omitted — otherwise a vanilla PUT to a
+        # deactivated user would silently re-enable them and unblock their keys.
+        client_set_active = "active" in user.model_fields_set
+        scim_active_for_metadata = (
+            user_data["active"] if client_set_active else prev_active
         )
 
-        # Handle team membership changes
+        metadata = _build_scim_metadata(
+            user_data["given_name"],
+            user_data["family_name"],
+            scim_active_for_metadata,
+        )
+
         await _handle_team_membership_changes(
             user_id=user_id,
             existing_teams=existing_user.teams or [],
             new_teams=user_data["teams"],
         )
 
-        # Update user with all new data (full replacement)
         update_data = {
             "user_email": user_data["user_email"],
             "user_alias": user_data["user_alias"],
             "sso_user_id": user_data["sso_user_id"],
             "teams": user_data["teams"],
-            "metadata": metadata,
+            "metadata": safe_dumps(metadata),
         }
-
-        # Serialize metadata to JSON string for Prisma to avoid GraphQL parsing issues
-        if "metadata" in update_data and isinstance(update_data["metadata"], dict):
-            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
-            update_data["metadata"] = safe_dumps(update_data["metadata"])
 
         updated_user = await prisma_client.db.litellm_usertable.update(
             where={"user_id": user_id},
             data=update_data,
         )
+
+        if client_set_active:
+            new_active = _scim_active_value(metadata)
+            if new_active is not None and new_active != (
+                True if prev_active is None else prev_active
+            ):
+                await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
 
         # Convert back to SCIM format
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
@@ -1008,6 +1132,10 @@ async def delete_user(
                 await prisma_client.db.litellm_teamtable.update(
                     where={"team_id": team.team_id}, data={"members": new_members}
                 )
+
+        await _set_user_keys_blocked(user_id=user_id, blocked=True)
+
+        await _delete_rows_referencing_user(prisma_client, user_id=user_id)
 
         # Delete user
         await prisma_client.db.litellm_usertable.delete(where={"user_id": user_id})
@@ -1242,10 +1370,14 @@ async def patch_user(
         prisma_client = await _get_prisma_client_or_raise_exception()
         existing_user = await _check_user_exists(user_id)
 
+        prev_active = _scim_active_value(existing_user.metadata)
+
         update_data, final_team_set = _apply_patch_ops(
             existing_user=existing_user,
             patch_ops=patch_ops,
         )
+
+        new_active = _scim_active_value(update_data.get("metadata"))
 
         # Handle team membership changes
         await _handle_team_membership_changes(
@@ -1266,6 +1398,11 @@ async def patch_user(
             where={"user_id": user_id},
             data=update_data,
         )
+
+        if new_active is not None and new_active != (
+            True if prev_active is None else prev_active
+        ):
+            await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)
 
         scim_user = await ScimTransformations.transform_litellm_user_to_scim_user(
             updated_user

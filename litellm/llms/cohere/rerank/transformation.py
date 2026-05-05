@@ -111,6 +111,7 @@ class CohereRerankConfig(BaseRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for Cohere rerank")

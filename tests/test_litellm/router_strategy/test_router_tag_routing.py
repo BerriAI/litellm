@@ -346,6 +346,34 @@ def test_tag_routing_with_list_of_tags_match_all():
     assert not is_valid_deployment_tag(["default"], ["teamA"], match_any=False)
 
 
+def test_strict_tag_routing_without_request_tags_blocks_header_regex_fallback():
+    """
+    When tag_filtering_match_any=False, deployments with plain tags must require
+    those request tags before header regex can match. A spoofed User-Agent must
+    not route to a tagged deployment when the request has no tags.
+    """
+    from litellm.router_strategy.tag_based_routing import _match_deployment
+
+    deployment = {
+        "model_name": "restricted-model",
+        "litellm_params": {
+            "model": "gpt-4o",
+            "tags": ["internal"],
+            "tag_regex": ["^User-Agent: internal-tool"],
+        },
+    }
+
+    assert (
+        _match_deployment(
+            deployment=deployment,
+            request_tags=None,
+            header_strings=["User-Agent: internal-tool"],
+            match_any=False,
+        )
+        is None
+    )
+
+
 @pytest.mark.asyncio()
 async def test_router_free_paid_tier_with_responses_api():
     """

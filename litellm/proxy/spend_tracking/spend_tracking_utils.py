@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
     CostBreakdown,
@@ -471,9 +472,7 @@ def get_logging_payload(  # noqa: PLR0915
 
         return payload
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "Error creating spendlogs object - {}".format(str(e))
-        )
+        spend_log_error("Error creating spendlogs object - %s", str(e), exc=e)
         raise e
 
 
@@ -611,6 +610,9 @@ def _get_messages_for_spend_logs_payload(
     return "{}"
 
 
+_SENSITIVE_REQUEST_BODY_KEYS = frozenset({"secret_fields"})
+
+
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: dict,
     visited: Optional[set] = None,
@@ -619,6 +621,9 @@ def _sanitize_request_body_for_spend_logs_payload(
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
+
+    Also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields
+    which contains raw HTTP headers including Authorization tokens).
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -677,7 +682,11 @@ def _sanitize_request_body_for_spend_logs_payload(
             return value
         return value
 
-    return {k: _sanitize_value(v) for k, v in request_body.items()}
+    return {
+        k: _sanitize_value(v)
+        for k, v in request_body.items()
+        if k not in _SENSITIVE_REQUEST_BODY_KEYS
+    }
 
 
 def _convert_to_json_serializable_dict(

@@ -106,7 +106,8 @@ def _match_deployment(
     # check either didn't run (no request tags) or failed (step 1 returned
     # None).  Block the regex path so it cannot circumvent the operator's
     # strict-tag policy.
-    strict_tag_check_failed = not match_any and bool(deployment_tags)
+    deployment_has_plain_tags = deployment_tags is not None and len(deployment_tags) > 0
+    strict_tag_check_failed = not match_any and deployment_has_plain_tags
     if deployment_tag_regex and header_strings and not strict_tag_check_failed:
         regex_match = _is_valid_deployment_tag_regex(
             deployment_tag_regex, header_strings

@@ -22,6 +22,11 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import (
+    apply_redacted_messages_back,
+    build_inspection_messages,
+    has_non_string_content,
+)
 from litellm.types.utils import (
     CallTypesLiteral,
     Choices,
@@ -101,10 +106,11 @@ class AimGuardrail(CustomGuardrail):
             user_email=user_email,
             litellm_call_id=call_id,
         )
+        # Covers multimodal list content + Responses-API input.
         response = await self.async_handler.post(
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
-            json={"messages": data.get("messages", [])},
+            json={"messages": build_inspection_messages(data)},
         )
         response.raise_for_status()
         res = response.json()
@@ -137,13 +143,31 @@ class AimGuardrail(CustomGuardrail):
         redacted_chat = res.get("redacted_chat")
         if not redacted_chat:
             return data
-        data["messages"] = [
+        # Aim returns text-only redacted messages. Overwriting
+        # ``data["messages"]`` with that would silently strip image/audio
+        # parts from a multimodal request — degrade to block so the
+        # multimodal payload is never silently rewritten.
+        if has_non_string_content(data):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Aim: anonymize action requested for multimodal input "
+                    "but mask-in-place would drop non-text parts. Send the "
+                    "request with plain string content to use anonymize, "
+                    "or rely on block-mode policies."
+                ),
+            )
+        redacted_messages = [
             {
                 "role": message["role"],
                 "content": message["content"],
             }
             for message in redacted_chat["all_redacted_messages"]
         ]
+        # Write back to ``messages`` AND ``input``. The Responses-API
+        # backend reads ``input``; writing only to ``messages`` would let
+        # unredacted text reach the LLM for ``/v1/responses`` calls.
+        apply_redacted_messages_back(data, redacted_messages)
         return data
 
     async def call_aim_guardrail_on_output(
@@ -162,7 +186,7 @@ class AimGuardrail(CustomGuardrail):
                 litellm_call_id=call_id,
             ),
             json={
-                "messages": request_data.get("messages", [])
+                "messages": build_inspection_messages(request_data)
                 + [{"role": "assistant", "content": output}]
             },
         )
@@ -233,15 +257,33 @@ class AimGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
     ) -> Any:
-        if (
-            isinstance(response, ModelResponse)
-            and response.choices
-            and isinstance(response.choices[0], Choices)
-        ):
-            content = response.choices[0].message.content or ""
-            aim_output_guardrail_result = await self.call_aim_guardrail_on_output(
-                data, content, hook="output", key_alias=user_api_key_dict.key_alias
-            )
+        if not (isinstance(response, ModelResponse) and response.choices):
+            return response
+        # Inspect every choice — when ``n>1`` the additional completions
+        # used to bypass Aim entirely because the hook only inspected
+        # ``choices[0]``. Run inspections concurrently so multi-completion
+        # responses don't pay an n× latency penalty.
+        choices_to_inspect = [c for c in response.choices if isinstance(c, Choices)]
+        if not choices_to_inspect:
+            return response
+        # ``return_exceptions=True`` lets every inspection finish even if
+        # one fails — without it, the first exception would propagate and
+        # leave the remaining tasks running in the background.
+        results = await asyncio.gather(
+            *(
+                self.call_aim_guardrail_on_output(
+                    data,
+                    choice.message.content or "",
+                    hook="output",
+                    key_alias=user_api_key_dict.key_alias,
+                )
+                for choice in choices_to_inspect
+            ),
+            return_exceptions=True,
+        )
+        for choice, aim_output_guardrail_result in zip(choices_to_inspect, results):
+            if isinstance(aim_output_guardrail_result, BaseException):
+                raise aim_output_guardrail_result
             if aim_output_guardrail_result and aim_output_guardrail_result.get(
                 "detection_message"
             ):
@@ -252,7 +294,7 @@ class AimGuardrail(CustomGuardrail):
             if aim_output_guardrail_result and aim_output_guardrail_result.get(
                 "redacted_output"
             ):
-                response.choices[0].message.content = aim_output_guardrail_result.get(
+                choice.message.content = aim_output_guardrail_result.get(
                     "redacted_output"
                 )
         return response

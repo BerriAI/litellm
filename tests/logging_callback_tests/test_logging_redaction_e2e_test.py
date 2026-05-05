@@ -13,11 +13,13 @@ import logging
 import time
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.responses.main import mock_responses_api_response
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -126,17 +128,10 @@ async def test_redaction_responses_api():
     test_custom_logger = TestCustomLogger(turn_off_message_logging=True)
     litellm.callbacks = [test_custom_logger]
 
-    # Mock a ResponsesAPIResponse-style response
-    mock_response = {
-        "output": [{"text": "This is a test response"}],
-        "model": "gpt-3.5-turbo",
-        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
-    }
-
     response = await litellm.aresponses(
         model="gpt-3.5-turbo",
         input="hi",
-        mock_response=mock_response,
+        mock_response="This is a test response",
     )
 
     await asyncio.sleep(1)
@@ -163,6 +158,7 @@ async def test_redaction_responses_api():
                     assert (
                         content_item["text"] == "redacted-by-litellm"
                     ), f"Expected redacted text but got: {content_item['text']}"
+    assert "This is a test response" not in json.dumps(standard_logging_payload)
     print(
         "logged standard logging payload for ResponsesAPIResponse",
         json.dumps(standard_logging_payload, indent=2),
@@ -176,29 +172,36 @@ async def test_redaction_responses_api_stream():
     test_custom_logger = TestCustomLogger(turn_off_message_logging=True)
     litellm.callbacks = [test_custom_logger]
 
-    # Mock a ResponsesAPIResponse-style response with streaming chunks
-    mock_response = [
-        {
-            "output": [{"text": "This"}],
-            "model": "gpt-3.5-turbo",
-        },
-        {
-            "output": [{"text": " is"}],
-            "model": "gpt-3.5-turbo",
-        },
-        {
-            "output": [{"text": " a test response"}],
-            "model": "gpt-3.5-turbo",
-            "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
-        },
-    ]
+    mocked_response_payload = mock_responses_api_response(
+        "This is a test response"
+    ).model_dump()
 
-    response = await litellm.aresponses(
-        model="gpt-3.5-turbo",
-        input="hi",
-        mock_response=mock_response,
-        stream=True,
-    )
+    async def mock_post(self, url, headers, timeout, stream=False, **kwargs):
+        stream_content = (
+            "data: "
+            + json.dumps(
+                {
+                    "type": "response.completed",
+                    "response": mocked_response_payload,
+                }
+            )
+            + "\n\ndata: [DONE]\n\n"
+        )
+        return httpx.Response(
+            status_code=200,
+            content=stream_content,
+            request=httpx.Request("POST", url),
+        )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new=mock_post,
+    ):
+        response = await litellm.aresponses(
+            model="gpt-3.5-turbo",
+            input="hi",
+            stream=True,
+        )
 
     # Consume the stream
     chunks = []
@@ -445,18 +448,11 @@ async def test_disable_redaction_header_responses_api():
     test_custom_logger = TestCustomLogger()
     litellm.callbacks = [test_custom_logger]
 
-    # Mock a ResponsesAPIResponse-style response
-    mock_response = {
-        "output": [{"text": "This is a test response"}],
-        "model": "gpt-3.5-turbo",
-        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
-    }
-
     # Pass the header via litellm_metadata (as the proxy does for Responses API)
     response = await litellm.aresponses(
         model="gpt-3.5-turbo",
         input="hi",
-        mock_response=mock_response,
+        mock_response="This is a test response",
         litellm_metadata={"headers": {"litellm-disable-message-redaction": "true"}},
     )
 
@@ -464,14 +460,14 @@ async def test_disable_redaction_header_responses_api():
     standard_logging_payload = test_custom_logger.logged_standard_logging_payload
     assert standard_logging_payload is not None
 
-    # Verify that messages are NOT redacted because the header was set
+    # Verify that the direct SDK path still honors the explicit header.
     print(
         "logged standard logging payload for ResponsesAPI with disable header",
         json.dumps(standard_logging_payload, indent=2, default=str),
     )
 
-    # The content should NOT be redacted
-    assert standard_logging_payload["response"] != {"text": "redacted-by-litellm"}
+    response = standard_logging_payload["response"]
+    assert response["output"][0]["content"][0]["text"] == "This is a test response"
     assert standard_logging_payload["messages"][0]["content"] == "hi"
 
 

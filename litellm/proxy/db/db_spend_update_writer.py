@@ -60,6 +60,7 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
 )
 from litellm.proxy.route_llm_request import ROUTE_ENDPOINT_MAPPING
+from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
@@ -192,17 +193,16 @@ class DBSpendUpdateWriter:
 
             verbose_proxy_logger.debug("Runs spend update on all tables")
         except Exception:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - update_database failed. Spend log insertion or daily transaction enqueue "
                 "may not have completed for this request. "
-                "response_cost=%s, token=%s, user_id=%s, team_id=%s, org_id=%s, end_user_id=%s - %s",
+                "response_cost=%s, token=%s, user_id=%s, team_id=%s, org_id=%s, end_user_id=%s",
                 response_cost,
                 token,
                 user_id,
                 team_id,
                 org_id,
                 end_user_id,
-                traceback.format_exc(),
             )
 
     def _enqueue_tool_registry_upsert(
@@ -491,9 +491,7 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Update Key DB Call failed to execute - {str(e)}"
-            )
+            spend_log_error("Update Key DB Call failed to execute - %s", str(e), exc=e)
             raise e
 
     async def _update_user_db(
@@ -540,14 +538,14 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue user spend update. "
-                "user_id=%s, end_user_id=%s, response_cost=%s - %s\n%s",
+                "user_id=%s, end_user_id=%s, response_cost=%s - %s",
                 user_id,
                 end_user_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
 
     async def _update_team_db(
@@ -585,23 +583,23 @@ class DBSpendUpdateWriter:
                         )
                     )
             except Exception as e:
-                verbose_proxy_logger.error(
+                spend_log_error(
                     "Spend tracking - failed to enqueue team member spend update. "
-                    "team_id=%s, user_id=%s, response_cost=%s - %s\n%s",
+                    "team_id=%s, user_id=%s, response_cost=%s - %s",
                     team_id,
                     user_id,
                     response_cost,
                     str(e),
-                    traceback.format_exc(),
+                    exc=e,
                 )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue team spend update. "
-                "team_id=%s, response_cost=%s - %s\n%s",
+                "team_id=%s, response_cost=%s - %s",
                 team_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -626,13 +624,13 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue org spend update. "
-                "org_id=%s, response_cost=%s - %s\n%s",
+                "org_id=%s, response_cost=%s - %s",
                 org_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -654,13 +652,13 @@ class DBSpendUpdateWriter:
                 )
             )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue agent spend update. "
-                "agent_id=%s, response_cost=%s - %s\n%s",
+                "agent_id=%s, response_cost=%s - %s",
                 agent_id,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -707,13 +705,13 @@ class DBSpendUpdateWriter:
                         )
                     )
         except Exception as e:
-            verbose_proxy_logger.error(
+            spend_log_error(
                 "Spend tracking - failed to enqueue tag spend update. "
-                "request_tags=%s, response_cost=%s - %s\n%s",
+                "request_tags=%s, response_cost=%s - %s",
                 request_tags,
                 response_cost,
                 str(e),
-                traceback.format_exc(),
+                exc=e,
             )
             raise e
 
@@ -906,11 +904,11 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_agent_spend_update_transactions,
                     )
             except Exception as e:
-                verbose_proxy_logger.error(
+                spend_log_error(
                     "Spend tracking - failed to commit spend updates from Redis to DB. "
-                    "Data already popped from Redis may be lost. Error: %s\n%s",
+                    "Data already popped from Redis may be lost. Error: %s",
                     str(e),
-                    traceback.format_exc(),
+                    exc=e,
                 )
             finally:
                 await self.pod_lock_manager.release_lock(
@@ -1074,11 +1072,11 @@ class DBSpendUpdateWriter:
                         daily_spend_transactions=daily_tag_spend_update_transactions,
                     )
             except Exception as e:
-                verbose_proxy_logger.error(
+                spend_log_error(
                     "Spend tracking - failed to commit daily tag spend updates from Redis to DB. "
-                    "Data already popped from Redis may be lost. Error: %s\n%s",
+                    "Data already popped from Redis may be lost. Error: %s",
                     str(e),
-                    traceback.format_exc(),
+                    exc=e,
                 )
             finally:
                 await self.pod_lock_manager.release_lock(
@@ -1736,11 +1734,15 @@ class DBSpendUpdateWriter:
                     except Exception as batch_error:
                         # Log detailed error information for debugging batch upsert failures
                         # This helps diagnose issues like unique constraint violations
-                        verbose_proxy_logger.exception(
-                            f"Daily {entity_type} spend batch upsert failed. "
-                            f"Table: {table_name}, Constraint: {unique_constraint_name}, "
-                            f"Batch size: {len(transactions_to_process)}, "
-                            f"Error: {str(batch_error)}"
+                        spend_log_error(
+                            "Daily %s spend batch upsert failed. "
+                            "Table: %s, Constraint: %s, Batch size: %d, Error: %s",
+                            entity_type,
+                            table_name,
+                            unique_constraint_name,
+                            len(transactions_to_process),
+                            str(batch_error),
+                            exc=batch_error,
                         )
                         raise
 

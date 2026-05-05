@@ -409,9 +409,12 @@ class MCPRequestHandler:
 
         Permission hierarchy (all rules are intersections):
         1. Get allowed servers from key permissions
-        2. Get allowed servers from team permissions
-        3. Get allowed servers from end_user permissions
-        4. Final result = intersection of key/team AND end_user (if end_user has permissions set)
+        2. Get allowed servers from team permissions (key inherits from team, or intersection)
+        3. Get allowed servers from end_user permissions (intersected if set)
+        4. Get allowed servers from agent permissions (intersected if set)
+        5. Get allowed servers from org permissions — org acts as a ceiling: if the org
+           has an explicit MCP server list, the combined key/team/end_user/agent result is
+           capped to that list.  If the org has no list, no extra restriction is applied.
 
         Returns:
             List[str]: List of allowed MCP servers by server id
@@ -435,6 +438,10 @@ class MCPRequestHandler:
             # Calculate key/team allowed servers using inheritance and intersection logic
             #########################################################
             allowed_mcp_servers: List[str] = []
+            has_lower_level_mcp_restrictions = (
+                len(allowed_mcp_servers_for_key) > 0
+                or len(allowed_mcp_servers_for_team) > 0
+            )
             if len(allowed_mcp_servers_for_team) > 0:
                 if len(allowed_mcp_servers_for_key) > 0:
                     # Key has its own MCP permissions - use intersection with team permissions
@@ -459,6 +466,7 @@ class MCPRequestHandler:
 
                 # If end_user has explicit MCP server permissions, apply intersection
                 if len(allowed_mcp_servers_for_end_user) > 0:
+                    has_lower_level_mcp_restrictions = True
                     verbose_logger.debug(
                         f"End user {user_api_key_auth.end_user_id} has explicit MCP permissions: {allowed_mcp_servers_for_end_user}"
                     )
@@ -490,6 +498,7 @@ class MCPRequestHandler:
                     )
                 )
                 if len(allowed_mcp_servers_for_agent) > 0:
+                    has_lower_level_mcp_restrictions = True
                     # Intersect: agent can only use servers allowed by BOTH key/team AND agent config
                     allowed_mcp_servers = [
                         s
@@ -498,6 +507,30 @@ class MCPRequestHandler:
                     ]
                     verbose_logger.debug(
                         f"Applied agent intersection filter. Final allowed servers: {allowed_mcp_servers}"
+                    )
+
+            #########################################################
+            # Apply org-level ceiling if org_id is set
+            #########################################################
+            if user_api_key_auth and user_api_key_auth.org_id:
+                allowed_mcp_servers_for_org = (
+                    await MCPRequestHandler._get_allowed_mcp_servers_for_org(
+                        user_api_key_auth
+                    )
+                )
+                if len(allowed_mcp_servers_for_org) > 0:
+                    if has_lower_level_mcp_restrictions:
+                        # Lower-level restrictions exist, so org can only cap them.
+                        allowed_mcp_servers = [
+                            s
+                            for s in allowed_mcp_servers
+                            if s in allowed_mcp_servers_for_org
+                        ]
+                    else:
+                        # No lower-level restrictions → org list becomes the ceiling
+                        allowed_mcp_servers = allowed_mcp_servers_for_org
+                    verbose_logger.debug(
+                        f"Applied org ceiling filter. Final allowed servers: {allowed_mcp_servers}"
                     )
 
             return list(set(allowed_mcp_servers))
@@ -638,6 +671,27 @@ class MCPRequestHandler:
                         allowed_tools = list(set(allowed_tools) & set(agent_tools))
                     else:
                         allowed_tools = agent_tools
+
+            # Apply org-level tool ceiling if org_id is set
+            if user_api_key_auth.org_id:
+                # _get_org_object_permission uses user_api_key_cache, so this is not a
+                # fresh DB round-trip when get_allowed_mcp_servers was already called.
+                org_obj_perm = await MCPRequestHandler._get_org_object_permission(
+                    user_api_key_auth
+                )
+                org_tools = (
+                    global_mcp_server_manager.expand_tool_permissions(
+                        org_obj_perm.mcp_tool_permissions
+                    ).get(server_id)
+                    if org_obj_perm and org_obj_perm.mcp_tool_permissions
+                    else None
+                )
+                if org_tools is not None:
+                    if allowed_tools is not None:
+                        allowed_tools = list(set(allowed_tools) & set(org_tools))
+                    else:
+                        allowed_tools = list(org_tools)
+
             return allowed_tools
 
         except Exception as e:
@@ -802,6 +856,120 @@ class MCPRequestHandler:
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for team: {str(e)}"
+            )
+            return []
+
+    # Sentinel stored in cache when an org has no object_permission, so we
+    # don't re-query the DB on every MCP request for that org.
+    _ORG_NO_PERMISSION_SENTINEL = "__org_no_mcp_permission__"
+
+    @staticmethod
+    async def _get_org_object_permission(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ):
+        """
+        Get org object_permission, using user_api_key_cache to avoid DB hits on every request.
+
+        Caches both positive results and the absence of an object_permission so that orgs
+        with no MCP permissions configured (the common default) do not trigger a DB query
+        on every request.
+        """
+        from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+        if not user_api_key_auth or not user_api_key_auth.org_id:
+            return None
+
+        if prisma_client is None:
+            verbose_logger.debug("prisma_client is None")
+            return None
+
+        org_id = user_api_key_auth.org_id
+        cache_key = f"org_object_permission:{org_id}"
+
+        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+        try:
+            cached = await user_api_key_cache.async_get_cache(key=cache_key)
+            if cached is not None:
+                # Sentinel means the DB confirmed no object_permission for this org
+                if cached == MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL:
+                    return None
+                # Redis deserialises to a plain dict; reconstruct the Pydantic model
+                # so callers can access .mcp_servers / .mcp_tool_permissions as attrs.
+                if isinstance(cached, dict):
+                    return LiteLLM_ObjectPermissionTable(**cached)
+                return cached
+
+            org_row = await prisma_client.db.litellm_organizationtable.find_unique(
+                where={"organization_id": org_id},
+                include={"object_permission": True},
+            )
+
+            if org_row is None or org_row.object_permission is None:
+                # Cache the negative result so subsequent calls skip the DB
+                await user_api_key_cache.async_set_cache(
+                    key=cache_key,
+                    value=MCPRequestHandler._ORG_NO_PERMISSION_SENTINEL,
+                )
+                return None
+
+            # Convert raw Prisma model → Pydantic before caching.  Caching the
+            # Pydantic .dict() ensures the value survives a Redis JSON round-trip
+            # as a plain dict that we can reconstruct above (same pattern used by
+            # get_end_user_object / get_team_object in auth_checks.py).
+            obj_perm = LiteLLM_ObjectPermissionTable(**org_row.object_permission.dict())
+            await user_api_key_cache.async_set_cache(
+                key=cache_key, value=obj_perm.dict()
+            )
+            return obj_perm
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get org object permission: {str(e)}")
+            return None
+
+    @staticmethod
+    async def _get_allowed_mcp_servers_for_org(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get allowed MCP servers for an organization.
+
+        Returns the MCP servers from the org's object_permission.
+        An empty result means the org places no restriction (allow-all from this level).
+        """
+        try:
+            object_permissions = await MCPRequestHandler._get_org_object_permission(
+                user_api_key_auth
+            )
+
+            if object_permissions is None:
+                return []
+
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                global_mcp_server_manager,
+            )
+
+            # Expand names/aliases to canonical server IDs (consistent with key/team/end-user path)
+            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(
+                object_permissions.mcp_servers or []
+            )
+
+            access_group_servers = (
+                await MCPRequestHandler._get_mcp_servers_from_access_groups(
+                    object_permissions.mcp_access_groups or []
+                )
+            )
+
+            tool_perm_servers = list(
+                global_mcp_server_manager.expand_tool_permissions(
+                    object_permissions.mcp_tool_permissions
+                ).keys()
+            )
+
+            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            return list(set(all_servers))
+        except Exception as e:
+            verbose_logger.warning(
+                f"Failed to get allowed MCP servers for org: {str(e)}"
             )
             return []
 

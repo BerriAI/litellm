@@ -273,7 +273,18 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
-        """Claude 4.6+ models use adaptive thinking with output_config effort."""
+        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``."""
+        from litellm.utils import _supports_factory
+
+        try:
+            if _supports_factory(
+                model=model,
+                custom_llm_provider=None,
+                key="supports_adaptive_thinking",
+            ):
+                return True
+        except Exception:
+            pass
         return AnthropicModelInfo._is_claude_4_6_model(
             model
         ) or AnthropicModelInfo._is_claude_4_7_model(model)

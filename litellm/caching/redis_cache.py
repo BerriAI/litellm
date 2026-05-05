@@ -551,6 +551,13 @@ class RedisCache(BaseCache):
     async def async_set_cache(self, key, value, **kwargs):
         from redis.asyncio import Redis
 
+        if key is None:
+            verbose_logger.debug(
+                "LiteLLM Redis Caching: async set() skipped — key is None, value=%r",
+                value,
+            )
+            return None
+
         start_time = time.time()
         try:
             _redis_client: Redis = self.init_async_client()  # type: ignore
@@ -569,8 +576,9 @@ class RedisCache(BaseCache):
                 )
             )
             verbose_logger.error(
-                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, Writing value=%s",
+                "LiteLLM Redis Caching: async set() - Got exception from REDIS %s, key=%r, value=%r",
                 str(e),
+                key,
                 value,
             )
             raise e
@@ -824,6 +832,7 @@ class RedisCache(BaseCache):
         value: float,
         ttl: Optional[int] = None,
         parent_otel_span: Optional[Span] = None,
+        refresh_ttl: bool = False,
     ) -> float:
         from redis.asyncio import Redis
 
@@ -834,11 +843,12 @@ class RedisCache(BaseCache):
         try:
             result = await _redis_client.incrbyfloat(name=key, amount=value)
             if _used_ttl is not None:
-                # check if key already has ttl, if not -> set ttl
-                current_ttl = await _redis_client.ttl(key)
-                if current_ttl == -1:
-                    # Key has no expiration
+                if refresh_ttl:
                     await _redis_client.expire(key, _used_ttl)
+                else:
+                    current_ttl = await _redis_client.ttl(key)
+                    if current_ttl == -1:
+                        await _redis_client.expire(key, _used_ttl)
 
             ## LOGGING ##
             end_time = time.time()

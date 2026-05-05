@@ -1270,7 +1270,7 @@ def test_bedrock_claude_3_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "claude-4-sonnet-20250514",
+        "claude-haiku-4-5-20251001",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
     ],
@@ -2696,7 +2696,7 @@ def test_completion_claude_3_function_call_with_streaming():
     try:
         # test without max tokens
         response = completion(
-            model="claude-4-sonnet-20250514",
+            model="claude-haiku-4-5-20251001",
             messages=messages,
             tools=tools,
             tool_choice="required",
@@ -3640,7 +3640,7 @@ def test_mock_response_iterator_tool_use():
     [
         # "deepseek/deepseek-reasoner",
         # "anthropic/claude-3-7-sonnet-20250219",
-        "openrouter/anthropic/claude-3.7-sonnet",
+        "openrouter/anthropic/claude-sonnet-4.5",
     ],
 )
 def test_reasoning_content_completion(model):

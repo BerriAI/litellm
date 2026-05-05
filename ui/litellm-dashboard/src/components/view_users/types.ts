@@ -11,4 +11,5 @@ export interface UserInfo {
   updated_at: string;
   sso_user_id: string | null;
   budget_duration: string | null;
+  metadata?: Record<string, unknown> | null;
 }

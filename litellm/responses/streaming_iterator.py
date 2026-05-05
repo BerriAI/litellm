@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import time
 import traceback
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from functools import lru_cache
+from typing import Any, Dict, List, Literal, Optional
 
 import httpx
 
@@ -22,17 +25,24 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import (
-    OutputTextDeltaEvent,
-    ResponseAPIUsage,
-    ResponseCompletedEvent,
-    ResponsesAPIRequestParams,
-    ResponsesAPIResponse,
-    ResponsesAPIStreamEvents,
-    ResponsesAPIStreamingResponse,
-)
+from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
 from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
+
+
+@lru_cache(maxsize=1)
+def _get_openai_response_types():
+    from litellm.types.llms import openai as openai_types
+
+    return openai_types
+
+
+def _log_background_task_failure(task: "asyncio.Task[Any]", *, task_name: str) -> None:
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is not None:
+        verbose_logger.error("%s failed: %s", task_name, exception)
 
 
 class BaseResponsesAPIStreamingIterator:
@@ -46,7 +56,7 @@ class BaseResponsesAPIStreamingIterator:
         self,
         response: httpx.Response,
         model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
+        responses_api_provider_config: Optional[BaseResponsesAPIConfig],
         logging_obj: LiteLLMLoggingObj,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         custom_llm_provider: Optional[str] = None,
@@ -58,9 +68,13 @@ class BaseResponsesAPIStreamingIterator:
         self.logging_obj = logging_obj
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
-        self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
+        self.completed_response: Optional[Any] = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
         self._failure_handled = False  # Track if failure handler has been called
+        self._completed_response_cached = False
+        self._completed_response_logged = False
+        self._completed_response_cache_hit: Optional[bool] = None
+        self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
 
         # track request context for hooks
@@ -101,7 +115,7 @@ class BaseResponsesAPIStreamingIterator:
                 llm_provider=self.custom_llm_provider or "",
             )
 
-    def _process_chunk(self, chunk) -> Optional[ResponsesAPIStreamingResponse]:
+    def _process_chunk(self, chunk) -> Optional[Any]:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
@@ -122,6 +136,10 @@ class BaseResponsesAPIStreamingIterator:
 
             # Format as ResponsesAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
+                if self.responses_api_provider_config is None:
+                    raise ValueError(
+                        "responses_api_provider_config is required to process live streaming chunks"
+                    )
                 openai_responses_api_chunk = (
                     self.responses_api_provider_config.transform_streaming_response(
                         model=self.model,
@@ -195,10 +213,11 @@ class BaseResponsesAPIStreamingIterator:
                 if self.litellm_metadata and self.litellm_metadata.get(
                     "encrypted_content_affinity_enabled"
                 ):
+                    openai_types = _get_openai_response_types()
                     event_type = getattr(openai_responses_api_chunk, "type", None)
                     if event_type in (
-                        ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-                        ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                        openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                        openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
                     ):
                         item = getattr(openai_responses_api_chunk, "item", None)
                         if item:
@@ -219,10 +238,11 @@ class BaseResponsesAPIStreamingIterator:
 
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type = getattr(openai_responses_api_chunk, "type", None)
+                openai_types = _get_openai_response_types()
                 if openai_responses_api_chunk and _chunk_type in (
-                    ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-                    ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
-                    ResponsesAPIStreamEvents.RESPONSE_FAILED,
+                    openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                    openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     self.completed_response = openai_responses_api_chunk
                     # Add cost to usage object if include_cost_in_streaming_usage is True
@@ -230,11 +250,11 @@ class BaseResponsesAPIStreamingIterator:
                         litellm.include_cost_in_streaming_usage
                         and self.logging_obj is not None
                     ):
-                        response_obj: Optional[ResponsesAPIResponse] = getattr(
+                        response_obj: Optional[Any] = getattr(
                             openai_responses_api_chunk, "response", None
                         )
                         if response_obj:
-                            usage_obj: Optional[ResponseAPIUsage] = getattr(
+                            usage_obj: Optional[Any] = getattr(
                                 response_obj, "usage", None
                             )
                             if usage_obj is not None:
@@ -247,9 +267,13 @@ class BaseResponsesAPIStreamingIterator:
                                     if cost is not None:
                                         setattr(usage_obj, "cost", cost)
                                 except Exception:
+                                    # Best-effort usage cost annotation should not break stream replay.
                                     pass
 
-                    if _chunk_type == ResponsesAPIStreamEvents.RESPONSE_FAILED:
+                    if (
+                        _chunk_type
+                        == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED
+                    ):
                         self._handle_logging_failed_response()
                     else:
                         self._handle_logging_completed_response()
@@ -265,6 +289,59 @@ class BaseResponsesAPIStreamingIterator:
             # This ensures failures are logged even when _process_chunk is called directly
             self._handle_failure(e)
             raise
+
+    def _log_completed_response(self, *, is_async: bool) -> None:
+        if self._completed_response_logged:
+            return
+        self._completed_response_logged = True
+
+        if self._persist_completed_response_before_logging:
+            self._persist_completed_response_to_cache(is_async=is_async)
+
+        # Create a copy for logging to avoid modifying the response object that will be returned to the user
+        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
+        # to chat completion format (prompt_tokens/completion_tokens) for internal logging
+        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
+        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
+        logging_response = self.completed_response
+        if self.completed_response is not None and hasattr(
+            self.completed_response, "model_dump"
+        ):
+            try:
+                logging_response = type(self.completed_response).model_validate(
+                    self.completed_response.model_dump()
+                )
+            except Exception:
+                # Fallback to original if serialization fails
+                pass
+
+        end_time = datetime.now()
+        if is_async:
+            asyncio.create_task(
+                self.logging_obj.async_success_handler(
+                    result=logging_response,
+                    start_time=self.start_time,
+                    end_time=end_time,
+                    cache_hit=self._completed_response_cache_hit,
+                )
+            )
+        else:
+            run_async_function(
+                async_function=self.logging_obj.async_success_handler,
+                result=logging_response,
+                start_time=self.start_time,
+                end_time=end_time,
+                cache_hit=self._completed_response_cache_hit,
+            )
+
+        executor.submit(
+            self.logging_obj.success_handler,
+            result=logging_response,
+            cache_hit=self._completed_response_cache_hit,
+            start_time=self.start_time,
+            end_time=end_time,
+        )
+        self._run_post_success_hooks(end_time=end_time)
 
     def _handle_logging_completed_response(self):
         """Base implementation - should be overridden by subclasses"""
@@ -295,6 +372,88 @@ class BaseResponsesAPIStreamingIterator:
             model=self.model or "",
         )
         self._handle_failure(exception)
+
+    def _get_completed_response_object(self) -> Optional[Any]:
+        openai_types = _get_openai_response_types()
+        completed_response = self.completed_response
+        if isinstance(completed_response, openai_types.ResponsesAPIResponse):
+            return completed_response
+
+        response_obj = getattr(completed_response, "response", None)
+        if isinstance(response_obj, openai_types.ResponsesAPIResponse):
+            return response_obj
+
+        return None
+
+    def _persist_completed_response_to_cache(self, *, is_async: bool) -> None:
+        if self._completed_response_cached:
+            return
+
+        completed_response = self.completed_response
+        openai_types = _get_openai_response_types()
+        if (
+            getattr(completed_response, "type", None)
+            != openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        ):
+            return
+
+        response_obj = self._get_completed_response_object()
+        if response_obj is None:
+            return
+
+        caching_handler = getattr(self.logging_obj, "_llm_caching_handler", None)
+        if caching_handler is None:
+            return
+
+        request_kwargs = getattr(caching_handler, "request_kwargs", None)
+        if (
+            not isinstance(request_kwargs, dict)
+            or request_kwargs.get("stream") is not True
+        ):
+            return
+        request_kwargs = request_kwargs.copy()
+        preset_cache_key = getattr(caching_handler, "preset_cache_key", None)
+        request_cache_key = request_kwargs.pop("cache_key", None)
+        if preset_cache_key is None:
+            preset_cache_key = request_cache_key
+        if request_kwargs.get("metadata") is None:
+            request_kwargs.pop("metadata", None)
+        request_kwargs.pop("custom_llm_provider", None)
+        if preset_cache_key is not None:
+            request_kwargs["cache_key"] = preset_cache_key
+
+        if not caching_handler._should_store_result_in_cache(
+            original_function=caching_handler.original_function,
+            kwargs=request_kwargs,
+        ):
+            return
+
+        if litellm.cache is None:
+            return
+
+        cached_response = response_obj.model_dump_json()
+        if is_async:
+            cache_write_task = asyncio.create_task(
+                litellm.cache.async_add_cache(
+                    cached_response,
+                    dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
+                    **request_kwargs,
+                )
+            )
+            cache_write_task.add_done_callback(
+                lambda task: _log_background_task_failure(
+                    task,
+                    task_name="Responses stream cache write",
+                )
+            )
+        else:
+            litellm.cache.add_cache(
+                cached_response,
+                dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
+                **request_kwargs,
+            )
+
+        self._completed_response_cached = True
 
     async def _call_post_streaming_deployment_hook(self, chunk):
         """
@@ -480,7 +639,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> ResponsesAPIStreamingResponse:
+    async def __anext__(self) -> Any:
         try:
             self._check_max_streaming_duration()
             while True:
@@ -520,40 +679,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in async context"""
-        # Create a copy for logging to avoid modifying the response object that will be returned to the user
-        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
-        # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
-        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
-        logging_response = self.completed_response
-        if self.completed_response is not None and hasattr(
-            self.completed_response, "model_dump"
-        ):
-            try:
-                logging_response = type(self.completed_response).model_validate(
-                    self.completed_response.model_dump()
-                )
-            except Exception:
-                # Fallback to original if serialization fails
-                pass
-
-        asyncio.create_task(
-            self.logging_obj.async_success_handler(
-                result=logging_response,
-                start_time=self.start_time,
-                end_time=datetime.now(),
-                cache_hit=None,
-            )
-        )
-
-        executor.submit(
-            self.logging_obj.success_handler,
-            result=logging_response,
-            cache_hit=None,
-            start_time=self.start_time,
-            end_time=datetime.now(),
-        )
-        self._run_post_success_hooks(end_time=datetime.now())
+        self._log_completed_response(is_async=True)
 
 
 class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
@@ -627,39 +753,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in sync context"""
-        # Create a copy for logging to avoid modifying the response object that will be returned to the user
-        # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
-        # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
-        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
-        logging_response = self.completed_response
-        if self.completed_response is not None and hasattr(
-            self.completed_response, "model_dump"
-        ):
-            try:
-                logging_response = type(self.completed_response).model_validate(
-                    self.completed_response.model_dump()
-                )
-            except Exception:
-                # Fallback to original if serialization fails
-                pass
-
-        run_async_function(
-            async_function=self.logging_obj.async_success_handler,
-            result=logging_response,
-            start_time=self.start_time,
-            end_time=datetime.now(),
-            cache_hit=None,
-        )
-
-        executor.submit(
-            self.logging_obj.success_handler,
-            result=logging_response,
-            cache_hit=None,
-            start_time=self.start_time,
-            end_time=datetime.now(),
-        )
-        self._run_post_success_hooks(end_time=datetime.now())
+        self._log_completed_response(is_async=False)
 
 
 class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
@@ -683,90 +777,441 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         request_data: Optional[Dict[str, Any]] = None,
         call_type: Optional[str] = None,
     ):
-        super().__init__(
-            response=response,
+        transformed = responses_api_provider_config.transform_response_api_response(
             model=model,
-            responses_api_provider_config=responses_api_provider_config,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+        super().__init__(
+            response=httpx.Response(200),
+            model=model,
+            responses_api_provider_config=None,
             logging_obj=logging_obj,
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
             request_data=request_data,
             call_type=call_type,
         )
+        self._set_events_from_response(transformed=transformed, logging_obj=logging_obj)
 
-        # one-time transform
-        transformed = (
-            self.responses_api_provider_config.transform_response_api_response(
-                model=self.model,
-                raw_response=response,
-                logging_obj=logging_obj,
-            )
+    def _set_events_from_response(
+        self,
+        transformed: Any,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> None:
+        self._events = _build_synthetic_response_events(
+            transformed=transformed,
+            logging_obj=logging_obj,
+            chunk_size=self.CHUNK_SIZE,
         )
-        full_text = self._collect_text(transformed)
-
-        # build a list of 5‑char delta events
-        deltas = [
-            OutputTextDeltaEvent(
-                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
-                delta=full_text[i : i + self.CHUNK_SIZE],
-                item_id=transformed.id,
-                output_index=0,
-                content_index=0,
-            )
-            for i in range(0, len(full_text), self.CHUNK_SIZE)
-        ]
-
-        # Add cost to usage object if include_cost_in_streaming_usage is True
-        if litellm.include_cost_in_streaming_usage and logging_obj is not None:
-            usage_obj: Optional[ResponseAPIUsage] = getattr(transformed, "usage", None)
-            if usage_obj is not None:
-                try:
-                    cost: Optional[float] = logging_obj._response_cost_calculator(
-                        result=transformed
-                    )
-                    if cost is not None:
-                        setattr(usage_obj, "cost", cost)
-                except Exception:
-                    # If cost calculation fails, continue without cost
-                    pass
-
-        # append the completed event
-        self._events = deltas + [
-            ResponseCompletedEvent(
-                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
-                response=transformed,
-            )
-        ]
         self._idx = 0
+        self.completed_response = self._events[-1]
 
     def __aiter__(self):
         return self
 
-    async def __anext__(self) -> ResponsesAPIStreamingResponse:
+    async def __anext__(self) -> Any:
         if self._idx >= len(self._events):
             raise StopAsyncIteration
         evt = self._events[self._idx]
         self._idx += 1
+        openai_types = _get_openai_response_types()
+        if (
+            getattr(evt, "type", None)
+            == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        ):
+            self.completed_response = evt
+            self._log_completed_response(is_async=True)
         return evt
 
     def __iter__(self):
         return self
 
-    def __next__(self) -> ResponsesAPIStreamingResponse:
+    def __next__(self) -> Any:
         if self._idx >= len(self._events):
             raise StopIteration
         evt = self._events[self._idx]
         self._idx += 1
+        openai_types = _get_openai_response_types()
+        if (
+            getattr(evt, "type", None)
+            == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        ):
+            self.completed_response = evt
+            self._log_completed_response(is_async=False)
         return evt
 
-    def _collect_text(self, resp: ResponsesAPIResponse) -> str:
-        out = ""
-        for out_item in resp.output:
-            item_type = getattr(out_item, "type", None)
-            if item_type == "message":
-                for c in getattr(out_item, "content", []):
-                    out += c.text
-        return out
+
+class CachedResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
+    def __init__(
+        self,
+        response: Any,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: Optional[Dict[str, Any]] = None,
+        call_type: Optional[str] = None,
+    ):
+        BaseResponsesAPIStreamingIterator.__init__(
+            self,
+            response=httpx.Response(200),
+            model=getattr(response, "model", ""),
+            responses_api_provider_config=None,
+            logging_obj=logging_obj,
+            litellm_metadata=None,
+            custom_llm_provider="cached_response",
+            request_data=request_data,
+            call_type=call_type,
+        )
+        self._completed_response_cache_hit = True
+        self._persist_completed_response_before_logging = False
+        self._events: List[Any] = []
+        self._idx = 0
+        self._set_events_from_response(transformed=response, logging_obj=logging_obj)
+
+    def _set_events_from_response(
+        self,
+        transformed: Any,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> None:
+        self._events = _build_synthetic_response_events(
+            transformed=transformed,
+            logging_obj=logging_obj,
+            chunk_size=MockResponsesAPIStreamingIterator.CHUNK_SIZE,
+        )
+        self._idx = 0
+        self.completed_response = self._events[-1]
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._idx >= len(self._events):
+            raise StopAsyncIteration
+        evt = self._events[self._idx]
+        self._idx += 1
+        openai_types = _get_openai_response_types()
+        if (
+            getattr(evt, "type", None)
+            == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        ):
+            self.completed_response = evt
+            self._log_completed_response(is_async=True)
+        return evt
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> Any:
+        if self._idx >= len(self._events):
+            raise StopIteration
+        evt = self._events[self._idx]
+        self._idx += 1
+        openai_types = _get_openai_response_types()
+        if (
+            getattr(evt, "type", None)
+            == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        ):
+            self.completed_response = evt
+            self._log_completed_response(is_async=False)
+        return evt
+
+
+def _dump_response_object(obj: Any) -> Dict[str, Any]:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if isinstance(obj, dict):
+        return obj
+    return {}
+
+
+def _build_response_status_event(
+    event_type: Literal[
+        "response.created",
+        "response.in_progress",
+    ],
+    transformed: Any,
+) -> Any:
+    openai_types = _get_openai_response_types()
+    in_progress_response = transformed.model_copy(
+        deep=True,
+        update={"status": "in_progress", "output": []},
+    )
+    if event_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED:
+        return openai_types.ResponseCreatedEvent(
+            type=event_type, response=in_progress_response
+        )
+    return openai_types.ResponseInProgressEvent(
+        type=event_type, response=in_progress_response
+    )
+
+
+def _build_content_part_done_event(
+    *,
+    item_id: str,
+    output_index: int,
+    content_index: int,
+    part_payload: Dict[str, Any],
+) -> Optional[Any]:
+    openai_types = _get_openai_response_types()
+    part_type = part_payload.get("type")
+    part: Any
+    if part_type == "output_text":
+        annotations = [
+            openai_types.BaseLiteLLMOpenAIResponseObject(**annotation)
+            for annotation in part_payload.get("annotations", []) or []
+        ]
+        part = openai_types.ContentPartDonePartOutputText(
+            type="output_text",
+            text=str(part_payload.get("text") or ""),
+            annotations=annotations,
+            logprobs=part_payload.get("logprobs"),
+        )
+    elif part_type == "refusal":
+        part = openai_types.ContentPartDonePartRefusal(
+            type="refusal",
+            refusal=str(part_payload.get("refusal") or ""),
+        )
+    elif part_type == "reasoning_text":
+        part = openai_types.ContentPartDonePartReasoningText(
+            type="reasoning_text",
+            reasoning=str(part_payload.get("reasoning") or ""),
+        )
+    else:
+        return None
+
+    return openai_types.ContentPartDoneEvent(
+        type=openai_types.ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+        item_id=item_id,
+        output_index=output_index,
+        content_index=content_index,
+        part=part,
+    )
+
+
+def _add_text_like_part_events(
+    *,
+    events: List[Any],
+    item_id: str,
+    output_index: int,
+    content_index: int,
+    part_payload: Dict[str, Any],
+    chunk_size: int,
+) -> None:
+    openai_types = _get_openai_response_types()
+    part_type = part_payload.get("type")
+    if part_type == "output_text":
+        text = str(part_payload.get("text") or "")
+        for i in range(0, len(text), chunk_size):
+            events.append(
+                openai_types.OutputTextDeltaEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                    item_id=item_id,
+                    output_index=output_index,
+                    content_index=content_index,
+                    delta=text[i : i + chunk_size],
+                )
+            )
+        for annotation_index, annotation in enumerate(
+            part_payload.get("annotations", []) or []
+        ):
+            events.append(
+                openai_types.OutputTextAnnotationAddedEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
+                    item_id=item_id,
+                    output_index=output_index,
+                    content_index=content_index,
+                    annotation_index=annotation_index,
+                    annotation=annotation,
+                )
+            )
+        events.append(
+            openai_types.OutputTextDoneEvent(
+                type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+                item_id=item_id,
+                output_index=output_index,
+                content_index=content_index,
+                text=text,
+            )
+        )
+    elif part_type == "refusal":
+        refusal = str(part_payload.get("refusal") or "")
+        for i in range(0, len(refusal), chunk_size):
+            events.append(
+                openai_types.RefusalDeltaEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.REFUSAL_DELTA,
+                    item_id=item_id,
+                    output_index=output_index,
+                    content_index=content_index,
+                    delta=refusal[i : i + chunk_size],
+                )
+            )
+        events.append(
+            openai_types.RefusalDoneEvent(
+                type=openai_types.ResponsesAPIStreamEvents.REFUSAL_DONE,
+                item_id=item_id,
+                output_index=output_index,
+                content_index=content_index,
+                refusal=refusal,
+            )
+        )
+
+
+def _build_synthetic_response_events(
+    *,
+    transformed: Any,
+    logging_obj: LiteLLMLoggingObj,
+    chunk_size: int,
+) -> List[Any]:
+    openai_types = _get_openai_response_types()
+    if litellm.include_cost_in_streaming_usage and logging_obj is not None:
+        usage_obj: Optional[Any] = getattr(transformed, "usage", None)
+        if usage_obj is not None:
+            try:
+                cost: Optional[float] = logging_obj._response_cost_calculator(
+                    result=transformed
+                )
+                if cost is not None:
+                    setattr(usage_obj, "cost", cost)
+            except Exception:
+                pass
+
+    events: List[Any] = [
+        _build_response_status_event(
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_CREATED, transformed
+        ),
+        _build_response_status_event(
+            openai_types.ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS, transformed
+        ),
+    ]
+
+    sequence_number = 0
+    for output_index, output_item in enumerate(
+        getattr(transformed, "output", []) or []
+    ):
+        output_item_payload = _dump_response_object(output_item)
+        item_id = str(output_item_payload.get("id") or transformed.id)
+        item_type = output_item_payload.get("type")
+
+        events.append(
+            openai_types.OutputItemAddedEvent(
+                type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                output_index=output_index,
+                item=openai_types.BaseLiteLLMOpenAIResponseObject(
+                    **output_item_payload
+                ),
+            )
+        )
+
+        if item_type == "message":
+            for content_index, part in enumerate(
+                output_item_payload.get("content", []) or []
+            ):
+                part_payload = _dump_response_object(part)
+                events.append(
+                    openai_types.ContentPartAddedEvent(
+                        type=openai_types.ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+                        item_id=item_id,
+                        output_index=output_index,
+                        content_index=content_index,
+                        part=openai_types.BaseLiteLLMOpenAIResponseObject(
+                            **part_payload
+                        ),
+                    )
+                )
+                _add_text_like_part_events(
+                    events=events,
+                    item_id=item_id,
+                    output_index=output_index,
+                    content_index=content_index,
+                    part_payload=part_payload,
+                    chunk_size=chunk_size,
+                )
+                done_event = _build_content_part_done_event(
+                    item_id=item_id,
+                    output_index=output_index,
+                    content_index=content_index,
+                    part_payload=part_payload,
+                )
+                if done_event is not None:
+                    events.append(done_event)
+        elif item_type == "function_call":
+            arguments = str(output_item_payload.get("arguments") or "")
+            for i in range(0, len(arguments), chunk_size):
+                events.append(
+                    openai_types.FunctionCallArgumentsDeltaEvent(
+                        type=openai_types.ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+                        item_id=item_id,
+                        output_index=output_index,
+                        delta=arguments[i : i + chunk_size],
+                    )
+                )
+            events.append(
+                openai_types.FunctionCallArgumentsDoneEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+                    item_id=item_id,
+                    output_index=output_index,
+                    arguments=arguments,
+                )
+            )
+        elif item_type == "reasoning":
+            for summary_index, summary in enumerate(
+                output_item_payload.get("summary", []) or []
+            ):
+                summary_payload = _dump_response_object(summary)
+                summary_text = str(summary_payload.get("text") or "")
+                for i in range(0, len(summary_text), chunk_size):
+                    events.append(
+                        openai_types.ReasoningSummaryTextDeltaEvent(
+                            type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+                            item_id=item_id,
+                            output_index=output_index,
+                            summary_index=summary_index,
+                            delta=summary_text[i : i + chunk_size],
+                        )
+                    )
+                sequence_number += 1
+                events.append(
+                    openai_types.ReasoningSummaryTextDoneEvent(
+                        type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+                        item_id=item_id,
+                        output_index=output_index,
+                        sequence_number=sequence_number,
+                        summary_index=summary_index,
+                        text=summary_text,
+                    )
+                )
+                sequence_number += 1
+                events.append(
+                    openai_types.ReasoningSummaryPartDoneEvent(
+                        type=openai_types.ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+                        item_id=item_id,
+                        output_index=output_index,
+                        sequence_number=sequence_number,
+                        summary_index=summary_index,
+                        part=openai_types.BaseLiteLLMOpenAIResponseObject(
+                            **summary_payload
+                        ),
+                    )
+                )
+
+        sequence_number += 1
+        events.append(
+            openai_types.OutputItemDoneEvent(
+                type=openai_types.ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=output_index,
+                sequence_number=sequence_number,
+                item=openai_types.BaseLiteLLMOpenAIResponseObject(
+                    **output_item_payload
+                ),
+            )
+        )
+
+    events.append(
+        openai_types.ResponseCompletedEvent(
+            type=openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=transformed,
+        )
+    )
+    return events
 
 
 # ---------------------------------------------------------------------------
@@ -951,8 +1396,8 @@ class ResponsesWebSocketStreaming:
 # ---------------------------------------------------------------------------
 
 _RESPONSE_CREATE_PARAMS: frozenset = (
-    ResponsesAPIRequestParams.__required_keys__
-    | ResponsesAPIRequestParams.__optional_keys__
+    _get_openai_response_types().ResponsesAPIRequestParams.__required_keys__
+    | _get_openai_response_types().ResponsesAPIRequestParams.__optional_keys__
 )
 
 _MANAGED_WS_SKIP_KWARGS: frozenset = frozenset(
@@ -1085,7 +1530,7 @@ class ManagedResponsesWebSocketHandler:
 
     @staticmethod
     def _extract_output_messages(
-        completed_event: Dict[str, Any]
+        completed_event: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         """
         Convert the output items in a ``response.completed`` event into

@@ -4,7 +4,8 @@ GitLab prompt manager with configurable prompts folder.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from jinja2 import DictLoader, Environment, select_autoescape
+from jinja2 import DictLoader, select_autoescape
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 
@@ -90,7 +91,13 @@ class GitLabTemplateManager:
             or ""
         ).strip("/")
 
-        self.jinja_env = Environment(
+        # Templates fetched from a GitLab repo are not trustworthy:
+        # anyone with repo write access can ship Jinja syntax that, in a
+        # plain `Environment()`, would reach `__class__.__init__.__globals__`
+        # and pivot into RCE on the proxy host. The sandbox blocks that
+        # attribute traversal while leaving normal `{{ var }}` substitution
+        # intact. Matches the dotprompt manager's hardening.
+        self.jinja_env = ImmutableSandboxedEnvironment(
             loader=DictLoader({}),
             autoescape=select_autoescape(["html", "xml"]),
             variable_start_string="{{",

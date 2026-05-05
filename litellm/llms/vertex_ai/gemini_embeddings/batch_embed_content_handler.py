@@ -3,7 +3,7 @@ Google AI Studio /batchEmbedContents Embeddings Endpoint
 """
 
 import json
-from typing import Any, Dict, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import httpx
 
@@ -13,8 +13,8 @@ from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
 )
-from litellm.types.llms.openai import EmbeddingInput
 from litellm.types.llms.vertex_ai import (
+    GeminiEmbeddingInput,
     VertexAIBatchEmbeddingsRequestBody,
     VertexAIBatchEmbeddingsResponseObject,
 )
@@ -23,7 +23,6 @@ from litellm.types.utils import EmbeddingResponse
 from ..gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from .batch_embed_content_transformation import (
     _is_file_reference,
-    _is_multimodal_input,
     process_embed_content_response,
     process_response,
     transform_openai_input_gemini_content,
@@ -32,9 +31,24 @@ from .batch_embed_content_transformation import (
 
 
 class GoogleBatchEmbeddings(VertexLLM):
+    @staticmethod
+    def _flatten_and_detect_file_refs(
+        input: GeminiEmbeddingInput,
+    ) -> Tuple[List[str], bool]:
+        """Flatten nested input lists and detect file references."""
+        input_list = [input] if isinstance(input, str) else input
+        flat_elements = [
+            e
+            for item in input_list
+            for e in (item if isinstance(item, list) else [item])
+            if isinstance(e, str)
+        ]
+        has_file_refs = any(_is_file_reference(e) for e in flat_elements)
+        return flat_elements, has_file_refs
+
     def _resolve_file_references(
         self,
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
         api_key: str,
         sync_handler: HTTPHandler,
     ) -> Dict[str, Dict[str, str]]:
@@ -42,7 +56,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         Resolve Gemini file references (files/...) to get mime_type and uri.
 
         Args:
-            input: EmbeddingInput that may contain file references
+            input: GeminiEmbeddingInput that may contain file references
             api_key: Gemini API key
             sync_handler: HTTP client
 
@@ -73,7 +87,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
     async def _async_resolve_file_references(
         self,
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
         api_key: str,
         async_handler: AsyncHTTPHandler,
     ) -> Dict[str, Dict[str, str]]:
@@ -81,7 +95,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         Async version of _resolve_file_references.
 
         Args:
-            input: EmbeddingInput that may contain file references
+            input: GeminiEmbeddingInput that may contain file references
             api_key: Gemini API key
             async_handler: Async HTTP client
 
@@ -110,10 +124,10 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         return resolved_files
 
-    def batch_embeddings(
+    def batch_embeddings(  # noqa: PLR0915
         self,
         model: str,
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
         print_verbose,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
@@ -151,8 +165,7 @@ class GoogleBatchEmbeddings(VertexLLM):
 
         optional_params = optional_params or {}
 
-        is_multimodal = _is_multimodal_input(input)
-        use_embed_content = is_multimodal or (custom_llm_provider == "vertex_ai")
+        use_embed_content = custom_llm_provider == "vertex_ai"
         mode: Literal["embedding", "batch_embedding"]
         if use_embed_content:
             mode = "embedding"
@@ -215,8 +228,22 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
+            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
+            if has_file_refs and not api_key:
+                raise ValueError(
+                    "An API key is required to resolve Gemini file references (files/...). "
+                    "Pass api_key= or set GEMINI_API_KEY."
+                )
+            resolved_files = {}
+            if api_key and has_file_refs:
+                resolved_files = self._resolve_file_references(
+                    input=flat_elements, api_key=api_key, sync_handler=sync_handler
+                )
             request_data = transform_openai_input_gemini_content(
-                input=input, model=model, optional_params=optional_params
+                input=input,
+                model=model,
+                optional_params=optional_params,
+                resolved_files=resolved_files,
             )
 
         ## LOGGING
@@ -264,7 +291,7 @@ class GoogleBatchEmbeddings(VertexLLM):
         url: str,
         data: Optional[Union[VertexAIBatchEmbeddingsRequestBody, dict]],
         model_response: EmbeddingResponse,
-        input: EmbeddingInput,
+        input: GeminiEmbeddingInput,
         timeout: Optional[Union[float, httpx.Timeout]],
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
@@ -303,8 +330,22 @@ class GoogleBatchEmbeddings(VertexLLM):
                 resolved_files=resolved_files,
             )
         else:
+            flat_elements, has_file_refs = self._flatten_and_detect_file_refs(input)
+            if has_file_refs and not api_key:
+                raise ValueError(
+                    "An API key is required to resolve Gemini file references (files/...). "
+                    "Pass api_key= or set GEMINI_API_KEY."
+                )
+            resolved_files = {}
+            if api_key and has_file_refs:
+                resolved_files = await self._async_resolve_file_references(
+                    input=flat_elements, api_key=api_key, async_handler=async_handler
+                )
             data = transform_openai_input_gemini_content(
-                input=input, model=model, optional_params=optional_params or {}
+                input=input,
+                model=model,
+                optional_params=optional_params or {},
+                resolved_files=resolved_files,
             )
 
         ## LOGGING

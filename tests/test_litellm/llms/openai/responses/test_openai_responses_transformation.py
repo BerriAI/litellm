@@ -265,6 +265,24 @@ class TestOpenAIResponsesAPIConfig:
 
         assert result == "https://custom-openai.example.com/v1/responses"
 
+    def test_response_id_path_requests_encode_response_id(self):
+        """Test response_id is treated as one upstream URL path segment."""
+        api_base = "https://custom-openai.example.com/v1/responses"
+        response_id = "../../files?x=1#frag"
+
+        url, data = self.config.transform_list_input_items_request(
+            response_id=response_id,
+            api_base=api_base,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert (
+            url
+            == "https://custom-openai.example.com/v1/responses/..%2F..%2Ffiles%3Fx%3D1%23frag/input_items"
+        )
+        assert data["limit"] == 20
+
     def test_get_event_model_class_generic_event(self):
         """Test that get_event_model_class returns the correct event model class"""
         from litellm.types.llms.openai import GenericEvent
@@ -547,7 +565,12 @@ class TestOpenAIResponsesAPIConfig:
         """Base helper strips ``namespace`` from custom_tool_call for every provider path."""
         inp = [
             {"type": "function_call", "call_id": "a", "name": "f", "namespace": "keep"},
-            {"type": "custom_tool_call", "call_id": "b", "name": "c", "namespace": "drop"},
+            {
+                "type": "custom_tool_call",
+                "call_id": "b",
+                "name": "c",
+                "namespace": "drop",
+            },
         ]
         out = BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(
             inp

@@ -592,13 +592,8 @@ def test_remove_scope_from_cache_control():
     assert request["messages"][0]["content"][0]["cache_control"]["type"] == "ephemeral"
 
 
-def test_bedrock_messages_strips_output_config():
-    """
-    Ensure output_config is stripped from the request before sending to
-    Bedrock Invoke, which doesn't support this Anthropic-specific parameter.
-
-    Regression test for: https://github.com/BerriAI/litellm/issues/22797
-    """
+def test_bedrock_messages_forwards_output_config():
+    """Bedrock Invoke /v1/messages forwards ``output_config`` for adaptive Claude models."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -611,26 +606,20 @@ def test_bedrock_messages_strips_output_config():
     }
 
     result = cfg.transform_anthropic_messages_request(
-        model="anthropic.claude-3-haiku-20240307-v1:0",
+        model="anthropic.claude-opus-4-7",
         messages=messages,
         anthropic_messages_optional_request_params=optional_params,
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )
 
-    assert (
-        "output_config" not in result
-    ), "output_config should be stripped — Bedrock Invoke rejects it"
+    assert result.get("output_config") == {"effort": "high"}
     # Other params should be preserved
     assert result.get("max_tokens") == 4096
 
 
-def test_bedrock_messages_strips_output_config_with_output_format():
-    """
-    When both output_config and output_format are present, both should be
-    stripped (output_format is converted to inline schema, output_config
-    is simply dropped).
-    """
+def test_bedrock_messages_forwards_output_config_with_output_format():
+    """``output_config`` is forwarded; ``output_format`` is converted to inline schema."""
     from litellm.types.router import GenericLiteLLMParams
 
     cfg = AmazonAnthropicClaudeMessagesConfig()
@@ -648,6 +637,29 @@ def test_bedrock_messages_strips_output_config_with_output_format():
     }
 
     result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "low"}
+    assert "output_format" not in result
+
+
+def test_bedrock_messages_forwards_output_config_for_non_adaptive_model():
+    """``output_config`` is forwarded for non-adaptive models so the provider's error surfaces."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "high"},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
         model="anthropic.claude-3-haiku-20240307-v1:0",
         messages=messages,
         anthropic_messages_optional_request_params=optional_params,
@@ -655,8 +667,201 @@ def test_bedrock_messages_strips_output_config_with_output_format():
         headers={},
     )
 
+    assert result.get("output_config") == {"effort": "high"}
+    assert result.get("max_tokens") == 4096
+
+
+def test_bedrock_messages_drop_params_strips_output_config_for_pre_4_5():
+    """``drop_params=True`` strips ``output_config`` for pre-4.5 Anthropic on /v1/messages."""
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "low"},
+    }
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
     assert "output_config" not in result
-    assert "output_format" not in result
+
+
+def test_bedrock_messages_drop_params_keeps_output_config_for_4_7():
+    """``drop_params=True`` does not strip on opus-4-7 (supports effort)."""
+    import litellm
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "output_config": {"effort": "high"},
+    }
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = cfg.transform_anthropic_messages_request(
+            model="anthropic.claude-opus-4-7",
+            messages=messages,
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("output_config") == {"effort": "high"}
+
+
+@pytest.mark.parametrize(
+    "reasoning_effort,expected_effort",
+    [
+        ("minimal", "low"),
+        ("low", "low"),
+        ("medium", "medium"),
+        ("high", "high"),
+        ("xhigh", "xhigh"),
+        ("max", "max"),
+    ],
+)
+def test_bedrock_messages_maps_reasoning_effort_for_adaptive_model(
+    reasoning_effort, expected_effort
+):
+    """``reasoning_effort`` maps to ``thinking`` + ``output_config.effort`` on /v1/messages."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "reasoning_effort": reasoning_effort,
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "reasoning_effort" not in result
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": expected_effort}
+
+
+def test_bedrock_messages_reasoning_effort_on_non_adaptive_uses_thinking_budget():
+    """Non-adaptive models map ``reasoning_effort`` to ``thinking.budget_tokens``."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "reasoning_effort": "medium",
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-5-20251101-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "reasoning_effort" not in result
+    assert "output_config" not in result
+    thinking = result.get("thinking")
+    assert isinstance(thinking, dict)
+    assert thinking.get("type") == "enabled"
+    assert isinstance(thinking.get("budget_tokens"), int)
+    assert thinking["budget_tokens"] >= 1024
+
+
+def test_bedrock_messages_reasoning_effort_none_clears_thinking():
+    """``reasoning_effort='none'`` clears both ``thinking`` and ``output_config``."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "reasoning_effort": "none",
+        "output_config": {"effort": "high"},
+        "thinking": {"type": "adaptive"},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "reasoning_effort" not in result
+    assert "thinking" not in result
+    assert "output_config" not in result
+
+
+def test_bedrock_messages_invalid_reasoning_effort_raises_400():
+    """Garbage ``reasoning_effort`` raises AnthropicError (400)."""
+    from litellm.llms.anthropic.common_utils import AnthropicError
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+
+    for bad_effort in ("invalid", "disabled", ""):
+        with pytest.raises(AnthropicError):
+            cfg.transform_anthropic_messages_request(
+                model="anthropic.claude-opus-4-7",
+                messages=messages,
+                anthropic_messages_optional_request_params={
+                    "max_tokens": 4096,
+                    "reasoning_effort": bad_effort,
+                },
+                litellm_params=GenericLiteLLMParams(),
+                headers={},
+            )
+
+
+def test_bedrock_messages_explicit_output_config_wins_over_reasoning_effort():
+    """Explicit ``output_config.effort`` wins over the ``reasoning_effort`` alias."""
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    optional_params = {
+        "max_tokens": 4096,
+        "reasoning_effort": "low",
+        "output_config": {"effort": "max"},
+    }
+
+    result = cfg.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "reasoning_effort" not in result
+    assert result.get("output_config") == {"effort": "max"}
 
 
 def test_bedrock_messages_strips_context_management():
@@ -728,13 +933,13 @@ def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
         "mcp_servers",
         "container",
         "inference_geo",
-        "output_config",
         "context_management",
         "model",
         "stream",
     ):
         assert bad not in result, f"{bad} should be stripped by the allowlist"
 
+    assert result.get("output_config") == {"effort": "low"}
     # Supported fields pass through.
     assert result["max_tokens"] == 4096
     assert result["temperature"] == 0.5
@@ -882,7 +1087,10 @@ async def test_promote_message_start_cache_when_message_stop_omits_cache_fields(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"input_tokens": 10, "output_tokens": 181},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     merged: list[dict] = []
     async for chunk in cfg._promote_message_stop_usage(_stream()):
@@ -936,7 +1144,11 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
                 },
             },
         }
-        yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+        yield {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        }
         yield {
             "type": "content_block_delta",
             "index": 0,
@@ -948,7 +1160,10 @@ async def test_unified_bedrock_messages_cache_on_start_only_never_negative_cost(
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
             "usage": {"output_tokens": 181, "input_tokens": 10},
         }
-        yield {"type": "message_stop", "usage": {"input_tokens": 10, "output_tokens": 181}}
+        yield {
+            "type": "message_stop",
+            "usage": {"input_tokens": 10, "output_tokens": 181},
+        }
 
     logging_obj = LiteLLMLoggingObj(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
