@@ -22,6 +22,13 @@ CONTAINER_OBJECT_PURPOSE = "container"
 _NEGATIVE_OWNER_SENTINEL = "__litellm_container_no_owner__"
 _CONTAINER_OWNER_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
 
+# Per-caller-scope cache for ``GET /v1/containers`` list filtering. Without
+# this, every list call issues a fresh ``find_many`` against
+# ``litellm_managedobjecttable``. The cache key is the sorted owner-scope
+# tuple — different keys for the same user share the same allow-set, but
+# different users with different scopes get disjoint cache entries.
+_ALLOWED_CONTAINER_IDS_CACHE = InMemoryCache(max_size_in_memory=2048, default_ttl=60)
+
 
 def _container_model_object_id(
     original_container_id: str, custom_llm_provider: str
@@ -86,19 +93,20 @@ async def record_container_owner(
     custom_llm_provider: str,
 ) -> Any:
     container_id = _get_response_id(response)
-    owner = get_primary_resource_owner_scope(user_api_key_dict)
-    if is_proxy_admin(user_api_key_dict) and (container_id is None or owner is None):
-        return response
     if container_id is None:
         verbose_proxy_logger.warning(
             "Skipping container ownership tracking because provider response has no id"
         )
         return response
+    owner = get_primary_resource_owner_scope(user_api_key_dict)
     if owner is None:
-        # Identity-less callers (no user_id / team_id / org_id / api_key /
-        # token) can't be uniquely stamped on the row. Stamping a
+        # Admins with identity (the common path: master-key auth populates
+        # ``user_id`` + ``api_key``) flow through the normal record path
+        # below so admin-created containers are still tracked. Truly
+        # identity-less admins (no user_id / team_id / org_id / api_key /
+        # token) can't be uniquely stamped on the row — stamping a
         # placeholder would collapse every such caller into a shared
-        # owner — the cross-tenant primitive we explicitly avoid.
+        # owner, the cross-tenant primitive we explicitly avoid.
         raise HTTPException(
             status_code=403,
             detail="Unable to record container ownership: caller has no identity scope.",
@@ -151,6 +159,14 @@ async def record_container_owner(
         )
 
     _CONTAINER_OWNER_CACHE.set_cache(model_object_id, owner)
+    # Drop the caller's own list-cache entry so the just-created container
+    # shows up on their next ``GET /v1/containers``. Other callers with
+    # disjoint scope tuples have their own entries; intersecting-scope
+    # tuples self-correct on the 60s TTL.
+    caller_scope_key = "|".join(sorted(get_resource_owner_scopes(user_api_key_dict)))
+    if caller_scope_key:
+        _ALLOWED_CONTAINER_IDS_CACHE.cache_dict.pop(caller_scope_key, None)
+        _ALLOWED_CONTAINER_IDS_CACHE.ttl_dict.pop(caller_scope_key, None)
     return response
 
 
@@ -249,6 +265,11 @@ async def _get_allowed_container_ids(
     if not owner_scopes:
         return set()
 
+    cache_key = "|".join(sorted(owner_scopes))
+    cached = _ALLOWED_CONTAINER_IDS_CACHE.get_cache(cache_key)
+    if cached is not None:
+        return set(cached)
+
     prisma_client = await _get_prisma_client()
     if prisma_client is None:
         return set()
@@ -259,11 +280,15 @@ async def _get_allowed_container_ids(
             "created_by": {"in": owner_scopes},
         }
     )
-    return {
+    allowed_ids = {
         row.model_object_id
         for row in rows
         if getattr(row, "model_object_id", None) is not None
     }
+    # ``InMemoryCache`` json-encodes values; sets aren't JSON-serializable,
+    # so store as a list and rehydrate above.
+    _ALLOWED_CONTAINER_IDS_CACHE.set_cache(cache_key, sorted(allowed_ids))
+    return allowed_ids
 
 
 async def filter_container_list_response(

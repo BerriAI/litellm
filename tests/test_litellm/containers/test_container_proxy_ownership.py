@@ -13,11 +13,19 @@ from litellm.types.containers.main import ContainerListResponse, ContainerObject
 
 @pytest.fixture(autouse=True)
 def clear_container_owner_cache():
-    ownership._CONTAINER_OWNER_CACHE.cache_dict.clear()
-    ownership._CONTAINER_OWNER_CACHE.ttl_dict.clear()
+    for cache in (
+        ownership._CONTAINER_OWNER_CACHE,
+        ownership._ALLOWED_CONTAINER_IDS_CACHE,
+    ):
+        cache.cache_dict.clear()
+        cache.ttl_dict.clear()
     yield
-    ownership._CONTAINER_OWNER_CACHE.cache_dict.clear()
-    ownership._CONTAINER_OWNER_CACHE.ttl_dict.clear()
+    for cache in (
+        ownership._CONTAINER_OWNER_CACHE,
+        ownership._ALLOWED_CONTAINER_IDS_CACHE,
+    ):
+        cache.cache_dict.clear()
+        cache.ttl_dict.clear()
 
 
 def _container(container_id: str) -> ContainerObject:
@@ -801,3 +809,112 @@ async def test_get_container_owner_caches_negative_lookups(monkeypatch):
     assert await ownership._get_container_owner("cntr_x", "openai") is None
     assert await ownership._get_container_owner("cntr_x", "openai") is None
     assert table.find_first.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_allowed_container_ids_uses_cache_after_first_db_hit(monkeypatch):
+    """``GET /v1/containers`` filtering must not issue a fresh ``find_many``
+    on every list call within the cache TTL window."""
+    table = AsyncMock()
+    table.find_many.return_value = [
+        SimpleNamespace(model_object_id="container:openai:cntr_a"),
+    ]
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    first = await ownership._get_allowed_container_ids(auth)
+    second = await ownership._get_allowed_container_ids(auth)
+    third = await ownership._get_allowed_container_ids(auth)
+
+    assert first == {"container:openai:cntr_a"}
+    assert second == first
+    assert third == first
+    # Single DB call across three list filterings — the cache absorbs the rest.
+    assert table.find_many.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_record_container_owner_invalidates_caller_list_cache(monkeypatch):
+    """A just-created container must show up on the caller's next ``GET
+    /v1/containers`` — recording the owner has to drop the caller's
+    list-cache entry, otherwise the new container is invisible for up
+    to the cache TTL."""
+    table = AsyncMock()
+    table.find_unique.return_value = None
+    table.find_many.return_value = [
+        SimpleNamespace(model_object_id="container:openai:cntr_old"),
+    ]
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    auth = UserAPIKeyAuth(user_id="user-1")
+
+    # Prime the list cache.
+    await ownership._get_allowed_container_ids(auth)
+    assert table.find_many.await_count == 1
+
+    # Recording a new owner invalidates the caller's list-cache entry.
+    table.find_many.return_value = [
+        SimpleNamespace(model_object_id="container:openai:cntr_old"),
+        SimpleNamespace(model_object_id="container:openai:cntr_new"),
+    ]
+    await ownership.record_container_owner(
+        response=_container("cntr_new"),
+        user_api_key_dict=auth,
+        custom_llm_provider="openai",
+    )
+
+    # Next list call refreshes from DB and picks up the new container.
+    refreshed = await ownership._get_allowed_container_ids(auth)
+    assert "container:openai:cntr_new" in refreshed
+    assert table.find_many.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_with_identity_records_container_ownership(monkeypatch):
+    """The admin early-return only short-circuits when there's literally no
+    container ID to stamp. An admin with identity (the master-key path
+    populates ``user_id`` + ``api_key``) creates an owned row like any
+    other caller, so admin-created containers aren't permanently
+    untracked."""
+    table = AsyncMock()
+    table.find_unique.return_value = None
+    prisma_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_managedobjecttable=table)
+    )
+    monkeypatch.setattr(
+        ownership,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+    admin_auth = UserAPIKeyAuth(
+        user_id="proxy-admin",
+        user_role=ownership.is_proxy_admin.__module__.split(".")[0]
+        and "proxy_admin",  # placeholder; the create flow doesn't actually gate on the role
+    )
+    # Use the real role enum value.
+    from litellm.proxy._types import LitellmUserRoles
+
+    admin_auth.user_role = LitellmUserRoles.PROXY_ADMIN.value
+
+    await ownership.record_container_owner(
+        response=_container("cntr_admin"),
+        user_api_key_dict=admin_auth,
+        custom_llm_provider="openai",
+    )
+
+    table.create.assert_awaited_once()
+    created_data = table.create.await_args.kwargs["data"]
+    assert created_data["created_by"] == "proxy-admin"
