@@ -40,21 +40,11 @@ _RESPX_CONFLICTING_FILES = frozenset(
     }
 )
 
-# Files where VCR replay actively breaks the test:
-# - ``test_assistants.py`` exercises the OpenAI Assistants polling APIs
-#   which mint fresh thread/run/message IDs every recording session and
-#   then poll until ``status == "completed"``. Replays of those polled
-#   GETs would have to match the new run id (impossible) or be played
-#   back in lockstep with a freshly recorded creation, neither of which
-#   ``record_mode="new_episodes"`` does well. The result in CI is that
-#   every run effectively re-records, blowing past the 15-minute step
-#   timeout for ``litellm_assistants_api_testing``.
-# - ``test_router_caching.py`` asserts on litellm's own router-level
-#   response cache by comparing ``response1.id`` to ``response2.id``
-#   across repeat upstream calls (the test bypasses litellm's cache via
-#   ``ttl=0`` and expects the upstream to return a *new* id each time).
-#   With VCR replay both upstream calls return the same cassette body,
-#   so the ids are identical and ``response1.id != response2.id`` flips.
+# Files where VCR replay breaks the test:
+# - ``test_assistants.py``: polls fresh per-session run IDs that no cassette
+#   can match, so every CI run re-records and the suite times out.
+# - ``test_router_caching.py``: asserts upstream returns a *new* id per call,
+#   which a deterministic cassette replay violates.
 _VCR_INCOMPATIBLE_FILES = frozenset(
     {
         "test_assistants.py",
@@ -62,12 +52,6 @@ _VCR_INCOMPATIBLE_FILES = frozenset(
     }
 )
 
-# No node-id suffix skips at the moment. Tests that deliberately use
-# ``api_key="my-bad-key"`` to assert a failure callback fires are handled
-# transparently by the ``key_fingerprint`` matcher in
-# ``tests/_vcr_conftest_common.py`` — bad-key requests get a different
-# cassette bucket than good-key ones, so vcrpy will not replay a recorded
-# 200 in place of the expected 401.
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 

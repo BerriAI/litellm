@@ -23,21 +23,15 @@ from tests._vcr_conftest_common import (  # noqa: E402
 _verbose_state = VerboseReporterState()
 
 
-# Files where VCR replay actively breaks the test:
-# - ``test_litellm_overhead.py`` measures ``litellm_overhead_time_ms`` as a
-#   percentage of total wall-clock time. With cached responses the upstream
-#   "network" time collapses to microseconds, so the overhead percentage
-#   blows past the 40% threshold the test asserts on.
+# Files where VCR replay breaks the test:
+# - ``test_litellm_overhead.py``: asserts overhead/total < 40%, which
+#   inverts when cached replay collapses the upstream time to microseconds.
 _VCR_INCOMPATIBLE_FILES = frozenset(
     {
         "test_litellm_overhead.py",
     }
 )
 
-# No node-id suffix skips at the moment. Tests that deliberately use a
-# bad API key (e.g. ``test_get_valid_models_from_dynamic_api_key`` with
-# ``api_key="123"``) are handled transparently by the ``key_fingerprint``
-# matcher in ``tests/_vcr_conftest_common.py``.
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 

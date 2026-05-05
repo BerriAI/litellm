@@ -36,21 +36,15 @@ _RESPX_CONFLICTING_FILES = frozenset(
     }
 )
 
-# Files where VCR replay actively breaks the test:
-# - ``test_amazing_s3_logs.py`` exercises the S3 success callback using
-#   ``mock_response`` (so there is no upstream LLM call worth caching) and
-#   asserts on a per-run ``response_id`` round-tripped through a real S3
-#   PUT/LIST. vcrpy's boto3 stub intercepts the PUT and replays a stale LIST,
-#   so the freshly-generated id is never found in the cached keys.
+# Files where VCR replay breaks the test:
+# - ``test_amazing_s3_logs.py``: vcrpy's boto3 stub intercepts a real S3
+#   PUT/LIST round-trip the test asserts on, so the per-run id is never found.
 _VCR_INCOMPATIBLE_FILES = frozenset(
     {
         "test_amazing_s3_logs.py",
     }
 )
 
-# No node-id suffix skips at the moment. Tests that deliberately use a
-# bad API key to assert a failure callback fires are handled transparently
-# by the ``key_fingerprint`` matcher in ``tests/_vcr_conftest_common.py``.
 _VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 
