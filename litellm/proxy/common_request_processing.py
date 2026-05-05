@@ -560,8 +560,7 @@ async def _check_request_disconnection(
     start_time = time.time()
     while time.time() - start_time < DEFAULT_CLIENT_DISCONNECT_CHECK_TIMEOUT_SECONDS:
         await asyncio.sleep(1)
-        message = await request.receive()
-        if message.get("type") == "http.disconnect":
+        if await request.is_disconnected():
             # cancel the LLM API Call task if any passed - this is passed from individual providers
             # Example OpenAI, Azure, VertexAI etc
             llm_api_call_task.cancel()
