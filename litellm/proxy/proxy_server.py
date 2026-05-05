@@ -14959,6 +14959,27 @@ async def _stream_mcp_asgi_response(
 ########################################################
 
 
+# Bare /mcp route — without this, Starlette's Mount("/mcp", ...) issues a 307
+# redirect from /mcp to /mcp/ which drops the request body and breaks MCP
+# clients that don't follow redirects.  This explicit route handles /mcp
+# directly so both /mcp and /mcp/ work identically.
+@app.api_route(
+    "/mcp",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
+)
+async def bare_mcp_route(request: Request):
+    """Forward bare /mcp requests to the MCP streamable-HTTP handler."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        handle_streamable_http_mcp,
+    )
+
+    scope = dict(request.scope)
+    scope["path"] = "/mcp"
+    return await _stream_mcp_asgi_response(
+        handle_streamable_http_mcp, scope, request.receive
+    )
+
+
 # Toolset-namespaced MCP routes - handle /toolset/{toolset_name}/mcp
 # Must be declared BEFORE /{mcp_server_name}/mcp to avoid being swallowed by the catchall.
 @app.api_route(
