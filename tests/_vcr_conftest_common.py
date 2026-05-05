@@ -175,19 +175,29 @@ def _strip_headers(headers, names: Iterable[str]) -> None:
 def _before_record_request(request):
     """Fingerprint API keys, then scrub them.
 
-    Order matters: vcrpy's ``filter_headers`` config option runs *before*
-    ``before_record_request`` and would erase the auth value before we
-    could hash it. Doing both steps here keeps the fingerprint available
-    while ensuring the secret never reaches the cassette.
+    Order matters in two ways:
+
+    1. vcrpy's ``filter_headers`` config option runs *before*
+       ``before_record_request``, so the auth-header scrubbing has to
+       live here; otherwise the secret would already be gone when we
+       try to hash it.
+    2. vcrpy invokes this hook more than once per request (e.g.
+       ``can_play_response_for`` calls it, then ``_responses`` calls it
+       again on the result). The second invocation sees a request whose
+       auth headers we already stripped, so re-hashing would yield
+       ``"no-key"`` and the stored vs. incoming fingerprints would
+       diverge. Skip the recompute when the header is already set so
+       this hook is idempotent.
     """
     headers = getattr(request, "headers", None)
     if headers is None:
         return request
-    fingerprint = _compute_key_fingerprint(request)
-    try:
-        headers[KEY_FINGERPRINT_HEADER] = fingerprint
-    except (TypeError, AttributeError):
-        pass
+    if not any(_iter_header_values(headers, KEY_FINGERPRINT_HEADER)):
+        fingerprint = _compute_key_fingerprint(request)
+        try:
+            headers[KEY_FINGERPRINT_HEADER] = fingerprint
+        except (TypeError, AttributeError):
+            pass
     _strip_headers(headers, FILTERED_REQUEST_HEADERS)
     return request
 

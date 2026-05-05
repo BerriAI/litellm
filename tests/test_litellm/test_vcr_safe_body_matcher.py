@@ -143,10 +143,28 @@ def test_key_fingerprint_matcher_distinguishes_x_api_key_callers():
         _key_fingerprint_matcher(a, b)
 
 
-def test_before_record_request_is_idempotent_under_replay():
+def test_before_record_request_is_deterministic_across_distinct_requests():
     payload = {"Authorization": "Bearer sk-deterministic"}
     first = _before_record_request(_req_with_headers(payload))
     second = _before_record_request(_req_with_headers(payload))
     assert (
         first.headers[KEY_FINGERPRINT_HEADER] == second.headers[KEY_FINGERPRINT_HEADER]
     )
+
+
+def test_before_record_request_is_idempotent_on_the_same_request_object():
+    """vcrpy invokes ``before_record_request`` more than once per request.
+
+    ``can_play_response_for`` calls it, then ``__contains__`` /
+    ``_responses`` call it again on the result. The second call sees a
+    request whose auth headers are already gone, so a naive recompute
+    would produce ``"no-key"`` and the matcher would consider the
+    request distinct from anything it just stored — manifesting in CI as
+    ``UnhandledHTTPRequestError`` from ``play_response``.
+    """
+    req = _req_with_headers({"Authorization": "Bearer sk-someone"})
+    _before_record_request(req)
+    fp_after_first = req.headers[KEY_FINGERPRINT_HEADER]
+    _before_record_request(req)
+    assert req.headers[KEY_FINGERPRINT_HEADER] == fp_after_first
+    assert fp_after_first != "no-key"
