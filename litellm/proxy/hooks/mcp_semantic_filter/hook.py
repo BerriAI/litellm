@@ -327,9 +327,7 @@ class SemanticToolFilterHook(CustomLogger):
             filtered_mcp_ids = {id(t) for t in filtered_mcp_tools}
             mcp_ids = {id(t) for t in mcp_tools}
             filtered_tools = [
-                t
-                for t in tools
-                if id(t) not in mcp_ids or id(t) in filtered_mcp_ids
+                t for t in tools if id(t) not in mcp_ids or id(t) in filtered_mcp_ids
             ]
 
             # Always update tools
