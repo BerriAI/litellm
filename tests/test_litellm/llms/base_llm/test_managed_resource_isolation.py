@@ -31,7 +31,7 @@ def test_owner_filter_user_scoped_to_user_id():
 
 def test_owner_filter_service_account_scoped_to_team():
     service_account = UserAPIKeyAuth(team_id="team-eng")
-    assert build_owner_filter(service_account) == {"created_by_team_id": "team-eng"}
+    assert build_owner_filter(service_account) == {"team_id": "team-eng"}
 
 
 def test_owner_filter_user_with_team_returns_or_filter():
@@ -42,7 +42,7 @@ def test_owner_filter_user_with_team_returns_or_filter():
     assert build_owner_filter(user) == {
         "OR": [
             {"created_by": "alice"},
-            {"created_by_team_id": "team-eng"},
+            {"team_id": "team-eng"},
         ]
     }
 
@@ -64,14 +64,14 @@ def test_owner_filter_no_identity_returns_none():
     [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY],
 )
 @pytest.mark.parametrize(
-    "created_by,created_by_team_id",
+    "created_by,resource_team_id",
     [("alice", "team-eng"), (None, None)],
 )
-def test_access_admin_can_read_any_resource(role, created_by, created_by_team_id):
+def test_access_admin_can_read_any_resource(role, created_by, resource_team_id):
     admin = UserAPIKeyAuth(user_role=role)
     assert (
         can_access_resource(
-            admin, created_by=created_by, created_by_team_id=created_by_team_id
+            admin, created_by=created_by, resource_team_id=resource_team_id
         )
         is True
     )
@@ -88,24 +88,26 @@ def test_access_admin_can_read_any_resource(role, created_by, created_by_team_id
 def test_access_user_id_match(user_id, created_by, expected):
     user = UserAPIKeyAuth(user_id=user_id)
     assert (
-        can_access_resource(user, created_by=created_by, created_by_team_id=None)
+        can_access_resource(user, created_by=created_by, resource_team_id=None)
         is expected
     )
 
 
 @pytest.mark.parametrize(
-    "team_id,created_by_team_id,expected",
+    "caller_team_id,resource_team_id,expected",
     [
         ("team-eng", "team-eng", True),
         ("team-eng", "team-sales", False),
         ("team-eng", None, False),
     ],
 )
-def test_access_service_account_team_id_match(team_id, created_by_team_id, expected):
-    service_account = UserAPIKeyAuth(team_id=team_id)
+def test_access_service_account_team_id_match(
+    caller_team_id, resource_team_id, expected
+):
+    service_account = UserAPIKeyAuth(team_id=caller_team_id)
     assert (
         can_access_resource(
-            service_account, created_by=None, created_by_team_id=created_by_team_id
+            service_account, created_by=None, resource_team_id=resource_team_id
         )
         is expected
     )
@@ -117,9 +119,7 @@ def test_access_user_can_see_team_match_when_no_user_id_match():
     same team."""
     user = UserAPIKeyAuth(user_id="alice", team_id="team-eng")
     assert (
-        can_access_resource(
-            user, created_by="service-bot", created_by_team_id="team-eng"
-        )
+        can_access_resource(user, created_by="service-bot", resource_team_id="team-eng")
         is True
     )
 
@@ -128,14 +128,14 @@ def test_access_service_account_denied_user_resource_in_different_team():
     service_account = UserAPIKeyAuth(team_id="team-eng")
     assert (
         can_access_resource(
-            service_account, created_by="bob", created_by_team_id="team-sales"
+            service_account, created_by="bob", resource_team_id="team-sales"
         )
         is False
     )
 
 
 @pytest.mark.parametrize(
-    "created_by,created_by_team_id",
+    "created_by,resource_team_id",
     [
         (None, None),
         ("anybody", None),
@@ -143,14 +143,14 @@ def test_access_service_account_denied_user_resource_in_different_team():
         ("anybody", "any-team"),
     ],
 )
-def test_access_identity_less_caller_always_denied(created_by, created_by_team_id):
+def test_access_identity_less_caller_always_denied(created_by, resource_team_id):
     """The original `None == None` bypass — a caller with no admin role and
     no identifying ids is denied against every resource regardless of how
     the resource was tagged."""
     nobody = UserAPIKeyAuth()
     assert (
         can_access_resource(
-            nobody, created_by=created_by, created_by_team_id=created_by_team_id
+            nobody, created_by=created_by, resource_team_id=resource_team_id
         )
         is False
     )

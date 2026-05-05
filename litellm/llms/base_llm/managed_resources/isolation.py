@@ -36,7 +36,7 @@ def build_owner_filter(
 
     - ``{}`` means no scoping (proxy admins).
     - ``{"created_by": <user_id>}`` for user-keyed callers.
-    - ``{"created_by_team_id": <team_id>}`` for service-account callers
+    - ``{"team_id": <team_id>}`` for service-account callers
       that have a team but no user_id.
     - ``{"OR": [...]}`` when the caller has both — listing must include
       both their own resources and team-shared ones so it stays consistent
@@ -54,7 +54,7 @@ def build_owner_filter(
         return {
             "OR": [
                 {"created_by": user_id},
-                {"created_by_team_id": team_id},
+                {"team_id": team_id},
             ]
         }
 
@@ -62,7 +62,7 @@ def build_owner_filter(
         return {"created_by": user_id}
 
     if team_id is not None:
-        return {"created_by_team_id": team_id}
+        return {"team_id": team_id}
 
     return None
 
@@ -70,12 +70,12 @@ def build_owner_filter(
 def can_access_resource(
     user_api_key_dict: UserAPIKeyAuth,
     created_by: Optional[str],
-    created_by_team_id: Optional[str],
+    resource_team_id: Optional[str],
 ) -> bool:
     """Return True iff the caller may read/modify a managed resource.
 
-    Both ``created_by`` and ``created_by_team_id`` must be non-None to
-    match the caller's identity — guarding against the ``None == None``
+    The resource's ``created_by`` and ``team_id`` fields must be non-None
+    to match the caller's identity — guarding against the ``None == None``
     bypass that previously let service-account keys read every keyless
     resource.
     """
@@ -89,8 +89,8 @@ def can_access_resource(
     team_id = user_api_key_dict.team_id
     if (
         team_id is not None
-        and created_by_team_id is not None
-        and created_by_team_id == team_id
+        and resource_team_id is not None
+        and resource_team_id == team_id
     ):
         return True
 

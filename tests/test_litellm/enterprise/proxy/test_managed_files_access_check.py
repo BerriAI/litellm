@@ -34,7 +34,7 @@ def _make_unified_file_id() -> str:
 def _make_managed_files_instance(
     file_created_by: str,
     unified_file_id: str,
-    file_created_by_team_id=None,
+    file_team_id=None,
 ):
     """Create a _PROXY_LiteLLMManagedFiles with a mocked DB that returns a file owned by file_created_by."""
     from litellm_enterprise.proxy.hooks.managed_files import (
@@ -43,7 +43,7 @@ def _make_managed_files_instance(
 
     mock_db_record = MagicMock()
     mock_db_record.created_by = file_created_by
-    mock_db_record.created_by_team_id = file_created_by_team_id
+    mock_db_record.team_id = file_team_id
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(
@@ -110,7 +110,7 @@ async def test_should_block_default_user_id_access():
     assert exc_info.value.status_code == 403
 
 
-# --- Service-account isolation: created_by/created_by_team_id checks ---
+# --- Service-account isolation: created_by/team_id checks ---
 
 
 @pytest.mark.asyncio
@@ -120,7 +120,7 @@ async def test_keyless_caller_cannot_access_keyless_file():
     unified_file_id = _make_unified_file_id()
     managed_files = _make_managed_files_instance(
         file_created_by=None,
-        file_created_by_team_id=None,
+        file_team_id=None,
         unified_file_id=unified_file_id,
     )
     keyless = UserAPIKeyAuth(api_key="sk-test", parent_otel_span=None)
@@ -136,7 +136,7 @@ async def test_service_account_can_access_team_file():
     unified_file_id = _make_unified_file_id()
     managed_files = _make_managed_files_instance(
         file_created_by=None,
-        file_created_by_team_id="team-eng",
+        file_team_id="team-eng",
         unified_file_id=unified_file_id,
     )
     sa = UserAPIKeyAuth(api_key="sk-svc", team_id="team-eng", parent_otel_span=None)
@@ -150,7 +150,7 @@ async def test_service_account_blocked_from_other_team_file():
     unified_file_id = _make_unified_file_id()
     managed_files = _make_managed_files_instance(
         file_created_by=None,
-        file_created_by_team_id="team-sales",
+        file_team_id="team-sales",
         unified_file_id=unified_file_id,
     )
     sa = UserAPIKeyAuth(api_key="sk-svc", team_id="team-eng", parent_otel_span=None)

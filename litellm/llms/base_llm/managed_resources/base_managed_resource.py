@@ -174,7 +174,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             "model_mappings": model_mappings,
             "flat_model_resource_ids": list(model_mappings.values()),
             "created_by": user_api_key_dict.user_id,
-            "created_by_team_id": user_api_key_dict.team_id,
+            "team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
 
@@ -196,7 +196,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             "model_mappings": json.dumps(model_mappings),
             "flat_model_resource_ids": list(model_mappings.values()),
             "created_by": user_api_key_dict.user_id,
-            "created_by_team_id": user_api_key_dict.team_id,
+            "team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
 
@@ -332,7 +332,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             return can_access_resource(
                 user_api_key_dict=user_api_key_dict,
                 created_by=resource.get("created_by"),
-                created_by_team_id=resource.get("created_by_team_id"),
+                resource_team_id=resource.get("team_id"),
             )
 
         return False

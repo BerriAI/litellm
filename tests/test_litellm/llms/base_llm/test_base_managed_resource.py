@@ -58,7 +58,7 @@ async def test_list_admin_query_is_unscoped():
     table = resource.prisma_client.db.litellm_test_resource_table
     where = table.find_many.await_args.kwargs["where"]
     assert "created_by" not in where
-    assert "created_by_team_id" not in where
+    assert "team_id" not in where
 
 
 @pytest.mark.asyncio
@@ -72,7 +72,7 @@ async def test_list_user_filters_by_user_id():
         "where"
     ]
     assert where["created_by"] == "alice"
-    assert "created_by_team_id" not in where
+    assert "team_id" not in where
 
 
 @pytest.mark.asyncio
@@ -85,7 +85,7 @@ async def test_list_service_account_filters_by_team_id():
     where = resource.prisma_client.db.litellm_test_resource_table.find_many.await_args.kwargs[
         "where"
     ]
-    assert where["created_by_team_id"] == "team-eng"
+    assert where["team_id"] == "team-eng"
     assert "created_by" not in where
 
 
@@ -118,7 +118,7 @@ async def test_can_access_uses_team_id_for_service_account(caller_team_id, expec
     cache.async_get_cache = AsyncMock(
         return_value={
             "created_by": None,
-            "created_by_team_id": "team-eng",
+            "team_id": "team-eng",
         }
     )
     prisma = MagicMock()

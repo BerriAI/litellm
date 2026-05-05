@@ -104,7 +104,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 model_mappings=model_mappings,
                 flat_model_file_ids=list(model_mappings.values()),
                 created_by=user_api_key_dict.user_id,
-                created_by_team_id=user_api_key_dict.team_id,
+                team_id=user_api_key_dict.team_id,
                 updated_by=user_api_key_dict.user_id,
             )
             await self.internal_usage_cache.async_set_cache(
@@ -120,7 +120,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "model_mappings": json.dumps(model_mappings),
             "flat_model_file_ids": list(model_mappings.values()),
             "created_by": user_api_key_dict.user_id,
-            "created_by_team_id": user_api_key_dict.team_id,
+            "team_id": user_api_key_dict.team_id,
             "updated_by": user_api_key_dict.user_id,
         }
 
@@ -178,7 +178,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "model_object_id": model_object_id,
                     "file_purpose": file_purpose,
                     "created_by": user_api_key_dict.user_id,
-                    "created_by_team_id": user_api_key_dict.team_id,
+                    "team_id": user_api_key_dict.team_id,
                     "updated_by": user_api_key_dict.user_id,
                     "status": file_object.status,
                 },
@@ -245,7 +245,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return can_access_resource(
                 user_api_key_dict=user_api_key_dict,
                 created_by=managed_file.created_by,
-                created_by_team_id=managed_file.created_by_team_id,
+                resource_team_id=managed_file.team_id,
             )
         raise HTTPException(
             status_code=404,
@@ -265,7 +265,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return can_access_resource(
                 user_api_key_dict=user_api_key_dict,
                 created_by=managed_object.created_by,
-                created_by_team_id=managed_object.created_by_team_id,
+                resource_team_id=managed_object.team_id,
             )
         raise HTTPException(
             status_code=404,
@@ -349,7 +349,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Get all file ids the caller is allowed to see for a list of model
         object ids. Service-account keys (no user_id) are scoped to their
-        team via ``created_by_team_id``; admins see all matches.
+        team via ``team_id``; admins see all matches.
 
         Returns:
          - List of OpenAIFileObject's
