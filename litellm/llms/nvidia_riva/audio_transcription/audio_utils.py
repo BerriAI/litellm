@@ -16,13 +16,21 @@ import io
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Tuple
+from typing import TYPE_CHECKING, Tuple, cast
 
 from litellm.llms.nvidia_riva.audio_transcription.transformation import (
     RIVA_TARGET_NUM_CHANNELS,
     RIVA_TARGET_SAMPLE_RATE_HZ,
 )
 from litellm.llms.nvidia_riva.common_utils import NvidiaRivaException
+
+if TYPE_CHECKING:
+    import numpy as np
+    import numpy.typing as npt
+
+    FloatArray = npt.NDArray[np.float32]
+else:
+    FloatArray = object
 
 
 _INSTALL_HINT = (
@@ -83,7 +91,7 @@ def resample_to_riva_pcm(file_bytes: bytes) -> ResampledAudio:
     )
 
 
-def _decode_to_float32(file_bytes: bytes) -> Tuple["object", int]:
+def _decode_to_float32(file_bytes: bytes) -> Tuple["FloatArray", int]:
     """
     Decode arbitrary audio bytes into a float32 array shaped either
     ``(n_samples,)`` (mono) or ``(n_samples, n_channels)`` plus the source
@@ -101,7 +109,7 @@ def _decode_to_float32(file_bytes: bytes) -> Tuple["object", int]:
 
         with io.BytesIO(file_bytes) as buf:
             data, source_rate = sf.read(buf, dtype="float32", always_2d=False)
-        return data, int(source_rate)
+        return cast("FloatArray", data), int(source_rate)
     except ImportError as e:
         sf_error = e
     except Exception as e:
@@ -144,7 +152,7 @@ def _decode_to_float32(file_bytes: bytes) -> Tuple["object", int]:
                 interleaved = np.concatenate(chunks).astype(np.float32) / 32768.0
                 if channels > 1:
                     interleaved = interleaved.reshape(-1, channels)
-                return interleaved, source_rate
+                return cast("FloatArray", interleaved), source_rate
         except NvidiaRivaException:
             raise
         except Exception as e:
@@ -162,7 +170,9 @@ def _decode_to_float32(file_bytes: bytes) -> Tuple["object", int]:
             pass
 
 
-def _resample(samples, source_rate: int, target_rate: int):
+def _resample(
+    samples: "FloatArray", source_rate: int, target_rate: int
+) -> "FloatArray":
     """
     Resample mono float32 ``samples`` from ``source_rate`` to ``target_rate``.
 
@@ -180,8 +190,11 @@ def _resample(samples, source_rate: int, target_rate: int):
     try:
         import soxr  # type: ignore
 
-        return np.asarray(
-            soxr.resample(samples, source_rate, target_rate), dtype=np.float32
+        return cast(
+            "FloatArray",
+            np.asarray(
+                soxr.resample(samples, source_rate, target_rate), dtype=np.float32
+            ),
         )
     except ImportError:
         pass
@@ -194,14 +207,18 @@ def _resample(samples, source_rate: int, target_rate: int):
         g = gcd(int(source_rate), int(target_rate))
         up = int(target_rate) // g
         down = int(source_rate) // g
-        return np.asarray(resample_poly(samples, up, down), dtype=np.float32)
+        return cast(
+            "FloatArray", np.asarray(resample_poly(samples, up, down), dtype=np.float32)
+        )
     except ImportError:
         pass
 
     return _linear_resample(samples, source_rate, target_rate)
 
 
-def _linear_resample(samples, source_rate: int, target_rate: int):
+def _linear_resample(
+    samples: "FloatArray", source_rate: int, target_rate: int
+) -> "FloatArray":
     """Linear-interpolation fallback. See :func:`_resample` for caveats."""
     import numpy as np  # type: ignore
 
