@@ -1681,8 +1681,6 @@ def convert_to_anthropic_tool_result(
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
-
-
     {
         "tool_call_id": "tool_1",
         "role": "tool",
