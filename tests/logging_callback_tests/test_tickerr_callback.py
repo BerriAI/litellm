@@ -217,10 +217,21 @@ def test_report_omits_error_type_for_unknown_code():
 
 def test_fire_and_forget_respects_semaphore_cap():
     """Reports beyond _MAX_INFLIGHT are dropped silently without blocking."""
-    # Exhaust the semaphore by acquiring all slots directly
+    # Exhaust the semaphore by acquiring all slots directly.
+    # Track how many we actually acquired so the finally block releases exactly
+    # that many — releasing more than acquired would push the count above its
+    # initial maximum and corrupt later tests.
+    acquired_count = 0
     for _ in range(_MAX_INFLIGHT):
-        acquired = _inflight.acquire(blocking=False)
-        assert acquired, "semaphore should have slots available at test start"
+        if _inflight.acquire(blocking=False):
+            acquired_count += 1
+        else:
+            break
+
+    assert acquired_count == _MAX_INFLIGHT, (
+        f"semaphore should have {_MAX_INFLIGHT} slots available at test start, "
+        f"got {acquired_count}"
+    )
 
     try:
         # With semaphore exhausted, _fire_and_forget must return immediately
@@ -229,7 +240,7 @@ def test_fire_and_forget_respects_semaphore_cap():
             _fire_and_forget({"provider": "openai"})
             mock_thread.assert_not_called()
     finally:
-        for _ in range(_MAX_INFLIGHT):
+        for _ in range(acquired_count):
             _inflight.release()
 
 
