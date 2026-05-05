@@ -1235,15 +1235,15 @@ class ProxyBaseLLMRequestProcessing:
             # upstream connection is established; the ASGI transport layer handles
             # cancellation of the upstream when the client disconnects mid-stream.
             responses = await llm_responses
-            disconnect_task.cancel()
         except asyncio.CancelledError:
-            disconnect_task.cancel()
             if disconnect_event.is_set():
                 raise HTTPException(
                     status_code=499,
                     detail="Client disconnected the request",
                 )
             raise
+        finally:
+            disconnect_task.cancel()
 
         response = responses[1]
 
