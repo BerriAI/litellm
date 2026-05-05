@@ -33,6 +33,10 @@ Documentation = "https://docs.litellm.ai"
 # Docker and CI should prefer `uv.lock` rather than maintaining parallel installers.
 [project.optional-dependencies]
 proxy = [
+    "pycryptodome==3.23.0", # rsa
+    "rsa==4.9.1", # rsa
+    "prance==25.4.8.0",
+    "openapi-spec-validator==0.7.2",
     "gunicorn==23.0.0",
     "uvicorn==0.33.0",
     "uvloop==0.21.0; sys_platform != 'win32'",
@@ -173,8 +177,8 @@ ci = [
     "pytest-retry==1.7.0",
     "pyarrow==22.0.0",
     "langchain==1.2.10",
-    "lunary==1.4.36; python_version == '3.10'",
-    "lunary==1.4.37; python_version >= '3.11'",
+    # "lunary==1.4.36; python_version == '3.10'",
+    # "lunary==1.4.37; python_version >= '3.11'",
     "logfire==4.6.0",
     "traceloop-sdk==0.33.12",
     "detect-secrets==1.5.0",
@@ -207,6 +211,12 @@ requires = ["uv_build==0.10.7"]
 build-backend = "uv_build"
 
 [tool.uv]
+# conflicts = [
+#     [
+#         { group = "ci" },
+#         { extra = "proxy" },
+#     ],
+# ]
 default-groups = ["dev"]
 required-version = "==0.10.9"
 exclude-newer = "3 days"
