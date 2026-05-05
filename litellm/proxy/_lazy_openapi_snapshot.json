@@ -3616,7 +3616,7 @@
         },
         "get": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__get",
           "parameters": [
             {
               "in": "path",
@@ -3660,7 +3660,7 @@
         },
         "patch": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__patch",
           "parameters": [
             {
               "in": "path",
@@ -3704,7 +3704,7 @@
         },
         "post": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__post",
           "parameters": [
             {
               "in": "path",
@@ -3748,7 +3748,7 @@
         },
         "put": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)",
-          "operationId": "anthropic_proxy_route_anthropic__endpoint__delete",
+          "operationId": "anthropic_proxy_route_anthropic__endpoint__put",
           "parameters": [
             {
               "in": "path",
@@ -5454,7 +5454,7 @@
       },
       "/cloudzero/settings": {
         "get": {
-          "description": "View current CloudZero settings.\n\nReturns the current CloudZero configuration with the API key masked for security.\nOnly the first 4 and last 4 characters of the API key are shown.\nReturns null/empty values when settings are not configured (consistent with other settings endpoints).\n\nOnly admin users can view CloudZero settings.",
+          "description": "View current CloudZero settings.\n\nReturns the current CloudZero configuration with the API key masked for security.\nOnly the first 4 and last 4 characters of the API key are shown.\nReturns null/empty values when settings are not configured (consistent with other settings endpoints).\n\nOnly admin users (Proxy Admin or Admin Viewer) can view CloudZero settings.",
           "operationId": "get_cloudzero_settings_cloudzero_settings_get",
           "responses": {
             "200": {
@@ -13299,7 +13299,7 @@
         },
         "get": {
           "description": "Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/langfuse)",
-          "operationId": "langfuse_proxy_route_langfuse__endpoint__delete",
+          "operationId": "langfuse_proxy_route_langfuse__endpoint__get",
           "parameters": [
             {
               "in": "path",
@@ -13338,7 +13338,7 @@
         },
         "patch": {
           "description": "Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/langfuse)",
-          "operationId": "langfuse_proxy_route_langfuse__endpoint__delete",
+          "operationId": "langfuse_proxy_route_langfuse__endpoint__patch",
           "parameters": [
             {
               "in": "path",
@@ -13377,7 +13377,7 @@
         },
         "post": {
           "description": "Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/langfuse)",
-          "operationId": "langfuse_proxy_route_langfuse__endpoint__delete",
+          "operationId": "langfuse_proxy_route_langfuse__endpoint__post",
           "parameters": [
             {
               "in": "path",
@@ -13416,7 +13416,7 @@
         },
         "put": {
           "description": "Call Langfuse via LiteLLM proxy. Works with Langfuse SDK.\n\n[Docs](https://docs.litellm.ai/docs/pass_through/langfuse)",
-          "operationId": "langfuse_proxy_route_langfuse__endpoint__delete",
+          "operationId": "langfuse_proxy_route_langfuse__endpoint__put",
           "parameters": [
             {
               "in": "path",
@@ -26922,7 +26922,7 @@
         },
         "get": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_get",
           "parameters": [
             {
               "in": "path",
@@ -26961,7 +26961,7 @@
         },
         "head": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_head",
           "parameters": [
             {
               "in": "path",
@@ -27000,7 +27000,7 @@
         },
         "options": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_options",
           "parameters": [
             {
               "in": "path",
@@ -27039,7 +27039,7 @@
         },
         "patch": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_patch",
           "parameters": [
             {
               "in": "path",
@@ -27078,7 +27078,7 @@
         },
         "post": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_post",
           "parameters": [
             {
               "in": "path",
@@ -27117,7 +27117,7 @@
         },
         "put": {
           "description": "Namespace a toolset as its own MCP endpoint.\n\nConnecting to /toolset/<name>/mcp exposes exactly the tools defined in\nthe toolset. Access is enforced: non-admin API keys must have the toolset\nlisted in their object_permission.mcp_toolsets grant list, or the request\nwill be rejected with a 403.",
-          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_delete",
+          "operationId": "toolset_mcp_route_toolset__toolset_name__mcp_put",
           "parameters": [
             {
               "in": "path",
@@ -28202,7 +28202,7 @@
       },
       "/vantage/settings": {
         "get": {
-          "description": "View current Vantage settings.\n\nReturns the current Vantage configuration with the API key masked for security.\nOnly admin users can view Vantage settings.",
+          "description": "View current Vantage settings.\n\nReturns the current Vantage configuration with the API key masked for security.\nOnly admin users (Proxy Admin or Admin Viewer) can view Vantage settings.",
           "operationId": "get_vantage_settings_vantage_settings_get",
           "responses": {
             "200": {
