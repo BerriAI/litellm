@@ -990,7 +990,7 @@ if MCP_AVAILABLE:
             tools: List[dict] = []
             used_names: set = set()
             for path, path_item in paths.items():
-                for method in ("get", "post", "put", "patch", "delete"):
+                for method in ("get", "post", "put", "delete", "patch"):
                     operation = path_item.get(method)
                     if operation is None:
                         continue

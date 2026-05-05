@@ -1447,3 +1447,93 @@ class TestPreviewOpenAPITools:
             ), f"preview tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
         assert "actions_download-job-logs-for-workflow-run" in names
         assert "pulls_list-files" in names
+
+    async def test_preview_method_order_matches_registration(self, monkeypatch):
+        """Preview must iterate HTTP methods in the same order as
+        register_tools_from_openapi, otherwise collision-disambiguation
+        suffixes (_2, _3, ...) get assigned to different operations and the
+        dashboard shows names that differ from what's actually registered.
+        """
+        from litellm.proxy._experimental.mcp_server import (
+            openapi_to_mcp_generator,
+        )
+
+        spec = {
+            "paths": {
+                "/items/{id}": {
+                    "delete": {
+                        "operationId": "items/delete",
+                        "summary": "Delete item",
+                    },
+                    "patch": {
+                        "operationId": "items.delete",
+                        "summary": "Soft-delete item",
+                    },
+                }
+            }
+        }
+
+        async def fake_load_spec(spec_path):  # noqa: ANN001
+            return spec
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator,
+            "load_openapi_spec_async",
+            fake_load_spec,
+            raising=False,
+        )
+
+        payload = NewMCPServerRequest(
+            server_name="collision_openapi_mcp",
+            spec_path="https://example.invalid/openapi.json",
+            transport="http",
+        )
+        request = _build_request()
+        from litellm.proxy._types import LitellmUserRoles
+
+        result = await rest_endpoints.test_tools_list(
+            request,
+            payload,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert result.get("error") is None, result
+        preview_summary_to_name = {t["description"]: t["name"] for t in result["tools"]}
+
+        registered_summary_to_name: dict = {}
+
+        def fake_create_tool_function(
+            path, method, operation, base_url
+        ):  # noqa: ANN001
+            def _f():
+                return None
+
+            return _f
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator,
+            "create_tool_function",
+            fake_create_tool_function,
+        )
+
+        class _StubRegistry:
+            def register_tool(
+                self, name, description, input_schema, handler
+            ):  # noqa: ANN001
+                registered_summary_to_name[description] = name
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator,
+            "global_mcp_tool_registry",
+            _StubRegistry(),
+        )
+
+        openapi_to_mcp_generator.register_tools_from_openapi(
+            spec, base_url="https://example.invalid"
+        )
+
+        assert preview_summary_to_name == registered_summary_to_name, (
+            f"preview {preview_summary_to_name} != "
+            f"registered {registered_summary_to_name} — method iteration "
+            "order is out of sync, so collision suffixes (_2, _3, ...) "
+            "land on different operations"
+        )
