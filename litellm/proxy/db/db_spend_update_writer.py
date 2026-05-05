@@ -38,6 +38,7 @@ from litellm.proxy._types import (
     DailyOrganizationSpendTransaction,
     DailyTagSpendTransaction,
     DailyTeamSpendTransaction,
+    DailyUserRequestDurationTransaction,
     DailyUserSpendTransaction,
     DBSpendUpdateTransactions,
     Litellm_EntityType,
@@ -49,6 +50,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
     DailySpendUpdateQueue,
+)
+from litellm.proxy.db.db_transaction_queue.daily_user_request_duration_queue import (
+    DailyUserRequestDurationQueue,
 )
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
@@ -88,6 +92,7 @@ class DBSpendUpdateWriter:
         self.daily_agent_spend_update_queue = DailySpendUpdateQueue()
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
+        self.daily_user_request_duration_queue = DailyUserRequestDurationQueue()
 
     async def update_database(
         # LiteLLM management object fields
@@ -462,6 +467,17 @@ class DBSpendUpdateWriter:
         except Exception:
             verbose_proxy_logger.debug(
                 "_batch_database_updates: add_spend_log_transaction_to_daily_user_transaction failed: %s",
+                traceback.format_exc(),
+            )
+
+        try:
+            await self.add_spend_log_transaction_to_daily_user_request_duration_transaction(
+                payload=payload_copy,
+                prisma_client=prisma_client,
+            )
+        except Exception:
+            verbose_proxy_logger.debug(
+                "_batch_database_updates: add_spend_log_transaction_to_daily_user_request_duration_transaction failed: %s",
                 traceback.format_exc(),
             )
 
@@ -1062,7 +1078,19 @@ class DBSpendUpdateWriter:
             proxy_logging_obj=proxy_logging_obj,
             daily_spend_transactions=daily_agent_spend_update_transactions,
         )
-        
+
+        ################## Daily User Request Duration Update Transactions ##################
+        daily_user_request_duration_transactions = (
+            await self.daily_user_request_duration_queue.flush_and_get_aggregated()
+        )
+
+        await DBSpendUpdateWriter.update_daily_user_request_duration(
+            n_retry_times=n_retry_times,
+            prisma_client=prisma_client,
+            proxy_logging_obj=proxy_logging_obj,
+            transactions=daily_user_request_duration_transactions,
+        )
+
         ################## Tool Registry Upserts ##################
         await self._flush_tool_discovery_queue(prisma_client=prisma_client)
 
@@ -1947,6 +1975,52 @@ class DBSpendUpdateWriter:
             unique_constraint_name="tag_date_api_key_model_custom_llm_provider_mcp_namespaced_tool_name_endpoint",
         )
 
+    @staticmethod
+    async def update_daily_user_request_duration(
+        n_retry_times: int,
+        prisma_client: PrismaClient,
+        proxy_logging_obj: ProxyLogging,
+        transactions: Dict[str, DailyUserRequestDurationTransaction],
+    ):
+        """
+        Batch upsert aggregated request duration rows into LiteLLM_DailyUserRequestDuration.
+        Uses increment on conflict so concurrent writers don't stomp each other.
+        """
+        if not transactions:
+            return
+
+        table = prisma_client.db.litellm_dailyuserrequestduration
+        for transaction in transactions.values():
+            try:
+                await table.upsert(
+                    where={
+                        "user_id_date": {
+                            "user_id": transaction["user_id"],
+                            "date": transaction["date"],
+                        }
+                    },
+                    data={
+                        "create": {
+                            "user_id": transaction["user_id"],
+                            "date": transaction["date"],
+                            "total_request_duration_ms": transaction[
+                                "total_request_duration_ms"
+                            ],
+                            "api_requests": transaction["api_requests"],
+                        },
+                        "update": {
+                            "total_request_duration_ms": {
+                                "increment": transaction["total_request_duration_ms"]
+                            },
+                            "api_requests": {"increment": transaction["api_requests"]},
+                        },
+                    },
+                )
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    "update_daily_user_request_duration upsert failed: %s", e
+                )
+
     async def _common_add_spend_log_transaction_to_daily_transaction(
         self,
         payload: Union[dict, SpendLogsPayload],
@@ -2071,6 +2145,42 @@ class DBSpendUpdateWriter:
         )
         await self.daily_spend_update_queue.add_update(
             update={daily_transaction_key: daily_transaction}
+        )
+
+    async def add_spend_log_transaction_to_daily_user_request_duration_transaction(
+        self,
+        payload: Union[dict, SpendLogsPayload],
+        prisma_client: Optional[PrismaClient] = None,
+    ):
+        """
+        Enqueue a request duration update for LiteLLM_DailyUserRequestDuration.
+        Key = (user_id, date) — collapses all requests for a user on a given day.
+        """
+        if prisma_client is None:
+            return
+
+        user_id = payload.get("user")
+        if not user_id:
+            return
+
+        start_time = payload.get("startTime")
+        if isinstance(start_time, datetime):
+            date = start_time.strftime("%Y-%m-%d")
+        elif isinstance(start_time, str):
+            date = start_time.split("T")[0]
+        else:
+            return
+
+        duration_ms = payload.get("request_duration_ms") or 0
+        transaction_key = f"{user_id}_{date}"
+        transaction = DailyUserRequestDurationTransaction(
+            user_id=user_id,
+            date=date,
+            total_request_duration_ms=duration_ms,
+            api_requests=1,
+        )
+        await self.daily_user_request_duration_queue.add_update(
+            update={transaction_key: transaction}
         )
 
     async def add_spend_log_transaction_to_daily_team_transaction(

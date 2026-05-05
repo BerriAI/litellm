@@ -4385,6 +4385,13 @@ class DailyAgentSpendTransaction(BaseDailySpendTransaction):
     agent_id: str
 
 
+class DailyUserRequestDurationTransaction(TypedDict):
+    user_id: str
+    date: str
+    total_request_duration_ms: int
+    api_requests: int
+
+
 class DBSpendUpdateTransactions(TypedDict):
     """
     Internal Data Structure for buffering spend updates in Redis or in memory before committing them to the database

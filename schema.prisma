@@ -790,6 +790,21 @@ model LiteLLM_DailyAgentSpend {
   @@index([endpoint])
 }
 
+// Track daily request duration per user
+model LiteLLM_DailyUserRequestDuration {
+  id                        String   @id @default(uuid())
+  user_id                   String
+  date                      String   // YYYY-MM-DD
+  total_request_duration_ms BigInt   @default(0)
+  api_requests              BigInt   @default(0)
+  created_at                DateTime @default(now())
+  updated_at                DateTime @updatedAt
+
+  @@unique([user_id, date])
+  @@index([date])
+  @@index([user_id, date])
+}
+
 // Track daily team spend metrics per model and key
 model LiteLLM_DailyTeamSpend {
   id                  String   @id @default(uuid())
