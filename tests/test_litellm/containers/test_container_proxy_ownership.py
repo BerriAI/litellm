@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.container_endpoints import ownership
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.containers.main import ContainerListResponse, ContainerObject
@@ -901,13 +901,8 @@ async def test_admin_with_identity_records_container_ownership(monkeypatch):
     )
     admin_auth = UserAPIKeyAuth(
         user_id="proxy-admin",
-        user_role=ownership.is_proxy_admin.__module__.split(".")[0]
-        and "proxy_admin",  # placeholder; the create flow doesn't actually gate on the role
+        user_role=LitellmUserRoles.PROXY_ADMIN.value,
     )
-    # Use the real role enum value.
-    from litellm.proxy._types import LitellmUserRoles
-
-    admin_auth.user_role = LitellmUserRoles.PROXY_ADMIN.value
 
     await ownership.record_container_owner(
         response=_container("cntr_admin"),

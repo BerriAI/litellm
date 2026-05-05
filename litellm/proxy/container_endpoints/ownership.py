@@ -1,3 +1,4 @@
+import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
@@ -28,6 +29,14 @@ _CONTAINER_OWNER_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
 # tuple — different keys for the same user share the same allow-set, but
 # different users with different scopes get disjoint cache entries.
 _ALLOWED_CONTAINER_IDS_CACHE = InMemoryCache(max_size_in_memory=2048, default_ttl=60)
+
+
+def _allowed_container_ids_cache_key(owner_scopes: List[str]) -> str:
+    """JSON-encode the sorted scope list — using a separator like ``|``
+    would collide for any tenant whose user_id / team_id / org_id /
+    api_key happens to contain the separator. JSON quoting escapes
+    every separator that matters."""
+    return json.dumps(sorted(owner_scopes))
 
 
 def _container_model_object_id(
@@ -163,10 +172,11 @@ async def record_container_owner(
     # shows up on their next ``GET /v1/containers``. Other callers with
     # disjoint scope tuples have their own entries; intersecting-scope
     # tuples self-correct on the 60s TTL.
-    caller_scope_key = "|".join(sorted(get_resource_owner_scopes(user_api_key_dict)))
-    if caller_scope_key:
-        _ALLOWED_CONTAINER_IDS_CACHE.cache_dict.pop(caller_scope_key, None)
-        _ALLOWED_CONTAINER_IDS_CACHE.ttl_dict.pop(caller_scope_key, None)
+    caller_scopes = get_resource_owner_scopes(user_api_key_dict)
+    if caller_scopes:
+        _ALLOWED_CONTAINER_IDS_CACHE.delete_cache(
+            _allowed_container_ids_cache_key(caller_scopes)
+        )
     return response
 
 
@@ -265,7 +275,7 @@ async def _get_allowed_container_ids(
     if not owner_scopes:
         return set()
 
-    cache_key = "|".join(sorted(owner_scopes))
+    cache_key = _allowed_container_ids_cache_key(owner_scopes)
     cached = _ALLOWED_CONTAINER_IDS_CACHE.get_cache(cache_key)
     if cached is not None:
         return set(cached)
@@ -285,9 +295,10 @@ async def _get_allowed_container_ids(
         for row in rows
         if getattr(row, "model_object_id", None) is not None
     }
-    # ``InMemoryCache`` json-encodes values; sets aren't JSON-serializable,
-    # so store as a list and rehydrate above.
-    _ALLOWED_CONTAINER_IDS_CACHE.set_cache(cache_key, sorted(allowed_ids))
+    # ``InMemoryCache.get_cache`` attempts ``json.loads`` on the stored
+    # value; passing a set would round-trip through that path
+    # unnecessarily. Store as a list and rehydrate above.
+    _ALLOWED_CONTAINER_IDS_CACHE.set_cache(cache_key, list(allowed_ids))
     return allowed_ids
 
 
