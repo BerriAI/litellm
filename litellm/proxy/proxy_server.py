@@ -3820,6 +3820,11 @@ class ProxyConfig:
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
                 elif key == "audit_log_callbacks":
+                    from litellm.proxy.management_helpers.audit_logs import (
+                        reset_audit_log_callback_cache,
+                    )
+
+                    reset_audit_log_callback_cache()
                     litellm.audit_log_callbacks = []
 
                     for callback in value:
@@ -3901,6 +3906,21 @@ class ProxyConfig:
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
                     )
                     setattr(litellm, key, value)
+                    if key in {"s3_audit_callback_params", "s3_callback_params"}:
+                        from litellm.proxy.management_helpers.audit_logs import (
+                            reset_audit_log_callback_cache,
+                        )
+                        from litellm.litellm_core_utils.litellm_logging import (
+                            _in_memory_loggers,
+                        )
+                        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+
+                        reset_audit_log_callback_cache()
+                        _in_memory_loggers[:] = [
+                            cb
+                            for cb in _in_memory_loggers
+                            if not isinstance(cb, S3V2Logger)
+                        ]
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})
