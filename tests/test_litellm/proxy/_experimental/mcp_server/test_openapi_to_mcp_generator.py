@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+    _request_extra_headers,
     _resolve_param_list,
     _resolve_ref,
     build_input_schema,
@@ -368,6 +369,38 @@ class TestCreateToolFunction:
 
         # Should have no exec() calls
         assert len(exec_calls) == 0, "create_tool_function should not use exec()"
+
+    @pytest.mark.asyncio
+    async def test_request_extra_headers_contextvar_merges_into_request_headers(self):
+        """Hook-injected headers set by the caller are sent to the upstream API."""
+        operation = {}
+        func = create_tool_function(
+            path="/protected",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Static": "static"},
+        )
+
+        token = _request_extra_headers.set(
+            {"Authorization": "Bearer signed-jwt", "X-Trace": "trace-id"}
+        )
+        try:
+            with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+                async_client = _create_mock_client("get", "ok")
+                mock_client.return_value = async_client
+
+                result = await func()
+
+                assert result == "ok"
+                call_kwargs = async_client.get.call_args.kwargs
+                assert call_kwargs["headers"] == {
+                    "X-Static": "static",
+                    "Authorization": "Bearer signed-jwt",
+                    "X-Trace": "trace-id",
+                }
+        finally:
+            _request_extra_headers.reset(token)
 
 
 class TestBuildInputSchema:

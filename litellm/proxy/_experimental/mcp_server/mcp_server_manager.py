@@ -2351,7 +2351,9 @@ class MCPServerManager:
                 extra_headers = {}
 
             normalized_raw_headers = {
-                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
+                str(k).lower(): v
+                for k, v in raw_headers.items()
+                if isinstance(k, str)
             }
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
