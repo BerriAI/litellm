@@ -57,6 +57,9 @@ import {
 import TeamMembersComponent from "./TeamMemberTab";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 
+const safeGuardrailsList = (m: any): string[] =>
+  Array.isArray(m?.guardrails) ? (m.guardrails as string[]) : [];
+
 export interface TeamMembership {
   user_id: string;
   team_id: string;
@@ -654,7 +657,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
   const initialKillSwitchOn = info.metadata?.disable_global_guardrails === true;
   const optedOutGlobals = new Set<string>(info.metadata?.opted_out_global_guardrails || []);
-  const nonGlobalOptIns: string[] = (info.metadata?.guardrails || []).filter(
+  const nonGlobalOptIns: string[] = safeGuardrailsList(info.metadata).filter(
     (n: string) => !globalGuardrailNames.has(n),
   );
   const effectiveGuardrails: string[] = initialKillSwitchOn
@@ -815,7 +818,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <Card>
                   <GuardrailSettingsView
                     globalGuardrailNames={globalGuardrailNames}
-                    teamGuardrails={info.metadata?.guardrails || []}
+                    teamGuardrails={safeGuardrailsList(info.metadata)}
                     optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
                     killSwitchOn={initialKillSwitchOn}
                     variant="inline"
@@ -1619,7 +1622,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
                     <GuardrailSettingsView
                       globalGuardrailNames={globalGuardrailNames}
-                      teamGuardrails={info.metadata?.guardrails || []}
+                      teamGuardrails={safeGuardrailsList(info.metadata)}
                       optedOutGlobalGuardrails={info.metadata?.opted_out_global_guardrails || []}
                       killSwitchOn={initialKillSwitchOn}
                       variant="inline"
