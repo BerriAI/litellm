@@ -19,9 +19,11 @@ from litellm.skills import main as skills_main
 
 @pytest.fixture(autouse=True)
 def clear_skill_cache():
-    skills_handler._SKILL_CACHE.clear()
+    skills_handler._SKILL_CACHE.cache_dict.clear()
+    skills_handler._SKILL_CACHE.ttl_dict.clear()
     yield
-    skills_handler._SKILL_CACHE.clear()
+    skills_handler._SKILL_CACHE.cache_dict.clear()
+    skills_handler._SKILL_CACHE.ttl_dict.clear()
 
 
 def _skill(skill_id: str, created_by: str | None) -> LiteLLM_SkillsTable:
@@ -440,99 +442,75 @@ async def test_should_scope_skill_injection_fetch_to_authenticated_user(monkeypa
 
 @pytest.mark.asyncio
 async def test_load_skill_uses_cache_after_first_db_hit(monkeypatch):
-    """`fetch_skill_from_db` is hit per-chat-completion; the cache absorbs
+    """``fetch_skill_from_db`` runs per chat-completion; the cache absorbs
     repeats so we don't issue a Prisma query on every request."""
     fake_skill = Mock(created_by="user-1", skill_id="litellm_skill_a")
-    store_factory = AsyncMock()
-    store = Mock()
-    store.find_skill = AsyncMock(return_value=fake_skill)
+    table = AsyncMock()
+    table.find_unique = AsyncMock(return_value=fake_skill)
+    prisma_client = type(
+        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
+    )()
     monkeypatch.setattr(
         skills_handler.LiteLLMSkillsHandler,
         "_get_prisma_client",
-        AsyncMock(return_value=store_factory),
-    )
-    monkeypatch.setattr(
-        skills_handler,
-        "LiteLLMSkillsStore",
-        Mock(return_value=store),
+        AsyncMock(return_value=prisma_client),
     )
 
-    first = await skills_handler.LiteLLMSkillsHandler._load_skill("litellm_skill_a")
-    second = await skills_handler.LiteLLMSkillsHandler._load_skill("litellm_skill_a")
-    third = await skills_handler.LiteLLMSkillsHandler._load_skill("litellm_skill_a")
-
-    assert first is fake_skill
-    assert second is fake_skill
-    assert third is fake_skill
-    assert store.find_skill.await_count == 1
+    for _ in range(3):
+        assert (
+            await skills_handler.LiteLLMSkillsHandler._load_skill("litellm_skill_a")
+            is fake_skill
+        )
+    assert table.find_unique.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_load_skill_caches_negative_lookups(monkeypatch):
-    """Missing skills must cache as `None` so repeated lookups skip the DB."""
-    store_factory = AsyncMock()
-    store = Mock()
-    store.find_skill = AsyncMock(return_value=None)
+    """Missing skills cache as the negative sentinel so repeated misses skip
+    the DB and the caller still sees ``None``."""
+    table = AsyncMock()
+    table.find_unique = AsyncMock(return_value=None)
+    prisma_client = type(
+        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
+    )()
     monkeypatch.setattr(
         skills_handler.LiteLLMSkillsHandler,
         "_get_prisma_client",
-        AsyncMock(return_value=store_factory),
-    )
-    monkeypatch.setattr(
-        skills_handler,
-        "LiteLLMSkillsStore",
-        Mock(return_value=store),
+        AsyncMock(return_value=prisma_client),
     )
 
     assert await skills_handler.LiteLLMSkillsHandler._load_skill("missing") is None
     assert await skills_handler.LiteLLMSkillsHandler._load_skill("missing") is None
-    assert store.find_skill.await_count == 1
+    assert table.find_unique.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_delete_skill_invalidates_cache(monkeypatch):
-    """After delete, the next read must consult the DB rather than the cached
-    pre-delete row."""
+    """After delete, the next read should not see the pre-delete cached row."""
     fake_skill = Mock(created_by="user-1", skill_id="litellm_skill_a")
-    store = Mock()
-    store.find_skill = AsyncMock(return_value=fake_skill)
-    store.delete_skill = AsyncMock()
+    table = AsyncMock()
+    table.find_unique = AsyncMock(return_value=fake_skill)
+    table.delete = AsyncMock()
+    prisma_client = type(
+        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
+    )()
     monkeypatch.setattr(
         skills_handler.LiteLLMSkillsHandler,
         "_get_prisma_client",
-        AsyncMock(return_value=Mock()),
-    )
-    monkeypatch.setattr(
-        skills_handler,
-        "LiteLLMSkillsStore",
-        Mock(return_value=store),
+        AsyncMock(return_value=prisma_client),
     )
 
     # Prime the cache via the read path.
     await skills_handler.LiteLLMSkillsHandler._load_skill("litellm_skill_a")
-    cached_hit, _ = skills_handler._read_skill_cache("litellm_skill_a")
-    assert cached_hit
+    assert skills_handler._SKILL_CACHE.get_cache("litellm_skill_a") is fake_skill
 
     auth = UserAPIKeyAuth(user_id="user-1")
     await skills_handler.LiteLLMSkillsHandler.delete_skill(
         "litellm_skill_a", user_api_key_dict=auth
     )
 
-    cached_hit_after, _ = skills_handler._read_skill_cache("litellm_skill_a")
-    assert not cached_hit_after
-
-
-def test_skill_cache_expires_after_ttl(monkeypatch):
-    monkeypatch.setattr(skills_handler, "_SKILL_CACHE_TTL", 0.0)
-    skills_handler._write_skill_cache("k", Mock())
-    cached_hit, _ = skills_handler._read_skill_cache("k")
-    assert not cached_hit
-
-
-def test_skill_cache_evicts_when_at_capacity(monkeypatch):
-    monkeypatch.setattr(skills_handler, "_SKILL_CACHE_MAX_SIZE", 2)
-    skills_handler._write_skill_cache("a", Mock())
-    skills_handler._write_skill_cache("b", Mock())
-    skills_handler._write_skill_cache("c", Mock())
-    # ``a`` was the oldest and is LRU-evicted; ``b`` and ``c`` survive.
-    assert list(skills_handler._SKILL_CACHE.keys()) == ["b", "c"]
+    # Post-delete, the cache holds the negative sentinel — not the stale row.
+    assert (
+        skills_handler._SKILL_CACHE.get_cache("litellm_skill_a")
+        == skills_handler._NEGATIVE_SKILL_SENTINEL
+    )

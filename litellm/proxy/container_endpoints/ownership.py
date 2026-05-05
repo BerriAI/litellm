@@ -1,10 +1,9 @@
-import time
-from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.resource_ownership import (
     get_primary_resource_owner_scope,
@@ -12,75 +11,26 @@ from litellm.proxy.common_utils.resource_ownership import (
     is_proxy_admin,
     user_can_access_resource_owner,
 )
-from litellm.proxy.container_endpoints.ownership_store import (
-    CONTAINER_OBJECT_PURPOSE,
-    ContainerOwnershipStore,
-)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
-MAX_IN_MEMORY_CONTAINER_OWNERS = 10000
-_IN_MEMORY_CONTAINER_OWNERS: "OrderedDict[str, str]" = OrderedDict()
+CONTAINER_OBJECT_PURPOSE = "container"
 
-# Short-lived cache keeps every container access check from hitting the DB
-# (`_get_container_owner` is invoked on retrieve / delete / list / file-content
-# paths). Mirrors the `_byok_cred_cache` pattern in mcp_server/server.py:
-# (value, monotonic_timestamp) tuples, TTL'd, LRU-evicted at capacity,
-# invalidated by writes. A ``None`` value caches "untracked" so repeated
-# negative lookups also avoid DB.
-_CONTAINER_OWNER_CACHE: "OrderedDict[str, Tuple[Optional[str], float]]" = OrderedDict()
-_CONTAINER_OWNER_CACHE_TTL = 60  # seconds
-_CONTAINER_OWNER_CACHE_MAX_SIZE = 10000
-
-
-def _read_container_owner_cache(model_object_id: str) -> Tuple[bool, Optional[str]]:
-    """Return (hit, value). hit=False means caller must consult the DB."""
-    entry = _CONTAINER_OWNER_CACHE.get(model_object_id)
-    if entry is None:
-        return False, None
-    value, timestamp = entry
-    if time.monotonic() - timestamp > _CONTAINER_OWNER_CACHE_TTL:
-        _CONTAINER_OWNER_CACHE.pop(model_object_id, None)
-        return False, None
-    _CONTAINER_OWNER_CACHE.move_to_end(model_object_id)
-    return True, value
-
-
-def _write_container_owner_cache(model_object_id: str, owner: Optional[str]) -> None:
-    # LRU eviction (popitem(last=False)) instead of full ``clear()`` — a
-    # full clear at capacity converts a steady-state cached workload into
-    # a periodic full-DB-load oscillation as the cache repopulates from
-    # zero and clears again.
-    if model_object_id in _CONTAINER_OWNER_CACHE:
-        _CONTAINER_OWNER_CACHE.move_to_end(model_object_id)
-    _CONTAINER_OWNER_CACHE[model_object_id] = (owner, time.monotonic())
-    while len(_CONTAINER_OWNER_CACHE) > _CONTAINER_OWNER_CACHE_MAX_SIZE:
-        _CONTAINER_OWNER_CACHE.popitem(last=False)
-
-
-def _invalidate_container_owner_cache(model_object_id: str) -> None:
-    """Drop a cache entry after a write so the next read sees the new owner."""
-    _CONTAINER_OWNER_CACHE.pop(model_object_id, None)
-
-
-def _remember_container_owner(model_object_id: str, owner: str) -> None:
-    existing_owner = _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
-    if existing_owner is not None:
-        _IN_MEMORY_CONTAINER_OWNERS.move_to_end(model_object_id)
-    _IN_MEMORY_CONTAINER_OWNERS[model_object_id] = owner
-    while len(_IN_MEMORY_CONTAINER_OWNERS) > MAX_IN_MEMORY_CONTAINER_OWNERS:
-        _IN_MEMORY_CONTAINER_OWNERS.popitem(last=False)
+# 60s LRU/TTL cache absorbs every container access check before it reaches
+# Prisma. ``_NEGATIVE_OWNER_SENTINEL`` lets us cache a true "untracked"
+# answer so repeated misses also avoid the DB — ``InMemoryCache`` returns
+# ``None`` indistinguishably for "miss" and "cached as None".
+_NEGATIVE_OWNER_SENTINEL = "__litellm_container_no_owner__"
+_CONTAINER_OWNER_CACHE = InMemoryCache(max_size_in_memory=10000, default_ttl=60)
 
 
 def _container_model_object_id(
-    original_container_id: str,
-    custom_llm_provider: str,
+    original_container_id: str, custom_llm_provider: str
 ) -> str:
     return f"{CONTAINER_OBJECT_PURPOSE}:{custom_llm_provider}:{original_container_id}"
 
 
 def decode_container_id_for_ownership(
-    container_id: str,
-    custom_llm_provider: str,
+    container_id: str, custom_llm_provider: str
 ) -> Tuple[str, str]:
     decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
     original_container_id = decoded.get("response_id", container_id)
@@ -91,9 +41,7 @@ def decode_container_id_for_ownership(
 
 
 def get_container_forwarding_params(
-    container_id: str,
-    original_container_id: str,
-    custom_llm_provider: str,
+    container_id: str, original_container_id: str, custom_llm_provider: str
 ) -> Dict[str, str]:
     params = {
         "container_id": original_container_id,
@@ -147,122 +95,93 @@ async def record_container_owner(
         )
         return response
     if owner is None:
-        # Caller has no identity (no user_id / team_id / org_id / api_key /
-        # token) we can stamp on the row. Recording with a placeholder
-        # would collapse every such caller into a single shared owner —
-        # the cross-tenant data-access primitive we explicitly avoid.
-        # Reject with 403 rather than fall back to a sentinel.
+        # Identity-less callers (no user_id / team_id / org_id / api_key /
+        # token) can't be uniquely stamped on the row. Stamping a
+        # placeholder would collapse every such caller into a shared
+        # owner — the cross-tenant primitive we explicitly avoid.
         raise HTTPException(
             status_code=403,
             detail="Unable to record container ownership: caller has no identity scope.",
         )
 
     original_container_id, resolved_provider = decode_container_id_for_ownership(
-        container_id,
-        custom_llm_provider,
+        container_id, custom_llm_provider
     )
     model_object_id = _container_model_object_id(
-        original_container_id,
-        resolved_provider,
+        original_container_id, resolved_provider
     )
     file_object = _dump_response(response)
     file_object["custom_llm_provider"] = resolved_provider
     file_object["provider_container_id"] = original_container_id
 
-    try:
-        prisma_client = await _get_prisma_client()
-        if prisma_client is None:
-            existing_owner = _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
-            if existing_owner is not None and not user_can_access_resource_owner(
-                existing_owner, user_api_key_dict
-            ):
-                raise HTTPException(status_code=403, detail="Forbidden")
-            _remember_container_owner(model_object_id, owner)
-            _invalidate_container_owner_cache(model_object_id)
-            return response
-
-        store = ContainerOwnershipStore(prisma_client)
-        existing = await store.find_by_model_object_id(model_object_id)
-        if existing is not None:
-            if getattr(existing, "file_purpose", None) != CONTAINER_OBJECT_PURPOSE:
-                raise HTTPException(status_code=500, detail="Unable to track container")
-            if not user_can_access_resource_owner(
-                getattr(existing, "created_by", None), user_api_key_dict
-            ):
-                raise HTTPException(status_code=403, detail="Forbidden")
-            await store.update_owner_record(
-                model_object_id=model_object_id,
-                data={
-                    "unified_object_id": container_id,
-                    "file_object": file_object,
-                    "updated_by": owner,
-                },
-            )
-        else:
-            await store.create_owner_record(
-                data={
-                    "unified_object_id": container_id,
-                    "model_object_id": model_object_id,
-                    "file_object": file_object,
-                    "file_purpose": CONTAINER_OBJECT_PURPOSE,
-                    "created_by": owner,
-                    "updated_by": owner,
-                }
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
+    prisma_client = await _get_prisma_client()
+    if prisma_client is None:
         verbose_proxy_logger.warning(
-            "Failed to persist container ownership for container_id=%s; "
-            "falling back to in-process tracking: %s",
-            model_object_id,
-            e,
+            "Skipping container ownership tracking because prisma_client is None"
         )
-        existing_owner = _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
-        if existing_owner is not None and not user_can_access_resource_owner(
-            existing_owner, user_api_key_dict
+        return response
+
+    table = prisma_client.db.litellm_managedobjecttable
+    existing = await table.find_unique(where={"model_object_id": model_object_id})
+    if existing is not None:
+        if getattr(existing, "file_purpose", None) != CONTAINER_OBJECT_PURPOSE:
+            raise HTTPException(status_code=500, detail="Unable to track container")
+        if not user_can_access_resource_owner(
+            getattr(existing, "created_by", None), user_api_key_dict
         ):
             raise HTTPException(status_code=403, detail="Forbidden")
-        _remember_container_owner(model_object_id, owner)
+        await table.update(
+            where={"model_object_id": model_object_id},
+            data={
+                "unified_object_id": container_id,
+                "file_object": file_object,
+                "updated_by": owner,
+            },
+        )
+    else:
+        await table.create(
+            data={
+                "unified_object_id": container_id,
+                "model_object_id": model_object_id,
+                "file_object": file_object,
+                "file_purpose": CONTAINER_OBJECT_PURPOSE,
+                "created_by": owner,
+                "updated_by": owner,
+            }
+        )
 
-    _invalidate_container_owner_cache(model_object_id)
+    _CONTAINER_OWNER_CACHE.set_cache(model_object_id, owner)
     return response
 
 
 async def _get_container_owner(
-    original_container_id: str,
-    custom_llm_provider: str,
+    original_container_id: str, custom_llm_provider: str
 ) -> Optional[str]:
     model_object_id = _container_model_object_id(
-        original_container_id,
-        custom_llm_provider,
+        original_container_id, custom_llm_provider
     )
 
-    cached_hit, cached_value = _read_container_owner_cache(model_object_id)
-    if cached_hit:
-        return cached_value
+    cached = _CONTAINER_OWNER_CACHE.get_cache(model_object_id)
+    if cached == _NEGATIVE_OWNER_SENTINEL:
+        return None
+    if cached is not None:
+        return cached
 
-    try:
-        prisma_client = await _get_prisma_client()
-        if prisma_client is None:
-            owner = _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
-            _write_container_owner_cache(model_object_id, owner)
-            return owner
+    prisma_client = await _get_prisma_client()
+    if prisma_client is None:
+        return None
 
-        owner = await ContainerOwnershipStore(prisma_client).get_owner(model_object_id)
-        if owner is None:
-            owner = _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
-        _write_container_owner_cache(model_object_id, owner)
-        return owner
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Failed to load container ownership for container_id=%s; "
-            "falling back to in-process tracking: %s",
-            model_object_id,
-            e,
-        )
-        # Don't cache transient DB errors — let the next request retry.
-        return _IN_MEMORY_CONTAINER_OWNERS.get(model_object_id)
+    row = await prisma_client.db.litellm_managedobjecttable.find_first(
+        where={
+            "model_object_id": model_object_id,
+            "file_purpose": CONTAINER_OBJECT_PURPOSE,
+        }
+    )
+    owner = getattr(row, "created_by", None) if row is not None else None
+    _CONTAINER_OWNER_CACHE.set_cache(
+        model_object_id, owner if owner is not None else _NEGATIVE_OWNER_SENTINEL
+    )
+    return owner
 
 
 async def assert_user_can_access_container(
@@ -271,17 +190,15 @@ async def assert_user_can_access_container(
     custom_llm_provider: str,
 ) -> Tuple[str, str]:
     original_container_id, resolved_provider = decode_container_id_for_ownership(
-        container_id,
-        custom_llm_provider,
+        container_id, custom_llm_provider
     )
 
     if is_proxy_admin(user_api_key_dict):
         return original_container_id, resolved_provider
 
-    # Untracked containers (no ownership row) are admin-only. Pre-isolation
-    # rows that pre-date this enforcement need the admin to either re-create
-    # via the now-tracked flow or explicitly assign ``created_by`` on the
-    # ``litellm_managedobjecttable`` row.
+    # Untracked rows (no ownership) are admin-only. Pre-isolation rows
+    # that pre-date this enforcement need an admin to either re-create
+    # via the now-tracked flow or assign ``created_by`` on the row.
     owner = await _get_container_owner(original_container_id, resolved_provider)
     if not user_can_access_resource_owner(owner, user_api_key_dict):
         raise HTTPException(status_code=403, detail="Forbidden")
@@ -327,35 +244,26 @@ def _set_container_list_data(
 
 async def _get_allowed_container_ids(
     user_api_key_dict: UserAPIKeyAuth,
-    custom_llm_provider: str,
 ) -> Set[str]:
     owner_scopes = get_resource_owner_scopes(user_api_key_dict)
     if not owner_scopes:
         return set()
 
-    in_memory_allowed_ids = {
-        model_object_id
-        for model_object_id, owner in _IN_MEMORY_CONTAINER_OWNERS.items()
-        if owner in owner_scopes
-    }
-    try:
-        prisma_client = await _get_prisma_client()
-        if prisma_client is None:
-            return in_memory_allowed_ids
+    prisma_client = await _get_prisma_client()
+    if prisma_client is None:
+        return set()
 
-        db_allowed_ids = await ContainerOwnershipStore(
-            prisma_client
-        ).list_model_object_ids_for_owners(
-            owner_scopes=owner_scopes,
-        )
-        return in_memory_allowed_ids | db_allowed_ids
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            "Failed to load allowed container ids; falling back to in-process "
-            "tracking: %s",
-            e,
-        )
-        return in_memory_allowed_ids
+    rows = await prisma_client.db.litellm_managedobjecttable.find_many(
+        where={
+            "file_purpose": CONTAINER_OBJECT_PURPOSE,
+            "created_by": {"in": owner_scopes},
+        }
+    )
+    return {
+        row.model_object_id
+        for row in rows
+        if getattr(row, "model_object_id", None) is not None
+    }
 
 
 async def filter_container_list_response(
@@ -370,18 +278,14 @@ async def filter_container_list_response(
     if data is None:
         return response
 
-    allowed_container_ids = await _get_allowed_container_ids(
-        user_api_key_dict,
-        custom_llm_provider,
-    )
+    allowed_container_ids = await _get_allowed_container_ids(user_api_key_dict)
     filtered: List[Any] = []
     for item in data:
         container_id = _get_response_id(item)
         if container_id is None:
             continue
         original_container_id, resolved_provider = decode_container_id_for_ownership(
-            container_id,
-            custom_llm_provider,
+            container_id, custom_llm_provider
         )
         if (
             _container_model_object_id(original_container_id, resolved_provider)
@@ -390,7 +294,5 @@ async def filter_container_list_response(
             filtered.append(item)
 
     return _set_container_list_data(
-        response,
-        filtered,
-        removed_filtered_items=len(filtered) != len(data),
+        response, filtered, removed_filtered_items=len(filtered) != len(data)
     )
