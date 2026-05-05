@@ -227,7 +227,7 @@ class NvidiaRivaAudioTranscription:
         )
 
         try:
-            asr_service = riva_asr_module.ASRService(auth_obj)
+            asr_service = riva_module.ASRService(auth_obj)
             audio_chunks = self._iter_audio_chunks(resampled.pcm_bytes)
             stream_kwargs: Dict[str, Any] = {
                 "audio_chunks": audio_chunks,
