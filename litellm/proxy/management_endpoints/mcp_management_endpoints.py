@@ -1503,8 +1503,12 @@ if MCP_AVAILABLE:
         servers only (browser OAuth). When present, global-registry access
         follows admin / allowlist rules via ``_get_cached_temporary_mcp_server_or_404``.
 
-        Only non-empty **string** auth header values trigger a full auth
-        pipeline import (tests and mocks may attach MagicMock headers).
+        Only non-empty **string** values in any recognised auth header trigger a
+        full auth pipeline import (tests and mocks may attach MagicMock headers).
+        The recognised headers match those checked by
+        ``user_api_key_auth_from_request_headers``: ``Authorization``,
+        ``API-Key``, ``x-api-key``, ``x-goog-api-key``,
+        ``Ocp-Apim-Subscription-Key``, and ``x-litellm-api-key``.
         """
         try:
             headers = request.headers
