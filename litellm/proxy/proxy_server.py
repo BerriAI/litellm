@@ -11008,6 +11008,10 @@ async def model_info_v2(
             sort_by=sortBy,
         )
 
+    # Enforce RBAC: non-admin users should only see their accessible models
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        user_models_only = True
+
     if user_models_only:
         all_models = await non_admin_all_models(
             all_models=all_models,
