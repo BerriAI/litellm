@@ -4,6 +4,8 @@ import tempfile
 
 import pytest
 
+pytest.importorskip("diskcache")
+
 sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm.caching.disk_cache import DiskCache
