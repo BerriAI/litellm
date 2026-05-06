@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 import httpx
 
 import litellm
+from litellm import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -921,17 +922,25 @@ def _load_bedrock_response_stream_shape():
     """
     Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
 
-    Uses a single module-level ``Loader`` instance (``_BEDROCK_LOADER``) so the
-    loader itself is not re-created on every call.  Called once at module import
-    time; the result is stored in ``BEDROCK_RESPONSE_STREAM_SHAPE`` and reused
-    for the process lifetime.
+    Called once at module import time; the result is stored in
+    ``BEDROCK_RESPONSE_STREAM_SHAPE`` and reused for the process lifetime.
+    Returns ``None`` if botocore is unavailable or the service model cannot be
+    loaded, so the module still imports cleanly.
     """
-    from botocore.loaders import Loader
-    from botocore.model import ServiceModel
+    try:
+        from botocore.loaders import Loader
+        from botocore.model import ServiceModel
 
-    loader = Loader()
-    service_dict = loader.load_service_model("bedrock-runtime", "service-2")
-    return ServiceModel(service_dict).shape_for("ResponseStream")
+        loader = Loader()
+        service_dict = loader.load_service_model("bedrock-runtime", "service-2")
+        return ServiceModel(service_dict).shape_for("ResponseStream")
+    except Exception as e:
+        verbose_logger.warning(
+            "litellm: could not pre-load bedrock-runtime response stream shape "
+            "— botocore shape parsing will fall back to per-call loading. Error: %s",
+            e,
+        )
+        return None
 
 
 # Eagerly resolved once per process — avoids per-instance or per-request disk I/O.

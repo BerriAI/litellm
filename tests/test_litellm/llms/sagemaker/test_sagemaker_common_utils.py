@@ -18,12 +18,30 @@ from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 
 def test_sagemaker_response_stream_shape_loaded_at_import():
     """
-    SAGEMAKER_RESPONSE_STREAM_SHAPE must be populated at module import time —
-    not None, not lazy.
+    SAGEMAKER_RESPONSE_STREAM_SHAPE is resolved at module import time.
+    In a standard environment with botocore installed it must be non-None.
     """
     from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
 
     assert SAGEMAKER_RESPONSE_STREAM_SHAPE is not None
+
+
+def test_sagemaker_response_stream_shape_load_failure_returns_none():
+    """
+    If botocore's Loader raises (e.g. missing data files), _load_sagemaker_response_stream_shape
+    should return None rather than propagating the exception, so the module
+    still imports cleanly.
+    """
+    from unittest.mock import patch
+
+    import litellm.llms.sagemaker.common_utils as mod
+
+    with patch(
+        "botocore.loaders.Loader.load_service_model",
+        side_effect=Exception("no data"),
+    ):
+        shape = mod._load_sagemaker_response_stream_shape()
+        assert shape is None
 
 
 def test_sagemaker_response_stream_shape_is_structure_shape():
@@ -35,11 +53,12 @@ def test_sagemaker_response_stream_shape_is_structure_shape():
 
     from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
 
-    assert isinstance(SAGEMAKER_RESPONSE_STREAM_SHAPE, StructureShape)
-    assert (
-        SAGEMAKER_RESPONSE_STREAM_SHAPE.name
-        == "InvokeEndpointWithResponseStreamOutput"
+    assert SAGEMAKER_RESPONSE_STREAM_SHAPE is not None, (
+        "SAGEMAKER_RESPONSE_STREAM_SHAPE is None — botocore may not be installed"
     )
+    shape: StructureShape = SAGEMAKER_RESPONSE_STREAM_SHAPE  # remove Optional
+    assert isinstance(shape, StructureShape)
+    assert shape.name == "InvokeEndpointWithResponseStreamOutput"
 
 
 def test_sagemaker_response_stream_shape_not_reloaded_on_new_decoder():

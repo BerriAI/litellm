@@ -20,12 +20,30 @@ from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
 def test_bedrock_response_stream_shape_loaded_at_import():
     """
-    BEDROCK_RESPONSE_STREAM_SHAPE must be populated at module import time —
-    not None, not lazy.
+    BEDROCK_RESPONSE_STREAM_SHAPE is resolved at module import time.
+    In a standard environment with botocore installed it must be non-None.
     """
     from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
 
     assert BEDROCK_RESPONSE_STREAM_SHAPE is not None
+
+
+def test_bedrock_response_stream_shape_load_failure_returns_none():
+    """
+    If botocore's Loader raises (e.g. missing data files), _load_bedrock_response_stream_shape
+    should return None rather than propagating the exception, so the module
+    still imports cleanly.
+    """
+    from unittest.mock import patch
+
+    import litellm.llms.bedrock.common_utils as mod
+
+    with patch(
+        "botocore.loaders.Loader.load_service_model",
+        side_effect=Exception("no data"),
+    ):
+        shape = mod._load_bedrock_response_stream_shape()
+        assert shape is None
 
 
 def test_bedrock_response_stream_shape_is_structure_shape():
@@ -37,8 +55,12 @@ def test_bedrock_response_stream_shape_is_structure_shape():
 
     from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
 
-    assert isinstance(BEDROCK_RESPONSE_STREAM_SHAPE, StructureShape)
-    assert BEDROCK_RESPONSE_STREAM_SHAPE.name == "ResponseStream"
+    assert BEDROCK_RESPONSE_STREAM_SHAPE is not None, (
+        "BEDROCK_RESPONSE_STREAM_SHAPE is None — botocore may not be installed"
+    )
+    shape: StructureShape = BEDROCK_RESPONSE_STREAM_SHAPE  # remove Optional
+    assert isinstance(shape, StructureShape)
+    assert shape.name == "ResponseStream"
 
 
 def test_bedrock_response_stream_shape_same_object_across_imports():

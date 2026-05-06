@@ -11,14 +11,22 @@ from litellm.types.utils import StreamingChatCompletionChunk
 
 
 def _load_sagemaker_response_stream_shape():
-    from botocore.loaders import Loader
-    from botocore.model import ServiceModel
+    try:
+        from botocore.loaders import Loader
+        from botocore.model import ServiceModel
 
-    loader = Loader()
-    service_dict = loader.load_service_model("sagemaker-runtime", "service-2")
-    return ServiceModel(service_dict).shape_for(
-        "InvokeEndpointWithResponseStreamOutput"
-    )
+        loader = Loader()
+        service_dict = loader.load_service_model("sagemaker-runtime", "service-2")
+        return ServiceModel(service_dict).shape_for(
+            "InvokeEndpointWithResponseStreamOutput"
+        )
+    except Exception as e:
+        verbose_logger.warning(
+            "litellm: could not pre-load sagemaker-runtime response stream shape "
+            "— botocore shape parsing will fall back to per-call loading. Error: %s",
+            e,
+        )
+        return None
 
 
 SAGEMAKER_RESPONSE_STREAM_SHAPE = _load_sagemaker_response_stream_shape()
