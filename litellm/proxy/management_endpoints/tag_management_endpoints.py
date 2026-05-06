@@ -59,21 +59,23 @@ async def _get_internal_user_api_keys(
     if not _is_internal_user_role(user_api_key_dict):
         return []
 
+    user_api_keys = set()
+    if user_api_key_dict.api_key:
+        user_api_keys.add(user_api_key_dict.api_key)
+
     user_id = user_api_key_dict.user_id
     if user_id is None:
-        return []
+        return sorted(user_api_keys)
 
     key_records = await prisma_client.db.litellm_verificationtoken.find_many(
         where={"user_id": user_id},
         select={"token": True},
     )
-    user_api_keys = {
+    user_api_keys.update(
         key_record.token
         for key_record in key_records
         if getattr(key_record, "token", None)
-    }
-    if user_api_key_dict.api_key:
-        user_api_keys.add(user_api_key_dict.api_key)
+    )
 
     return sorted(user_api_keys)
 
@@ -645,6 +647,8 @@ async def get_tag_daily_activity(
         user_api_key_dict=user_api_key_dict,
         requested_api_key=api_key,
     )
+    if scoped_api_key_filter == []:
+        return SpendAnalyticsPaginatedResponse(results=[])
 
     return await get_daily_activity(
         prisma_client=prisma_client,
