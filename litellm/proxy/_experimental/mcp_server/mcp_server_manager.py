@@ -768,7 +768,9 @@ class MCPServerManager:
         )
         return new_server
 
-    async def _maybe_register_openapi_tools(self, server: MCPServer):
+    async def _maybe_register_openapi_tools(
+        self, server: MCPServer, *, initialize_mapping: bool = True
+    ):
         """Register OpenAPI tools if the server has a spec_path configured."""
         if server.spec_path:
             verbose_logger.info(
@@ -779,7 +781,8 @@ class MCPServerManager:
                 server=server,
                 base_url=server.url or "",
             )
-            self.initialize_tool_name_to_mcp_server_name_mapping()
+            if initialize_mapping:
+                self.initialize_tool_name_to_mcp_server_name_mapping()
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
@@ -1978,7 +1981,11 @@ class MCPServerManager:
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
 
-    def _assign_unique_short_prefix(self, server: MCPServer) -> None:
+    def _assign_unique_short_prefix(
+        self,
+        server: MCPServer,
+        registry: Optional[Dict[str, MCPServer]] = None,
+    ) -> None:
         """Resolve and cache a collision-free short tool prefix on ``server``.
 
         Called at registration time for every MCP server entering the
@@ -2002,7 +2009,8 @@ class MCPServerManager:
             return
 
         used: Dict[str, str] = {}
-        for other in self.get_registry().values():
+        registry_for_collision_check = registry or self.get_registry()
+        for other in registry_for_collision_check.values():
             if other.server_id == server.server_id:
                 continue
             if other.short_prefix:
@@ -2916,46 +2924,72 @@ class MCPServerManager:
         # against the *full* set so dedup is deterministic regardless of
         # iteration order.
         for server in db_mcp_servers:
-            existing_server = previous_registry.get(server.server_id)
+            try:
+                existing_server = previous_registry.get(server.server_id)
 
-            if (
-                existing_server is not None
-                and existing_server.updated_at is not None
-                and server.updated_at is not None
-                and existing_server.updated_at == server.updated_at
-            ):
-                # Re-use existing server instance to avoid re-running build_mcp_server_from_table()
-                # which can perform network discovery for OAuth2 servers.
-                new_registry[server.server_id] = existing_server
-                continue
+                if (
+                    existing_server is not None
+                    and existing_server.updated_at is not None
+                    and server.updated_at is not None
+                    and existing_server.updated_at == server.updated_at
+                ):
+                    # Re-use existing server instance to avoid re-running build_mcp_server_from_table()
+                    # which can perform network discovery for OAuth2 servers.
+                    new_registry[server.server_id] = existing_server
+                    continue
 
-            _warn_on_server_name_fields(
-                server_id=server.server_id,
-                alias=getattr(server, "alias", None),
-                server_name=getattr(server, "server_name", None),
-            )
-            verbose_logger.debug(
-                f"Building server from DB: {server.server_id} ({server.server_name})"
-            )
-            new_server = await self.build_mcp_server_from_table(server)
-            # Carry the cached short_prefix from the previous registry entry
-            # (if any) so the prefix is stable across reloads.
-            if existing_server is not None and existing_server.short_prefix:
-                new_server.short_prefix = existing_server.short_prefix
-            new_registry[server.server_id] = new_server
+                _warn_on_server_name_fields(
+                    server_id=server.server_id,
+                    alias=getattr(server, "alias", None),
+                    server_name=getattr(server, "server_name", None),
+                )
+                verbose_logger.debug(
+                    f"Building server from DB: {server.server_id} ({server.server_name})"
+                )
+                new_server = await self.build_mcp_server_from_table(server)
+                # Carry the cached short_prefix from the previous registry entry
+                # (if any) so the prefix is stable across reloads.
+                if existing_server is not None and existing_server.short_prefix:
+                    new_server.short_prefix = existing_server.short_prefix
+                new_registry[server.server_id] = new_server
+            except Exception as e:
+                verbose_logger.exception(
+                    "Skipping MCP server %s (%s) during DB reload: %s",
+                    server.server_id,
+                    getattr(server, "alias", None),
+                    e,
+                )
 
-        # Swap in the new registry first so _assign_unique_short_prefix
-        # sees the complete set when checking for collisions.
-        self.registry = new_registry
-        for new_server in new_registry.values():
-            self._assign_unique_short_prefix(new_server)
-            # Register OpenAPI tools *after* the final short prefix is assigned
-            # so the tools are stored in the global registry under the same
-            # prefix that lookups will use.
-            await self._maybe_register_openapi_tools(new_server)
+        # Assign short prefixes against the full candidate set without
+        # publishing the staged registry to concurrent callers.
+        registered_registry: Dict[str, MCPServer] = {}
+        registered_openapi_tools = False
+        for server_id, new_server in new_registry.items():
+            try:
+                self._assign_unique_short_prefix(new_server, registry=new_registry)
+                # Register OpenAPI tools *after* the final short prefix is assigned
+                # so the tools are stored in the global registry under the same
+                # prefix that lookups will use.
+                await self._maybe_register_openapi_tools(
+                    new_server, initialize_mapping=False
+                )
+                registered_registry[server_id] = new_server
+                if new_server.spec_path:
+                    registered_openapi_tools = True
+            except Exception as e:
+                verbose_logger.exception(
+                    "Skipping MCP server %s (%s) during DB reload: %s",
+                    new_server.server_id,
+                    getattr(new_server, "alias", None),
+                    e,
+                )
+
+        self.registry = registered_registry
+        if registered_openapi_tools:
+            self.initialize_tool_name_to_mcp_server_name_mapping()
 
         verbose_logger.debug(
-            "MCP registry refreshed (%s servers in registry)", len(new_registry)
+            "MCP registry refreshed (%s servers in registry)", len(registered_registry)
         )
 
     def get_mcp_servers_from_ids(self, server_ids: List[str]) -> List[MCPServer]:
