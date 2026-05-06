@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, Empty, Tag, Typography, Button, Space, message } from "antd";
-import dayjs from "dayjs";
+import { relativeOrAbsolute } from "@/app/(dashboard)/agents/components/_dayjs";
 import SessionList from "@/app/(dashboard)/agents/components/session-list";
 import NewSessionDialog from "@/app/(dashboard)/agents/components/new-session-dialog";
 import { getCloudAgent, listCloudSessions } from "@/lib/cloud-agents-client";
@@ -70,7 +70,7 @@ export default function AgentDetail({ agentId, accessToken }: AgentDetailProps) 
               {agent?.model && <Tag color="blue">{agent.model}</Tag>}
               {agent?.last_activity_at && (
                 <Text type="secondary" className="!text-xs">
-                  Last activity {dayjs(agent.last_activity_at).fromNow?.() ?? agent.last_activity_at}
+                  Last activity {relativeOrAbsolute(agent.last_activity_at)}
                 </Text>
               )}
             </Space>
