@@ -66,18 +66,18 @@ export interface CreateSessionOptions {
 }
 
 export type SessionStatus =
-  | "pending"
-  | "running"
-  | "idle"
-  | "terminated"
-  | "failed";
+  | "provisioning"
+  | "ready"
+  | "busy"
+  | "error"
+  | "terminated";
 
 export type RunStatus =
   | "queued"
   | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  | "finished"
+  | "cancelled"
+  | "error";
 
 /** Lightweight info returned by list endpoints. */
 export interface AgentInfo {
@@ -149,7 +149,7 @@ export class LiteLLMAgentError extends Error {
     message: string,
     options: { code: string; status?: number; retryable?: boolean } = {
       code: "unknown",
-    }
+    },
   ) {
     super(message);
     this.name = "LiteLLMAgentError";
