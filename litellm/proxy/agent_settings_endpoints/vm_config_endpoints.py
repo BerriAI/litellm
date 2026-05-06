@@ -159,6 +159,11 @@ def _build_update_payload(
     )
     for field in plain_fields:
         value = getattr(body, field, None)
+        # Use `is not None` (not truthiness): `False`, `0`, and `""` are
+        # all valid values that callers may legitimately want to write
+        # (e.g. disabling warm pool with `warm_pool_enabled=False`,
+        # zeroing `warm_pool_size`). A future contributor adding a field
+        # here should keep this guard so those updates don't get dropped.
         if value is not None:
             payload[field] = value
 
@@ -322,8 +327,15 @@ def _mock_caller_identity(creds: Dict[str, Optional[str]]) -> TestConnectionResp
 
 
 def _aws_mock_enabled() -> bool:
-    """Real STS is owned by B0. Mock by default until that ticket closes."""
-    return os.getenv("LITELLM_CLOUD_AGENT_MOCK_AWS", "1") == "1"
+    """Whether `test-connection` should return a synthetic mock response
+    instead of calling the real `sts:GetCallerIdentity`.
+
+    Defaults to OFF — a fresh production proxy must always validate AWS
+    credentials against STS, never silently return success for invalid
+    creds. Set `LITELLM_CLOUD_AGENT_MOCK_AWS=1` explicitly to opt into the
+    mock path during local development / tests.
+    """
+    return os.getenv("LITELLM_CLOUD_AGENT_MOCK_AWS", "0") == "1"
 
 
 @router.post(
