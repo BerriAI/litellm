@@ -515,6 +515,53 @@ async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
 
 
 @pytest.mark.asyncio
+async def test_internal_user_tag_daily_activity_rejects_unowned_api_key_filter():
+    """
+    If an internal user filters tag usage by an API key they do not own, the
+    endpoint should return an empty scoped filter instead of exposing that key's
+    tag spend.
+    """
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="internal-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.tag_management_endpoints.get_daily_activity",
+            new_callable=AsyncMock,
+        ) as mock_get_daily_activity,
+    ):
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        owned_key_record = Mock()
+        owned_key_record.token = "owned-key"
+        mock_db.litellm_verificationtoken.find_many = AsyncMock(
+            return_value=[owned_key_record]
+        )
+        mock_get_daily_activity.return_value = "empty-daily-activity-response"
+
+        result = await get_tag_daily_activity(
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            api_key="unowned-key",
+            user_api_key_dict=mock_user_auth,
+        )
+
+        assert result == "empty-daily-activity-response"
+        mock_get_daily_activity.assert_awaited_once()
+        assert mock_get_daily_activity.await_args.kwargs["api_key"] == []
+
+
+@pytest.mark.asyncio
 async def test_get_deployments_by_model_id():
     """
     Test get_deployments_by_model when model is found by model_id
