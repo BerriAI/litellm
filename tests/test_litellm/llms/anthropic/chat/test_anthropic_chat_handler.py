@@ -1,7 +1,11 @@
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
 from litellm.types.llms.openai import (
@@ -341,6 +345,289 @@ def test_text_only_streaming_has_index_zero():
             assert (
                 parsed.choices[0].index == 0
             ), f"Expected index=0, got {parsed.choices[0].index}"
+
+
+def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():
+    """Anthropic streaming usage should account for emitted thinking deltas."""
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "thinking_delta",
+                "thinking": "First I need to count the favorable outcomes. ",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "thinking_delta",
+                "thinking": "Then I compare that count with all possible outcomes.",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig_123"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": "The probability is 3/8."},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+    final_usage = None
+    reasoning_deltas = []
+
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        reasoning_content = getattr(parsed.choices[0].delta, "reasoning_content", None)
+        if reasoning_content:
+            reasoning_deltas.append(reasoning_content)
+        if parsed.usage is not None:
+            final_usage = parsed.usage
+
+    assert reasoning_deltas == [
+        "First I need to count the favorable outcomes. ",
+        "Then I compare that count with all possible outcomes.",
+    ]
+    assert final_usage is not None
+    completion_tokens_details = final_usage.completion_tokens_details
+    assert completion_tokens_details is not None
+    assert completion_tokens_details.reasoning_tokens > 0
+    assert completion_tokens_details.text_tokens == (
+        final_usage.completion_tokens - completion_tokens_details.reasoning_tokens
+    )
+
+
+def test_anthropic_completion_streaming_usage_matches_non_streaming_with_thinking():
+    """The completion API should preserve Anthropic thinking usage in streaming mode."""
+    thinking_parts = [
+        "First I need to count the favorable outcomes. ",
+        "Then I compare that count with all possible outcomes.",
+    ]
+    thinking_text = "".join(thinking_parts)
+    answer_text = "The probability is 3/8."
+    requests_seen = []
+
+    class MockAnthropicHandler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format, *args):  # type: ignore[no-untyped-def]
+            return
+
+        def do_POST(self):  # type: ignore[no-untyped-def]
+            content_length = int(self.headers.get("content-length", "0"))
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            requests_seen.append(
+                {
+                    "path": self.path,
+                    "model": payload.get("model"),
+                    "stream": payload.get("stream", False),
+                    "thinking": payload.get("thinking"),
+                }
+            )
+
+            if payload.get("stream"):
+                events = [
+                    {
+                        "type": "message_start",
+                        "message": {
+                            "id": "msg_mock",
+                            "type": "message",
+                            "role": "assistant",
+                            "model": payload.get("model"),
+                            "content": [],
+                            "usage": {"input_tokens": 10, "output_tokens": 1},
+                        },
+                    },
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {"type": "thinking", "thinking": ""},
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": thinking_parts[0],
+                        },
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": thinking_parts[1],
+                        },
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "signature_delta",
+                            "signature": "sig_mock",
+                        },
+                    },
+                    {"type": "content_block_stop", "index": 0},
+                    {
+                        "type": "content_block_start",
+                        "index": 1,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                    {
+                        "type": "content_block_delta",
+                        "index": 1,
+                        "delta": {"type": "text_delta", "text": answer_text},
+                    },
+                    {"type": "content_block_stop", "index": 1},
+                    {
+                        "type": "message_delta",
+                        "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                        "usage": {"output_tokens": 50},
+                    },
+                    {"type": "message_stop"},
+                ]
+                self._write_response(
+                    content_type="text/event-stream",
+                    body="".join(
+                        f"data: {json.dumps(event)}\n\n" for event in events
+                    ).encode("utf-8"),
+                )
+                return
+
+            self._write_response(
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "id": "msg_mock",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": payload.get("model"),
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": thinking_text,
+                                "signature": "sig_mock",
+                            },
+                            {"type": "text", "text": answer_text},
+                        ],
+                        "stop_reason": "end_turn",
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 10, "output_tokens": 50},
+                    }
+                ).encode("utf-8"),
+            )
+
+        def _write_response(self, content_type: str, body: bytes) -> None:
+            self.send_response(200)
+            self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), MockAnthropicHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        request_kwargs = {
+            "model": "anthropic/claude-sonnet-4-6",
+            "api_base": f"http://127.0.0.1:{server.server_port}",
+            "api_key": "test",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Solve a probability problem and show thinking.",
+                }
+            ],
+            "thinking": {"type": "adaptive"},
+            "max_tokens": 128,
+        }
+
+        non_stream_response = litellm.completion(**request_kwargs, stream=False)
+        non_stream_details = non_stream_response.usage.completion_tokens_details
+        assert non_stream_details is not None
+        assert non_stream_details.reasoning_tokens > 0
+
+        reasoning_chunks = []
+        content_chunks = []
+        stream_usage = None
+        for chunk in litellm.completion(
+            **request_kwargs,
+            stream=True,
+            stream_options={"include_usage": True},
+        ):
+            chunk_dict = chunk.model_dump(exclude_none=True)
+            choices = chunk_dict.get("choices") or []
+            if choices:
+                delta = choices[0].get("delta") or {}
+                if delta.get("reasoning_content"):
+                    reasoning_chunks.append(delta["reasoning_content"])
+                if delta.get("content"):
+                    content_chunks.append(delta["content"])
+            if chunk_dict.get("usage"):
+                stream_usage = chunk_dict["usage"]
+
+        assert reasoning_chunks == thinking_parts
+        assert content_chunks == [answer_text]
+        assert stream_usage is not None
+        stream_completion_details = stream_usage["completion_tokens_details"]
+        assert (
+            stream_completion_details["reasoning_tokens"]
+            == non_stream_details.reasoning_tokens
+        )
+        assert stream_completion_details["text_tokens"] == (
+            stream_usage["completion_tokens"]
+            - stream_completion_details["reasoning_tokens"]
+        )
+        assert requests_seen == [
+            {
+                "path": "/v1/messages",
+                "model": "claude-sonnet-4-6",
+                "stream": False,
+                "thinking": {"type": "adaptive"},
+            },
+            {
+                "path": "/v1/messages",
+                "model": "claude-sonnet-4-6",
+                "stream": True,
+                "thinking": {"type": "adaptive"},
+            },
+        ]
+    finally:
+        server.shutdown()
 
 
 def test_text_and_tool_streaming_has_index_zero():
