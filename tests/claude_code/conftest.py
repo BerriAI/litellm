@@ -158,7 +158,16 @@ def pytest_sessionstart(session):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Write the structured results artifact at end of session."""
+    """Write the structured results artifact at end of session.
+
+    Skip writing when no compat results were collected — this conftest is
+    loaded by pytest for every test under `tests/claude_code/`, including
+    sibling unit-test trees (e.g. `_driver_unit_tests/`). Writing an empty
+    artifact in those runs would silently overwrite a real artifact from a
+    prior compat-test run on the same checkout.
+    """
+    if not _COLLECTOR.items:
+        return
     artifact_path = os.environ.get(RESULTS_ARTIFACT_ENV) or DEFAULT_ARTIFACT_PATH
     payload = {
         "schema_version": "1",
