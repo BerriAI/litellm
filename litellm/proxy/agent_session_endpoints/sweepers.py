@@ -101,7 +101,11 @@ async def _terminate_and_mark(
     prisma_client: Any,
 ) -> None:
     """Common path: terminate VM, update session row. Idempotent."""
-    session_id = getattr(session, "session_id", None) or getattr(session, "id", None)
+    session_id_raw = getattr(session, "session_id", None) or getattr(session, "id", None)
+    if not session_id_raw:
+        # Defensive: row without an id cannot be updated.
+        return
+    session_id: str = str(session_id_raw)
 
     # Re-fetch the row to confirm status hasn't moved (cheap optimistic lock).
     fresh = None
