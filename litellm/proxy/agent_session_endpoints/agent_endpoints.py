@@ -14,6 +14,7 @@ row is removed.
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import ORJSONResponse
@@ -27,6 +28,13 @@ from litellm.proxy.agent_session_endpoints.ownership import (
     assert_caller_owns_agent,
     caller_api_key_hash,
     owner_filter_for_caller,
+)
+from litellm.proxy.agent_session_endpoints.pagination import (
+    DEFAULT_PAGE_LIMIT,
+    MAX_PAGE_LIMIT,
+    build_page_response,
+    cursor_where_clause,
+    normalize_limit,
 )
 from litellm.proxy.agent_session_endpoints.schemas import (
     AgentCreate,
@@ -168,18 +176,26 @@ async def update_agent(
 )
 async def list_agents(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
 ):
+    """List agents owned by the caller (or all, for proxy admins).
+
+    Cursor-paginated. Pass ``?cursor=<next_cursor>`` from the previous
+    response to fetch the next page.
+    """
     prisma_client = await _get_prisma_client_or_503()
-    where_filter = owner_filter_for_caller(user_api_key_dict)
+    page_limit = normalize_limit(limit)
     rows = await prisma_client.db.litellm_agent.find_many(
-        where=where_filter,
-        order={"created_at": "desc"},
-        take=limit,
-        skip=offset,
+        where=cursor_where_clause(owner_filter_for_caller(user_api_key_dict), cursor),
+        order=[{"created_at": "desc"}, {"id": "desc"}],
+        take=page_limit + 1,
     )
-    return {"data": [agent_row_to_response(r).model_dump() for r in rows]}
+    return build_page_response(
+        rows,
+        page_limit,
+        lambda r: agent_row_to_response(r).model_dump(),
+    )
 
 
 @router.delete(
