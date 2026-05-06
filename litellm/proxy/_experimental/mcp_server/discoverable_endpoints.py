@@ -12,6 +12,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
+    get_request_base_url,
     validate_trusted_redirect_uri,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -27,51 +28,6 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 router = APIRouter(
     tags=["mcp"],
 )
-
-
-def get_request_base_url(request: Request) -> str:
-    """
-    Get the base URL for the request, considering X-Forwarded-* headers.
-
-    X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port are only honoured
-    when the request comes from a configured trusted proxy
-    (``use_x_forwarded_for`` enabled AND caller in ``mcp_trusted_proxy_ranges``).
-    Otherwise the request's literal ``base_url`` is returned, so an
-    untrusted caller cannot poison OAuth-discovery / redirect_uri values
-    by injecting headers.
-
-    Args:
-        request: FastAPI Request object
-
-    Returns:
-        The reconstructed base URL (e.g., "https://proxy.example.com")
-    """
-    base_url = str(request.base_url).rstrip("/")
-    parsed = urlparse(base_url)
-
-    if not IPAddressUtils.is_request_from_trusted_proxy(request):
-        return base_url
-
-    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
-    x_forwarded_host = request.headers.get("X-Forwarded-Host")
-    x_forwarded_port = request.headers.get("X-Forwarded-Port")
-
-    scheme = x_forwarded_proto if x_forwarded_proto else parsed.scheme
-
-    if x_forwarded_host:
-        # X-Forwarded-Host may already include port (e.g., "example.com:8080")
-        if ":" in x_forwarded_host and not x_forwarded_host.startswith("["):
-            netloc = x_forwarded_host
-        elif x_forwarded_port:
-            netloc = f"{x_forwarded_host}:{x_forwarded_port}"
-        else:
-            netloc = x_forwarded_host
-    else:
-        netloc = parsed.netloc
-        if x_forwarded_port and ":" not in netloc:
-            netloc = f"{netloc}:{x_forwarded_port}"
-
-    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
 
 
 def encode_state_with_base_url(

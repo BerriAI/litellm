@@ -2,13 +2,61 @@
 (BYOK + discoverable / pass-through OAuth proxy)."""
 
 from ipaddress import ip_address
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException, Request
+
+from litellm._logging import verbose_logger
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
 # RFC 6749 §5.1 / OAuth 2.1 draft-15 §4.1.3: token-endpoint responses
 # must not be cached — both success and error bodies may reveal secrets.
 TOKEN_NO_CACHE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+
+def get_request_base_url(request: Request) -> str:
+    """
+    Get the base URL for the request, considering X-Forwarded-* headers.
+
+    X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port are only honoured
+    when the request comes from a configured trusted proxy
+    (``use_x_forwarded_for`` enabled AND caller in ``mcp_trusted_proxy_ranges``).
+    Otherwise the request's literal ``base_url`` is returned, so an
+    untrusted caller cannot poison OAuth-discovery / redirect_uri values
+    by injecting headers.
+
+    Args:
+        request: FastAPI Request object
+
+    Returns:
+        The reconstructed base URL (e.g., "https://proxy.example.com")
+    """
+    base_url = str(request.base_url).rstrip("/")
+    parsed = urlparse(base_url)
+
+    if not IPAddressUtils.is_request_from_trusted_proxy(request):
+        return base_url
+
+    x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    x_forwarded_host = request.headers.get("X-Forwarded-Host")
+    x_forwarded_port = request.headers.get("X-Forwarded-Port")
+
+    scheme = x_forwarded_proto if x_forwarded_proto else parsed.scheme
+
+    if x_forwarded_host:
+        # X-Forwarded-Host may already include port (e.g., "example.com:8080")
+        if ":" in x_forwarded_host and not x_forwarded_host.startswith("["):
+            netloc = x_forwarded_host
+        elif x_forwarded_port:
+            netloc = f"{x_forwarded_host}:{x_forwarded_port}"
+        else:
+            netloc = x_forwarded_host
+    else:
+        netloc = parsed.netloc
+        if x_forwarded_port and ":" not in netloc:
+            netloc = f"{netloc}:{x_forwarded_port}"
+
+    return urlunparse((scheme, netloc, parsed.path, "", "", ""))
 
 
 def validate_loopback_redirect_uri(redirect_uri: str) -> None:
@@ -66,11 +114,6 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
     support native clients should keep
     :func:`validate_loopback_redirect_uri`.
     """
-    # Lazy import to avoid circular dependency with discoverable_endpoints.
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        get_request_base_url,
-    )
-
     try:
         parsed = urlparse(redirect_uri)
     except ValueError:
@@ -90,9 +133,14 @@ def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
             and parsed.netloc.lower() == proxy_base.netloc.lower()
         ):
             return
-    except Exception:
-        # If we can't determine the proxy's origin, fall through to loopback.
-        pass
+    except Exception as exc:
+        # If we can't determine the proxy's origin, fall through to
+        # loopback. Log so the failure is diagnosable in production.
+        verbose_logger.warning(
+            "validate_trusted_redirect_uri: could not determine proxy origin, "
+            "falling back to loopback-only check. error=%s",
+            exc,
+        )
 
     host = (parsed.hostname or "").lower()
     if host == "localhost":

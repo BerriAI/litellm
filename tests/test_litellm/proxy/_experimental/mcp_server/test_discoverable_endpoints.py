@@ -1955,21 +1955,24 @@ async def test_oauth_callback_accepts_same_origin_ui_redirect():
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
     ) as mock_decode:
         mock_decode.return_value = {
-            "base_url": "https://llm.atko.ai/ui/mcp/oauth/callback",
+            "base_url": "https://proxy.example.com/ui/mcp/oauth/callback",
             "original_state": "state-123",
             "code_challenge": None,
             "code_challenge_method": None,
-            "client_redirect_uri": "https://llm.atko.ai/ui/mcp/oauth/callback",
+            "client_redirect_uri": "https://proxy.example.com/ui/mcp/oauth/callback",
         }
 
         response = await callback(
-            request=_mock_callback_request(base_url="https://llm.atko.ai/"),
+            request=_mock_callback_request(base_url="https://proxy.example.com/"),
             code="auth-code-123",
             state="encrypted_state",
         )
 
     assert response.status_code == 302
-    assert "https://llm.atko.ai/ui/mcp/oauth/callback" in response.headers["location"]
+    assert (
+        "https://proxy.example.com/ui/mcp/oauth/callback"
+        in response.headers["location"]
+    )
     assert "code=auth-code-123" in response.headers["location"]
     assert "state=state-123" in response.headers["location"]
 

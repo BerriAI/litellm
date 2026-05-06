@@ -1150,9 +1150,11 @@ def test_validate_trusted_redirect_uri_accepts_same_origin():
         validate_trusted_redirect_uri,
     )
 
-    req = _mock_request_with_base_url("https://llm.atko.ai/")
+    req = _mock_request_with_base_url("https://proxy.example.com/")
     # Should not raise.
-    validate_trusted_redirect_uri(req, "https://llm.atko.ai/ui/mcp/oauth/callback")
+    validate_trusted_redirect_uri(
+        req, "https://proxy.example.com/ui/mcp/oauth/callback"
+    )
 
 
 def test_validate_trusted_redirect_uri_accepts_loopback():
@@ -1161,7 +1163,7 @@ def test_validate_trusted_redirect_uri_accepts_loopback():
         validate_trusted_redirect_uri,
     )
 
-    req = _mock_request_with_base_url("https://llm.atko.ai/")
+    req = _mock_request_with_base_url("https://proxy.example.com/")
     validate_trusted_redirect_uri(req, "http://127.0.0.1:3000/cb")
     validate_trusted_redirect_uri(req, "http://localhost:3000/cb")
 
@@ -1172,7 +1174,7 @@ def test_validate_trusted_redirect_uri_rejects_external_origin():
         validate_trusted_redirect_uri,
     )
 
-    req = _mock_request_with_base_url("https://llm.atko.ai/")
+    req = _mock_request_with_base_url("https://proxy.example.com/")
     with pytest.raises(HTTPException) as exc:
         validate_trusted_redirect_uri(req, "https://attacker.example.com/cb")
     assert exc.value.status_code == 400
@@ -1184,9 +1186,9 @@ def test_validate_trusted_redirect_uri_rejects_scheme_mismatch():
         validate_trusted_redirect_uri,
     )
 
-    req = _mock_request_with_base_url("https://llm.atko.ai/")
+    req = _mock_request_with_base_url("https://proxy.example.com/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(req, "http://llm.atko.ai/ui/callback")
+        validate_trusted_redirect_uri(req, "http://proxy.example.com/ui/callback")
     assert exc.value.status_code == 400
 
 
@@ -1195,7 +1197,7 @@ def test_validate_trusted_redirect_uri_rejects_fragment():
         validate_trusted_redirect_uri,
     )
 
-    req = _mock_request_with_base_url("https://llm.atko.ai/")
+    req = _mock_request_with_base_url("https://proxy.example.com/")
     with pytest.raises(HTTPException) as exc:
-        validate_trusted_redirect_uri(req, "https://llm.atko.ai/ui/cb#code=1")
+        validate_trusted_redirect_uri(req, "https://proxy.example.com/ui/cb#code=1")
     assert exc.value.status_code == 400
