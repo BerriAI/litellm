@@ -257,3 +257,65 @@ def test_hosted_vllm_thinking_blocks_with_list_content():
     }
     assert assistant_msg["content"][2] == {"type": "text", "text": "Response text"}
     assert "thinking_blocks" not in assistant_msg
+
+
+def test_hosted_vllm_custom_tools_are_converted_to_function_tools():
+    config = HostedVLLMChatConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "custom",
+                    "custom": {
+                        "name": "apply_patch",
+                        "description": "Apply text patch",
+                        "format": {
+                            "type": "grammar",
+                            "grammar": {"syntax": "lark", "definition": "start: /.*/"},
+                        },
+                    },
+                }
+            ]
+        },
+        optional_params={},
+        model="hosted_vllm/gpt-oss-120b",
+        drop_params=False,
+    )
+
+    tools = optional_params["tools"]
+    assert len(tools) == 1
+    assert tools[0]["type"] == "function"
+    assert tools[0]["function"]["name"] == "apply_patch"
+    assert tools[0]["function"]["description"] == "Apply text patch"
+    assert tools[0]["function"]["parameters"]["type"] == "object"
+    assert "input" in tools[0]["function"]["parameters"]["properties"]
+
+
+def test_hosted_vllm_custom_tools_use_top_level_input_schema():
+    config = HostedVLLMChatConfig()
+    input_schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "search",
+                    "description": "Search docs",
+                    "input_schema": input_schema,
+                }
+            ]
+        },
+        optional_params={},
+        model="hosted_vllm/gpt-oss-120b",
+        drop_params=False,
+    )
+
+    tools = optional_params["tools"]
+    assert len(tools) == 1
+    assert tools[0]["function"]["name"] == "search"
+    assert tools[0]["function"]["description"] == "Search docs"
+    assert tools[0]["function"]["parameters"] == input_schema
