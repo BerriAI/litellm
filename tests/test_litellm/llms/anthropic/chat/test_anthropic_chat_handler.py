@@ -343,6 +343,89 @@ def test_text_only_streaming_has_index_zero():
             ), f"Expected index=0, got {parsed.choices[0].index}"
 
 
+def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():
+    """Anthropic streaming usage should account for emitted thinking deltas."""
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "thinking_delta",
+                "thinking": "First I need to count the favorable outcomes. ",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "thinking_delta",
+                "thinking": "Then I compare that count with all possible outcomes.",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig_123"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": "The probability is 3/8."},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(None, sync_stream=True)
+    final_usage = None
+    reasoning_deltas = []
+
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        reasoning_content = getattr(parsed.choices[0].delta, "reasoning_content", None)
+        if reasoning_content:
+            reasoning_deltas.append(reasoning_content)
+        if parsed.usage is not None:
+            final_usage = parsed.usage
+
+    assert reasoning_deltas == [
+        "First I need to count the favorable outcomes. ",
+        "Then I compare that count with all possible outcomes.",
+    ]
+    assert final_usage is not None
+    completion_tokens_details = final_usage.completion_tokens_details
+    assert completion_tokens_details is not None
+    assert completion_tokens_details.reasoning_tokens > 0
+    assert completion_tokens_details.text_tokens == (
+        final_usage.completion_tokens - completion_tokens_details.reasoning_tokens
+    )
+
+
 def test_text_and_tool_streaming_has_index_zero():
     """Test that mixed text and tool streaming responses have choice index=0"""
     chunks = [
