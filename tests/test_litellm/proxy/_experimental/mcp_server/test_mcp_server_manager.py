@@ -1870,6 +1870,49 @@ class TestMCPServerManager:
         assert resolved_server_pref is not None
         assert resolved_server_pref.server_id == server.server_id
 
+    def test_get_mcp_server_from_prefixed_token_exchange_tool_without_mapping(self):
+        """OBO servers are not discovered at startup, but prefixed calls can still route."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="obo-server",
+            name="obo_server",
+            alias="obo_server",
+            server_name="obo_server",
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            client_id="client-id",
+            client_secret="client-secret",
+            token_exchange_endpoint="https://idp.example.com/token",
+        )
+        manager.config_mcp_servers = {server.server_id: server}
+
+        resolved_server = manager._get_mcp_server_from_tool_name("obo_server-whoami")
+
+        assert resolved_server is not None
+        assert resolved_server.server_id == server.server_id
+
+    @pytest.mark.asyncio
+    async def test_initialize_mapping_skips_token_exchange_servers(self):
+        """Startup discovery must not call OBO servers without a request subject token."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="obo-server",
+            name="obo_server",
+            url="https://mcp.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2_token_exchange,
+            client_id="client-id",
+            client_secret="client-secret",
+            token_exchange_endpoint="https://idp.example.com/token",
+        )
+        manager.config_mcp_servers = {server.server_id: server}
+        manager._get_tools_from_server = AsyncMock()
+
+        await manager._initialize_tool_name_to_mcp_server_name_mapping()
+
+        manager._get_tools_from_server.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_rest_endpoint_filters_by_allowed_tools(self):
         """Test that REST endpoint _get_tools_for_single_server respects allowed_tools configuration"""
