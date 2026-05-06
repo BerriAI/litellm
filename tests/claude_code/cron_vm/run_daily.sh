@@ -202,11 +202,23 @@ else
   if [[ ! -x "${WORKTREE_UV}" ]]; then
     log "downloading uv ${PINNED_UV_VERSION} for the worktree"
     mkdir -p "${WORKTREE}/.uv-bin"
-    curl -fsSL \
-      "https://github.com/astral-sh/uv/releases/download/${PINNED_UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
-      | tar -xzO "uv-x86_64-unknown-linux-gnu/uv" >"${WORKTREE_UV}.tmp"
+    UV_TARBALL_NAME="uv-x86_64-unknown-linux-gnu.tar.gz"
+    UV_DOWNLOAD_URL="https://github.com/astral-sh/uv/releases/download/${PINNED_UV_VERSION}/${UV_TARBALL_NAME}"
+    UV_TMPDIR="$(mktemp -d -t uv-download.XXXXXX)"
+    # Download the tarball and Astral's official .sha256 sidecar to disk
+    # and verify the digest before extracting/executing anything. This
+    # closes the supply-chain trust gap of piping a remote binary
+    # straight into `tar -xzO ... > file ; chmod +x` (see CLAUDE.md
+    # "CI Supply-Chain Safety").
+    curl -fsSL --output "${UV_TMPDIR}/${UV_TARBALL_NAME}" "${UV_DOWNLOAD_URL}"
+    curl -fsSL --output "${UV_TMPDIR}/${UV_TARBALL_NAME}.sha256" "${UV_DOWNLOAD_URL}.sha256"
+    (cd "${UV_TMPDIR}" && sha256sum -c "${UV_TARBALL_NAME}.sha256") \
+      || { rm -rf "${UV_TMPDIR}"; die "uv ${PINNED_UV_VERSION} sha256 mismatch — refusing to install"; }
+    tar -xzf "${UV_TMPDIR}/${UV_TARBALL_NAME}" -C "${UV_TMPDIR}" "uv-x86_64-unknown-linux-gnu/uv"
+    mv "${UV_TMPDIR}/uv-x86_64-unknown-linux-gnu/uv" "${WORKTREE_UV}.tmp"
     chmod +x "${WORKTREE_UV}.tmp"
     mv "${WORKTREE_UV}.tmp" "${WORKTREE_UV}"
+    rm -rf "${UV_TMPDIR}"
   fi
 fi
 # `--extra proxy` pulls fastapi/uvicorn/etc. so `uv run litellm` can
