@@ -43,6 +43,7 @@ from litellm.proxy.agent_session_endpoints.constants import (
 )
 from litellm.proxy.agent_session_endpoints.ids import new_run_id, new_session_id
 from litellm.proxy.agent_session_endpoints.ownership import (
+    assert_caller_can_mutate,
     assert_caller_owns_agent,
     assert_caller_owns_session,
     caller_api_key_hash,
@@ -70,6 +71,22 @@ DEFAULT_VM_PROVIDER_NAME = "noop"
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _has_active_run(prisma_client, session_id: str) -> bool:
+    """True iff ``session_id`` has any run in queued/running.
+
+    Mirrors the ``_has_active_run`` helper in ``run_endpoints.py``. We
+    duplicate it here (instead of importing) to keep ``session_endpoints``
+    free of any dependency on ``run_endpoints``.
+    """
+    existing = await prisma_client.db.litellm_agentrun.find_first(
+        where={
+            "session_id": session_id,
+            "status": {"in": list(RUN_ACTIVE_STATUSES)},
+        }
+    )
+    return existing is not None
 
 
 async def _get_prisma_client_or_503():
@@ -216,6 +233,7 @@ async def create_session(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
+    assert_caller_can_mutate(user_api_key_dict)
     prisma_client = await _get_prisma_client_or_503()
 
     # Idempotency: same (caller, key) returns same session — no daemon
@@ -345,6 +363,7 @@ async def delete_session(
     session_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    assert_caller_can_mutate(user_api_key_dict)
     prisma_client = await _get_prisma_client_or_503()
     row = await prisma_client.db.litellm_agentsession.find_unique(
         where={"id": session_id}
@@ -474,6 +493,7 @@ async def followup(
     ``user_message`` event via the events stream and weaves it into the
     in-flight LLM turn.
     """
+    assert_caller_can_mutate(user_api_key_dict)
     prisma_client = await _get_prisma_client_or_503()
     session = await prisma_client.db.litellm_agentsession.find_unique(
         where={"id": session_id}
@@ -504,16 +524,45 @@ async def followup(
         )
         return FollowupResponse(run_id=latest_run.id, action="queued")
 
+    # Concurrency guard: matches POST /runs. Without this, two concurrent
+    # /followup requests on an idle session both pass the
+    # ``latest_run.status in RUN_ACTIVE_STATUSES`` check above and both
+    # fall through to ``create``, breaking the "one active run at a time"
+    # invariant. Re-check for any active run RIGHT before insert and
+    # return 409 ``run_busy`` instead, just like POST /runs does.
+    if await _has_active_run(prisma_client, session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="run_busy: another run is queued/running for this session",
+        )
+
     # Else start a fresh run.
-    new_run = await prisma_client.db.litellm_agentrun.create(
-        data={
-            "id": new_run_id(),
-            "session_id": session_id,
-            "status": RUN_STATUS_QUEUED,
-            "prompt": body.prompt,
-            "updated_at": _now(),
-        }
-    )
+    try:
+        new_run = await prisma_client.db.litellm_agentrun.create(
+            data={
+                "id": new_run_id(),
+                "session_id": session_id,
+                "status": RUN_STATUS_QUEUED,
+                "prompt": body.prompt,
+                "updated_at": _now(),
+            }
+        )
+    except Exception as exc:
+        # Last line of defense: another /followup or POST /runs may have
+        # raced past the busy check and won the insert. Surface the same
+        # 409 so the client can retry deterministically.
+        active_other = await prisma_client.db.litellm_agentrun.find_first(
+            where={
+                "session_id": session_id,
+                "status": {"in": list(RUN_ACTIVE_STATUSES)},
+            }
+        )
+        if active_other is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="run_busy: another run is queued/running for this session",
+            ) from exc
+        raise
     return FollowupResponse(run_id=new_run.id, action="new_run")
 
 
