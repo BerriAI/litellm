@@ -1396,6 +1396,36 @@ class PrometheusLogger(CustomLogger):
             amount=float(response_cost),
         )
 
+    @staticmethod
+    def _coerce_prometheus_gauge_value(value: Any) -> Any:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+
+    @staticmethod
+    def _get_virtual_key_rate_limit_value(
+        metadata: dict,
+        metadata_key: str,
+        additional_headers: Optional[dict],
+        header_key: str,
+    ) -> Any:
+        if metadata_key in metadata and metadata[metadata_key] is not None:
+            return PrometheusLogger._coerce_prometheus_gauge_value(
+                metadata[metadata_key]
+            )
+
+        if (
+            additional_headers is not None
+            and header_key in additional_headers
+            and additional_headers[header_key] is not None
+        ):
+            return PrometheusLogger._coerce_prometheus_gauge_value(
+                additional_headers[header_key]
+            )
+
+        return sys.maxsize
+
     def _set_virtual_key_rate_limit_metrics(
         self,
         user_api_key: Optional[str],
@@ -1416,11 +1446,25 @@ class PrometheusLogger(CustomLogger):
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
-        remaining_requests = (
-            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
+        standard_logging_payload = kwargs.get("standard_logging_object") or {}
+        hidden_params = standard_logging_payload.get("hidden_params", {})
+        additional_headers = (
+            hidden_params.get("additional_headers", {})
+            if isinstance(hidden_params, dict)
+            else {}
         )
-        remaining_tokens = (
-            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
+
+        remaining_requests = self._get_virtual_key_rate_limit_value(
+            metadata=metadata,
+            metadata_key=remaining_requests_variable_name,
+            additional_headers=additional_headers,
+            header_key="x-ratelimit-model_per_key-remaining-requests",
+        )
+        remaining_tokens = self._get_virtual_key_rate_limit_value(
+            metadata=metadata,
+            metadata_key=remaining_tokens_variable_name,
+            additional_headers=additional_headers,
+            header_key="x-ratelimit-model_per_key-remaining-tokens",
         )
 
         self.litellm_remaining_api_key_requests_for_model.labels(
