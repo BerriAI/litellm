@@ -234,7 +234,16 @@ PROXY_CONFIG="${WORKTREE}/tests/claude_code/test_config.yaml"
 # 3. Boot the proxy
 # ---------------------------------------------------------------------------
 
-log "starting proxy on :${PROXY_PORT}"
+log "starting proxy on 127.0.0.1:${PROXY_PORT}"
+# Bind the proxy to loopback only. The populator proxy is talked to
+# exclusively by the pytest run on the same host (the health check and
+# the test env set `LITELLM_PROXY_BASE_URL=http://127.0.0.1:...`),
+# so there's no reason to expose it on the VM's external interfaces.
+# Without `--host`, `litellm` defaults to 0.0.0.0, which combined with
+# the predictable default `LITELLM_MASTER_KEY=sk-cron-matrix` would
+# allow anything that can reach :${PROXY_PORT} on the VM to authenticate
+# and burn upstream provider credentials.
+#
 # `setsid` puts the proxy in its own session+pgroup so cleanup() can
 # SIGTERM the whole tree by passing the pgid as a negative pid. We
 # write that pid to a file so cleanup() doesn't need to remember a
@@ -242,7 +251,7 @@ log "starting proxy on :${PROXY_PORT}"
 setsid env LITELLM_MASTER_KEY="${PROXY_API_KEY}" bash -c '
   echo "$$" > "$0"
   cd "$1"
-  exec "$2" run litellm --config "$3" --port "$4"
+  exec "$2" run litellm --config "$3" --host 127.0.0.1 --port "$4"
 ' "${PROXY_PID_FILE}" "${WORKTREE}" "${WORKTREE_UV}" "${PROXY_CONFIG}" "${PROXY_PORT}" \
   >"${WORKDIR}/proxy.log" 2>&1 &
 disown
