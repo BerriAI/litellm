@@ -666,6 +666,10 @@ class LiteLLMRoutes(enum.Enum):
             "/global/activity",
             "/global/activity/model",
             "/global/activity/cache_hits",
+            # Tag usage endpoints scope internal users to tags produced by
+            # their own keys in tag_management_endpoints.py.
+            "/tag/daily/activity",
+            "/tag/list",
             "/v1/models/{model_id}",
             "/models/{model_id}",
             "/guardrails/list",
@@ -677,7 +681,12 @@ class LiteLLMRoutes(enum.Enum):
         + key_management_routes
     )
 
-    internal_user_view_only_routes = spend_tracking_routes
+    internal_user_view_only_routes = spend_tracking_routes + [
+        # Tag usage endpoints scope internal viewers to tags produced by
+        # their own keys in tag_management_endpoints.py.
+        "/tag/daily/activity",
+        "/tag/list",
+    ]
 
     self_managed_routes = [
         "/team/member_add",

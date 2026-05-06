@@ -381,6 +381,140 @@ async def test_list_tags_no_dynamic_tags():
 
 
 @pytest.mark.asyncio
+async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
+    """
+    Internal users can view tag usage, but the tag list must be scoped to tags
+    produced by API keys owned by the caller.
+    """
+    from datetime import datetime
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="current-owned-key",
+        user_id="internal-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+
+            owned_key_record = Mock()
+            owned_key_record.token = "owned-key"
+            mock_db.litellm_verificationtoken.find_many = AsyncMock(
+                return_value=[owned_key_record]
+            )
+
+            mock_db.litellm_dailytagspend.group_by = AsyncMock(
+                return_value=[
+                    {
+                        "tag": "stored-owned-tag",
+                        "_min": {"created_at": "2025-02-01T00:00:00Z"},
+                        "_max": {"updated_at": "2025-03-01T00:00:00Z"},
+                    },
+                    {
+                        "tag": "dynamic-owned-tag",
+                        "_min": {"created_at": "2025-02-02T00:00:00Z"},
+                        "_max": {"updated_at": "2025-03-02T00:00:00Z"},
+                    },
+                ]
+            )
+
+            stored_tag = Mock()
+            stored_tag.tag_name = "stored-owned-tag"
+            stored_tag.description = "A stored tag used by the caller"
+            stored_tag.models = ["model-1"]
+            stored_tag.model_info = {}
+            stored_tag.spend = 0.0
+            stored_tag.budget_id = None
+            stored_tag.created_at = datetime(2025, 1, 1)
+            stored_tag.updated_at = datetime(2025, 1, 1)
+            stored_tag.created_by = "admin-user"
+            stored_tag.litellm_budget_table = None
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[stored_tag])
+
+            response = client.get(
+                "/tag/list",
+                headers={"Authorization": "Bearer test-key"},
+            )
+
+            assert response.status_code == 200
+            assert [tag["name"] for tag in response.json()] == [
+                "stored-owned-tag",
+                "dynamic-owned-tag",
+            ]
+            mock_db.litellm_verificationtoken.find_many.assert_awaited_once_with(
+                where={"user_id": "internal-user-123"},
+                select={"token": True},
+            )
+            mock_db.litellm_dailytagspend.group_by.assert_awaited_once_with(
+                by=["tag"],
+                where={
+                    "tag": {"not": None},
+                    "api_key": {"in": ["current-owned-key", "owned-key"]},
+                },
+                min={"created_at": True},
+                max={"updated_at": True},
+            )
+            mock_db.litellm_tagtable.find_many.assert_awaited_once_with(
+                where={"tag_name": {"in": ["stored-owned-tag", "dynamic-owned-tag"]}},
+                include={"litellm_budget_table": True},
+            )
+
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_internal_user_tag_daily_activity_is_scoped_to_their_keys():
+    """
+    Internal users must not receive proxy-wide tag spend rows when viewing tag
+    usage daily activity.
+    """
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="internal-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch(
+            "litellm.proxy.management_endpoints.tag_management_endpoints.get_daily_activity",
+            new_callable=AsyncMock,
+        ) as mock_get_daily_activity,
+    ):
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+
+        owned_key_record = Mock()
+        owned_key_record.token = "owned-key"
+        mock_db.litellm_verificationtoken.find_many = AsyncMock(
+            return_value=[owned_key_record]
+        )
+        mock_get_daily_activity.return_value = "daily-activity-response"
+
+        result = await get_tag_daily_activity(
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            user_api_key_dict=mock_user_auth,
+        )
+
+        assert result == "daily-activity-response"
+        mock_get_daily_activity.assert_awaited_once()
+        assert mock_get_daily_activity.await_args.kwargs["api_key"] == ["owned-key"]
+
+
+@pytest.mark.asyncio
 async def test_get_deployments_by_model_id():
     """
     Test get_deployments_by_model when model is found by model_id
