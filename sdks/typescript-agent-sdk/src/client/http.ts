@@ -6,9 +6,69 @@
  *  - Inject `Authorization: Bearer <apiKey>`
  *  - Retry retryable errors (5xx, 429) with exponential backoff
  *  - Normalize errors to `LiteLLMAgentError`
+ *  - Translate between the SDK's camelCase public API and the backend's
+ *    snake_case wire format. Request bodies are converted with
+ *    `camelToSnake` before serialization; response JSON is converted with
+ *    `snakeToCamel` before being returned to callers. Only object keys are
+ *    rewritten — values pass through unchanged.
  */
 
 import { ClientOptions, LiteLLMAgentError } from "../types.js";
+
+/**
+ * Recursively convert object keys from snake_case to camelCase.
+ * Walks plain objects and arrays; leaves Date/Buffer/etc. untouched.
+ * Single-word keys (no underscores) pass through unchanged.
+ */
+export function snakeToCamel(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(snakeToCamel);
+  }
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[snakeToCamelKey(k)] = snakeToCamel(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Recursively convert object keys from camelCase to snake_case.
+ * Walks plain objects and arrays; leaves Date/Buffer/etc. untouched.
+ * Single-word keys (no uppercase) pass through unchanged.
+ */
+export function camelToSnake(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(camelToSnake);
+  }
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[camelToSnakeKey(k)] = camelToSnake(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+function snakeToCamelKey(key: string): string {
+  if (!key.includes("_")) return key;
+  return key.replace(/_([a-zA-Z0-9])/g, (_, c: string) => c.toUpperCase());
+}
+
+function camelToSnakeKey(key: string): string {
+  // Only rewrite if there's at least one uppercase letter to convert.
+  if (!/[A-Z]/.test(key)) return key;
+  return key.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  if (v === null || typeof v !== "object") return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
 
 const DEFAULT_BASE_URL = "https://api.litellm.ai";
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -76,7 +136,10 @@ export async function request(
   const init: RequestInit = {
     method: opts.method ?? "GET",
     headers,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    body:
+      opts.body !== undefined
+        ? JSON.stringify(camelToSnake(opts.body))
+        : undefined,
     signal: opts.signal,
   };
 
@@ -114,7 +177,8 @@ export async function requestJson<T>(
 ): Promise<T> {
   const res = await request(client, opts);
   if (res.status === 204) return undefined as unknown as T;
-  return (await res.json()) as T;
+  const parsed = await res.json();
+  return snakeToCamel(parsed) as T;
 }
 
 function buildUrl(
