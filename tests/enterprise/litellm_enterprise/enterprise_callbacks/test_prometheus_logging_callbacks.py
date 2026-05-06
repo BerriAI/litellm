@@ -661,14 +661,14 @@ async def test_async_log_failure_event(prometheus_logger):
     # litellm_llm_api_failed_requests_metric incremented
     # Labels: end_user, hashed_api_key, api_key_alias, model, team, team_alias, user, model_id
     prometheus_logger.litellm_llm_api_failed_requests_metric.labels.assert_called_once_with(
-        None,  # end_user_id
-        "test_hash",
-        "test_alias",
-        "gpt-3.5-turbo",
-        "test_team",
-        "test_team_alias",
-        "test_user",
-        "model-123",  # model_id from standard_logging_payload
+        end_user=None,
+        hashed_api_key="test_hash",
+        api_key_alias="test_alias",
+        model="gpt-3.5-turbo",
+        team="test_team",
+        team_alias="test_team_alias",
+        user="test_user",
+        model_id="model-123",
     )
     prometheus_logger.litellm_llm_api_failed_requests_metric.labels().inc.assert_called_once()
 
