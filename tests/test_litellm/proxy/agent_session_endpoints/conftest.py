@@ -182,6 +182,11 @@ class _DB:
         self.litellm_agentsession = _Table()
         self.litellm_agentrun = _AgentRunTable()
         self.litellm_agentrunevent = _AgentRunEventTable()
+        # Warm-pool tables (LIT-2890). Same `_Table` semantics so the in-memory
+        # client mirrors what the real Prisma client exposes.
+        self.litellm_agentvm = _Table()
+        self.litellm_agentvmconfig = _Table()
+        self.litellm_agentsecret = _Table()
 
 
 class _AgentRunTable(_Table):
@@ -290,11 +295,48 @@ def other_tenant_client(fake_prisma_client):
     return _build_test_app(LitellmUserRoles.INTERNAL_USER, api_key="sk-tenant-B")
 
 
+class _RecordingNoopProvider:
+    """Test-only noop that tracks ``provision`` / ``terminate`` calls.
+
+    A1's tests poke at ``provider.provision_calls`` / ``terminate_calls``
+    while B1's ``NoopProvider`` only implements the ABC. Wrap B1's behavior
+    here without polluting the production class.
+    """
+
+    name = "noop"
+
+    def __init__(self) -> None:
+        from litellm.proxy.agent_session_endpoints.vm_providers import NoopProvider
+
+        self._inner = NoopProvider()
+        self.provision_calls: list = []
+        self.terminate_calls: list = []
+
+    async def provision(self, ctx) -> Any:  # noqa: ANN001
+        self.provision_calls.append(
+            {
+                "session_id": getattr(ctx, "session_id", None),
+                "team_id": getattr(ctx, "team_id", None),
+                "agent_id": getattr(ctx, "agent_id", None),
+                "mode": getattr(ctx, "mode", None),
+            }
+        )
+        return await self._inner.provision(ctx)
+
+    async def terminate(self, vm) -> None:  # noqa: ANN001
+        self.terminate_calls.append(
+            {"session_id": vm.metadata.get("session_id"), "vm_id": vm.vm_id}
+        )
+        await self._inner.terminate(vm)
+
+    async def status(self, vm):  # noqa: ANN001
+        return await self._inner.status(vm)
+
+
 @pytest.fixture
 def noop_provider(monkeypatch):
-    """Reset the VM provider registry to a fresh ``NoopVMProvider``."""
+    """Reset the VM provider registry to a fresh recording noop."""
     from litellm.proxy.agent_session_endpoints.vm_providers import (
-        NoopVMProvider,
         register_vm_provider,
     )
     from litellm.proxy.agent_session_endpoints.vm_providers.registry import (
@@ -302,7 +344,7 @@ def noop_provider(monkeypatch):
     )
 
     reset_vm_provider_registry()
-    provider = NoopVMProvider()
+    provider = _RecordingNoopProvider()
     register_vm_provider(provider)
     yield provider
     reset_vm_provider_registry()

@@ -67,6 +67,11 @@ from litellm.proxy.agent_session_endpoints.vm_providers import (
     VMHandle,
     get_vm_provider,
 )
+from litellm.proxy.agent_session_endpoints.warm_pool.attach import (
+    AttachResult,
+    WarmPoolEmptyError,
+    attach_warm_vm,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
@@ -237,6 +242,48 @@ async def _provision_in_background(
             )
 
 
+async def _try_warm_attach(
+    *,
+    prisma_client: Any,
+    team_id: Optional[str],
+    session_id: str,
+    agent_row: Any,
+    daemon_token: str,
+    expires_at: datetime,
+    repos: List[Dict[str, Any]],
+    env_vars: Optional[Dict[str, str]],
+) -> Optional[AttachResult]:
+    """Best-effort warm-pool attach. Returns ``None`` to fall through to cold boot.
+
+    Never raises: warm attach failures fall through silently so the session
+    creation itself is not gated on warm-pool health. The cold-boot path
+    serves as the always-available fallback.
+    """
+    if not team_id:
+        return None
+    try:
+        return await attach_warm_vm(
+            prisma_client=prisma_client,
+            team_id=team_id,
+            session_id=session_id,
+            agent_id=agent_row.id,
+            jwt=daemon_token,
+            jwt_expires_at=expires_at,
+            repos=repos,
+            env_vars=env_vars,
+            agent_row=agent_row,
+        )
+    except WarmPoolEmptyError:
+        return None
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "session.create: warm attach failed; falling back to cold boot session=%s: %s",
+            session_id,
+            exc,
+        )
+        return None
+
+
 async def _find_idempotent_session(user_api_key_hash: str, idempotency_key: str):
     """Return the existing session row for ``(user, idempotency_key)`` if any."""
     from litellm.proxy.proxy_server import prisma_client
@@ -311,8 +358,40 @@ async def create_session(
     }
     row = await prisma_client.db.litellm_agentsession.create(data=payload)
 
-    # Fire-and-forget VM provisioning. The client polls / subscribes
-    # for status flips.
+    # Try warm-pool attach first. Per LIT-2890, this is the primary path
+    # when ``LiteLLM_AgentVMConfig.warm_pool_enabled=true`` for the team —
+    # P95 target <3s vs ~60s cold boot. If no warm VM is available we
+    # fall through to the existing cold-boot path.
+    attach_result = await _try_warm_attach(
+        prisma_client=prisma_client,
+        team_id=user_api_key_dict.team_id,
+        session_id=session_id,
+        agent_row=agent_row,
+        daemon_token=daemon_token,
+        expires_at=expires_at,
+        repos=resolved_repos,
+        env_vars=resolved_env_vars,
+    )
+    if attach_result is not None:
+        row = await prisma_client.db.litellm_agentsession.update(
+            where={"id": session_id},
+            data={
+                "vm_id": attach_result.vm_id,
+                "vm_provider": "ec2",
+                "status": SESSION_STATUS_READY,
+                "updated_at": _now(),
+            },
+        )
+        verbose_proxy_logger.info(
+            "session.create warm_attach=ok id=%s vm_id=%s expires_at=%s",
+            session_id,
+            attach_result.vm_id,
+            expires_at.isoformat(),
+        )
+        return session_row_to_response(row, daemon_token=daemon_token)
+
+    # Cold boot path: fire-and-forget VM provisioning. The client polls /
+    # subscribes for status flips.
     asyncio.create_task(
         _provision_in_background(
             session_id=session_id,
@@ -326,7 +405,7 @@ async def create_session(
     )
 
     verbose_proxy_logger.info(
-        "session.create id=%s agent_id=%s expires_at=%s",
+        "session.create warm_attach=miss id=%s agent_id=%s expires_at=%s",
         session_id,
         body.agent_id,
         expires_at.isoformat(),
