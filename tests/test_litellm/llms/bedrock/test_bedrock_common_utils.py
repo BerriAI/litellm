@@ -13,6 +13,64 @@ sys.path.insert(
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
 
+# --------------------------------------------------------------------------- #
+# BEDROCK_RESPONSE_STREAM_SHAPE eager-load tests                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_bedrock_response_stream_shape_loaded_at_import():
+    """
+    BEDROCK_RESPONSE_STREAM_SHAPE must be populated at module import time —
+    not None, not lazy.
+    """
+    from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
+
+    assert BEDROCK_RESPONSE_STREAM_SHAPE is not None
+
+
+def test_bedrock_response_stream_shape_is_structure_shape():
+    """
+    The loaded shape should be the botocore StructureShape for ResponseStream,
+    not a plain dict or any other type.
+    """
+    from botocore.model import StructureShape
+
+    from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
+
+    assert isinstance(BEDROCK_RESPONSE_STREAM_SHAPE, StructureShape)
+    assert BEDROCK_RESPONSE_STREAM_SHAPE.name == "ResponseStream"
+
+
+def test_bedrock_response_stream_shape_same_object_across_imports():
+    """
+    Both bedrock modules that use the shape must reference the identical object —
+    confirming the constant is not re-loaded per import.
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import (
+        BEDROCK_RESPONSE_STREAM_SHAPE as invoke_shape,
+    )
+    from litellm.llms.bedrock.common_utils import (
+        BEDROCK_RESPONSE_STREAM_SHAPE as common_shape,
+    )
+
+    assert common_shape is invoke_shape
+
+
+def test_bedrock_event_stream_decoder_base_uses_module_shape():
+    """
+    BedrockEventStreamDecoderBase instances no longer carry their own
+    per-instance cache — _parse_message_from_event uses the module constant
+    directly, so there is no instance-level _response_stream_shape_cache attr.
+    """
+    from litellm.llms.bedrock.common_utils import BedrockEventStreamDecoderBase
+
+    decoder_a = BedrockEventStreamDecoderBase()
+    decoder_b = BedrockEventStreamDecoderBase()
+
+    assert "_response_stream_shape_cache" not in decoder_a.__dict__
+    assert "_response_stream_shape_cache" not in decoder_b.__dict__
+
+
 def test_deepseek_cris():
     """
     Test that DeepSeek models with cross-region inference prefix use converse route

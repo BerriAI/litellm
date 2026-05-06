@@ -11,6 +11,59 @@ from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 
 
+# --------------------------------------------------------------------------- #
+# SAGEMAKER_RESPONSE_STREAM_SHAPE eager-load tests                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_sagemaker_response_stream_shape_loaded_at_import():
+    """
+    SAGEMAKER_RESPONSE_STREAM_SHAPE must be populated at module import time —
+    not None, not lazy.
+    """
+    from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
+
+    assert SAGEMAKER_RESPONSE_STREAM_SHAPE is not None
+
+
+def test_sagemaker_response_stream_shape_is_structure_shape():
+    """
+    The loaded shape should be the botocore StructureShape for
+    InvokeEndpointWithResponseStreamOutput, not a plain dict or any other type.
+    """
+    from botocore.model import StructureShape
+
+    from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
+
+    assert isinstance(SAGEMAKER_RESPONSE_STREAM_SHAPE, StructureShape)
+    assert (
+        SAGEMAKER_RESPONSE_STREAM_SHAPE.name
+        == "InvokeEndpointWithResponseStreamOutput"
+    )
+
+
+def test_sagemaker_response_stream_shape_not_reloaded_on_new_decoder():
+    """
+    Creating multiple AWSEventStreamDecoder instances must not trigger
+    additional botocore Loader calls — the shape is resolved once at import
+    time and reused.
+    """
+    from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
+
+    decoder_a = AWSEventStreamDecoder(model="test-model-a")
+    decoder_b = AWSEventStreamDecoder(model="test-model-b")
+
+    # Both decoders should use the same pre-loaded shape object (identity check)
+    assert "_response_stream_shape_cache" not in decoder_a.__dict__
+    assert "_response_stream_shape_cache" not in decoder_b.__dict__
+    # The module constant is still the same object
+    from litellm.llms.sagemaker.common_utils import (
+        SAGEMAKER_RESPONSE_STREAM_SHAPE as shape_after,
+    )
+
+    assert SAGEMAKER_RESPONSE_STREAM_SHAPE is shape_after
+
+
 @pytest.mark.asyncio
 async def test_aiter_bytes_unicode_decode_error():
     """

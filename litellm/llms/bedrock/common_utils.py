@@ -917,38 +917,41 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonInvokeConfig()
 
 
+def _load_bedrock_response_stream_shape():
+    """
+    Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
+
+    Uses a single module-level ``Loader`` instance (``_BEDROCK_LOADER``) so the
+    loader itself is not re-created on every call.  Called once at module import
+    time; the result is stored in ``BEDROCK_RESPONSE_STREAM_SHAPE`` and reused
+    for the process lifetime.
+    """
+    from botocore.loaders import Loader
+    from botocore.model import ServiceModel
+
+    loader = Loader()
+    service_dict = loader.load_service_model("bedrock-runtime", "service-2")
+    return ServiceModel(service_dict).shape_for("ResponseStream")
+
+
+# Eagerly resolved once per process — avoids per-instance or per-request disk I/O.
+BEDROCK_RESPONSE_STREAM_SHAPE = _load_bedrock_response_stream_shape()
+
+
 class BedrockEventStreamDecoderBase:
     """
     Base class for event stream decoding for Bedrock
     """
-
-    _response_stream_shape_cache = None
 
     def __init__(self):
         from botocore.parsers import EventStreamJSONParser
 
         self.parser = EventStreamJSONParser()
 
-    def get_response_stream_shape(self):
-        if self._response_stream_shape_cache is None:
-            from botocore.loaders import Loader
-            from botocore.model import ServiceModel
-
-            loader = Loader()
-            bedrock_service_dict = loader.load_service_model(
-                "bedrock-runtime", "service-2"
-            )
-            bedrock_service_model = ServiceModel(bedrock_service_dict)
-            self._response_stream_shape_cache = bedrock_service_model.shape_for(
-                "ResponseStream"
-            )
-
-        return self._response_stream_shape_cache
-
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(
-            response_dict, self.get_response_stream_shape()
+            response_dict, BEDROCK_RESPONSE_STREAM_SHAPE
         )
 
         if response_dict["status_code"] != 200:

@@ -67,9 +67,12 @@ from litellm.types.utils import (
 from litellm.utils import CustomStreamWrapper, get_secret
 
 from ..base_aws_llm import BaseAWSLLM
-from ..common_utils import BedrockError, ModelResponseIterator, get_bedrock_tool_name
-
-_response_stream_shape_cache = None
+from ..common_utils import (
+    BEDROCK_RESPONSE_STREAM_SHAPE,
+    BedrockError,
+    ModelResponseIterator,
+    get_bedrock_tool_name,
+)
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
 )
@@ -1391,18 +1394,6 @@ class BedrockLLM(BaseAWSLLM):
         return None
 
 
-def get_response_stream_shape():
-    global _response_stream_shape_cache
-    if _response_stream_shape_cache is None:
-        from botocore.loaders import Loader
-        from botocore.model import ServiceModel
-
-        loader = Loader()
-        bedrock_service_dict = loader.load_service_model("bedrock-runtime", "service-2")
-        bedrock_service_model = ServiceModel(bedrock_service_dict)
-        _response_stream_shape_cache = bedrock_service_model.shape_for("ResponseStream")
-
-    return _response_stream_shape_cache
 
 
 class AWSEventStreamDecoder:
@@ -1839,7 +1830,7 @@ class AWSEventStreamDecoder:
 
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, get_response_stream_shape())
+        parsed_response = self.parser.parse(response_dict, BEDROCK_RESPONSE_STREAM_SHAPE)
 
         if response_dict["status_code"] != 200:
             decoded_body = response_dict["body"].decode()
