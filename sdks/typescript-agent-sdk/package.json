@@ -1,0 +1,59 @@
+{
+  "name": "@litellm/agent-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for LiteLLM Agents — Agent → Session → Run hierarchy",
+  "license": "MIT",
+  "author": "BerriAI",
+  "homepage": "https://github.com/BerriAI/litellm/tree/main/sdks/typescript-agent-sdk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BerriAI/litellm.git",
+    "directory": "sdks/typescript-agent-sdk"
+  },
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"examples/**/*.ts\""
+  },
+  "dependencies": {
+    "eventsource-parser": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "msw": "^2.4.0",
+    "prettier": "^3.3.0",
+    "tsup": "^8.2.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  },
+  "keywords": [
+    "litellm",
+    "agent",
+    "sdk",
+    "ai",
+    "llm",
+    "session",
+    "cursor"
+  ]
+}
