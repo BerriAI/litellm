@@ -1,0 +1,23 @@
+{
+  "id": "providers/openai/responses_api",
+  "title": "OpenAI - Response API",
+  "description": "Usage",
+  "source": "@site/docs/providers/openai/responses_api.md",
+  "sourceDirName": "providers/openai",
+  "slug": "/providers/openai/responses_api",
+  "permalink": "/docs/providers/openai/responses_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "OpenAI",
+    "permalink": "/docs/providers/openai"
+  },
+  "next": {
+    "title": "OpenAI - Text-to-speech",
+    "permalink": "/docs/providers/openai/text_to_speech"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "search/serper",
+  "title": "Serper Search",
+  "description": "Get API Key//serper.dev",
+  "source": "@site/docs/search/serper.md",
+  "sourceDirName": "search",
+  "slug": "/search/serper",
+  "permalink": "/docs/search/serper",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Linkup Search",
+    "permalink": "/docs/search/linkup"
+  },
+  "next": {
+    "title": "/skills - Anthropic Skills API",
+    "permalink": "/docs/skills"
+  }
+}

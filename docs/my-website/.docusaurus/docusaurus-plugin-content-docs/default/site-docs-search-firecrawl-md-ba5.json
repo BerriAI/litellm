@@ -1,0 +1,23 @@
+{
+  "id": "search/firecrawl",
+  "title": "Firecrawl Search",
+  "description": "Get API Key//firecrawl.dev",
+  "source": "@site/docs/search/firecrawl.md",
+  "sourceDirName": "search",
+  "slug": "/search/firecrawl",
+  "permalink": "/docs/search/firecrawl",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "DataForSEO Search",
+    "permalink": "/docs/search/dataforseo"
+  },
+  "next": {
+    "title": "SearXNG Search",
+    "permalink": "/docs/search/searxng"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/msft_sso",
+  "title": "Microsoft SSO: Sync Groups, Members with LiteLLM",
+  "description": "Sync Microsoft SSO Groups, Members with LiteLLM Teams.",
+  "source": "@site/docs/tutorials/msft_sso.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/msft_sso",
+  "permalink": "/docs/tutorials/msft_sso",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Onboard Users for AI Exploration",
+    "permalink": "/docs/tutorials/default_team_self_serve"
+  },
+  "next": {
+    "title": "SCIM with LiteLLM",
+    "permalink": "/docs/tutorials/scim_litellm"
+  }
+}

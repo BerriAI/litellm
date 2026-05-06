@@ -1,0 +1,76 @@
+{
+  "permalink": "/blog/httpx-cache-eviction-incident",
+  "source": "@site/blog/httpx_cache_eviction_incident/index.md",
+  "title": "Incident Report: Cache Eviction Closes In-Use httpx Clients",
+  "description": "Date: February 27, 2026",
+  "date": "2026-02-27T10:00:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "incident-report",
+      "permalink": "/blog/tags/incident-report"
+    },
+    {
+      "inline": true,
+      "label": "caching",
+      "permalink": "/blog/tags/caching"
+    },
+    {
+      "inline": true,
+      "label": "stability",
+      "permalink": "/blog/tags/stability"
+    }
+  ],
+  "hasTruncateMarker": true,
+  "authors": [
+    {
+      "name": "Ryan Crabbe",
+      "title": "Performance Engineer, LiteLLM",
+      "url": "https://www.linkedin.com/in/ryan-crabbe-0b9687214",
+      "imageURL": "https://media.licdn.com/dms/image/v2/D5603AQHt1t9Z4BJ6Gw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1724453682340?e=1772064000&v=beta&t=VXdmr13rsNB05wyA2F1TENOB5UuDHUZ0FCHTolNyR5M",
+      "key": "ryan",
+      "page": null
+    },
+    {
+      "name": "Ishaan Jaff",
+      "title": "CTO, LiteLLM",
+      "url": "https://www.linkedin.com/in/reffajnaahsi/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg",
+      "key": "ishaan-alt",
+      "page": null
+    },
+    {
+      "name": "Krrish Dholakia",
+      "title": "CEO, LiteLLM",
+      "url": "https://www.linkedin.com/in/krish-d/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg",
+      "key": "krrish",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "httpx-cache-eviction-incident",
+    "title": "Incident Report: Cache Eviction Closes In-Use httpx Clients",
+    "date": "2026-02-27T10:00:00.000Z",
+    "authors": [
+      "ryan",
+      "ishaan-alt",
+      "krrish"
+    ],
+    "tags": [
+      "incident-report",
+      "caching",
+      "stability"
+    ],
+    "hide_table_of_contents": false
+  },
+  "unlisted": false,
+  "prevItem": {
+    "title": "DAY 0 Support: Gemini 3.1 Flash Lite Preview on LiteLLM",
+    "permalink": "/blog/gemini_3_1_flash_lite_preview"
+  },
+  "nextItem": {
+    "title": "Day 0 Support: GPT-5.3-Codex",
+    "permalink": "/blog/gpt_5_3_codex"
+  }
+}

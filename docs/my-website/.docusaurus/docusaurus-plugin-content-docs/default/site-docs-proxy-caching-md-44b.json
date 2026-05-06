@@ -1,0 +1,23 @@
+{
+  "id": "proxy/caching",
+  "title": "Caching",
+  "description": "For OpenAI/Anthropic Prompt Caching, go here",
+  "source": "@site/docs/proxy/caching.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/caching",
+  "permalink": "/docs/proxy/caching",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Budget Reset Times and Timezones",
+    "permalink": "/docs/proxy/budget_reset_and_tz"
+  },
+  "next": {
+    "title": "Guardrails - Quick Start",
+    "permalink": "/docs/proxy/guardrails/quick_start"
+  }
+}

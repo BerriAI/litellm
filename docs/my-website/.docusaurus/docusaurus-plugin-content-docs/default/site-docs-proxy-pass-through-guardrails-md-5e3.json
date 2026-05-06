@@ -1,0 +1,23 @@
+{
+  "id": "proxy/pass_through_guardrails",
+  "title": "Guardrails on Pass-Through Endpoints",
+  "description": "Overview",
+  "source": "@site/docs/proxy/pass_through_guardrails.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/pass_through_guardrails",
+  "permalink": "/docs/proxy/pass_through_guardrails",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Create Pass Through Endpoints",
+    "permalink": "/docs/proxy/pass_through"
+  },
+  "next": {
+    "title": "/rag/ingest",
+    "permalink": "/docs/rag_ingest"
+  }
+}

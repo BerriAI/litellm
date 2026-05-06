@@ -1,0 +1,23 @@
+{
+  "id": "observability/logfire_integration",
+  "title": "Logfire",
+  "description": "Logfire is open Source Observability & Analytics for LLM Apps",
+  "source": "@site/docs/observability/logfire_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/logfire_integration",
+  "permalink": "/docs/observability/logfire_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Literal AI - Log, Evaluate, Monitor",
+    "permalink": "/docs/observability/literalai_integration"
+  },
+  "next": {
+    "title": "🌙 Lunary - GenAI Observability",
+    "permalink": "/docs/observability/lunary_integration"
+  }
+}

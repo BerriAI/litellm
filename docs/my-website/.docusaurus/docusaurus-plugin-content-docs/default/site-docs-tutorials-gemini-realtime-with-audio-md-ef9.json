@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/gemini_realtime_with_audio",
+  "title": "Call Gemini Realtime API with Audio Input/Output",
+  "description": "Requires LiteLLM Proxy v1.70.1+",
+  "source": "@site/docs/tutorials/gemini_realtime_with_audio.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/gemini_realtime_with_audio",
+  "permalink": "/docs/tutorials/gemini_realtime_with_audio",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Using Anthropic File API with LiteLLM Proxy",
+    "permalink": "/docs/tutorials/anthropic_file_usage"
+  },
+  "next": {
+    "title": "Aporia Guardrails with LiteLLM Gateway",
+    "permalink": "/docs/tutorials/litellm_proxy_aporia"
+  }
+}

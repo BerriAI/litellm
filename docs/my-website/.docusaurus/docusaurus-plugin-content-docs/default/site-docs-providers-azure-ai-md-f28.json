@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure_ai",
+  "title": "Azure AI Studio",
+  "description": "LiteLLM supports all models on Azure AI Studio",
+  "source": "@site/docs/providers/azure_ai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/azure_ai",
+  "permalink": "/docs/providers/azure_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure Video Generation",
+    "permalink": "/docs/providers/azure/videos"
+  },
+  "next": {
+    "title": "Azure Model Router",
+    "permalink": "/docs/providers/azure_ai/azure_model_router"
+  }
+}

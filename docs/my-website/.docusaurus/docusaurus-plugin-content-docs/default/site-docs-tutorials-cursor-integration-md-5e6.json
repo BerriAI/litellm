@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/cursor_integration",
+  "title": "Cursor Integration",
+  "description": "Route Cursor IDE requests through LiteLLM for unified logging, budget controls, and access to any model.",
+  "source": "@site/docs/tutorials/cursor_integration.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/cursor_integration",
+  "permalink": "/docs/tutorials/cursor_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "OpenClaw",
+    "permalink": "/docs/tutorials/openclaw_integration"
+  },
+  "next": {
+    "title": "GitHub Copilot",
+    "permalink": "/docs/tutorials/github_copilot_integration"
+  }
+}

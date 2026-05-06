@@ -1,0 +1,42 @@
+{
+  "id": "v1.81.9/index",
+  "title": "v1.81.9 - Control which MCP Servers are exposed on the Internet",
+  "description": "For each stable release, we now maintain a dedicated branch with the format litellmstablereleasebranchxxxxx for the version.",
+  "source": "@site/release_notes/v1.81.9/index.md",
+  "sourceDirName": "v1.81.9",
+  "slug": "/v1.81.9/v1-81-9",
+  "permalink": "/release_notes/v1.81.9/v1-81-9",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "v1.81.9 - Control which MCP Servers are exposed on the Internet",
+    "slug": "v1-81-9",
+    "date": "2026-02-07T00:00:00.000Z",
+    "authors": [
+      {
+        "name": "Krrish Dholakia",
+        "title": "CEO, LiteLLM",
+        "url": "https://www.linkedin.com/in/krish-d/",
+        "image_url": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg"
+      },
+      {
+        "name": "Ishaan Jaff",
+        "title": "CTO, LiteLLM",
+        "url": "https://www.linkedin.com/in/reffajnaahsi/",
+        "image_url": "https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg"
+      }
+    ],
+    "hide_table_of_contents": false
+  },
+  "sidebar": "releaseNotesSidebar",
+  "previous": {
+    "title": "v1.81.12",
+    "permalink": "/release_notes/v1.81.12/v1-81-12"
+  },
+  "next": {
+    "title": "v1.81.6",
+    "permalink": "/release_notes/v1.81.6/v1-81-6"
+  }
+}

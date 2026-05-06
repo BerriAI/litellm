@@ -1,0 +1,23 @@
+{
+  "id": "proxy/docker_quick_start",
+  "title": "Getting Started Tutorial",
+  "description": "End-to-End tutorial for LiteLLM Proxy to:",
+  "source": "@site/docs/proxy/docker_quick_start.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/docker_quick_start",
+  "permalink": "/docs/proxy/docker_quick_start",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "LiteLLM AI Gateway (Proxy)",
+    "permalink": "/docs/simple_proxy"
+  },
+  "next": {
+    "title": "Agent Gateway (A2A Protocol) - Overview",
+    "permalink": "/docs/a2a"
+  }
+}

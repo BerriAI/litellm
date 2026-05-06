@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/cursor",
+  "title": "Cursor Cloud Agents",
+  "description": "Pass-through endpoints for the Cursor Cloud Agents API — launch and manage cloud agents that work on your repositories, in native format (no translation).",
+  "source": "@site/docs/pass_through/cursor.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/cursor",
+  "permalink": "/docs/pass_through/cursor",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Cohere SDK",
+    "permalink": "/docs/pass_through/cohere"
+  },
+  "next": {
+    "title": "Google AI Studio SDK",
+    "permalink": "/docs/pass_through/google_ai_studio"
+  }
+}

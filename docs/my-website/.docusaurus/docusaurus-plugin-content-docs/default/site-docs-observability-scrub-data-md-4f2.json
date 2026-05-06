@@ -1,0 +1,23 @@
+{
+  "id": "observability/scrub_data",
+  "title": "Scrub Logged Data",
+  "description": "Redact messages / mask PII before sending data to logging integrations (langfuse/etc.).",
+  "source": "@site/docs/observability/scrub_data.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/scrub_data",
+  "permalink": "/docs/observability/scrub_data",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Raw Request/Response Logging",
+    "permalink": "/docs/observability/raw_request_response"
+  },
+  "next": {
+    "title": "Sentry - Log LLM Exceptions",
+    "permalink": "/docs/observability/sentry"
+  }
+}

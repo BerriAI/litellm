@@ -1,0 +1,23 @@
+{
+  "id": "providers/watsonx/index",
+  "title": "IBM watsonx.ai",
+  "description": "LiteLLM supports all IBM watsonx.ai foundational models and embeddings.",
+  "source": "@site/docs/providers/watsonx/index.md",
+  "sourceDirName": "providers/watsonx",
+  "slug": "/providers/watsonx/",
+  "permalink": "/docs/providers/watsonx/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Weights & Biases Inference",
+    "permalink": "/docs/providers/wandb_inference"
+  },
+  "next": {
+    "title": "WatsonX Audio Transcription",
+    "permalink": "/docs/providers/watsonx/audio_transcription"
+  }
+}

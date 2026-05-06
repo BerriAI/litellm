@@ -1,0 +1,23 @@
+{
+  "id": "anthropic_unified/structured_output",
+  "title": "Structured Output /v1/messages",
+  "description": "Use LiteLLM to call Anthropic's structured output feature via the /v1/messages endpoint.",
+  "source": "@site/docs/anthropic_unified/structured_output.md",
+  "sourceDirName": "anthropic_unified",
+  "slug": "/anthropic_unified/structured_output",
+  "permalink": "/docs/anthropic_unified/structured_output",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/v1/messages",
+    "permalink": "/docs/anthropic_unified/"
+  },
+  "next": {
+    "title": "v1/messages → /responses Parameter Mapping",
+    "permalink": "/docs/anthropic_unified/messages_to_responses_mapping"
+  }
+}

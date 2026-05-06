@@ -1,0 +1,23 @@
+{
+  "id": "proxy/request_headers",
+  "title": "Request Headers",
+  "description": "Special headers that are supported by LiteLLM.",
+  "source": "@site/docs/proxy/request_headers.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/request_headers",
+  "permalink": "/docs/proxy/request_headers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Clientside LLM Credentials",
+    "permalink": "/docs/proxy/clientside_auth"
+  },
+  "next": {
+    "title": "Response Headers",
+    "permalink": "/docs/proxy/response_headers"
+  }
+}

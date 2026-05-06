@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_partner",
+  "title": "Vertex AI - Anthropic, DeepSeek, Model Garden",
+  "description": "Supported Partner Providers",
+  "source": "@site/docs/providers/vertex_partner.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex_partner",
+  "permalink": "/docs/providers/vertex_partner",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI Video Generation (Veo)",
+    "permalink": "/docs/providers/vertex_ai/videos"
+  },
+  "next": {
+    "title": "Vertex AI - Self Deployed Models",
+    "permalink": "/docs/providers/vertex_self_deployed"
+  }
+}

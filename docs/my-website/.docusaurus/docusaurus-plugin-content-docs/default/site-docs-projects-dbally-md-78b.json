@@ -1,0 +1,23 @@
+{
+  "id": "projects/dbally",
+  "title": "dbally",
+  "description": "Efficient, consistent and secure library for querying structured data with natural language. Query any database with over 100 LLMs ❤️ 🚅.",
+  "source": "@site/docs/projects/dbally.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/dbally",
+  "permalink": "/docs/projects/dbally",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "🐕 Elroy",
+    "permalink": "/docs/projects/Elroy"
+  },
+  "next": {
+    "title": "FastREPL",
+    "permalink": "/docs/projects/FastREPL"
+  }
+}

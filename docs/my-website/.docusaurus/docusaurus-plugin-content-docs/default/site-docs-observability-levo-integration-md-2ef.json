@@ -1,0 +1,25 @@
+{
+  "id": "observability/levo_integration",
+  "title": "Levo AI",
+  "description": "Levo is an AI observability and compliance platform that provides comprehensive monitoring, analysis, and compliance tracking for LLM applications.",
+  "source": "@site/docs/observability/levo_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/levo_integration",
+  "permalink": "/docs/observability/levo_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "sidebar_label": "Levo AI"
+  },
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Langtrace AI",
+    "permalink": "/docs/observability/langtrace_integration"
+  },
+  "next": {
+    "title": "Literal AI - Log, Evaluate, Monitor",
+    "permalink": "/docs/observability/literalai_integration"
+  }
+}

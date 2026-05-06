@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/google_ai_studio",
+  "title": "Google AI Studio SDK",
+  "description": "Pass-through endpoints for Google AI Studio - call provider-specific endpoint, in native format (no translation).",
+  "source": "@site/docs/pass_through/google_ai_studio.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/google_ai_studio",
+  "permalink": "/docs/pass_through/google_ai_studio",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Cursor Cloud Agents",
+    "permalink": "/docs/pass_through/cursor"
+  },
+  "next": {
+    "title": "Langfuse SDK",
+    "permalink": "/docs/pass_through/langfuse"
+  }
+}

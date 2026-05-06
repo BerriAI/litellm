@@ -1,0 +1,23 @@
+{
+  "id": "data_security",
+  "title": "Data Privacy and Security",
+  "description": "At LiteLLM, safeguarding your data privacy and security is our top priority. We recognize the critical importance of the data you share with us and handle it with the highest level of diligence.",
+  "source": "@site/docs/data_security.md",
+  "sourceDirName": ".",
+  "slug": "/data_security",
+  "permalink": "/docs/data_security",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Migration Guide - LiteLLM v1.0.0+",
+    "permalink": "/docs/migration"
+  },
+  "next": {
+    "title": "Data Retention Policy",
+    "permalink": "/docs/data_retention"
+  }
+}

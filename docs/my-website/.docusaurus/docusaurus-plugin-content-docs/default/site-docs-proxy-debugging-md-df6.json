@@ -1,0 +1,23 @@
+{
+  "id": "proxy/debugging",
+  "title": "Debugging",
+  "description": "2 levels of debugging supported.",
+  "source": "@site/docs/proxy/debugging.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/debugging",
+  "permalink": "/docs/proxy/debugging",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "CLI Arguments",
+    "permalink": "/docs/proxy/cli"
+  },
+  "next": {
+    "title": "Diagnosing Errors - Provider vs Gateway",
+    "permalink": "/docs/proxy/error_diagnosis"
+  }
+}

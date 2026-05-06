@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/lakera_ai",
+  "title": "Lakera AI",
+  "description": "Supported endpoints: The Lakera v2 integration only supports the chat completions endpoint (/v1/chat/completions). It is not supported for the Responses API, /v1/messages, MCP, A2A, or other proxy endpoints.",
+  "source": "@site/docs/proxy/guardrails/lakera_ai.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/lakera_ai",
+  "permalink": "/docs/proxy/guardrails/lakera_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Javelin Guardrails",
+    "permalink": "/docs/proxy/guardrails/javelin"
+  },
+  "next": {
+    "title": "Lasso Security",
+    "permalink": "/docs/proxy/guardrails/lasso_security"
+  }
+}

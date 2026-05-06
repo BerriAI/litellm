@@ -1,0 +1,23 @@
+{
+  "id": "providers/perplexity_embedding",
+  "title": "Perplexity Embeddings",
+  "description": "https://docs.perplexity.ai/docs/embeddings/quickstart",
+  "source": "@site/docs/providers/perplexity_embedding.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/perplexity_embedding",
+  "permalink": "/docs/providers/perplexity_embedding",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Perplexity AI (pplx-api)",
+    "permalink": "/docs/providers/perplexity"
+  },
+  "next": {
+    "title": "Petals",
+    "permalink": "/docs/providers/petals"
+  }
+}

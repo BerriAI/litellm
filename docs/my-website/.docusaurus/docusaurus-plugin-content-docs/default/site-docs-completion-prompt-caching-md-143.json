@@ -1,0 +1,23 @@
+{
+  "id": "completion/prompt_caching",
+  "title": "Prompt Caching",
+  "description": "Supported Providers:",
+  "source": "@site/docs/completion/prompt_caching.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/prompt_caching",
+  "permalink": "/docs/completion/prompt_caching",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Trimming Input Messages",
+    "permalink": "/docs/completion/message_trimming"
+  },
+  "next": {
+    "title": "Prompt Formatting",
+    "permalink": "/docs/completion/prompt_formatting"
+  }
+}

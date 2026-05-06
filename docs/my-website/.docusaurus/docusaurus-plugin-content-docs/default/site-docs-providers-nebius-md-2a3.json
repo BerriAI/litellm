@@ -1,0 +1,23 @@
+{
+  "id": "providers/nebius",
+  "title": "Nebius AI Studio",
+  "description": "https://docs.nebius.com/studio/inference/quickstart",
+  "source": "@site/docs/providers/nebius.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/nebius",
+  "permalink": "/docs/providers/nebius",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Morph",
+    "permalink": "/docs/providers/morph"
+  },
+  "next": {
+    "title": "NLP Cloud",
+    "permalink": "/docs/providers/nlp_cloud"
+  }
+}

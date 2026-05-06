@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/",
+  "source": "@site/src/pages/index.md",
+  "title": "LiteLLM - Getting Started",
+  "description": "https://github.com/BerriAI/litellm",
+  "frontMatter": {},
+  "unlisted": false
+}

@@ -1,0 +1,23 @@
+{
+  "id": "extras/code_quality",
+  "title": "Code Quality",
+  "description": "🚅 LiteLLM follows the Google Python Style Guide.",
+  "source": "@site/docs/extras/code_quality.md",
+  "sourceDirName": "extras",
+  "slug": "/extras/code_quality",
+  "permalink": "/docs/extras/code_quality",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Railtracks",
+    "permalink": "/docs/projects/Railtracks"
+  },
+  "next": {
+    "title": "Rules",
+    "permalink": "/docs/rules"
+  }
+}

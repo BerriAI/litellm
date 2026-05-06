@@ -1,0 +1,23 @@
+{
+  "id": "providers/scaleway",
+  "title": "Scaleway",
+  "description": "LiteLLM supports all models available on Scaleway Generative APIs ↗.",
+  "source": "@site/docs/providers/scaleway.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/scaleway",
+  "permalink": "/docs/providers/scaleway",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "SAP Generative AI Hub",
+    "permalink": "/docs/providers/sap"
+  },
+  "next": {
+    "title": "Stability AI",
+    "permalink": "/docs/providers/stability"
+  }
+}

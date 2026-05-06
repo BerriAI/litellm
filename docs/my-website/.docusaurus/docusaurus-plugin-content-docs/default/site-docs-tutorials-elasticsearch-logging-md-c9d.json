@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/elasticsearch_logging",
+  "title": "Elasticsearch Logging with LiteLLM",
+  "description": "Send your LLM requests, responses, costs, and performance data to Elasticsearch for analytics and monitoring using OpenTelemetry.",
+  "source": "@site/docs/tutorials/elasticsearch_logging.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/elasticsearch_logging",
+  "permalink": "/docs/tutorials/elasticsearch_logging",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Observability & Evaluation",
+    "permalink": "/docs/tutorials/observability_evaluation"
+  },
+  "next": {
+    "title": "Benchmark LLMs",
+    "permalink": "/docs/tutorials/compare_llms"
+  }
+}

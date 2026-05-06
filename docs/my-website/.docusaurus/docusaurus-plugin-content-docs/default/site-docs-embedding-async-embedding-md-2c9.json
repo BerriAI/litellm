@@ -1,0 +1,14 @@
+{
+  "id": "embedding/async_embedding",
+  "title": "litellm.aembedding()",
+  "description": "LiteLLM provides an asynchronous version of the embedding function called aembedding",
+  "source": "@site/docs/embedding/async_embedding.md",
+  "sourceDirName": "embedding",
+  "slug": "/embedding/async_embedding",
+  "permalink": "/docs/embedding/async_embedding",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

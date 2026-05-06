@@ -1,0 +1,23 @@
+{
+  "id": "proxy/sync_models_github",
+  "title": "Auto Sync New Models (Day-0 Launches)",
+  "description": "Automatically keep your model pricing and context window data up to date without restarting your service. This allows you to add day-0 support for new models without restarting your service.",
+  "source": "@site/docs/proxy/sync_models_github.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/sync_models_github",
+  "permalink": "/docs/proxy/sync_models_github",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Provider Discounts",
+    "permalink": "/docs/proxy/provider_discounts"
+  },
+  "next": {
+    "title": "Billing",
+    "permalink": "/docs/proxy/billing"
+  }
+}

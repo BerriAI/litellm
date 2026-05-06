@@ -1,0 +1,23 @@
+{
+  "id": "providers/xai",
+  "title": "xAI",
+  "description": "https://docs.x.ai/docs",
+  "source": "@site/docs/providers/xai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/xai",
+  "permalink": "/docs/providers/xai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "WatsonX Audio Transcription",
+    "permalink": "/docs/providers/watsonx/audio_transcription"
+  },
+  "next": {
+    "title": "xAI Voice Agent (Realtime API)",
+    "permalink": "/docs/providers/xai_realtime"
+  }
+}

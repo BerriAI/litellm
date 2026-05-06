@@ -1,0 +1,23 @@
+{
+  "id": "providers/llamafile",
+  "title": "Llamafile",
+  "description": "LiteLLM supports all models on Llamafile.",
+  "source": "@site/docs/providers/llamafile.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/llamafile",
+  "permalink": "/docs/providers/llamafile",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Lemonade",
+    "permalink": "/docs/providers/lemonade"
+  },
+  "next": {
+    "title": "LlamaGate",
+    "permalink": "/docs/providers/llamagate"
+  }
+}

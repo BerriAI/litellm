@@ -1,0 +1,23 @@
+{
+  "id": "vector_stores/search",
+  "title": "/vector_stores/search - Search Vector Store",
+  "description": "Search a vector store for relevant chunks based on a query and file attributes filter. This is useful for retrieval-augmented generation (RAG) use cases.",
+  "source": "@site/docs/vector_stores/search.md",
+  "sourceDirName": "vector_stores",
+  "slug": "/vector_stores/search",
+  "permalink": "/docs/vector_stores/search",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/vector_stores - Create Vector Store",
+    "permalink": "/docs/vector_stores/create"
+  },
+  "next": {
+    "title": "MCP Overview",
+    "permalink": "/docs/mcp"
+  }
+}

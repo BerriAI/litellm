@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/completion/input",
+  "source": "@site/src/pages/completion/input.md",
+  "title": "Completion Function - completion()",
+  "description": "The Input params are exactly the same as the",
+  "frontMatter": {},
+  "unlisted": false
+}

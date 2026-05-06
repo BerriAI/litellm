@@ -1,0 +1,23 @@
+{
+  "id": "observability/azure_sentinel",
+  "title": "Azure Sentinel",
+  "description": "LiteLLM supports logging to Azure Sentinel via the Azure Monitor Logs Ingestion API. Azure Sentinel uses Log Analytics workspaces for data storage, so logs sent to the workspace will be available in Sentinel for security monitoring and analysis.",
+  "source": "@site/docs/observability/azure_sentinel.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/azure_sentinel",
+  "permalink": "/docs/observability/azure_sentinel",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Athina",
+    "permalink": "/docs/observability/athina_integration"
+  },
+  "next": {
+    "title": "Braintrust - Evals + Logging",
+    "permalink": "/docs/observability/braintrust"
+  }
+}

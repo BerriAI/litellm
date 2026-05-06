@@ -1,0 +1,23 @@
+{
+  "id": "proxy/project_management",
+  "title": "[Beta] Project Management",
+  "description": "Projects in LiteLLM sit between teams and keys in the organizational hierarchy, enabling fine-grained access control and budget management for specific use cases or applications.",
+  "source": "@site/docs/proxy/project_management.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/project_management",
+  "permalink": "/docs/proxy/project_management",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Setting Team Budgets",
+    "permalink": "/docs/proxy/team_budgets"
+  },
+  "next": {
+    "title": "Team Soft Budget Alerts",
+    "permalink": "/docs/proxy/ui_team_soft_budget_alerts"
+  }
+}

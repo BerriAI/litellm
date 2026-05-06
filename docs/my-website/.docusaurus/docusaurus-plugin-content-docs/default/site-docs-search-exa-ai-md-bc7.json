@@ -1,0 +1,23 @@
+{
+  "id": "search/exa_ai",
+  "title": "Exa AI Search",
+  "description": "Get API Key//exa.ai",
+  "source": "@site/docs/search/exa_ai.md",
+  "sourceDirName": "search",
+  "slug": "/search/exa_ai",
+  "permalink": "/docs/search/exa_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Tavily Search",
+    "permalink": "/docs/search/tavily"
+  },
+  "next": {
+    "title": "Brave Search",
+    "permalink": "/docs/search/brave"
+  }
+}

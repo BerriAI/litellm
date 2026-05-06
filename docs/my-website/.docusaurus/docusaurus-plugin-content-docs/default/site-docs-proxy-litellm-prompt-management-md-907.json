@@ -1,0 +1,23 @@
+{
+  "id": "proxy/litellm_prompt_management",
+  "title": "LiteLLM AI Gateway Prompt Management",
+  "description": "Use the LiteLLM AI Gateway to create, manage and version your prompts.",
+  "source": "@site/docs/proxy/litellm_prompt_management.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/litellm_prompt_management",
+  "permalink": "/docs/proxy/litellm_prompt_management",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "[BETA] Generic Prompt Management API - Integrate Without a PR",
+    "permalink": "/docs/adding_provider/generic_prompt_management_api"
+  },
+  "next": {
+    "title": "Custom Prompt Management",
+    "permalink": "/docs/proxy/custom_prompt_management"
+  }
+}

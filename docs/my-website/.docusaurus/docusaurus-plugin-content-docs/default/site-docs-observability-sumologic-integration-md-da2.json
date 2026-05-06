@@ -1,0 +1,23 @@
+{
+  "id": "observability/sumologic_integration",
+  "title": "Sumo Logic",
+  "description": "Send LiteLLM logs to Sumo Logic for observability, monitoring, and analysis.",
+  "source": "@site/docs/observability/sumologic_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/sumologic_integration",
+  "permalink": "/docs/observability/sumologic_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Slack - Logging LLM Input/Output, Exceptions",
+    "permalink": "/docs/observability/slack_integration"
+  },
+  "next": {
+    "title": "Supabase Tutorial",
+    "permalink": "/docs/observability/supabase_integration"
+  }
+}

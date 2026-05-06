@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-release-notes docs-version-current docs-doc-page docs-doc-id-v1.70.1-stable/index" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.8.1">
+<title data-rh="true">v1.70.1-stable - Gemini Realtime API Support | liteLLM</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" name="twitter:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" property="og:url" content="https://docs.litellm.ai/release_notes/v1.70.1-stable/v1.70.1-stable"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-release-notes-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-release-notes-current"><meta data-rh="true" property="og:title" content="v1.70.1-stable - Gemini Realtime API Support | liteLLM"><meta data-rh="true" name="description" content="Deploy this version"><meta data-rh="true" property="og:description" content="Deploy this version"><link data-rh="true" rel="icon" href="/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://docs.litellm.ai/release_notes/v1.70.1-stable/v1.70.1-stable"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/release_notes/v1.70.1-stable/v1.70.1-stable" hreflang="en"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/release_notes/v1.70.1-stable/v1.70.1-stable" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"v1.70.1-stable","item":"https://docs.litellm.ai/release_notes/v1.70.1-stable/v1.70.1-stable"}]}</script><link rel="preconnect" href="https://www.google-analytics.com">
+<link rel="preconnect" href="https://www.googletagmanager.com">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-K7K215ZVNC"></script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],gtag("js",new Date),gtag("config","G-K7K215ZVNC",{anonymize_ip:!0})</script>
+
+
+
+
+
+
+<link rel="alternate" type="application/rss+xml" href="/blog/rss.xml" title="liteLLM RSS Feed">
+<link rel="alternate" type="application/atom+xml" href="/blog/atom.xml" title="liteLLM Atom Feed">
+<script>window.$crisp=[],window.CRISP_WEBSITE_ID="be07a4d6-dba0-4df7-961d-9302c86b7ebc",d=document,s=d.createElement("script"),s.src="https://client.crisp.chat/l.js",s.async=1,d.getElementsByTagName("head")[0].appendChild(s)</script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],window.gtag||(window.gtag=gtag)</script>
+
+<script async src="https://www.feedbackrocket.io/sdk/v1.2.js" data-fr-id="GQwepB0f0L-x_ZH63kR_V" data-fr-theme="dynamic"></script><link rel="stylesheet" href="/assets/css/styles.f56ea1ab.css">
+<script src="/assets/js/runtime~main.b9bf1bac.js" defer="defer"></script>
+<script src="/assets/js/main.028e115a.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="navbar__brand-col"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/"><b class="navbar__title text--truncate">🚅 LiteLLM</b></a></div><div class="navbar__center-col"><a class="navbar__item navbar__link" href="/docs/">Docs</a><a class="navbar__item navbar__link" href="/docs/learn">Learn</a><a class="navbar__item navbar__link" href="/docs/integrations/">Integrations</a><a class="navbar__item navbar__link" href="/docs/enterprise">Enterprise</a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/release_notes">Changelog</a><a class="navbar__item navbar__link" href="/blog">Blog</a></div><div class="navbar__right-col"><a href="https://github.com/BerriAI/litellm" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-github-link" aria-label="GitHub repository"></a><a href="https://www.litellm.ai/support" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-discord-link" aria-label="Discord / Slack community"></a><div class="navbarSearchContainer_Bca1"><div id="inkeep-shadowradix-:Rtr5a5:" style="display:contents"></div><span></span></div><div class="toggle_vylO"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebarContainer_YAFp"><div class="searchBarContainer_wiet"><div id="inkeep-shadowradix-:R5aqlda5:" style="display:contents"></div><span></span></div><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/release_notes/">Overview</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="true" href="/release_notes/v1.83.3/v1-83-3-rc-1">2026</a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.83.3/v1-83-3-rc-1">v1.83.3</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.83.0/v1-83-0">v1.83.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.82.3/v1-82-3">v1.82.3</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.82.0/v1-82-0">v1.82.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.14/v1-81-14">v1.81.14</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.12/v1-81-12">v1.81.12</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.9/v1-81-9">v1.81.9</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.6/v1-81-6">v1.81.6</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.3-stable/v1-81-3">v1.81.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.0/v1-81-0">v1.81.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.15/v1-80-15">v1.80.15</a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/release_notes/v1.80.11-stable/v1-80-11">2025</a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.11-stable/v1-80-11">v1.80.11-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.10-stable/v1-80-10">v1.80.10-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.8-stable/v1-80-8">v1.80.8-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.5-stable/v1-80-5">v1.80.5-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.0-stable/v1-80-0">v1.80.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.79.3-stable/v1-79-3">v1.79.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.79.1-stable/v1-79-1">v1.79.1-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.79.0-stable/v1-79-0">v1.79.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.78.5-stable/v1-78-5">v1.78.5-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.78.0-stable/v1-78-0">v1.78.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.77.7-stable/v1-77-7">v1.77.7-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.77.5-stable/v1-77-5">v1.77.5-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.77.3-stable/v1-77-3">v1.77.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.77.2-stable/v1-77-2">v1.77.2-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.76.3-stable/v1-76-3">v1.76.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.76.1-stable/v1-76-1">v1.76.1-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.76.0-stable/v1-76-0">v1.76.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.75.8/v1-75-8">v1.75.8</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.75.5-stable/v1-75-5">v1.75.5-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.15-stable/v1-74-15">v1.74.15-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.9-stable/v1-74-9">v1.74.9-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.7/v1-74-7">v1.74.7</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.3-stable/v1-74-3-stable">v1.74.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.0-stable/v1-74-0-stable">v1.74.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.73.6-stable/v1-73-6-stable">v1.73.6-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.73.0-stable/v1-73-0-stable">v1.73.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.72.6-stable/v1-72-6-stable">v1.72.6-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.72.2-stable/v1-72-2-stable">v1.72.2-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.72.0-stable/v1-72-0-stable">v1.72.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.71.1-stable/v1.71.1-stable">v1.71.1-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/release_notes/v1.70.1-stable/v1.70.1-stable">v1.70.1-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.69.0-stable/v1.69.0-stable">v1.69.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.68.0-stable/v1.68.0-stable">v1.68.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.67.4-stable/v1.67.4-stable">v1.67.4-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.67.0-stable/v1.67.0-stable">v1.67.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.66.0-stable/v1.66.0-stable">v1.66.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.65.4-stable/v1.65.4-stable">v1.65.4-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.65.0/v1.65.0">v1.65.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.65.0-stable/v1.65.0-stable">v1.65.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.63.14/v1.63.14-stable">v1.63.14</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.63.11-stable/v1.63.11-stable">v1.63.11-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.63.2-stable/v1.63.2-stable">v1.63.2-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.63.0/v1.63.0">v1.63.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.61.20-stable/v1.61.20-stable">v1.61.20-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.59.8-stable/v1.59.8-stable">v1.59.8-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.59.0/v1.59.0">v1.59.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.57.8-stable/v1.57.8-stable">v1.57.8-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.57.7/v1.57.7">v1.57.7</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.57.3/v1.57.3">v1.57.3</a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/release_notes/v1.56.4/v1.56.4">2024</a></div></li></ul></nav></div></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">2025</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">v1.70.1-stable</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>v1.70.1-stable - Gemini Realtime API Support</h1></header><h2 class="anchor anchorWithStickyNavbar_LWe7" id="deploy-this-version">Deploy this version<a href="#deploy-this-version" class="hash-link" aria-label="Direct link to Deploy this version" title="Direct link to Deploy this version">​</a></h2>
+<div class="tabs-container tabList__CuJ"><ul role="tablist" aria-orientation="horizontal" class="tabs"><li role="tab" tabindex="0" aria-selected="true" class="tabs__item tabItem_LNqP tabs__item--active">Docker</li><li role="tab" tabindex="-1" aria-selected="false" class="tabs__item tabItem_LNqP">Pip</li></ul><div class="margin-top--md"><div role="tabpanel" class="tabItem_Ymn6"><div class="language-showLineNumbers language-showlinenumbers codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockTitle_OeMC">docker run litellm</div><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-showlinenumbers codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">docker run</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">-e STORE_MODEL_IN_DB=True</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">-p 4000:4000</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">docker.litellm.ai/berriai/litellm:main-v1.70.1-stable</span><br></span></code></pre></div></div></div><div role="tabpanel" class="tabItem_Ymn6" hidden=""><div class="language-showLineNumbers language-showlinenumbers codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockTitle_OeMC">pip install litellm</div><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-showlinenumbers codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">pip install litellm==1.70.1</span><br></span></code></pre></div></div></div></div></div>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="key-highlights">Key Highlights<a href="#key-highlights" class="hash-link" aria-label="Direct link to Key Highlights" title="Direct link to Key Highlights">​</a></h2>
+<p>LiteLLM v1.70.1-stable is live now. Here are the key highlights of this release:</p>
+<ul>
+<li><strong>Gemini Realtime API</strong>: You can now call Gemini&#x27;s Live API via the OpenAI /v1/realtime API</li>
+<li><strong>Spend Logs Retention Period</strong>: Enable deleting spend logs older than a certain period.</li>
+<li><strong>PII Masking 2.0</strong>: Easily configure masking or blocking specific PII/PHI entities on the UI</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="gemini-realtime-api">Gemini Realtime API<a href="#gemini-realtime-api" class="hash-link" aria-label="Direct link to Gemini Realtime API" title="Direct link to Gemini Realtime API">​</a></h2>
+<div style="background-size:cover;background-repeat:no-repeat;position:relative;background-image:url(&quot;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAFCAYAAAB8ZH1oAAAACXBIWXMAACxLAAAsSwGlPZapAAAAeklEQVR4nE3OQQ7DIBBDUe5/w2THJjsIqcQwM0B+RSO1tfSWlh1SSiw5Z67rwt0wU8wc958QY2Tfd7Zt4zgOqgjlPKml4K3RVelmhDEGy5yTOQeqhoox3Rm9w31/BLM19VgTIsIrJ0pK1Fq5eRL+fyyroKq01pDWvh/fM1XB5441ajkAAAAASUVORK5CYII=&quot;)"><svg style="width:100%;height:auto;max-width:100%;margin-bottom:-4px" width="640" height="334"></svg><noscript><img style="width:100%;height:auto;max-width:100%;margin-bottom:-4px;position:absolute;top:0;left:0" src="/assets/ideal-img/gemini_realtime.9ccd163.640.png" srcset="/assets/ideal-img/gemini_realtime.9ccd163.640.png 640w,/assets/ideal-img/gemini_realtime.c8e974c.1920.png 1920w" width="640" height="334"></noscript></div>
+<p>This release brings support for calling Gemini&#x27;s realtime models (e.g. gemini-2.0-flash-live) via OpenAI&#x27;s /v1/realtime API. This is great for developers as it lets them easily switch from OpenAI to Gemini by just changing the model name.</p>
+<p>Key Highlights:</p>
+<ul>
+<li>Support for text + audio input/output</li>
+<li>Support for setting session configurations (modality, instructions, activity detection) in the OpenAI format</li>
+<li>Support for logging + usage tracking for realtime sessions</li>
+</ul>
+<p>This is currently supported via Google AI Studio. We plan to release VertexAI support over the coming week.</p>
+<p><a href="/docs/providers/google_ai_studio/realtime"><strong>Read more</strong></a></p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="spend-logs-retention-period">Spend Logs Retention Period<a href="#spend-logs-retention-period" class="hash-link" aria-label="Direct link to Spend Logs Retention Period" title="Direct link to Spend Logs Retention Period">​</a></h2>
+<div style="background-size:cover;background-repeat:no-repeat;position:relative;background-image:url(&quot;data:image/jpeg;base64,/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAAEAAoDASIAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAAAAMI/8QAGxAAAgIDAQAAAAAAAAAAAAAAAQIAEQMhUbH/xAAUAQEAAAAAAAAAAAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8A08uJcdBCwF3tifZXXBEQP//Z&quot;)"><svg style="width:100%;height:auto;max-width:100%;margin-bottom:-4px" width="640" height="248"></svg><noscript><img style="width:100%;height:auto;max-width:100%;margin-bottom:-4px;position:absolute;top:0;left:0" src="/assets/ideal-img/delete_spend_logs.8fec311.640.jpg" srcset="/assets/ideal-img/delete_spend_logs.8fec311.640.jpg 640w,/assets/ideal-img/delete_spend_logs.158ab9b.1920.jpg 1920w" width="640" height="248"></noscript></div>
+<p>This release enables deleting LiteLLM Spend Logs older than a certain period. Since we now enable storing the raw request/response in the logs, deleting old logs ensures the database remains performant in production.</p>
+<p><a href="/docs/proxy/spend_logs_deletion"><strong>Read more</strong></a></p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="pii-masking-20">PII Masking 2.0<a href="#pii-masking-20" class="hash-link" aria-label="Direct link to PII Masking 2.0" title="Direct link to PII Masking 2.0">​</a></h2>
+<div style="background-size:cover;background-repeat:no-repeat;position:relative;background-image:url(&quot;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAGCAYAAAD68A/GAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAh0lEQVR4nFWPQQrEMAhFc/8rdtVFdt1MY000Jm9Ih0JHeKjw9WsSEWqt9N4xM9z9xeoNcyflnNm2jX3fKaXQzJBLkVYR7XgPIoJ0nifHcbDy2thaY0RgYag5T6RlsSaW9apFnXJ11Acxx7/wfVuRykeU5kGPQYwft/DBzFGtjDHvB8yNOefNFxQE6i6ONtlzAAAAAElFTkSuQmCC&quot;)"><svg style="width:100%;height:auto;max-width:100%;margin-bottom:-4px" width="640" height="384"></svg><noscript><img style="width:100%;height:auto;max-width:100%;margin-bottom:-4px;position:absolute;top:0;left:0" src="/assets/ideal-img/pii_masking_v2.3b28c41.640.png" srcset="/assets/ideal-img/pii_masking_v2.3b28c41.640.png 640w,/assets/ideal-img/pii_masking_v2.8bb7c2d.1920.png 1920w" width="640" height="384"></noscript></div>
+<p>This release brings improvements to our Presidio PII Integration. As a Proxy Admin, you now have the ability to:</p>
+<ul>
+<li>Mask or block specific entities (e.g., block medical licenses while masking other entities like emails).</li>
+<li>Monitor guardrails in production. LiteLLM Logs will now show you the guardrail run, the entities it detected, and its confidence score for each entity.</li>
+</ul>
+<p><a href="/docs/proxy/guardrails/pii_masking_v2"><strong>Read more</strong></a></p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="new-models--updated-models">New Models / Updated Models<a href="#new-models--updated-models" class="hash-link" aria-label="Direct link to New Models / Updated Models" title="Direct link to New Models / Updated Models">​</a></h2>
+<ul>
+<li><strong>Gemini (<a href="https://docs.litellm.ai/docs/providers/vertex#usage-with-litellm-proxy-server" target="_blank" rel="noopener noreferrer">VertexAI</a> + <a href="https://docs.litellm.ai/docs/providers/gemini" target="_blank" rel="noopener noreferrer">Google AI Studio</a>)</strong>
+<ul>
+<li><code>/chat/completion</code>
+<ul>
+<li>Handle audio input - <a href="https://github.com/BerriAI/litellm/pull/10739" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>Fixes maximum recursion depth issue when using deeply nested response schemas with Vertex AI by Increasing DEFAULT_MAX_RECURSE_DEPTH from 10 to 100 in constants. <a href="https://github.com/BerriAI/litellm/pull/10798" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>Capture reasoning tokens in streaming mode - <a href="https://github.com/BerriAI/litellm/pull/10789" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/google_ai_studio/realtime">Google AI Studio</a></strong>
+<ul>
+<li><code>/realtime</code>
+<ul>
+<li>Gemini Multimodal Live API support</li>
+<li>Audio input/output support, optional param mapping, accurate usage calculation - <a href="https://github.com/BerriAI/litellm/pull/10909" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/vertex#metallama-api">VertexAI</a></strong>
+<ul>
+<li><code>/chat/completion</code>
+<ul>
+<li>Fix llama streaming error - where model response was nested in returned streaming chunk - <a href="https://github.com/BerriAI/litellm/pull/10878" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/ollama">Ollama</a></strong>
+<ul>
+<li><code>/chat/completion</code>
+<ul>
+<li>structure responses fix - <a href="https://github.com/BerriAI/litellm/pull/10617" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/bedrock#litellm-proxy-usage">Bedrock</a></strong>
+<ul>
+<li><a href="/docs/providers/bedrock#litellm-proxy-usage"><code>/chat/completion</code></a>
+<ul>
+<li>Handle thinking_blocks when assistant.content is None - <a href="https://github.com/BerriAI/litellm/pull/10688" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>Fixes to only allow accepted fields for tool json schema - <a href="https://github.com/BerriAI/litellm/pull/10062" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>Add bedrock sonnet prompt caching cost information</li>
+<li>Mistral Pixtral support - <a href="https://github.com/BerriAI/litellm/pull/10439" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>Tool caching support - <a href="https://github.com/BerriAI/litellm/pull/10897" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><a href="/docs/anthropic_unified"><code>/messages</code></a>
+<ul>
+<li>allow using dynamic AWS Params - <a href="https://github.com/BerriAI/litellm/pull/10769" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/nvidia_nim">Nvidia NIM</a></strong>
+<ul>
+<li><a href="/docs/providers/nvidia_nim#usage---litellm-proxy-server"><code>/chat/completion</code></a>
+<ul>
+<li>Add tools, tool_choice, parallel_tool_calls support - <a href="https://github.com/BerriAI/litellm/pull/10763" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/novita">Novita AI</a></strong>
+<ul>
+<li>New Provider added for <code>/chat/completion</code> routes - <a href="https://github.com/BerriAI/litellm/pull/9527" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/azure">Azure</a></strong>
+<ul>
+<li><a href="/docs/providers/azure#image-generation"><code>/image/generation</code></a>
+<ul>
+<li>Fix azure dall e 3 call with custom model name - <a href="https://github.com/BerriAI/litellm/pull/10776" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/cohere">Cohere</a></strong>
+<ul>
+<li><a href="/docs/providers/cohere#embedding"><code>/embeddings</code></a>
+<ul>
+<li>Migrate embedding to use <code>/v2/embed</code> - adds support for output_dimensions param - <a href="https://github.com/BerriAI/litellm/pull/10809" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/anthropic">Anthropic</a></strong>
+<ul>
+<li><a href="/docs/providers/anthropic#usage-with-litellm-proxy"><code>/chat/completion</code></a>
+<ul>
+<li>Web search tool support - native + openai format - <a href="/docs/providers/anthropic#anthropic-hosted-tools-computer-text-editor-web-search">Get Started</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/vllm">VLLM</a></strong>
+<ul>
+<li><a href="/docs/providers/vllm#embeddings"><code>/embeddings</code></a>
+<ul>
+<li>Support embedding input as list of integers</li>
+</ul>
+</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/openai">OpenAI</a></strong>
+<ul>
+<li><a href="/docs/providers/openai#usage---litellm-proxy-server"><code>/chat/completion</code></a>
+<ul>
+<li>Fix - b64 file data input handling - <a href="/docs/providers/openai#pdf-file-parsing">Get Started</a></li>
+<li>Add ‘supports_pdf_input’ to all vision models - <a href="https://github.com/BerriAI/litellm/pull/10897" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="llm-api-endpoints">LLM API Endpoints<a href="#llm-api-endpoints" class="hash-link" aria-label="Direct link to LLM API Endpoints" title="Direct link to LLM API Endpoints">​</a></h2>
+<ul>
+<li><a href="/docs/response_api"><strong>Responses API</strong></a>
+<ul>
+<li>Fix delete API support - <a href="https://github.com/BerriAI/litellm/pull/10845" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><a href="/docs/rerank"><strong>Rerank API</strong></a>
+<ul>
+<li><code>/v2/rerank</code> now registered as ‘llm_api_route’ - enabling non-admins to call it - <a href="https://github.com/BerriAI/litellm/pull/10861" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="spend-tracking-improvements">Spend Tracking Improvements<a href="#spend-tracking-improvements" class="hash-link" aria-label="Direct link to Spend Tracking Improvements" title="Direct link to Spend Tracking Improvements">​</a></h2>
+<ul>
+<li><strong><code>/chat/completion</code>, <code>/messages</code></strong>
+<ul>
+<li>Anthropic - web search tool cost tracking - <a href="https://github.com/BerriAI/litellm/pull/10846" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>Groq - update model max tokens + cost information - <a href="https://github.com/BerriAI/litellm/pull/10077" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong><code>/audio/transcription</code></strong>
+<ul>
+<li>Azure - Add gpt-4o-mini-tts pricing - <a href="https://github.com/BerriAI/litellm/pull/10807" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>Proxy - Fix tracking spend by tag - <a href="https://github.com/BerriAI/litellm/pull/10832" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong><code>/embeddings</code></strong>
+<ul>
+<li>Azure AI - Add cohere embed v4 pricing - <a href="https://github.com/BerriAI/litellm/pull/10806" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="management-endpoints--ui">Management Endpoints / UI<a href="#management-endpoints--ui" class="hash-link" aria-label="Direct link to Management Endpoints / UI" title="Direct link to Management Endpoints / UI">​</a></h2>
+<ul>
+<li><strong>Models</strong>
+<ul>
+<li>Ollama - adds api base param to UI</li>
+</ul>
+</li>
+<li><strong>Logs</strong>
+<ul>
+<li>Add team id, key alias, key hash filter on logs - <a href="https://github.com/BerriAI/litellm/pull/10831" target="_blank" rel="noopener noreferrer">https://github.com/BerriAI/litellm/pull/10831</a></li>
+<li>Guardrail tracing now in Logs UI - <a href="https://github.com/BerriAI/litellm/pull/10893" target="_blank" rel="noopener noreferrer">https://github.com/BerriAI/litellm/pull/10893</a></li>
+</ul>
+</li>
+<li><strong>Teams</strong>
+<ul>
+<li>Patch for updating team info when team in org and members not in org - <a href="https://github.com/BerriAI/litellm/pull/10835" target="_blank" rel="noopener noreferrer">https://github.com/BerriAI/litellm/pull/10835</a></li>
+</ul>
+</li>
+<li><strong>Guardrails</strong>
+<ul>
+<li>Add Bedrock, Presidio, Lakers guardrails on UI - <a href="https://github.com/BerriAI/litellm/pull/10874" target="_blank" rel="noopener noreferrer">https://github.com/BerriAI/litellm/pull/10874</a></li>
+<li>See guardrail info page - <a href="https://github.com/BerriAI/litellm/pull/10904" target="_blank" rel="noopener noreferrer">https://github.com/BerriAI/litellm/pull/10904</a></li>
+<li>Allow editing guardrails on UI - <a href="https://github.com/BerriAI/litellm/pull/10907" target="_blank" rel="noopener noreferrer">https://github.com/BerriAI/litellm/pull/10907</a></li>
+</ul>
+</li>
+<li><strong>Test Key</strong>
+<ul>
+<li>select guardrails to test on UI</li>
+</ul>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="logging--alerting-integrations">Logging / Alerting Integrations<a href="#logging--alerting-integrations" class="hash-link" aria-label="Direct link to Logging / Alerting Integrations" title="Direct link to Logging / Alerting Integrations">​</a></h2>
+<ul>
+<li><strong><a href="/docs/proxy/logging_spec">StandardLoggingPayload</a></strong>
+<ul>
+<li>Log any <code>x-</code> headers in requester metadata - <a href="/docs/proxy/logging_spec#standardloggingmetadata">Get Started</a></li>
+<li>Guardrail tracing now in standard logging payload - <a href="/docs/proxy/logging_spec#standardloggingguardrailinformation">Get Started</a></li>
+</ul>
+</li>
+<li><strong><a href="/docs/proxy/logging#custom-callback-apis-async">Generic API Logger</a></strong>
+<ul>
+<li>Support passing application/json header</li>
+</ul>
+</li>
+<li><strong><a href="/docs/observability/phoenix_integration">Arize Phoenix</a></strong>
+<ul>
+<li>fix: URL encode OTEL_EXPORTER_OTLP_TRACES_HEADERS for Phoenix Integration - <a href="https://github.com/BerriAI/litellm/pull/10654" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>add guardrail tracing to OTEL, Arize phoenix - <a href="https://github.com/BerriAI/litellm/pull/10896" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong><a href="/docs/proxy/pagerduty">PagerDuty</a></strong>
+<ul>
+<li>Pagerduty is now a free feature - <a href="https://github.com/BerriAI/litellm/pull/10857" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong><a href="/docs/proxy/alerting">Alerting</a></strong>
+<ul>
+<li>Sending slack alerts on virtual key/user/team updates is now free - <a href="https://github.com/BerriAI/litellm/pull/10863" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="guardrails">Guardrails<a href="#guardrails" class="hash-link" aria-label="Direct link to Guardrails" title="Direct link to Guardrails">​</a></h2>
+<ul>
+<li><strong>Guardrails</strong>
+<ul>
+<li>New <code>/apply_guardrail</code> endpoint for directly testing a guardrail - <a href="https://github.com/BerriAI/litellm/pull/10867" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong><a href="/docs/proxy/guardrails/lakera_ai">Lakera</a></strong>
+<ul>
+<li><code>/v2</code> endpoints support - <a href="https://github.com/BerriAI/litellm/pull/10880" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong><a href="/docs/proxy/guardrails/pii_masking_v2">Presidio</a></strong>
+<ul>
+<li>Fixes handling of message content on presidio guardrail integration - <a href="https://github.com/BerriAI/litellm/pull/10197" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>Allow specifying PII Entities Config - <a href="https://github.com/BerriAI/litellm/pull/10810" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong><a href="/docs/proxy/guardrails/aim_security">Aim Security</a></strong>
+<ul>
+<li>Support for anonymization in AIM Guardrails - <a href="https://github.com/BerriAI/litellm/pull/10757" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="performance--loadbalancing--reliability-improvements">Performance / Loadbalancing / Reliability improvements<a href="#performance--loadbalancing--reliability-improvements" class="hash-link" aria-label="Direct link to Performance / Loadbalancing / Reliability improvements" title="Direct link to Performance / Loadbalancing / Reliability improvements">​</a></h2>
+<ul>
+<li><strong>Allow overriding all constants using a .env variable</strong> - <a href="https://github.com/BerriAI/litellm/pull/10803" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li><strong><a href="/docs/proxy/spend_logs_deletion">Maximum retention period for spend logs</a></strong>
+<ul>
+<li>Add retention flag to config - <a href="https://github.com/BerriAI/litellm/pull/10815" target="_blank" rel="noopener noreferrer">PR</a></li>
+<li>Support for cleaning up logs based on configured time period - <a href="https://github.com/BerriAI/litellm/pull/10872" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="general-proxy-improvements">General Proxy Improvements<a href="#general-proxy-improvements" class="hash-link" aria-label="Direct link to General Proxy Improvements" title="Direct link to General Proxy Improvements">​</a></h2>
+<ul>
+<li><strong>Authentication</strong>
+<ul>
+<li>Handle Bearer $LITELLM_API_KEY in x-litellm-api-key custom header <a href="https://github.com/BerriAI/litellm/pull/10776" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong>New Enterprise pip package</strong> - <code>litellm-enterprise</code> - fixes issue where <code>enterprise</code> folder was not found when using pip package</li>
+<li><strong><a href="/docs/proxy/management_cli">Proxy CLI</a></strong>
+<ul>
+<li>Add <code>models import</code> command - <a href="https://github.com/BerriAI/litellm/pull/10581" target="_blank" rel="noopener noreferrer">PR</a></li>
+</ul>
+</li>
+<li><strong><a href="/docs/tutorials/openweb_ui#per-user-tracking">OpenWebUI</a></strong>
+<ul>
+<li>Configure LiteLLM to Parse User Headers from Open Web UI</li>
+</ul>
+</li>
+<li><strong><a href="/docs/providers/litellm_proxy#send-all-sdk-requests-to-litellm-proxy">LiteLLM Proxy w/ LiteLLM SDK</a></strong>
+<ul>
+<li>Option to force/always use the litellm proxy when calling via LiteLLM SDK</li>
+</ul>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="new-contributors">New Contributors<a href="#new-contributors" class="hash-link" aria-label="Direct link to New Contributors" title="Direct link to New Contributors">​</a></h2>
+<ul>
+<li><a href="https://github.com/imdigitalashish" target="_blank" rel="noopener noreferrer">@imdigitalashish</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10617" target="_blank" rel="noopener noreferrer">#10617</a></li>
+<li><a href="https://github.com/LouisShark" target="_blank" rel="noopener noreferrer">@LouisShark</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10688" target="_blank" rel="noopener noreferrer">#10688</a></li>
+<li><a href="https://github.com/OscarSavNS" target="_blank" rel="noopener noreferrer">@OscarSavNS</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10764" target="_blank" rel="noopener noreferrer">#10764</a></li>
+<li><a href="https://github.com/arizedatngo" target="_blank" rel="noopener noreferrer">@arizedatngo</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10654" target="_blank" rel="noopener noreferrer">#10654</a></li>
+<li><a href="https://github.com/jugaldb" target="_blank" rel="noopener noreferrer">@jugaldb</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10805" target="_blank" rel="noopener noreferrer">#10805</a></li>
+<li><a href="https://github.com/daikeren" target="_blank" rel="noopener noreferrer">@daikeren</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10781" target="_blank" rel="noopener noreferrer">#10781</a></li>
+<li><a href="https://github.com/naliotopier" target="_blank" rel="noopener noreferrer">@naliotopier</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10077" target="_blank" rel="noopener noreferrer">#10077</a></li>
+<li><a href="https://github.com/damienpontifex" target="_blank" rel="noopener noreferrer">@damienpontifex</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10813" target="_blank" rel="noopener noreferrer">#10813</a></li>
+<li><a href="https://github.com/Dima-Mediator" target="_blank" rel="noopener noreferrer">@Dima-Mediator</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10789" target="_blank" rel="noopener noreferrer">#10789</a></li>
+<li><a href="https://github.com/igtm" target="_blank" rel="noopener noreferrer">@igtm</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10814" target="_blank" rel="noopener noreferrer">#10814</a></li>
+<li><a href="https://github.com/shibaboy" target="_blank" rel="noopener noreferrer">@shibaboy</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10752" target="_blank" rel="noopener noreferrer">#10752</a></li>
+<li><a href="https://github.com/camfarineau" target="_blank" rel="noopener noreferrer">@camfarineau</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10629" target="_blank" rel="noopener noreferrer">#10629</a></li>
+<li><a href="https://github.com/ajac-zero" target="_blank" rel="noopener noreferrer">@ajac-zero</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10439" target="_blank" rel="noopener noreferrer">#10439</a></li>
+<li><a href="https://github.com/damgem" target="_blank" rel="noopener noreferrer">@damgem</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/9802" target="_blank" rel="noopener noreferrer">#9802</a></li>
+<li><a href="https://github.com/hxdror" target="_blank" rel="noopener noreferrer">@hxdror</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10757" target="_blank" rel="noopener noreferrer">#10757</a></li>
+<li><a href="https://github.com/wwwillchen" target="_blank" rel="noopener noreferrer">@wwwillchen</a> made their first contribution in PR <a href="https://github.com/BerriAI/litellm/pull/10894" target="_blank" rel="noopener noreferrer">#10894</a></li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="demo-instance">Demo Instance<a href="#demo-instance" class="hash-link" aria-label="Direct link to Demo Instance" title="Direct link to Demo Instance">​</a></h2>
+<p>Here&#x27;s a Demo Instance to test changes:</p>
+<ul>
+<li>Instance: <a href="https://demo.litellm.ai/" target="_blank" rel="noopener noreferrer">https://demo.litellm.ai/</a></li>
+<li>Login Credentials:<!-- -->
+<ul>
+<li>Username: admin</li>
+<li>Password: sk-1234</li>
+</ul>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="git-diff"><a href="https://github.com/BerriAI/litellm/releases" target="_blank" rel="noopener noreferrer">Git Diff</a><a href="#git-diff" class="hash-link" aria-label="Direct link to git-diff" title="Direct link to git-diff">​</a></h2></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/release_notes/v1.71.1-stable/v1.71.1-stable"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">v1.71.1-stable</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/release_notes/v1.69.0-stable/v1.69.0-stable"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">v1.69.0-stable</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_jeP5 theme-doc-toc-desktop"><div class="tocItemsContainer_yosJ thin-scrollbar"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#deploy-this-version" class="table-of-contents__link toc-highlight">Deploy this version</a></li><li><a href="#key-highlights" class="table-of-contents__link toc-highlight">Key Highlights</a></li><li><a href="#gemini-realtime-api" class="table-of-contents__link toc-highlight">Gemini Realtime API</a></li><li><a href="#spend-logs-retention-period" class="table-of-contents__link toc-highlight">Spend Logs Retention Period</a></li><li><a href="#pii-masking-20" class="table-of-contents__link toc-highlight">PII Masking 2.0</a></li><li><a href="#new-models--updated-models" class="table-of-contents__link toc-highlight">New Models / Updated Models</a></li><li><a href="#llm-api-endpoints" class="table-of-contents__link toc-highlight">LLM API Endpoints</a></li><li><a href="#spend-tracking-improvements" class="table-of-contents__link toc-highlight">Spend Tracking Improvements</a></li><li><a href="#management-endpoints--ui" class="table-of-contents__link toc-highlight">Management Endpoints / UI</a></li><li><a href="#logging--alerting-integrations" class="table-of-contents__link toc-highlight">Logging / Alerting Integrations</a></li><li><a href="#guardrails" class="table-of-contents__link toc-highlight">Guardrails</a></li><li><a href="#performance--loadbalancing--reliability-improvements" class="table-of-contents__link toc-highlight">Performance / Loadbalancing / Reliability improvements</a></li><li><a href="#general-proxy-improvements" class="table-of-contents__link toc-highlight">General Proxy Improvements</a></li><li><a href="#new-contributors" class="table-of-contents__link toc-highlight">New Contributors</a></li><li><a href="#demo-instance" class="table-of-contents__link toc-highlight">Demo Instance</a></li><li><a href="#git-diff" class="table-of-contents__link toc-highlight">Git Diff</a></li></ul></div><div class="promoCard_SGxZ"><div class="promoEmoji_Dg1q">🚅</div><div class="promoHeading_s_Ub">LiteLLM Enterprise</div><div class="promoDescription_qSAY">SSO/SAML, audit logs, spend tracking, multi-team management, and guardrails — built for production.</div><a class="promoButton_KLlx" href="/docs/enterprise">Learn more →</a></div></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Docs</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Getting Started</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Community</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://discord.com/invite/wuPM9dRgDw" target="_blank" rel="noopener noreferrer" class="footer__link-item">Discord<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://twitter.com/LiteLLM" target="_blank" rel="noopener noreferrer" class="footer__link-item">Twitter<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/BerriAI/litellm/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 liteLLM</div></div></div></footer><div id="inkeep-shadowradix-:Rp:" style="display:contents"></div><span></span></div>
+</body>
+</html>

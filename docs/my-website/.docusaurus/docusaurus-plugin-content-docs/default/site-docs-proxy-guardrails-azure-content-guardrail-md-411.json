@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/azure_content_guardrail",
+  "title": "Azure Content Safety Guardrail",
+  "description": "LiteLLM supports Azure Content Safety guardrails via the Azure Content Safety API.",
+  "source": "@site/docs/proxy/guardrails/azure_content_guardrail.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/azure_content_guardrail",
+  "permalink": "/docs/proxy/guardrails/azure_content_guardrail",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Aporia",
+    "permalink": "/docs/proxy/guardrails/aporia_api"
+  },
+  "next": {
+    "title": "Bedrock Guardrails",
+    "permalink": "/docs/proxy/guardrails/bedrock"
+  }
+}

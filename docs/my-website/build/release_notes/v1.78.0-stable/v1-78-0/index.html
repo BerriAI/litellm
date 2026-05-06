@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-release-notes docs-version-current docs-doc-page docs-doc-id-v1.78.0-stable/index" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.8.1">
+<title data-rh="true">v1.78.0-stable - MCP Gateway: Control Tool Access by Team, Key | liteLLM</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" name="twitter:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" property="og:url" content="https://docs.litellm.ai/release_notes/v1.78.0-stable/v1-78-0"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-release-notes-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-release-notes-current"><meta data-rh="true" property="og:title" content="v1.78.0-stable - MCP Gateway: Control Tool Access by Team, Key | liteLLM"><meta data-rh="true" name="description" content="Deploy this version"><meta data-rh="true" property="og:description" content="Deploy this version"><link data-rh="true" rel="icon" href="/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://docs.litellm.ai/release_notes/v1.78.0-stable/v1-78-0"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/release_notes/v1.78.0-stable/v1-78-0" hreflang="en"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/release_notes/v1.78.0-stable/v1-78-0" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"v1.78.0-stable","item":"https://docs.litellm.ai/release_notes/v1.78.0-stable/v1-78-0"}]}</script><link rel="preconnect" href="https://www.google-analytics.com">
+<link rel="preconnect" href="https://www.googletagmanager.com">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-K7K215ZVNC"></script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],gtag("js",new Date),gtag("config","G-K7K215ZVNC",{anonymize_ip:!0})</script>
+
+
+
+
+
+
+<link rel="alternate" type="application/rss+xml" href="/blog/rss.xml" title="liteLLM RSS Feed">
+<link rel="alternate" type="application/atom+xml" href="/blog/atom.xml" title="liteLLM Atom Feed">
+<script>window.$crisp=[],window.CRISP_WEBSITE_ID="be07a4d6-dba0-4df7-961d-9302c86b7ebc",d=document,s=d.createElement("script"),s.src="https://client.crisp.chat/l.js",s.async=1,d.getElementsByTagName("head")[0].appendChild(s)</script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],window.gtag||(window.gtag=gtag)</script>
+
+<script async src="https://www.feedbackrocket.io/sdk/v1.2.js" data-fr-id="GQwepB0f0L-x_ZH63kR_V" data-fr-theme="dynamic"></script><link rel="stylesheet" href="/assets/css/styles.f56ea1ab.css">
+<script src="/assets/js/runtime~main.b9bf1bac.js" defer="defer"></script>
+<script src="/assets/js/main.028e115a.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="navbar__brand-col"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/"><b class="navbar__title text--truncate">🚅 LiteLLM</b></a></div><div class="navbar__center-col"><a class="navbar__item navbar__link" href="/docs/">Docs</a><a class="navbar__item navbar__link" href="/docs/learn">Learn</a><a class="navbar__item navbar__link" href="/docs/integrations/">Integrations</a><a class="navbar__item navbar__link" href="/docs/enterprise">Enterprise</a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/release_notes">Changelog</a><a class="navbar__item navbar__link" href="/blog">Blog</a></div><div class="navbar__right-col"><a href="https://github.com/BerriAI/litellm" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-github-link" aria-label="GitHub repository"></a><a href="https://www.litellm.ai/support" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-discord-link" aria-label="Discord / Slack community"></a><div class="navbarSearchContainer_Bca1"><div id="inkeep-shadowradix-:Rtr5a5:" style="display:contents"></div><span></span></div><div class="toggle_vylO"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebarContainer_YAFp"><div class="searchBarContainer_wiet"><div id="inkeep-shadowradix-:R5aqlda5:" style="display:contents"></div><span></span></div><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/release_notes/">Overview</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="true" href="/release_notes/v1.83.3/v1-83-3-rc-1">2026</a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.83.3/v1-83-3-rc-1">v1.83.3</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.83.0/v1-83-0">v1.83.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.82.3/v1-82-3">v1.82.3</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.82.0/v1-82-0">v1.82.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.14/v1-81-14">v1.81.14</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.12/v1-81-12">v1.81.12</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.9/v1-81-9">v1.81.9</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.6/v1-81-6">v1.81.6</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.3-stable/v1-81-3">v1.81.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.0/v1-81-0">v1.81.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.15/v1-80-15">v1.80.15</a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/release_notes/v1.80.11-stable/v1-80-11">2025</a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.11-stable/v1-80-11">v1.80.11-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.10-stable/v1-80-10">v1.80.10-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.8-stable/v1-80-8">v1.80.8-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.5-stable/v1-80-5">v1.80.5-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.0-stable/v1-80-0">v1.80.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.79.3-stable/v1-79-3">v1.79.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.79.1-stable/v1-79-1">v1.79.1-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.79.0-stable/v1-79-0">v1.79.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.78.5-stable/v1-78-5">v1.78.5-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/release_notes/v1.78.0-stable/v1-78-0">v1.78.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.77.7-stable/v1-77-7">v1.77.7-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.77.5-stable/v1-77-5">v1.77.5-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.77.3-stable/v1-77-3">v1.77.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.77.2-stable/v1-77-2">v1.77.2-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.76.3-stable/v1-76-3">v1.76.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.76.1-stable/v1-76-1">v1.76.1-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.76.0-stable/v1-76-0">v1.76.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.75.8/v1-75-8">v1.75.8</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.75.5-stable/v1-75-5">v1.75.5-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.15-stable/v1-74-15">v1.74.15-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.9-stable/v1-74-9">v1.74.9-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.7/v1-74-7">v1.74.7</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.3-stable/v1-74-3-stable">v1.74.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.74.0-stable/v1-74-0-stable">v1.74.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.73.6-stable/v1-73-6-stable">v1.73.6-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.73.0-stable/v1-73-0-stable">v1.73.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.72.6-stable/v1-72-6-stable">v1.72.6-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.72.2-stable/v1-72-2-stable">v1.72.2-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.72.0-stable/v1-72-0-stable">v1.72.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.71.1-stable/v1.71.1-stable">v1.71.1-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.70.1-stable/v1.70.1-stable">v1.70.1-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.69.0-stable/v1.69.0-stable">v1.69.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.68.0-stable/v1.68.0-stable">v1.68.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.67.4-stable/v1.67.4-stable">v1.67.4-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.67.0-stable/v1.67.0-stable">v1.67.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.66.0-stable/v1.66.0-stable">v1.66.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.65.4-stable/v1.65.4-stable">v1.65.4-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.65.0/v1.65.0">v1.65.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.65.0-stable/v1.65.0-stable">v1.65.0-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.63.14/v1.63.14-stable">v1.63.14</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.63.11-stable/v1.63.11-stable">v1.63.11-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.63.2-stable/v1.63.2-stable">v1.63.2-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.63.0/v1.63.0">v1.63.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.61.20-stable/v1.61.20-stable">v1.61.20-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.59.8-stable/v1.59.8-stable">v1.59.8-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.59.0/v1.59.0">v1.59.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.57.8-stable/v1.57.8-stable">v1.57.8-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.57.7/v1.57.7">v1.57.7</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.57.3/v1.57.3">v1.57.3</a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/release_notes/v1.56.4/v1.56.4">2024</a></div></li></ul></nav></div></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">2025</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">v1.78.0-stable</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>v1.78.0-stable - MCP Gateway: Control Tool Access by Team, Key</h1></header><h2 class="anchor anchorWithStickyNavbar_LWe7" id="deploy-this-version">Deploy this version<a href="#deploy-this-version" class="hash-link" aria-label="Direct link to Deploy this version" title="Direct link to Deploy this version">​</a></h2>
+<div class="tabs-container tabList__CuJ"><ul role="tablist" aria-orientation="horizontal" class="tabs"><li role="tab" tabindex="0" aria-selected="true" class="tabs__item tabItem_LNqP tabs__item--active">Docker</li><li role="tab" tabindex="-1" aria-selected="false" class="tabs__item tabItem_LNqP">Pip</li></ul><div class="margin-top--md"><div role="tabpanel" class="tabItem_Ymn6"><div class="language-showLineNumbers language-showlinenumbers codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockTitle_OeMC">docker run litellm</div><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-showlinenumbers codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">docker run \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">-e STORE_MODEL_IN_DB=True \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">-p 4000:4000 \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">docker.litellm.ai/berriai/litellm:v1.78.0-stable</span><br></span></code></pre></div></div></div><div role="tabpanel" class="tabItem_Ymn6" hidden=""><div class="language-showLineNumbers language-showlinenumbers codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockTitle_OeMC">pip install litellm</div><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-showlinenumbers codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">pip install litellm==1.78.0.post1</span><br></span></code></pre></div></div></div></div></div>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="key-highlights">Key Highlights<a href="#key-highlights" class="hash-link" aria-label="Direct link to Key Highlights" title="Direct link to Key Highlights">​</a></h2>
+<ul>
+<li><strong>MCP Gateway - Control Tool Access by Team, Key</strong> - Control MCP tool access by team/key.</li>
+<li><strong>Performance Improvements</strong> - 70% Lower p99 Latency</li>
+<li><strong>GPT-5 Pro &amp; GPT-Image-1-Mini</strong> - Day 0 support for OpenAI&#x27;s GPT-5 Pro (400K context) and gpt-image-1-mini image generation</li>
+<li><strong>EnkryptAI Guardrails</strong> - New guardrail integration for content moderation</li>
+<li><strong>Tag-Based Budgets</strong> - Support for setting budgets based on request tags</li>
+</ul>
+<hr>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="mcp-gateway---control-tool-access-by-team-key">MCP Gateway - Control Tool Access by Team, Key<a href="#mcp-gateway---control-tool-access-by-team-key" class="hash-link" aria-label="Direct link to MCP Gateway - Control Tool Access by Team, Key" title="Direct link to MCP Gateway - Control Tool Access by Team, Key">​</a></h3>
+<div style="background-size:cover;background-repeat:no-repeat;position:relative;background-image:url(&quot;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAFCAYAAAB8ZH1oAAAACXBIWXMAACxLAAAsSwGlPZapAAAAdUlEQVR4nD2NWwoEIQwEvf81RXA+xHnoqkm0l3aZDRQkdJF28TjgvUfOGSKC3jvGGHtX1T+OQggBMcYtXVdFa5QFNic4ay042ma2YVhqQ/00iCjUDAvA/RQ4VrDqraNIntqRzrI/pnT+xBfKrOGITuS775vZF6pTwroE5VMUAAAAAElFTkSuQmCC&quot;)"><svg style="width:100%;height:auto;max-width:100%;margin-bottom:-4px" width="640" height="334"></svg><noscript><img style="width:100%;height:auto;max-width:100%;margin-bottom:-4px;position:absolute;top:0;left:0" src="/assets/ideal-img/tool_control.c192a32.640.png" srcset="/assets/ideal-img/tool_control.c192a32.640.png 640w,/assets/ideal-img/tool_control.ab164aa.1920.png 1920w" width="640" height="334"></noscript></div>
+<br>
+<p>Proxy admins can now control MCP tool access by team or key. This makes it easy to grant different teams selective access to tools from the same MCP server.</p>
+<p>For example, you can now give your Engineering team access to <code>list_repositories</code>, <code>create_issue</code>, and <code>search_code</code> tools, while Sales only gets <code>search_code</code> and <code>close_issue</code> tools.</p>
+<p>This makes it easier for Proxy Admins to govern MCP Tool Access.</p>
+<p><a href="/docs/mcp_control#set-allowed-tools-for-a-key-team-or-organization">Get Started</a></p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="performance---70-lower-p99-latency">Performance - 70% Lower p99 Latency<a href="#performance---70-lower-p99-latency" class="hash-link" aria-label="Direct link to Performance - 70% Lower p99 Latency" title="Direct link to Performance - 70% Lower p99 Latency">​</a></h2>
+<div style="background-size:cover;background-repeat:no-repeat;position:relative;background-image:url(&quot;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAECAYAAAC3OK7NAAAACXBIWXMAABYlAAAWJQFJUiTwAAAAg0lEQVR4nG2MQQrCMAAE83dP/qCGYIsFfUBFvbUJpU/IWUS89dQmJW3KSOPVhYWF2V3R9z3Oe5a48E/rujLPM2KaJh7VnUtxpjyVSCnJDhnHPEcphdY6lYVzDlUX7Ko91/pG13aY1qBbQ9M0WGt/jyEE3sOHp3vhF5/WMcbkLW98HEe+nciO2qktIf0AAAAASUVORK5CYII=&quot;)"><svg style="width:100%;height:auto;max-width:100%;margin-bottom:-4px" width="640" height="251"></svg><noscript><img style="width:100%;height:auto;max-width:100%;margin-bottom:-4px;position:absolute;top:0;left:0" src="/assets/ideal-img/1_78_0_perf.80a9a6d.640.png" srcset="/assets/ideal-img/1_78_0_perf.80a9a6d.640.png 640w,/assets/ideal-img/1_78_0_perf.c75037e.1920.png 1920w" width="640" height="251"></noscript></div>
+<br>
+<p>This release cuts p99 latency by 70% on LiteLLM AI Gateway, making it even better for low-latency use cases.</p>
+<p>These gains come from two key enhancements:</p>
+<p><strong>Reliable Sessions</strong></p>
+<p>Added support for shared sessions with aiohttp. The shared_session parameter is now consistently used across all calls, enabling connection pooling.</p>
+<p><strong>Faster Routing</strong></p>
+<p>A new <code>model_name_to_deployment_indices</code> hash map replaces O(n) list scans in <code>_get_all_deployments()</code> with O(1) hash lookups, boosting routing performance and scalability.</p>
+<p>As a result, performance improved across all latency percentiles:</p>
+<ul>
+<li><strong>Median latency:</strong> 110 ms → <strong>100 ms</strong> (−9.1%)</li>
+<li><strong>p95 latency:</strong> 440 ms → <strong>150 ms</strong> (−65.9%)</li>
+<li><strong>p99 latency:</strong> 810 ms → <strong>240 ms</strong> (−70.4%)</li>
+<li><strong>Average latency:</strong> 310 ms → <strong>111.73 ms</strong> (−64.0%)</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="test-setup"><strong>Test Setup</strong><a href="#test-setup" class="hash-link" aria-label="Direct link to test-setup" title="Direct link to test-setup">​</a></h3>
+<p><strong>Locust</strong></p>
+<ul>
+<li><strong>Concurrent users:</strong> 1,000</li>
+<li><strong>Ramp-up:</strong> 500</li>
+</ul>
+<p><strong>System Specs</strong></p>
+<ul>
+<li><strong>Database was used</strong></li>
+<li><strong>CPU:</strong> 4 vCPUs</li>
+<li><strong>Memory:</strong> 8 GB RAM</li>
+<li><strong>LiteLLM Workers:</strong> 4</li>
+<li><strong>Instances</strong>: 4</li>
+</ul>
+<p><strong>Configuration (config.yaml)</strong></p>
+<p>View the complete configuration: <a href="https://gist.github.com/AlexsanderHamir/53f7d554a5d2afcf2c4edb5b6be68ff4" target="_blank" rel="noopener noreferrer">gist.github.com/AlexsanderHamir/config.yaml</a></p>
+<p><strong>Load Script (no_cache_hits.py)</strong></p>
+<p>View the complete load testing script: <a href="https://gist.github.com/AlexsanderHamir/42c33d7a4dc7a57f56a78b560dee3a42" target="_blank" rel="noopener noreferrer">gist.github.com/AlexsanderHamir/no_cache_hits.py</a></p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="new-models--updated-models">New Models / Updated Models<a href="#new-models--updated-models" class="hash-link" aria-label="Direct link to New Models / Updated Models" title="Direct link to New Models / Updated Models">​</a></h2>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="new-model-support">New Model Support<a href="#new-model-support" class="hash-link" aria-label="Direct link to New Model Support" title="Direct link to New Model Support">​</a></h4>
+<table><thead><tr><th>Provider</th><th>Model</th><th>Context Window</th><th>Input ($/1M tokens)</th><th>Output ($/1M tokens)</th><th>Features</th></tr></thead><tbody><tr><td>OpenAI</td><td><code>gpt-5-pro</code></td><td>400K</td><td>$15.00</td><td>$120.00</td><td>Responses API, reasoning, vision, function calling, prompt caching, web search</td></tr><tr><td>OpenAI</td><td><code>gpt-5-pro-2025-10-06</code></td><td>400K</td><td>$15.00</td><td>$120.00</td><td>Responses API, reasoning, vision, function calling, prompt caching, web search</td></tr><tr><td>OpenAI</td><td><code>gpt-image-1-mini</code></td><td>-</td><td>$2.00/img</td><td>-</td><td>Image generation and editing</td></tr><tr><td>OpenAI</td><td><code>gpt-realtime-mini</code></td><td>128K</td><td>$0.60</td><td>$2.40</td><td>Realtime audio, function calling</td></tr><tr><td>Azure AI</td><td><code>azure_ai/Phi-4-mini-reasoning</code></td><td>131K</td><td>$0.08</td><td>$0.32</td><td>Function calling</td></tr><tr><td>Azure AI</td><td><code>azure_ai/Phi-4-reasoning</code></td><td>32K</td><td>$0.125</td><td>$0.50</td><td>Function calling, reasoning</td></tr><tr><td>Azure AI</td><td><code>azure_ai/MAI-DS-R1</code></td><td>128K</td><td>$1.35</td><td>$5.40</td><td>Reasoning, function calling</td></tr><tr><td>Bedrock</td><td><code>au.anthropic.claude-sonnet-4-5-20250929-v1:0</code></td><td>200K</td><td>$3.30</td><td>$16.50</td><td>Chat, reasoning, vision, function calling, prompt caching</td></tr><tr><td>Bedrock</td><td><code>global.anthropic.claude-sonnet-4-5-20250929-v1:0</code></td><td>200K</td><td>$3.00</td><td>$15.00</td><td>Chat, reasoning, vision, function calling, prompt caching</td></tr><tr><td>Bedrock</td><td><code>global.anthropic.claude-sonnet-4-20250514-v1:0</code></td><td>1M</td><td>$3.00</td><td>$15.00</td><td>Chat, reasoning, vision, function calling, prompt caching</td></tr><tr><td>Bedrock</td><td><code>cohere.embed-v4:0</code></td><td>128K</td><td>$0.12</td><td>-</td><td>Embeddings, image input support</td></tr><tr><td>OCI</td><td><code>oci/cohere.command-latest</code></td><td>128K</td><td>$1.56</td><td>$1.56</td><td>Function calling</td></tr><tr><td>OCI</td><td><code>oci/cohere.command-a-03-2025</code></td><td>256K</td><td>$1.56</td><td>$1.56</td><td>Function calling</td></tr><tr><td>OCI</td><td><code>oci/cohere.command-plus-latest</code></td><td>128K</td><td>$1.56</td><td>$1.56</td><td>Function calling</td></tr><tr><td>Together AI</td><td><code>together_ai/moonshotai/Kimi-K2-Instruct-0905</code></td><td>262K</td><td>$1.00</td><td>$3.00</td><td>Function calling</td></tr><tr><td>Together AI</td><td><code>together_ai/Qwen/Qwen3-Next-80B-A3B-Instruct</code></td><td>262K</td><td>$0.15</td><td>$1.50</td><td>Function calling</td></tr><tr><td>Together AI</td><td><code>together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking</code></td><td>262K</td><td>$0.15</td><td>$1.50</td><td>Function calling</td></tr><tr><td>Vertex AI</td><td>MedGemma models</td><td>Varies</td><td>Varies</td><td>Varies</td><td>Medical-focused Gemma models on custom endpoints</td></tr><tr><td>Watson X</td><td>27 new foundation models</td><td>Varies</td><td>Varies</td><td>Varies</td><td>Granite, Llama, Mistral families</td></tr></tbody></table>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="features">Features<a href="#features" class="hash-link" aria-label="Direct link to Features" title="Direct link to Features">​</a></h4>
+<ul>
+<li>
+<p><strong><a href="/docs/providers/openai">OpenAI</a></strong></p>
+<ul>
+<li>Add GPT-5 Pro model configuration and documentation - <a href="https://github.com/BerriAI/litellm/pull/15258" target="_blank" rel="noopener noreferrer">PR #15258</a></li>
+<li>Add stop parameter to non-supported params for GPT-5 - <a href="https://github.com/BerriAI/litellm/pull/15244" target="_blank" rel="noopener noreferrer">PR #15244</a></li>
+<li>Day 0 Support, Add gpt-image-1-mini - <a href="https://github.com/BerriAI/litellm/pull/15259" target="_blank" rel="noopener noreferrer">PR #15259</a></li>
+<li>Add gpt-realtime-mini support - <a href="https://github.com/BerriAI/litellm/pull/15283" target="_blank" rel="noopener noreferrer">PR #15283</a></li>
+<li>Add gpt-5-pro-2025-10-06 to model costs - <a href="https://github.com/BerriAI/litellm/pull/15344" target="_blank" rel="noopener noreferrer">PR #15344</a></li>
+<li>Minimal fix: gpt5 models should not go on cooldown when called with temperature!=1 - <a href="https://github.com/BerriAI/litellm/pull/15330" target="_blank" rel="noopener noreferrer">PR #15330</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/snowflake">Snowflake Cortex</a></strong></p>
+<ul>
+<li>Add function calling support for Snowflake Cortex REST API - <a href="https://github.com/BerriAI/litellm/pull/15221" target="_blank" rel="noopener noreferrer">PR #15221</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/gemini">Gemini</a></strong></p>
+<ul>
+<li>Fix header forwarding for Gemini/Vertex AI providers in proxy mode - <a href="https://github.com/BerriAI/litellm/pull/15231" target="_blank" rel="noopener noreferrer">PR #15231</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/azure">Azure</a></strong></p>
+<ul>
+<li>Removed stop param from unsupported azure models - <a href="https://github.com/BerriAI/litellm/pull/15229" target="_blank" rel="noopener noreferrer">PR #15229</a></li>
+<li>Fix(azure/responses): remove invalid status param from azure call - <a href="https://github.com/BerriAI/litellm/pull/15253" target="_blank" rel="noopener noreferrer">PR #15253</a></li>
+<li>Add new Azure AI models with pricing details - <a href="https://github.com/BerriAI/litellm/pull/15387" target="_blank" rel="noopener noreferrer">PR #15387</a></li>
+<li>AzureAD Default credentials - select credential type based on environment - <a href="https://github.com/BerriAI/litellm/pull/14470" target="_blank" rel="noopener noreferrer">PR #14470</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/bedrock">Bedrock</a></strong></p>
+<ul>
+<li>Add Global Cross-Region Inference - <a href="https://github.com/BerriAI/litellm/pull/15210" target="_blank" rel="noopener noreferrer">PR #15210</a></li>
+<li>Add Cohere Embed v4 support for AWS Bedrock - <a href="https://github.com/BerriAI/litellm/pull/15298" target="_blank" rel="noopener noreferrer">PR #15298</a></li>
+<li>Fix(bedrock): include cacheWriteInputTokens in prompt_tokens calculation - <a href="https://github.com/BerriAI/litellm/pull/15292" target="_blank" rel="noopener noreferrer">PR #15292</a></li>
+<li>Add Bedrock AU Cross-Region Inference for Claude Sonnet 4.5 - <a href="https://github.com/BerriAI/litellm/pull/15402" target="_blank" rel="noopener noreferrer">PR #15402</a></li>
+<li>Converse → /v1/messages streaming doesn&#x27;t handle parallel tool calls with Claude models - <a href="https://github.com/BerriAI/litellm/pull/15315" target="_blank" rel="noopener noreferrer">PR #15315</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/vertex">Vertex AI</a></strong></p>
+<ul>
+<li>Implement Context Caching for Vertex AI provider - <a href="https://github.com/BerriAI/litellm/pull/15226" target="_blank" rel="noopener noreferrer">PR #15226</a></li>
+<li>Support for Vertex AI Gemma Models on Custom Endpoints - <a href="https://github.com/BerriAI/litellm/pull/15397" target="_blank" rel="noopener noreferrer">PR #15397</a></li>
+<li>VertexAI - gemma model family support (custom endpoints) - <a href="https://github.com/BerriAI/litellm/pull/15419" target="_blank" rel="noopener noreferrer">PR #15419</a></li>
+<li>VertexAI Gemma model family streaming support + Added MedGemma - <a href="https://github.com/BerriAI/litellm/pull/15427" target="_blank" rel="noopener noreferrer">PR #15427</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/oci">OCI</a></strong></p>
+<ul>
+<li>Add OCI Cohere support with tool calling and streaming capabilities - <a href="https://github.com/BerriAI/litellm/pull/15365" target="_blank" rel="noopener noreferrer">PR #15365</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/watsonx">Watson X</a></strong></p>
+<ul>
+<li>Add Watson X foundation model definitions to model_prices_and_context_window.json - <a href="https://github.com/BerriAI/litellm/pull/15219" target="_blank" rel="noopener noreferrer">PR #15219</a></li>
+<li>Watsonx - Apply correct prompt templates for openai/gpt-oss model family - <a href="https://github.com/BerriAI/litellm/pull/15341" target="_blank" rel="noopener noreferrer">PR #15341</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/openrouter">OpenRouter</a></strong></p>
+<ul>
+<li>Fix - (openrouter): move cache_control to content blocks for claude/gemini - <a href="https://github.com/BerriAI/litellm/pull/15345" target="_blank" rel="noopener noreferrer">PR #15345</a></li>
+<li>Fix - OpenRouter cache_control to only apply to last content block - <a href="https://github.com/BerriAI/litellm/pull/15395" target="_blank" rel="noopener noreferrer">PR #15395</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/togetherai">Together AI</a></strong></p>
+<ul>
+<li>Add new together models - <a href="https://github.com/BerriAI/litellm/pull/15383" target="_blank" rel="noopener noreferrer">PR #15383</a></li>
+</ul>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="bug-fixes">Bug Fixes<a href="#bug-fixes" class="hash-link" aria-label="Direct link to Bug Fixes" title="Direct link to Bug Fixes">​</a></h3>
+<ul>
+<li><strong>General</strong>
+<ul>
+<li>Bug fix: gpt-5-chat-latest has incorrect max_input_tokens value - <a href="https://github.com/BerriAI/litellm/pull/15116" target="_blank" rel="noopener noreferrer">PR #15116</a></li>
+<li>Fix reasoning response ID - <a href="https://github.com/BerriAI/litellm/pull/15265" target="_blank" rel="noopener noreferrer">PR #15265</a></li>
+<li>Fix issue with parsing assistant messages - <a href="https://github.com/BerriAI/litellm/pull/15320" target="_blank" rel="noopener noreferrer">PR #15320</a></li>
+<li>Fix litellm_param based costing - <a href="https://github.com/BerriAI/litellm/pull/15336" target="_blank" rel="noopener noreferrer">PR #15336</a></li>
+<li>Fix lint errors - <a href="https://github.com/BerriAI/litellm/pull/15406" target="_blank" rel="noopener noreferrer">PR #15406</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="llm-api-endpoints">LLM API Endpoints<a href="#llm-api-endpoints" class="hash-link" aria-label="Direct link to LLM API Endpoints" title="Direct link to LLM API Endpoints">​</a></h2>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="features-1">Features<a href="#features-1" class="hash-link" aria-label="Direct link to Features" title="Direct link to Features">​</a></h4>
+<ul>
+<li>
+<p><strong><a href="/docs/response_api">Responses API</a></strong></p>
+<ul>
+<li>Added streaming support for response api streaming image generation - <a href="https://github.com/BerriAI/litellm/pull/15269" target="_blank" rel="noopener noreferrer">PR #15269</a></li>
+<li>Add native Responses API support for litellm_proxy provider - <a href="https://github.com/BerriAI/litellm/pull/15347" target="_blank" rel="noopener noreferrer">PR #15347</a></li>
+<li>Temporarily relax ResponsesAPIResponse parsing to support custom backends (e.g., vLLM) - <a href="https://github.com/BerriAI/litellm/pull/15362" target="_blank" rel="noopener noreferrer">PR #15362</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/files_api">Files API</a></strong></p>
+<ul>
+<li>Feat(files): add @client decorator to file operations - <a href="https://github.com/BerriAI/litellm/pull/15339" target="_blank" rel="noopener noreferrer">PR #15339</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/gemini">/generateContent</a></strong></p>
+<ul>
+<li>Fix gemini cli by actually streaming the response - <a href="https://github.com/BerriAI/litellm/pull/15264" target="_blank" rel="noopener noreferrer">PR #15264</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/pass_through/azure">Azure Passthrough</a></strong></p>
+<ul>
+<li>Azure - passthrough support with router models - <a href="https://github.com/BerriAI/litellm/pull/15240" target="_blank" rel="noopener noreferrer">PR #15240</a></li>
+</ul>
+</li>
+</ul>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="bugs">Bugs<a href="#bugs" class="hash-link" aria-label="Direct link to Bugs" title="Direct link to Bugs">​</a></h4>
+<ul>
+<li><strong>General</strong>
+<ul>
+<li>Fix x-litellm-cache-key header not being returned on cache hit - <a href="https://github.com/BerriAI/litellm/pull/15348" target="_blank" rel="noopener noreferrer">PR #15348</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="management-endpoints--ui">Management Endpoints / UI<a href="#management-endpoints--ui" class="hash-link" aria-label="Direct link to Management Endpoints / UI" title="Direct link to Management Endpoints / UI">​</a></h2>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="features-2">Features<a href="#features-2" class="hash-link" aria-label="Direct link to Features" title="Direct link to Features">​</a></h4>
+<ul>
+<li>
+<p><strong>Proxy CLI Auth</strong></p>
+<ul>
+<li>Proxy CLI - dont store existing key in the URL, store it in the state param - <a href="https://github.com/BerriAI/litellm/pull/15290" target="_blank" rel="noopener noreferrer">PR #15290</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Models + Endpoints</strong></p>
+<ul>
+<li>Make PATCH <code>/model/{model_id}/update</code> handle <code>team_id</code> consistently with POST <code>/model/new</code> - <a href="https://github.com/BerriAI/litellm/pull/15297" target="_blank" rel="noopener noreferrer">PR #15297</a></li>
+<li>Feature: adds Infinity as a provider in the UI - <a href="https://github.com/BerriAI/litellm/pull/15285" target="_blank" rel="noopener noreferrer">PR #15285</a></li>
+<li>Fix: model + endpoints page crash when config file contains router_settings.model_group_alias - <a href="https://github.com/BerriAI/litellm/pull/15308" target="_blank" rel="noopener noreferrer">PR #15308</a></li>
+<li>Models &amp; Endpoints Initial Refactor - <a href="https://github.com/BerriAI/litellm/pull/15435" target="_blank" rel="noopener noreferrer">PR #15435</a></li>
+<li>Litellm UI API Reference page updates - <a href="https://github.com/BerriAI/litellm/pull/15438" target="_blank" rel="noopener noreferrer">PR #15438</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Teams</strong></p>
+<ul>
+<li>Teams page: new column &quot;Your Role&quot; on the teams table - <a href="https://github.com/BerriAI/litellm/pull/15384" target="_blank" rel="noopener noreferrer">PR #15384</a></li>
+<li>LiteLLM Dashboard Teams UI refactor - <a href="https://github.com/BerriAI/litellm/pull/15418" target="_blank" rel="noopener noreferrer">PR #15418</a></li>
+</ul>
+</li>
+<li>
+<p><strong>UI Infrastructure</strong></p>
+<ul>
+<li>Added prettier to autoformat frontend - <a href="https://github.com/BerriAI/litellm/pull/15215" target="_blank" rel="noopener noreferrer">PR #15215</a></li>
+<li>Adds turbopack to the npm run dev command in UI to build faster during development - <a href="https://github.com/BerriAI/litellm/pull/15250" target="_blank" rel="noopener noreferrer">PR #15250</a></li>
+<li>(perf) fix: Replaces bloated key list calls with lean key aliases endpoint - <a href="https://github.com/BerriAI/litellm/pull/15252" target="_blank" rel="noopener noreferrer">PR #15252</a></li>
+<li>Potentially fixes a UI spasm issue with an expired cookie - <a href="https://github.com/BerriAI/litellm/pull/15309" target="_blank" rel="noopener noreferrer">PR #15309</a></li>
+<li>LiteLLM UI Refactor Infrastructure - <a href="https://github.com/BerriAI/litellm/pull/15236" target="_blank" rel="noopener noreferrer">PR #15236</a></li>
+<li>Enforces removal of unused imports from UI - <a href="https://github.com/BerriAI/litellm/pull/15416" target="_blank" rel="noopener noreferrer">PR #15416</a></li>
+<li>Fix: usage page &gt;&gt; Model Activity &gt;&gt; spend per day graph: y-axis clipping on large spend values - <a href="https://github.com/BerriAI/litellm/pull/15389" target="_blank" rel="noopener noreferrer">PR #15389</a></li>
+<li>Updates guardrail provider logos - <a href="https://github.com/BerriAI/litellm/pull/15421" target="_blank" rel="noopener noreferrer">PR #15421</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Admin Settings</strong></p>
+<ul>
+<li>Fix: Router settings do not update despite success message - <a href="https://github.com/BerriAI/litellm/pull/15249" target="_blank" rel="noopener noreferrer">PR #15249</a></li>
+<li>Fix: Prevents DB from accidentally overriding config file values if they are empty in DB - <a href="https://github.com/BerriAI/litellm/pull/15340" target="_blank" rel="noopener noreferrer">PR #15340</a></li>
+</ul>
+</li>
+<li>
+<p><strong>SSO</strong></p>
+<ul>
+<li>SSO - support EntraID app roles - <a href="https://github.com/BerriAI/litellm/pull/15351" target="_blank" rel="noopener noreferrer">PR #15351</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="logging--guardrail--prompt-management-integrations">Logging / Guardrail / Prompt Management Integrations<a href="#logging--guardrail--prompt-management-integrations" class="hash-link" aria-label="Direct link to Logging / Guardrail / Prompt Management Integrations" title="Direct link to Logging / Guardrail / Prompt Management Integrations">​</a></h2>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="features-3">Features<a href="#features-3" class="hash-link" aria-label="Direct link to Features" title="Direct link to Features">​</a></h4>
+<ul>
+<li><strong><a href="/docs/observability/posthog">PostHog</a></strong>
+<ul>
+<li>Feat: posthog per request api key - <a href="https://github.com/BerriAI/litellm/pull/15379" target="_blank" rel="noopener noreferrer">PR #15379</a></li>
+</ul>
+</li>
+</ul>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="guardrails">Guardrails<a href="#guardrails" class="hash-link" aria-label="Direct link to Guardrails" title="Direct link to Guardrails">​</a></h4>
+<ul>
+<li><strong><a href="/docs/proxy/guardrails">EnkryptAI</a></strong>
+<ul>
+<li>Add EnkryptAI Guardrails on LiteLLM - <a href="https://github.com/BerriAI/litellm/pull/15390" target="_blank" rel="noopener noreferrer">PR #15390</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="spend-tracking-budgets-and-rate-limiting">Spend Tracking, Budgets and Rate Limiting<a href="#spend-tracking-budgets-and-rate-limiting" class="hash-link" aria-label="Direct link to Spend Tracking, Budgets and Rate Limiting" title="Direct link to Spend Tracking, Budgets and Rate Limiting">​</a></h2>
+<ul>
+<li>
+<p><strong>Tag Management</strong></p>
+<ul>
+<li>Tag Management - Add support for setting tag based budgets - <a href="https://github.com/BerriAI/litellm/pull/15433" target="_blank" rel="noopener noreferrer">PR #15433</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Dynamic Rate Limiter v3</strong></p>
+<ul>
+<li>QA/Fixes - Dynamic Rate Limiter v3 - final QA - <a href="https://github.com/BerriAI/litellm/pull/15311" target="_blank" rel="noopener noreferrer">PR #15311</a></li>
+<li>Fix dynamic Rate limiter v3 - inserting litellm_model_saturation - <a href="https://github.com/BerriAI/litellm/pull/15394" target="_blank" rel="noopener noreferrer">PR #15394</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Shared Health Check</strong></p>
+<ul>
+<li>Implement Shared Health Check State Across Pods - <a href="https://github.com/BerriAI/litellm/pull/15380" target="_blank" rel="noopener noreferrer">PR #15380</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="mcp-gateway">MCP Gateway<a href="#mcp-gateway" class="hash-link" aria-label="Direct link to MCP Gateway" title="Direct link to MCP Gateway">​</a></h2>
+<ul>
+<li>
+<p><strong>Tool Control</strong></p>
+<ul>
+<li>MCP Gateway - UI - Select allowed tools for Key, Teams - <a href="https://github.com/BerriAI/litellm/pull/15241" target="_blank" rel="noopener noreferrer">PR #15241</a></li>
+<li>MCP Gateway - Backend - Allow storing allowed tools by team/key - <a href="https://github.com/BerriAI/litellm/pull/15243" target="_blank" rel="noopener noreferrer">PR #15243</a></li>
+<li>MCP Gateway - Fine-grained Database Object Storage Control - <a href="https://github.com/BerriAI/litellm/pull/15255" target="_blank" rel="noopener noreferrer">PR #15255</a></li>
+<li>MCP Gateway - Litellm mcp fixes team control - <a href="https://github.com/BerriAI/litellm/pull/15304" target="_blank" rel="noopener noreferrer">PR #15304</a></li>
+<li>MCP Gateway - QA/Fixes - Ensure Team/Key level enforcement works for MCPs - <a href="https://github.com/BerriAI/litellm/pull/15305" target="_blank" rel="noopener noreferrer">PR #15305</a></li>
+<li>Feature: Include server_name in /v1/mcp/server/health endpoint response - <a href="https://github.com/BerriAI/litellm/pull/15431" target="_blank" rel="noopener noreferrer">PR #15431</a></li>
+</ul>
+</li>
+<li>
+<p><strong>OpenAPI Integration</strong></p>
+<ul>
+<li>MCP - support converting OpenAPI specs to MCP servers - <a href="https://github.com/BerriAI/litellm/pull/15343" target="_blank" rel="noopener noreferrer">PR #15343</a></li>
+<li>MCP - specify allowed params per tool - <a href="https://github.com/BerriAI/litellm/pull/15346" target="_blank" rel="noopener noreferrer">PR #15346</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Configuration</strong></p>
+<ul>
+<li>MCP - support setting CA_BUNDLE_PATH - <a href="https://github.com/BerriAI/litellm/pull/15253" target="_blank" rel="noopener noreferrer">PR #15253</a></li>
+<li>Fix: Ensure MCP client stays open during tool call - <a href="https://github.com/BerriAI/litellm/pull/15391" target="_blank" rel="noopener noreferrer">PR #15391</a></li>
+<li>Remove hardcoded &quot;public&quot; schema in migration.sql - <a href="https://github.com/BerriAI/litellm/pull/15363" target="_blank" rel="noopener noreferrer">PR #15363</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="performance--loadbalancing--reliability-improvements">Performance / Loadbalancing / Reliability improvements<a href="#performance--loadbalancing--reliability-improvements" class="hash-link" aria-label="Direct link to Performance / Loadbalancing / Reliability improvements" title="Direct link to Performance / Loadbalancing / Reliability improvements">​</a></h2>
+<ul>
+<li>
+<p><strong>Router Optimizations</strong></p>
+<ul>
+<li>Fix - Router: add model_name index for O(1) deployment lookups - <a href="https://github.com/BerriAI/litellm/pull/15113" target="_blank" rel="noopener noreferrer">PR #15113</a></li>
+<li>Refactor Utils: extract inner function from client - <a href="https://github.com/BerriAI/litellm/pull/15234" target="_blank" rel="noopener noreferrer">PR #15234</a></li>
+<li>Fix Networking: remove limitations - <a href="https://github.com/BerriAI/litellm/pull/15302" target="_blank" rel="noopener noreferrer">PR #15302</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Session Management</strong></p>
+<ul>
+<li>Fix - Sessions not being shared - <a href="https://github.com/BerriAI/litellm/pull/15388" target="_blank" rel="noopener noreferrer">PR #15388</a></li>
+<li>Fix: remove panic from hot path - <a href="https://github.com/BerriAI/litellm/pull/15396" target="_blank" rel="noopener noreferrer">PR #15396</a></li>
+<li>Fix - shared session parsing and usage issue - <a href="https://github.com/BerriAI/litellm/pull/15440" target="_blank" rel="noopener noreferrer">PR #15440</a></li>
+<li>Fix: handle closed aiohttp sessions - <a href="https://github.com/BerriAI/litellm/pull/15442" target="_blank" rel="noopener noreferrer">PR #15442</a></li>
+<li>Fix: prevent session leaks when recreating aiohttp sessions - <a href="https://github.com/BerriAI/litellm/pull/15443" target="_blank" rel="noopener noreferrer">PR #15443</a></li>
+</ul>
+</li>
+<li>
+<p><strong>SSL/TLS Performance</strong></p>
+<ul>
+<li>Perf: optimize SSL/TLS handshake performance with prioritized cipher - <a href="https://github.com/BerriAI/litellm/pull/15398" target="_blank" rel="noopener noreferrer">PR #15398</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Dependencies</strong></p>
+<ul>
+<li>Upgrades tenacity version to 8.5.0 - <a href="https://github.com/BerriAI/litellm/pull/15303" target="_blank" rel="noopener noreferrer">PR #15303</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Data Masking</strong></p>
+<ul>
+<li>Fix - SensitiveDataMasker converts lists to string - <a href="https://github.com/BerriAI/litellm/pull/15420" target="_blank" rel="noopener noreferrer">PR #15420</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="general-ai-gateway-improvements">General AI Gateway Improvements<a href="#general-ai-gateway-improvements" class="hash-link" aria-label="Direct link to General AI Gateway Improvements" title="Direct link to General AI Gateway Improvements">​</a></h2>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="security">Security<a href="#security" class="hash-link" aria-label="Direct link to Security" title="Direct link to Security">​</a></h4>
+<ul>
+<li><strong>General</strong>
+<ul>
+<li>Fix: redact AWS credentials when redact_user_api_key_info enabled - <a href="https://github.com/BerriAI/litellm/pull/15321" target="_blank" rel="noopener noreferrer">PR #15321</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="documentation-updates">Documentation Updates<a href="#documentation-updates" class="hash-link" aria-label="Direct link to Documentation Updates" title="Direct link to Documentation Updates">​</a></h2>
+<ul>
+<li>
+<p><strong>Provider Documentation</strong></p>
+<ul>
+<li>Update doc: perf update - <a href="https://github.com/BerriAI/litellm/pull/15211" target="_blank" rel="noopener noreferrer">PR #15211</a></li>
+<li>Add W&amp;B Inference documentation - <a href="https://github.com/BerriAI/litellm/pull/15278" target="_blank" rel="noopener noreferrer">PR #15278</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Deployment</strong></p>
+<ul>
+<li>Deletion of docker-compose buggy comment that cause <code>config.yaml</code> based startup fail - <a href="https://github.com/BerriAI/litellm/pull/15425" target="_blank" rel="noopener noreferrer">PR #15425</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="new-contributors">New Contributors<a href="#new-contributors" class="hash-link" aria-label="Direct link to New Contributors" title="Direct link to New Contributors">​</a></h2>
+<ul>
+<li>@Gal-bloch made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/15219" target="_blank" rel="noopener noreferrer">PR #15219</a></li>
+<li>@lcfyi made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/15315" target="_blank" rel="noopener noreferrer">PR #15315</a></li>
+<li>@ashengstd made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/15362" target="_blank" rel="noopener noreferrer">PR #15362</a></li>
+<li>@vkolehmainen made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/15363" target="_blank" rel="noopener noreferrer">PR #15363</a></li>
+<li>@jlan-nl made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/15330" target="_blank" rel="noopener noreferrer">PR #15330</a></li>
+<li>@BCook98 made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/15402" target="_blank" rel="noopener noreferrer">PR #15402</a></li>
+<li>@PabloGmz96 made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/15425" target="_blank" rel="noopener noreferrer">PR #15425</a></li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="full-changelog"><strong><a href="https://github.com/BerriAI/litellm/compare/v1.77.7.rc.1...v1.78.0.rc.1" target="_blank" rel="noopener noreferrer">Full Changelog</a></strong><a href="#full-changelog" class="hash-link" aria-label="Direct link to full-changelog" title="Direct link to full-changelog">​</a></h2></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/release_notes/v1.78.5-stable/v1-78-5"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">v1.78.5-stable</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/release_notes/v1.77.7-stable/v1-77-7"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">v1.77.7-stable</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_jeP5 theme-doc-toc-desktop"><div class="tocItemsContainer_yosJ thin-scrollbar"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#deploy-this-version" class="table-of-contents__link toc-highlight">Deploy this version</a></li><li><a href="#key-highlights" class="table-of-contents__link toc-highlight">Key Highlights</a><ul><li><a href="#mcp-gateway---control-tool-access-by-team-key" class="table-of-contents__link toc-highlight">MCP Gateway - Control Tool Access by Team, Key</a></li></ul></li><li><a href="#performance---70-lower-p99-latency" class="table-of-contents__link toc-highlight">Performance - 70% Lower p99 Latency</a><ul><li><a href="#test-setup" class="table-of-contents__link toc-highlight"><strong>Test Setup</strong></a></li></ul></li><li><a href="#new-models--updated-models" class="table-of-contents__link toc-highlight">New Models / Updated Models</a><ul><li><a href="#bug-fixes" class="table-of-contents__link toc-highlight">Bug Fixes</a></li></ul></li><li><a href="#llm-api-endpoints" class="table-of-contents__link toc-highlight">LLM API Endpoints</a></li><li><a href="#management-endpoints--ui" class="table-of-contents__link toc-highlight">Management Endpoints / UI</a></li><li><a href="#logging--guardrail--prompt-management-integrations" class="table-of-contents__link toc-highlight">Logging / Guardrail / Prompt Management Integrations</a></li><li><a href="#spend-tracking-budgets-and-rate-limiting" class="table-of-contents__link toc-highlight">Spend Tracking, Budgets and Rate Limiting</a></li><li><a href="#mcp-gateway" class="table-of-contents__link toc-highlight">MCP Gateway</a></li><li><a href="#performance--loadbalancing--reliability-improvements" class="table-of-contents__link toc-highlight">Performance / Loadbalancing / Reliability improvements</a></li><li><a href="#general-ai-gateway-improvements" class="table-of-contents__link toc-highlight">General AI Gateway Improvements</a></li><li><a href="#documentation-updates" class="table-of-contents__link toc-highlight">Documentation Updates</a></li><li><a href="#new-contributors" class="table-of-contents__link toc-highlight">New Contributors</a></li><li><a href="#full-changelog" class="table-of-contents__link toc-highlight"><strong>Full Changelog</strong></a></li></ul></div><div class="promoCard_SGxZ"><div class="promoEmoji_Dg1q">🚅</div><div class="promoHeading_s_Ub">LiteLLM Enterprise</div><div class="promoDescription_qSAY">SSO/SAML, audit logs, spend tracking, multi-team management, and guardrails — built for production.</div><a class="promoButton_KLlx" href="/docs/enterprise">Learn more →</a></div></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Docs</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Getting Started</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Community</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://discord.com/invite/wuPM9dRgDw" target="_blank" rel="noopener noreferrer" class="footer__link-item">Discord<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://twitter.com/LiteLLM" target="_blank" rel="noopener noreferrer" class="footer__link-item">Twitter<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/BerriAI/litellm/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 liteLLM</div></div></div></footer><div id="inkeep-shadowradix-:Rp:" style="display:contents"></div><span></span></div>
+</body>
+</html>

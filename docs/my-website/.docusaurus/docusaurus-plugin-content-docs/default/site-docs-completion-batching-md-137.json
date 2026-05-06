@@ -1,0 +1,23 @@
+{
+  "id": "completion/batching",
+  "title": "Batching Completion()",
+  "description": "LiteLLM allows you to:",
+  "source": "@site/docs/completion/batching.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/batching",
+  "permalink": "/docs/completion/batching",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Streaming + Async",
+    "permalink": "/docs/completion/stream"
+  },
+  "next": {
+    "title": "Structured Outputs (JSON Mode)",
+    "permalink": "/docs/completion/json_mode"
+  }
+}

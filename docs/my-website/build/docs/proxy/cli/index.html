@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-proxy/cli" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.8.1">
+<title data-rh="true">CLI Arguments | liteLLM</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" name="twitter:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" property="og:url" content="https://docs.litellm.ai/docs/proxy/cli"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="CLI Arguments | liteLLM"><meta data-rh="true" name="description" content="This page documents all command-line interface (CLI) arguments available for the LiteLLM proxy server."><meta data-rh="true" property="og:description" content="This page documents all command-line interface (CLI) arguments available for the LiteLLM proxy server."><link data-rh="true" rel="icon" href="/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://docs.litellm.ai/docs/proxy/cli"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/docs/proxy/cli" hreflang="en"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/docs/proxy/cli" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"LiteLLM AI Gateway (Proxy)","item":"https://docs.litellm.ai/docs/simple_proxy"},{"@type":"ListItem","position":2,"name":"CLI Arguments","item":"https://docs.litellm.ai/docs/proxy/cli"}]}</script><link rel="preconnect" href="https://www.google-analytics.com">
+<link rel="preconnect" href="https://www.googletagmanager.com">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-K7K215ZVNC"></script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],gtag("js",new Date),gtag("config","G-K7K215ZVNC",{anonymize_ip:!0})</script>
+
+
+
+
+
+
+<link rel="alternate" type="application/rss+xml" href="/blog/rss.xml" title="liteLLM RSS Feed">
+<link rel="alternate" type="application/atom+xml" href="/blog/atom.xml" title="liteLLM Atom Feed">
+<script>window.$crisp=[],window.CRISP_WEBSITE_ID="be07a4d6-dba0-4df7-961d-9302c86b7ebc",d=document,s=d.createElement("script"),s.src="https://client.crisp.chat/l.js",s.async=1,d.getElementsByTagName("head")[0].appendChild(s)</script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],window.gtag||(window.gtag=gtag)</script>
+
+<script async src="https://www.feedbackrocket.io/sdk/v1.2.js" data-fr-id="GQwepB0f0L-x_ZH63kR_V" data-fr-theme="dynamic"></script><link rel="stylesheet" href="/assets/css/styles.f56ea1ab.css">
+<script src="/assets/js/runtime~main.b9bf1bac.js" defer="defer"></script>
+<script src="/assets/js/main.028e115a.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="navbar__brand-col"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/"><b class="navbar__title text--truncate">🚅 LiteLLM</b></a></div><div class="navbar__center-col"><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/docs/">Docs</a><a class="navbar__item navbar__link" href="/docs/learn">Learn</a><a class="navbar__item navbar__link" href="/docs/integrations/">Integrations</a><a class="navbar__item navbar__link" href="/docs/enterprise">Enterprise</a><a class="navbar__item navbar__link" href="/release_notes">Changelog</a><a class="navbar__item navbar__link" href="/blog">Blog</a></div><div class="navbar__right-col"><a href="https://github.com/BerriAI/litellm" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-github-link" aria-label="GitHub repository"></a><a href="https://www.litellm.ai/support" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-discord-link" aria-label="Discord / Slack community"></a><div class="navbarSearchContainer_Bca1"><div id="inkeep-shadowradix-:Rtr5a5:" style="display:contents"></div><span></span></div><div class="toggle_vylO"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebarContainer_YAFp"><div class="searchBarContainer_wiet"><div id="inkeep-shadowradix-:R5aqlda5:" style="display:contents"></div><span></span></div><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link">Get Started</a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/">Quickstart</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a href="https://models.litellm.ai" target="_blank" rel="noopener noreferrer" class="menu__link menuExternalLink_NmtK" tabindex="0">Models &amp; Pricing<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes">Changelog</a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/#litellm-python-sdk">LiteLLM Python SDK</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--active" href="/docs/simple_proxy">LiteLLM AI Gateway (Proxy)</a><button aria-label="Collapse sidebar category &#x27;LiteLLM AI Gateway (Proxy)&#x27;" aria-expanded="true" type="button" class="clean-btn menu__caret"></button></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/docker_quick_start">Getting Started Tutorial</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/a2a">Agent &amp; MCP Gateway</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/configs">Config.yaml</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" tabindex="0" href="/docs/proxy/quick_start">Setup &amp; Deployment</a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/quick_start">CLI - Quick Start</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/docs/proxy/cli">CLI Arguments</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/debugging">Debugging</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/error_diagnosis">Diagnosing Errors - Provider vs Gateway</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/deploy">Docker, Helm, Terraform</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/health">Health Checks</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/master_key_rotations">Rotating Master Key</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/model_management">Model Management</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/prod">⚡ Best Practices for Production</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/worker_startup_hooks">Worker Startup Hooks</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/release_cycle">Release Cycle</a></li></ul></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a href="https://www.litellm.ai/cloud" target="_blank" rel="noopener noreferrer" class="menu__link menuExternalLink_NmtK" tabindex="0">Demo LiteLLM Cloud<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/ui">Admin UI</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/architecture">Architecture</a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a href="https://litellm-api.up.railway.app/" target="_blank" rel="noopener noreferrer" class="menu__link menuExternalLink_NmtK" tabindex="0">All Endpoints (Swagger)<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/enterprise">✨ Enterprise Features</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/virtual_keys">Authentication</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/users">Budgets + Rate Limits</a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/caching">Caching</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/guardrails/quick_start">Guardrails</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/guardrails/guardrail_policies">Policies</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/call_hooks">Create Custom Plugins</a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/management_cli">LiteLLM Proxy CLI</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a href="https://docs.litellm.ai/docs/routing-load-balancing" target="_blank" rel="noopener noreferrer" class="menu__link menuExternalLink_NmtK" tabindex="0">Load Balancing, Routing, Fallbacks<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/traffic_mirroring">A/B Testing - Traffic Mirroring</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/dynamic_logging">Logging, Alerting, Metrics</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/user_keys">Making LLM Requests</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/model_access_guide">Model Access</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/secret_managers/overview">Secret Managers</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/cost_tracking">Spend Tracking</a></div></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist" href="/docs/supported_endpoints">Supported Endpoints</a><button aria-label="Expand sidebar category &#x27;Supported Endpoints&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist" href="/docs/providers">Supported Models &amp; Providers</a><button aria-label="Expand sidebar category &#x27;Supported Models &amp; Providers&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist" href="/docs/routing-load-balancing">Routing &amp; Load Balancing</a><button aria-label="Expand sidebar category &#x27;Routing &amp; Load Balancing&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/benchmarks">Load Testing</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/extras/contributing_code">Contributing</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/sdk_custom_pricing">Extras</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/troubleshoot/ui_issues">Troubleshooting</a></div></li></ul></nav></div></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><a class="breadcrumbs__link" href="/docs/simple_proxy"><span>LiteLLM AI Gateway (Proxy)</span></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">Setup &amp; Deployment</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">CLI Arguments</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>CLI Arguments</h1></header>
+<p>This page documents all command-line interface (CLI) arguments available for the LiteLLM proxy server.</p>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="server-configuration">Server Configuration<a href="#server-configuration" class="hash-link" aria-label="Direct link to Server Configuration" title="Direct link to Server Configuration">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--host">--host<a href="#--host" class="hash-link" aria-label="Direct link to --host" title="Direct link to --host">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>&#x27;0.0.0.0&#x27;</code></li>
+<li>The host for the server to listen on.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --host 127.0.0.1</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>HOST</code></li>
+</ul>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export HOST=127.0.0.1</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--port">--port<a href="#--port" class="hash-link" aria-label="Direct link to --port" title="Direct link to --port">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>4000</code></li>
+<li>The port to bind the server to.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --port 8080</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>PORT</code>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export PORT=8080</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--num_workers">--num_workers<a href="#--num_workers" class="hash-link" aria-label="Direct link to --num_workers" title="Direct link to --num_workers">​</a></h3>
+<ul>
+<li><strong>Default:</strong> Number of logical CPUs in the system, or <code>4</code> if that cannot be determined</li>
+<li>The number of uvicorn / gunicorn workers to spin up.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --num_workers 4</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>NUM_WORKERS</code>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export NUM_WORKERS=4</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--config">--config<a href="#--config" class="hash-link" aria-label="Direct link to --config" title="Direct link to --config">​</a></h3>
+<ul>
+<li><strong>Short form:</strong> <code>-c</code></li>
+<li><strong>Default:</strong> <code>None</code></li>
+<li>Path to the proxy configuration file (e.g., config.yaml).</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --config path/to/config.yaml</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--log_config">--log_config<a href="#--log_config" class="hash-link" aria-label="Direct link to --log_config" title="Direct link to --log_config">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>str</code></li>
+<li>Path to the logging configuration file for uvicorn.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --log_config path/to/log_config.conf</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--keepalive_timeout">--keepalive_timeout<a href="#--keepalive_timeout" class="hash-link" aria-label="Direct link to --keepalive_timeout" title="Direct link to --keepalive_timeout">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>int</code></li>
+<li>Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter).</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --keepalive_timeout 30</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>KEEPALIVE_TIMEOUT</code>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export KEEPALIVE_TIMEOUT=30</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--max_requests_before_restart">--max_requests_before_restart<a href="#--max_requests_before_restart" class="hash-link" aria-label="Direct link to --max_requests_before_restart" title="Direct link to --max_requests_before_restart">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>int</code></li>
+<li>Restart worker after this many requests. This is useful for mitigating memory growth over time.</li>
+<li>For uvicorn: maps to <code>limit_max_requests</code></li>
+<li>For gunicorn: maps to <code>max_requests</code></li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --max_requests_before_restart 10000</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>MAX_REQUESTS_BEFORE_RESTART</code>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export MAX_REQUESTS_BEFORE_RESTART=10000</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="server-backend-options">Server Backend Options<a href="#server-backend-options" class="hash-link" aria-label="Direct link to Server Backend Options" title="Direct link to Server Backend Options">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--run_gunicorn">--run_gunicorn<a href="#--run_gunicorn" class="hash-link" aria-label="Direct link to --run_gunicorn" title="Direct link to --run_gunicorn">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Starts proxy via gunicorn instead of uvicorn. Better for managing multiple workers in production.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --run_gunicorn</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--run_hypercorn">--run_hypercorn<a href="#--run_hypercorn" class="hash-link" aria-label="Direct link to --run_hypercorn" title="Direct link to --run_hypercorn">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Starts proxy via hypercorn instead of uvicorn. Supports HTTP/2.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --run_hypercorn</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--skip_server_startup">--skip_server_startup<a href="#--skip_server_startup" class="hash-link" aria-label="Direct link to --skip_server_startup" title="Direct link to --skip_server_startup">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Skip starting the server after setup (useful for database migrations only).</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --skip_server_startup</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="ssltls-configuration">SSL/TLS Configuration<a href="#ssltls-configuration" class="hash-link" aria-label="Direct link to SSL/TLS Configuration" title="Direct link to SSL/TLS Configuration">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--ssl_keyfile_path">--ssl_keyfile_path<a href="#--ssl_keyfile_path" class="hash-link" aria-label="Direct link to --ssl_keyfile_path" title="Direct link to --ssl_keyfile_path">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>str</code></li>
+<li>Path to the SSL keyfile. Use this when you want to provide SSL certificate when starting proxy.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --ssl_keyfile_path /path/to/key.pem --ssl_certfile_path /path/to/cert.pem</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>SSL_KEYFILE_PATH</code>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export SSL_KEYFILE_PATH=/path/to/key.pem</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--ssl_certfile_path">--ssl_certfile_path<a href="#--ssl_certfile_path" class="hash-link" aria-label="Direct link to --ssl_certfile_path" title="Direct link to --ssl_certfile_path">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>str</code></li>
+<li>Path to the SSL certfile. Use this when you want to provide SSL certificate when starting proxy.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --ssl_certfile_path /path/to/cert.pem --ssl_keyfile_path /path/to/key.pem</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>SSL_CERTFILE_PATH</code>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export SSL_CERTFILE_PATH=/path/to/cert.pem</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--ciphers">--ciphers<a href="#--ciphers" class="hash-link" aria-label="Direct link to --ciphers" title="Direct link to --ciphers">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>str</code></li>
+<li>Ciphers to use for the SSL setup. Only used with <code>--run_hypercorn</code>.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --run_hypercorn --ssl_keyfile_path /path/to/key.pem --ssl_certfile_path /path/to/cert.pem --ciphers &quot;ECDHE+AESGCM&quot;</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="model-configuration">Model Configuration<a href="#model-configuration" class="hash-link" aria-label="Direct link to Model Configuration" title="Direct link to Model Configuration">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--model-or--m">--model or -m<a href="#--model-or--m" class="hash-link" aria-label="Direct link to --model or -m" title="Direct link to --model or -m">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li>The model name to pass to LiteLLM.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --model gpt-3.5-turbo</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--alias">--alias<a href="#--alias" class="hash-link" aria-label="Direct link to --alias" title="Direct link to --alias">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li>An alias for the model, for user-friendly reference. Use this to give a litellm model name (e.g., &quot;huggingface/codellama/CodeLlama-7b-Instruct-hf&quot;) a more user-friendly name (&quot;codellama&quot;).</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --alias my-gpt-model</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--api_base">--api_base<a href="#--api_base" class="hash-link" aria-label="Direct link to --api_base" title="Direct link to --api_base">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li>The API base for the model LiteLLM should call.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --model huggingface/tinyllama --api_base https://k58ory32yinf1ly0.us-east-1.aws.endpoints.huggingface.cloud</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--api_version">--api_version<a href="#--api_version" class="hash-link" aria-label="Direct link to --api_version" title="Direct link to --api_version">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>2024-07-01-preview</code></li>
+<li>For Azure services, specify the API version.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --model azure/gpt-deployment --api_version 2023-08-01 --api_base https://&lt;your api base&gt;&quot;</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--headers">--headers<a href="#--headers" class="hash-link" aria-label="Direct link to --headers" title="Direct link to --headers">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li>Headers for the API call (as JSON string).</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --model my-model --headers &#x27;{&quot;Authorization&quot;: &quot;Bearer token&quot;}&#x27;</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--add_key">--add_key<a href="#--add_key" class="hash-link" aria-label="Direct link to --add_key" title="Direct link to --add_key">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li>Add a key to the model configuration.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --add_key my-api-key</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--save">--save<a href="#--save" class="hash-link" aria-label="Direct link to --save" title="Direct link to --save">​</a></h3>
+<ul>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Save the model-specific config.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --model gpt-3.5-turbo --save</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="model-parameters">Model Parameters<a href="#model-parameters" class="hash-link" aria-label="Direct link to Model Parameters" title="Direct link to Model Parameters">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--temperature">--temperature<a href="#--temperature" class="hash-link" aria-label="Direct link to --temperature" title="Direct link to --temperature">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>float</code></li>
+<li>Set the temperature for the model.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --temperature 0.7</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--max_tokens">--max_tokens<a href="#--max_tokens" class="hash-link" aria-label="Direct link to --max_tokens" title="Direct link to --max_tokens">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>int</code></li>
+<li>Set the maximum number of tokens for the model output.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --max_tokens 50</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--request_timeout">--request_timeout<a href="#--request_timeout" class="hash-link" aria-label="Direct link to --request_timeout" title="Direct link to --request_timeout">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>int</code></li>
+<li>Set the timeout in seconds for completion calls.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --request_timeout 300</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--max_budget">--max_budget<a href="#--max_budget" class="hash-link" aria-label="Direct link to --max_budget" title="Direct link to --max_budget">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>None</code></li>
+<li><strong>Type:</strong> <code>float</code></li>
+<li>Set max budget for API calls. Works for hosted models like OpenAI, TogetherAI, Anthropic, etc.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --max_budget 100.0</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--drop_params">--drop_params<a href="#--drop_params" class="hash-link" aria-label="Direct link to --drop_params" title="Direct link to --drop_params">​</a></h3>
+<ul>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Drop any unmapped params.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --drop_params</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--add_function_to_prompt">--add_function_to_prompt<a href="#--add_function_to_prompt" class="hash-link" aria-label="Direct link to --add_function_to_prompt" title="Direct link to --add_function_to_prompt">​</a></h3>
+<ul>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>If a function passed but unsupported, pass it as a part of the prompt.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --add_function_to_prompt</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="database-configuration">Database Configuration<a href="#database-configuration" class="hash-link" aria-label="Direct link to Database Configuration" title="Direct link to Database Configuration">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--iam_token_db_auth">--iam_token_db_auth<a href="#--iam_token_db_auth" class="hash-link" aria-label="Direct link to --iam_token_db_auth" title="Direct link to --iam_token_db_auth">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Connects to an RDS database using IAM token authentication instead of a password. This is useful for AWS RDS instances that are configured to use IAM database authentication.</li>
+<li>When enabled, LiteLLM will generate an IAM authentication token to connect to the database.</li>
+<li><strong>Required Environment Variables:</strong>
+<ul>
+<li><code>DATABASE_HOST</code> - The RDS database host</li>
+<li><code>DATABASE_PORT</code> - The database port</li>
+<li><code>DATABASE_USER</code> - The database user</li>
+<li><code>DATABASE_NAME</code> - The database name</li>
+<li><code>DATABASE_SCHEMA</code> (optional) - The database schema</li>
+</ul>
+</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --iam_token_db_auth</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>IAM_TOKEN_DB_AUTH</code>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export IAM_TOKEN_DB_AUTH=True</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">export DATABASE_HOST=mydb.us-east-1.rds.amazonaws.com</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">export DATABASE_PORT=5432</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">export DATABASE_USER=mydbuser</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">export DATABASE_NAME=mydb</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--use_prisma_db_push">--use_prisma_db_push<a href="#--use_prisma_db_push" class="hash-link" aria-label="Direct link to --use_prisma_db_push" title="Direct link to --use_prisma_db_push">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Use <code>prisma db push</code> instead of <code>prisma migrate</code> for database schema updates. This is useful when you want to quickly sync your database schema without creating migration files.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --use_prisma_db_push</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="debugging">Debugging<a href="#debugging" class="hash-link" aria-label="Direct link to Debugging" title="Direct link to Debugging">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--debug">--debug<a href="#--debug" class="hash-link" aria-label="Direct link to --debug" title="Direct link to --debug">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Enable debugging mode for the input.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --debug</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>DEBUG</code>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export DEBUG=True</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--detailed_debug">--detailed_debug<a href="#--detailed_debug" class="hash-link" aria-label="Direct link to --detailed_debug" title="Direct link to --detailed_debug">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Enable detailed debugging mode to view verbose debug logs.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --detailed_debug</span><br></span></code></pre></div></div>
+</li>
+<li><strong>Usage - set Environment Variable:</strong> <code>DETAILED_DEBUG</code>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">export DETAILED_DEBUG=True</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">litellm</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--local">--local<a href="#--local" class="hash-link" aria-label="Direct link to --local" title="Direct link to --local">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>For local debugging purposes.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --local</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="testing--health-checks">Testing &amp; Health Checks<a href="#testing--health-checks" class="hash-link" aria-label="Direct link to Testing &amp; Health Checks" title="Direct link to Testing &amp; Health Checks">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--test">--test<a href="#--test" class="hash-link" aria-label="Direct link to --test" title="Direct link to --test">​</a></h3>
+<ul>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Proxy chat completions URL to make a test request to.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --test</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--test_async">--test_async<a href="#--test_async" class="hash-link" aria-label="Direct link to --test_async" title="Direct link to --test_async">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Calls async endpoints <code>/queue/requests</code> and <code>/queue/response</code>.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --test_async</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--num_requests">--num_requests<a href="#--num_requests" class="hash-link" aria-label="Direct link to --num_requests" title="Direct link to --num_requests">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>10</code></li>
+<li><strong>Type:</strong> <code>int</code></li>
+<li>Number of requests to hit async endpoint with (used with <code>--test_async</code>).</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --test_async --num_requests 100</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--health">--health<a href="#--health" class="hash-link" aria-label="Direct link to --health" title="Direct link to --health">​</a></h3>
+<ul>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Runs a health check on all models in config.yaml.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --health</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="other-options">Other Options<a href="#other-options" class="hash-link" aria-label="Direct link to Other Options" title="Direct link to Other Options">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--version">--version<a href="#--version" class="hash-link" aria-label="Direct link to --version" title="Direct link to --version">​</a></h3>
+<ul>
+<li><strong>Short form:</strong> <code>-v</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>Print LiteLLM version and exit.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --version</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--telemetry">--telemetry<a href="#--telemetry" class="hash-link" aria-label="Direct link to --telemetry" title="Direct link to --telemetry">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>True</code></li>
+<li><strong>Type:</strong> <code>bool</code></li>
+<li>Help track usage of this feature. Turn off for privacy.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --telemetry False</span><br></span></code></pre></div></div>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="--use_queue">--use_queue<a href="#--use_queue" class="hash-link" aria-label="Direct link to --use_queue" title="Direct link to --use_queue">​</a></h3>
+<ul>
+<li><strong>Default:</strong> <code>False</code></li>
+<li><strong>Type:</strong> <code>bool</code> (Flag)</li>
+<li>To use celery workers for async endpoints.</li>
+<li><strong>Usage:</strong>
+<div class="language-shell codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-shell codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">litellm --use_queue</span><br></span></code></pre></div></div>
+</li>
+</ul></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/docs/proxy/quick_start"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">CLI - Quick Start</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/docs/proxy/debugging"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Debugging</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_jeP5 theme-doc-toc-desktop"><div class="tocItemsContainer_yosJ thin-scrollbar"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#server-configuration" class="table-of-contents__link toc-highlight">Server Configuration</a><ul><li><a href="#--host" class="table-of-contents__link toc-highlight">--host</a></li><li><a href="#--port" class="table-of-contents__link toc-highlight">--port</a></li><li><a href="#--num_workers" class="table-of-contents__link toc-highlight">--num_workers</a></li><li><a href="#--config" class="table-of-contents__link toc-highlight">--config</a></li><li><a href="#--log_config" class="table-of-contents__link toc-highlight">--log_config</a></li><li><a href="#--keepalive_timeout" class="table-of-contents__link toc-highlight">--keepalive_timeout</a></li><li><a href="#--max_requests_before_restart" class="table-of-contents__link toc-highlight">--max_requests_before_restart</a></li></ul></li><li><a href="#server-backend-options" class="table-of-contents__link toc-highlight">Server Backend Options</a><ul><li><a href="#--run_gunicorn" class="table-of-contents__link toc-highlight">--run_gunicorn</a></li><li><a href="#--run_hypercorn" class="table-of-contents__link toc-highlight">--run_hypercorn</a></li><li><a href="#--skip_server_startup" class="table-of-contents__link toc-highlight">--skip_server_startup</a></li></ul></li><li><a href="#ssltls-configuration" class="table-of-contents__link toc-highlight">SSL/TLS Configuration</a><ul><li><a href="#--ssl_keyfile_path" class="table-of-contents__link toc-highlight">--ssl_keyfile_path</a></li><li><a href="#--ssl_certfile_path" class="table-of-contents__link toc-highlight">--ssl_certfile_path</a></li><li><a href="#--ciphers" class="table-of-contents__link toc-highlight">--ciphers</a></li></ul></li><li><a href="#model-configuration" class="table-of-contents__link toc-highlight">Model Configuration</a><ul><li><a href="#--model-or--m" class="table-of-contents__link toc-highlight">--model or -m</a></li><li><a href="#--alias" class="table-of-contents__link toc-highlight">--alias</a></li><li><a href="#--api_base" class="table-of-contents__link toc-highlight">--api_base</a></li><li><a href="#--api_version" class="table-of-contents__link toc-highlight">--api_version</a></li><li><a href="#--headers" class="table-of-contents__link toc-highlight">--headers</a></li><li><a href="#--add_key" class="table-of-contents__link toc-highlight">--add_key</a></li><li><a href="#--save" class="table-of-contents__link toc-highlight">--save</a></li></ul></li><li><a href="#model-parameters" class="table-of-contents__link toc-highlight">Model Parameters</a><ul><li><a href="#--temperature" class="table-of-contents__link toc-highlight">--temperature</a></li><li><a href="#--max_tokens" class="table-of-contents__link toc-highlight">--max_tokens</a></li><li><a href="#--request_timeout" class="table-of-contents__link toc-highlight">--request_timeout</a></li><li><a href="#--max_budget" class="table-of-contents__link toc-highlight">--max_budget</a></li><li><a href="#--drop_params" class="table-of-contents__link toc-highlight">--drop_params</a></li><li><a href="#--add_function_to_prompt" class="table-of-contents__link toc-highlight">--add_function_to_prompt</a></li></ul></li><li><a href="#database-configuration" class="table-of-contents__link toc-highlight">Database Configuration</a><ul><li><a href="#--iam_token_db_auth" class="table-of-contents__link toc-highlight">--iam_token_db_auth</a></li><li><a href="#--use_prisma_db_push" class="table-of-contents__link toc-highlight">--use_prisma_db_push</a></li></ul></li><li><a href="#debugging" class="table-of-contents__link toc-highlight">Debugging</a><ul><li><a href="#--debug" class="table-of-contents__link toc-highlight">--debug</a></li><li><a href="#--detailed_debug" class="table-of-contents__link toc-highlight">--detailed_debug</a></li><li><a href="#--local" class="table-of-contents__link toc-highlight">--local</a></li></ul></li><li><a href="#testing--health-checks" class="table-of-contents__link toc-highlight">Testing &amp; Health Checks</a><ul><li><a href="#--test" class="table-of-contents__link toc-highlight">--test</a></li><li><a href="#--test_async" class="table-of-contents__link toc-highlight">--test_async</a></li><li><a href="#--num_requests" class="table-of-contents__link toc-highlight">--num_requests</a></li><li><a href="#--health" class="table-of-contents__link toc-highlight">--health</a></li></ul></li><li><a href="#other-options" class="table-of-contents__link toc-highlight">Other Options</a><ul><li><a href="#--version" class="table-of-contents__link toc-highlight">--version</a></li><li><a href="#--telemetry" class="table-of-contents__link toc-highlight">--telemetry</a></li><li><a href="#--use_queue" class="table-of-contents__link toc-highlight">--use_queue</a></li></ul></li></ul></div><div class="promoCard_SGxZ"><div class="promoEmoji_Dg1q">🚅</div><div class="promoHeading_s_Ub">LiteLLM Enterprise</div><div class="promoDescription_qSAY">SSO/SAML, audit logs, spend tracking, multi-team management, and guardrails — built for production.</div><a class="promoButton_KLlx" href="/docs/enterprise">Learn more →</a></div></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Docs</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Getting Started</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Community</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://discord.com/invite/wuPM9dRgDw" target="_blank" rel="noopener noreferrer" class="footer__link-item">Discord<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://twitter.com/LiteLLM" target="_blank" rel="noopener noreferrer" class="footer__link-item">Twitter<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/BerriAI/litellm/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 liteLLM</div></div></div></footer><div id="inkeep-shadowradix-:Rp:" style="display:contents"></div><span></span></div>
+</body>
+</html>

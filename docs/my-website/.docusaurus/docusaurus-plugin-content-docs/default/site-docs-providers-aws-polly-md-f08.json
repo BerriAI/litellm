@@ -1,0 +1,23 @@
+{
+  "id": "providers/aws_polly",
+  "title": "AWS Polly Text to Speech (tts)",
+  "description": "Overview",
+  "source": "@site/docs/providers/aws_polly.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/aws_polly",
+  "permalink": "/docs/providers/aws_polly",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Bedrock Realtime API",
+    "permalink": "/docs/providers/bedrock_realtime_with_audio"
+  },
+  "next": {
+    "title": "Bedrock Knowledge Bases",
+    "permalink": "/docs/providers/bedrock_vector_store"
+  }
+}

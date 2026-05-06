@@ -1,0 +1,23 @@
+{
+  "id": "batches",
+  "title": "/batches",
+  "description": "Covers Batches, Files",
+  "source": "@site/docs/batches.md",
+  "sourceDirName": ".",
+  "slug": "/batches",
+  "permalink": "/docs/batches",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/audio/speech",
+    "permalink": "/docs/text_to_speech"
+  },
+  "next": {
+    "title": "[BETA] LiteLLM Managed Files with Batches",
+    "permalink": "/docs/proxy/managed_batches"
+  }
+}

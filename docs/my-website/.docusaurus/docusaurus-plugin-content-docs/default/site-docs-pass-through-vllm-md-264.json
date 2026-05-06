@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/vllm",
+  "title": "VLLM",
+  "description": "Pass-through endpoints for VLLM - call provider-specific endpoint, in native format (no translation).",
+  "source": "@site/docs/pass_through/vllm.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/vllm",
+  "permalink": "/docs/pass_through/vllm",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI Search Datastores",
+    "permalink": "/docs/pass_through/vertex_ai_search_datastores"
+  },
+  "next": {
+    "title": "Create Pass Through Endpoints",
+    "permalink": "/docs/proxy/pass_through"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "search/index",
+  "title": "Overview",
+  "description": "| Feature | Supported |",
+  "source": "@site/docs/search/index.md",
+  "sourceDirName": "search",
+  "slug": "/search/",
+  "permalink": "/docs/search/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/responses/compact",
+    "permalink": "/docs/response_api_compact"
+  },
+  "next": {
+    "title": "Perplexity AI Search",
+    "permalink": "/docs/search/perplexity"
+  }
+}

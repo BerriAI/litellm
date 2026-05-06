@@ -1,0 +1,23 @@
+{
+  "id": "completion/json_mode",
+  "title": "Structured Outputs (JSON Mode)",
+  "description": "Quick Start",
+  "source": "@site/docs/completion/json_mode.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/json_mode",
+  "permalink": "/docs/completion/json_mode",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Batching Completion()",
+    "permalink": "/docs/completion/batching"
+  },
+  "next": {
+    "title": "'Thinking' / 'Reasoning Content'",
+    "permalink": "/docs/reasoning_content"
+  }
+}

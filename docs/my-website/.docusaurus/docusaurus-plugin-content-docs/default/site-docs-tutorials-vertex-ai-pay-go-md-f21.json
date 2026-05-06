@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/vertex_ai_pay_go",
+  "title": "Vertex AI PayGo and Priority",
+  "description": "Priority PayGo",
+  "source": "@site/docs/tutorials/vertex_ai_pay_go.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/vertex_ai_pay_go",
+  "permalink": "/docs/tutorials/vertex_ai_pay_go",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Spend Tracking",
+    "permalink": "/docs/proxy/cost_tracking"
+  },
+  "next": {
+    "title": "Request Tags for Spend Tracking",
+    "permalink": "/docs/proxy/request_tags"
+  }
+}

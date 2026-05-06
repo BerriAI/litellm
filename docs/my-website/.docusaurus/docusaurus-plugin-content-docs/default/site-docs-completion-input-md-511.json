@@ -1,0 +1,23 @@
+{
+  "id": "completion/input",
+  "title": "Input Params",
+  "description": "Common Params",
+  "source": "@site/docs/completion/input.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/input",
+  "permalink": "/docs/completion/input",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Quickstart",
+    "permalink": "/docs/"
+  },
+  "next": {
+    "title": "embedding()",
+    "permalink": "/docs/embedding/supported_embedding"
+  }
+}

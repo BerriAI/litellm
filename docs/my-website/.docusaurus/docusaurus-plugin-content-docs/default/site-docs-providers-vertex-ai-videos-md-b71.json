@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_ai/videos",
+  "title": "Vertex AI Video Generation (Veo)",
+  "description": "LiteLLM supports Vertex AI's Veo video generation models using the unified OpenAI video API surface.",
+  "source": "@site/docs/providers/vertex_ai/videos.md",
+  "sourceDirName": "providers/vertex_ai",
+  "slug": "/providers/vertex_ai/videos",
+  "permalink": "/docs/providers/vertex_ai/videos",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "VertexAI [Gemini]",
+    "permalink": "/docs/providers/vertex"
+  },
+  "next": {
+    "title": "Vertex AI - Anthropic, DeepSeek, Model Garden",
+    "permalink": "/docs/providers/vertex_partner"
+  }
+}

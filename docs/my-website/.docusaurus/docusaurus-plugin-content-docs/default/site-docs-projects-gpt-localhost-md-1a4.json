@@ -1,0 +1,23 @@
+{
+  "id": "projects/GPTLocalhost",
+  "title": "GPTLocalhost",
+  "description": "GPTLocalhost - LiteLLM is supported by GPTLocalhost, a local Word Add-in for you to use models in LiteLLM within Microsoft Word. 100% Private.",
+  "source": "@site/docs/projects/GPTLocalhost.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/GPTLocalhost",
+  "permalink": "/docs/projects/GPTLocalhost",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "pgai",
+    "permalink": "/docs/projects/pgai"
+  },
+  "next": {
+    "title": "HolmesGPT",
+    "permalink": "/docs/projects/HolmesGPT"
+  }
+}

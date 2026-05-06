@@ -1,0 +1,23 @@
+{
+  "id": "providers/google_ai_studio/realtime",
+  "title": "Gemini Realtime API - Google AI Studio",
+  "description": "| Feature | Description | Comments |",
+  "source": "@site/docs/providers/google_ai_studio/realtime.md",
+  "sourceDirName": "providers/google_ai_studio",
+  "slug": "/providers/google_ai_studio/realtime",
+  "permalink": "/docs/providers/google_ai_studio/realtime",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Google AI Studio Image Generation",
+    "permalink": "/docs/providers/google_ai_studio/image_gen"
+  },
+  "next": {
+    "title": "Anthropic",
+    "permalink": "/docs/providers/anthropic"
+  }
+}

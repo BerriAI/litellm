@@ -1,0 +1,23 @@
+{
+  "id": "providers/stability",
+  "title": "Stability AI",
+  "description": "https://stability.ai/",
+  "source": "@site/docs/providers/stability.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/stability",
+  "permalink": "/docs/providers/stability",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Scaleway",
+    "permalink": "/docs/providers/scaleway"
+  },
+  "next": {
+    "title": "Synthetic",
+    "permalink": "/docs/providers/synthetic"
+  }
+}

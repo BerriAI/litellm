@@ -1,0 +1,23 @@
+{
+  "id": "integrations/websearch_interception",
+  "title": "Web Search Integration",
+  "description": "Enable transparent server-side web search execution for any LLM provider. LiteLLM automatically intercepts web search tool calls and executes them using your configured search provider (Perplexity, Tavily, etc.).",
+  "source": "@site/docs/integrations/websearch_interception.md",
+  "sourceDirName": "integrations",
+  "slug": "/integrations/websearch_interception",
+  "permalink": "/docs/integrations/websearch_interception",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Web Search",
+    "permalink": "/docs/completion/web_search"
+  },
+  "next": {
+    "title": "Web Fetch",
+    "permalink": "/docs/completion/web_fetch"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "proxy/perf",
+  "title": "LiteLLM Proxy Performance",
+  "description": "Throughput - 30% Increase",
+  "source": "@site/docs/proxy/perf.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/perf",
+  "permalink": "/docs/proxy/perf",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

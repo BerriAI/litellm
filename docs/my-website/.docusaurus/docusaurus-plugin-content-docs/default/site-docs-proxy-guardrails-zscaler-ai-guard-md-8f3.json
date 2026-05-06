@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/zscaler_ai_guard",
+  "title": "Zscaler AI Guard",
+  "description": "Overview",
+  "source": "@site/docs/proxy/guardrails/zscaler_ai_guard.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/zscaler_ai_guard",
+  "permalink": "/docs/proxy/guardrails/zscaler_ai_guard",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "LiteLLM Tool Permission Guardrail",
+    "permalink": "/docs/proxy/guardrails/tool_permission"
+  },
+  "next": {
+    "title": "Alerting / Webhooks",
+    "permalink": "/docs/proxy/alerting"
+  }
+}

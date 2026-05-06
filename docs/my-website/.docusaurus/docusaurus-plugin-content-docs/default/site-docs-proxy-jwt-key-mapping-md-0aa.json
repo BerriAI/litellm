@@ -1,0 +1,23 @@
+{
+  "id": "proxy/jwt_key_mapping",
+  "title": "JWT → Virtual Key Mapping",
+  "description": "JWT → Virtual Key Mapping is an Enterprise feature.",
+  "source": "@site/docs/proxy/jwt_key_mapping.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/jwt_key_mapping",
+  "permalink": "/docs/proxy/jwt_key_mapping",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "OIDC - JWT-based Auth",
+    "permalink": "/docs/proxy/token_auth"
+  },
+  "next": {
+    "title": "[Beta] Service Accounts",
+    "permalink": "/docs/proxy/service_accounts"
+  }
+}

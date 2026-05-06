@@ -1,0 +1,14 @@
+{
+  "id": "providers/gigachat",
+  "title": "GigaChat",
+  "description": "https://developers.sber.ru/docs/ru/gigachat/api/overview",
+  "source": "@site/docs/providers/gigachat.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/gigachat",
+  "permalink": "/docs/providers/gigachat",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/logging",
+  "title": "Logging",
+  "description": "Log Proxy input, output, and exceptions using:",
+  "source": "@site/docs/proxy/logging.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/logging",
+  "permalink": "/docs/proxy/logging",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Dynamic Callback Management",
+    "permalink": "/docs/proxy/dynamic_logging"
+  },
+  "next": {
+    "title": "StandardLoggingPayload Specification",
+    "permalink": "/docs/proxy/logging_spec"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "guides/index",
+  "title": "Guides",
+  "description": "Guides are focused references organized by the job you are trying to do with LiteLLM: make requests, use tools, handle media, manage context, or operate the gateway safely.",
+  "source": "@site/docs/guides/index.md",
+  "sourceDirName": "guides",
+  "slug": "/guides/",
+  "permalink": "/docs/guides/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Guides",
+    "sidebar_label": "Overview"
+  },
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Gateway Quickstart",
+    "permalink": "/docs/learn/gateway_quickstart"
+  },
+  "next": {
+    "title": "Core Requests",
+    "permalink": "/docs/guides/core_request_response_patterns"
+  }
+}

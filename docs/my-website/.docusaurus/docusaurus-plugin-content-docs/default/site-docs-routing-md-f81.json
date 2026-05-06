@@ -1,0 +1,23 @@
+{
+  "id": "routing",
+  "title": "Router - Load Balancing",
+  "description": "LiteLLM manages:",
+  "source": "@site/docs/routing.md",
+  "sourceDirName": ".",
+  "slug": "/routing",
+  "permalink": "/docs/routing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Routing & Load Balancing",
+    "permalink": "/docs/routing-load-balancing"
+  },
+  "next": {
+    "title": "[BETA] Request Prioritization",
+    "permalink": "/docs/scheduler"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/clarifai",
+  "title": "Clarifai",
+  "description": "Anthropic, OpenAI, Qwen, xAI, Gemini and most of Open soured LLMs are Supported on Clarifai.",
+  "source": "@site/docs/providers/clarifai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/clarifai",
+  "permalink": "/docs/providers/clarifai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Chutes",
+    "permalink": "/docs/providers/chutes"
+  },
+  "next": {
+    "title": "Cloudflare Workers AI",
+    "permalink": "/docs/providers/cloudflare_workers"
+  }
+}

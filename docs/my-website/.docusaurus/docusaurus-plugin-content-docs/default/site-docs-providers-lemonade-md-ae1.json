@@ -1,0 +1,23 @@
+{
+  "id": "providers/lemonade",
+  "title": "Lemonade",
+  "description": "Lemonade Server is an OpenAI-compatible local language model inference provider optimized for AMD GPUs and NPUs. The lemonade litellm provider supports standard chat completions with full OpenAI API compatibility.",
+  "source": "@site/docs/providers/lemonade.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/lemonade",
+  "permalink": "/docs/providers/lemonade",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "LangGraph",
+    "permalink": "/docs/providers/langgraph"
+  },
+  "next": {
+    "title": "Llamafile",
+    "permalink": "/docs/providers/llamafile"
+  }
+}

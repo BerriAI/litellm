@@ -1,0 +1,23 @@
+{
+  "id": "router_architecture",
+  "title": "Router Architecture (Fallbacks / Retries)",
+  "description": "High Level architecture",
+  "source": "@site/docs/router_architecture.md",
+  "sourceDirName": ".",
+  "slug": "/router_architecture",
+  "permalink": "/docs/router_architecture",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "User Management Hierarchy",
+    "permalink": "/docs/proxy/user_management_heirarchy"
+  },
+  "next": {
+    "title": "✨ Enterprise Features",
+    "permalink": "/docs/proxy/enterprise"
+  }
+}

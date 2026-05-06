@@ -1,0 +1,23 @@
+{
+  "id": "providers/gemini",
+  "title": "Gemini - Google AI Studio",
+  "description": "| Property | Details |",
+  "source": "@site/docs/providers/gemini.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/gemini",
+  "permalink": "/docs/providers/gemini",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI Gemini Live - Realtime API",
+    "permalink": "/docs/providers/vertex_realtime"
+  },
+  "next": {
+    "title": "Gemini Video Generation (Veo)",
+    "permalink": "/docs/providers/gemini/videos"
+  }
+}

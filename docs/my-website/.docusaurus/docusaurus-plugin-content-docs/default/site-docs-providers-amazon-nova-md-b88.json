@@ -1,0 +1,23 @@
+{
+  "id": "providers/amazon_nova",
+  "title": "Amazon Nova",
+  "description": "| Property | Details |",
+  "source": "@site/docs/providers/amazon_nova.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/amazon_nova",
+  "permalink": "/docs/providers/amazon_nova",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Aleph Alpha",
+    "permalink": "/docs/providers/aleph_alpha"
+  },
+  "next": {
+    "title": "Anyscale",
+    "permalink": "/docs/providers/anyscale"
+  }
+}

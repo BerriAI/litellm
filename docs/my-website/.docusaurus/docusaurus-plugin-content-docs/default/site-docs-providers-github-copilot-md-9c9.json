@@ -1,0 +1,23 @@
+{
+  "id": "providers/github_copilot",
+  "title": "GitHub Copilot",
+  "description": "https://docs.github.com/en/copilot",
+  "source": "@site/docs/providers/github_copilot.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/github_copilot",
+  "permalink": "/docs/providers/github_copilot",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Github",
+    "permalink": "/docs/providers/github"
+  },
+  "next": {
+    "title": "GMI Cloud",
+    "permalink": "/docs/providers/gmi"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "adding_provider/directory_structure",
+  "title": "Directory Structure",
+  "description": "When adding a new provider, you need to create a directory for the provider that follows the following structure:",
+  "source": "@site/docs/adding_provider/directory_structure.md",
+  "sourceDirName": "adding_provider",
+  "slug": "/adding_provider/directory_structure",
+  "permalink": "/docs/adding_provider/directory_structure",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Adding OpenAI-Compatible Providers",
+    "permalink": "/docs/contributing/adding_openai_compatible_providers"
+  },
+  "next": {
+    "title": "Add Rerank Provider",
+    "permalink": "/docs/adding_provider/new_rerank_provider"
+  }
+}

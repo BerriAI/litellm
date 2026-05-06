@@ -1,0 +1,23 @@
+{
+  "id": "completion/message_sanitization",
+  "title": "Message Sanitization for Tool Calling for anthropic models",
+  "description": "Automatically fix common message formatting issues when using tool calling with modify_params=True",
+  "source": "@site/docs/completion/message_sanitization.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/message_sanitization",
+  "permalink": "/docs/completion/message_sanitization",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Code Interpreter",
+    "permalink": "/docs/guides/code_interpreter"
+  },
+  "next": {
+    "title": "Multimodal I/O",
+    "permalink": "/docs/guides/multimodal_io"
+  }
+}

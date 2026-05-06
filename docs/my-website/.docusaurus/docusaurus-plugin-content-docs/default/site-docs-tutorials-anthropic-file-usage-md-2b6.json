@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/anthropic_file_usage",
+  "title": "Using Anthropic File API with LiteLLM Proxy",
+  "description": "Overview",
+  "source": "@site/docs/tutorials/anthropic_file_usage.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/anthropic_file_usage",
+  "permalink": "/docs/tutorials/anthropic_file_usage",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "File Search in the Responses API",
+    "permalink": "/docs/tutorials/file_search_responses_api"
+  },
+  "next": {
+    "title": "Call Gemini Realtime API with Audio Input/Output",
+    "permalink": "/docs/tutorials/gemini_realtime_with_audio"
+  }
+}

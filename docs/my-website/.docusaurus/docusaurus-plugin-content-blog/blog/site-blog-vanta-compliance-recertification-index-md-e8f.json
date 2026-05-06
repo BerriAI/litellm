@@ -1,0 +1,53 @@
+{
+  "permalink": "/blog/vanta-compliance-recertification",
+  "source": "@site/blog/vanta_compliance_recertification/index.md",
+  "title": "LiteLLM + Vanta: SOC 2 Type 2 and ISO 27001 Recertification",
+  "description": "LiteLLM is partnering with Vanta on SOC 2 Type 2 and ISO 27001 recertification and engaging independent auditors for verification.",
+  "date": "2026-03-30T10:00:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "security",
+      "permalink": "/blog/tags/security"
+    },
+    {
+      "inline": true,
+      "label": "compliance",
+      "permalink": "/blog/tags/compliance"
+    }
+  ],
+  "hasTruncateMarker": false,
+  "authors": [
+    {
+      "name": "Krrish Dholakia",
+      "title": "CEO, LiteLLM",
+      "url": "https://www.linkedin.com/in/krish-d/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg",
+      "key": "krrish",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "vanta-compliance-recertification",
+    "title": "LiteLLM + Vanta: SOC 2 Type 2 and ISO 27001 Recertification",
+    "date": "2026-03-30T10:00:00.000Z",
+    "authors": [
+      "krrish"
+    ],
+    "description": "LiteLLM is partnering with Vanta on SOC 2 Type 2 and ISO 27001 recertification and engaging independent auditors for verification.",
+    "tags": [
+      "security",
+      "compliance"
+    ],
+    "hide_table_of_contents": true
+  },
+  "unlisted": false,
+  "prevItem": {
+    "title": "Announcing CI/CD v2 for LiteLLM",
+    "permalink": "/blog/ci-cd-v2-improvements"
+  },
+  "nextItem": {
+    "title": "Security Townhall Updates",
+    "permalink": "/blog/security-townhall-updates"
+  }
+}

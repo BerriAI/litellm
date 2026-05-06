@@ -1,0 +1,23 @@
+{
+  "id": "observability/langfuse_otel_integration",
+  "title": "🪢 Langfuse OpenTelemetry Integration",
+  "description": "The Langfuse OpenTelemetry integration allows you to send LiteLLM traces and observability data to Langfuse using the OpenTelemetry protocol. This provides a standardized way to collect and analyze your LLM usage data.",
+  "source": "@site/docs/observability/langfuse_otel_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/langfuse_otel_integration",
+  "permalink": "/docs/observability/langfuse_otel_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "🪢 Langfuse - Logging LLM Input/Output",
+    "permalink": "/docs/observability/langfuse_integration"
+  },
+  "next": {
+    "title": "Langsmith - Logging LLM Input/Output",
+    "permalink": "/docs/observability/langsmith_integration"
+  }
+}

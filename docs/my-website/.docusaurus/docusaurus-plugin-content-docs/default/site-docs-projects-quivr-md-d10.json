@@ -1,0 +1,23 @@
+{
+  "id": "projects/Quivr",
+  "title": "Quivr",
+  "description": "🧠 Your Second Brain supercharged by Generative AI 🧠 Dump all your files and chat with your personal assistant on your files & more using GPT 3.5/4, Private, Anthropic, VertexAI, LLMs...",
+  "source": "@site/docs/projects/Quivr.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Quivr",
+  "permalink": "/docs/projects/Quivr",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Softgen",
+    "permalink": "/docs/projects/Softgen"
+  },
+  "next": {
+    "title": "Langstream",
+    "permalink": "/docs/projects/Langstream"
+  }
+}

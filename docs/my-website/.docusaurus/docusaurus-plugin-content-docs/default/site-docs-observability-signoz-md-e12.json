@@ -1,0 +1,23 @@
+{
+  "id": "observability/signoz",
+  "title": "SigNoz LiteLLM Integration",
+  "description": "For more details on setting up observability for LiteLLM, check out the SigNoz LiteLLM observability docs.",
+  "source": "@site/docs/observability/signoz.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/signoz",
+  "permalink": "/docs/observability/signoz",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Sentry - Log LLM Exceptions",
+    "permalink": "/docs/observability/sentry"
+  },
+  "next": {
+    "title": "Slack - Logging LLM Input/Output, Exceptions",
+    "permalink": "/docs/observability/slack_integration"
+  }
+}

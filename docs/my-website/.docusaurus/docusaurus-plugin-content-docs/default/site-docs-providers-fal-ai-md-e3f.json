@@ -1,0 +1,23 @@
+{
+  "id": "providers/fal_ai",
+  "title": "Fal AI",
+  "description": "Fal AI provides fast, scalable access to state-of-the-art image generation models including FLUX, Stable Diffusion, Imagen, and more.",
+  "source": "@site/docs/providers/fal_ai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/fal_ai",
+  "permalink": "/docs/providers/fal_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "ElevenLabs",
+    "permalink": "/docs/providers/elevenlabs"
+  },
+  "next": {
+    "title": "Featherless AI",
+    "permalink": "/docs/providers/featherless_ai"
+  }
+}

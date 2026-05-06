@@ -1,0 +1,23 @@
+{
+  "id": "a2a_iteration_budgets",
+  "title": "Agent Iteration Budgets",
+  "description": "Control runaway costs from agentic loops with per-session iteration and budget caps.",
+  "source": "@site/docs/a2a_iteration_budgets.md",
+  "sourceDirName": ".",
+  "slug": "/a2a_iteration_budgets",
+  "permalink": "/docs/a2a_iteration_budgets",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Agent Permission Management",
+    "permalink": "/docs/a2a_agent_permissions"
+  },
+  "next": {
+    "title": "MCP Overview",
+    "permalink": "/docs/mcp"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "proxy/user_onboarding",
+  "title": "User Onboarding Guide",
+  "description": "A step-by-step guide to help admins onboard users to your LiteLLM proxy instance and help users get started with their API key.",
+  "source": "@site/docs/proxy/user_onboarding.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/user_onboarding",
+  "permalink": "/docs/proxy/user_onboarding",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

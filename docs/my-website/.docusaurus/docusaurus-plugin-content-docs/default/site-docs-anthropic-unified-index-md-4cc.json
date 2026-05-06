@@ -1,0 +1,23 @@
+{
+  "id": "anthropic_unified/index",
+  "title": "/v1/messages",
+  "description": "Use LiteLLM to call all your LLM APIs in the Anthropic v1/messages format.",
+  "source": "@site/docs/anthropic_unified/index.md",
+  "sourceDirName": "anthropic_unified",
+  "slug": "/anthropic_unified/",
+  "permalink": "/docs/anthropic_unified/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Troubleshooting Guide",
+    "permalink": "/docs/mcp_troubleshoot"
+  },
+  "next": {
+    "title": "Structured Output /v1/messages",
+    "permalink": "/docs/anthropic_unified/structured_output"
+  }
+}

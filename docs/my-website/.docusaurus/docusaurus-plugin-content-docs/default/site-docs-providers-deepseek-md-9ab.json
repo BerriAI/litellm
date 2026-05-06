@@ -1,0 +1,23 @@
+{
+  "id": "providers/deepseek",
+  "title": "Deepseek",
+  "description": "https://deepseek.com/",
+  "source": "@site/docs/providers/deepseek.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/deepseek",
+  "permalink": "/docs/providers/deepseek",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "DeepInfra",
+    "permalink": "/docs/providers/deepinfra"
+  },
+  "next": {
+    "title": "Docker Model Runner",
+    "permalink": "/docs/providers/docker_model_runner"
+  }
+}

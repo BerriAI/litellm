@@ -1,0 +1,23 @@
+{
+  "id": "proxy/response_headers",
+  "title": "Response Headers",
+  "description": "When you make a request to the proxy, the proxy will return the following headers:",
+  "source": "@site/docs/proxy/response_headers.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/response_headers",
+  "permalink": "/docs/proxy/response_headers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Request Headers",
+    "permalink": "/docs/proxy/request_headers"
+  },
+  "next": {
+    "title": "Forward Client Headers to LLM API",
+    "permalink": "/docs/proxy/forward_client_headers"
+  }
+}

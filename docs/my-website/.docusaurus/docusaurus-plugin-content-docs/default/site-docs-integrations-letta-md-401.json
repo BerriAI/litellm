@@ -1,0 +1,23 @@
+{
+  "id": "integrations/letta",
+  "title": "Letta Integration",
+  "description": "Letta (formerly MemGPT) is a framework for building stateful LLM agents with persistent memory. This guide shows how to integrate both LiteLLM SDK and LiteLLM Proxy with Letta to leverage multiple LLM providers while building memory-enabled agents.",
+  "source": "@site/docs/integrations/letta.md",
+  "sourceDirName": "integrations",
+  "slug": "/integrations/letta",
+  "permalink": "/docs/integrations/letta",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "LiveKit xAI Realtime Voice Agent",
+    "permalink": "/docs/tutorials/livekit_xai_realtime"
+  },
+  "next": {
+    "title": "Instructor with LiteLLM",
+    "permalink": "/docs/tutorials/instructor"
+  }
+}

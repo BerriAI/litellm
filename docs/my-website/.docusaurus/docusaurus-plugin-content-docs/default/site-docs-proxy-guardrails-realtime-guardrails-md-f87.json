@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/realtime_guardrails",
+  "title": "Realtime API Guardrails",
+  "description": "Guard voice conversations in the Realtime API — intercept speech transcriptions before the LLM responds.",
+  "source": "@site/docs/proxy/guardrails/realtime_guardrails.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/realtime_guardrails",
+  "permalink": "/docs/proxy/guardrails/realtime_guardrails",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "LiteLLM Content Filter (Built-in Guardrails)",
+    "permalink": "/docs/proxy/guardrails/litellm_content_filter"
+  },
+  "next": {
+    "title": "[BETA] Generic Guardrail API - Integrate Without a PR",
+    "permalink": "/docs/adding_provider/generic_guardrail_api"
+  }
+}

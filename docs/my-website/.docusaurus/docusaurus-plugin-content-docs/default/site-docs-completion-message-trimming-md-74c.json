@@ -1,0 +1,23 @@
+{
+  "id": "completion/message_trimming",
+  "title": "Trimming Input Messages",
+  "description": "Use litellm.trim_messages() to ensure messages does not exceed a model's token limit or specified max_tokens",
+  "source": "@site/docs/completion/message_trimming.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/message_trimming",
+  "permalink": "/docs/completion/message_trimming",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Predicted Outputs",
+    "permalink": "/docs/completion/predict_outputs"
+  },
+  "next": {
+    "title": "Prompt Caching",
+    "permalink": "/docs/completion/prompt_caching"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/file_search_responses_api",
+  "title": "File Search in the Responses API",
+  "description": "LiteLLM now supports file_search in the Responses API across both:",
+  "source": "@site/docs/tutorials/file_search_responses_api.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/file_search_responses_api",
+  "permalink": "/docs/tutorials/file_search_responses_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Auto-Inject Prompt Caching Checkpoints",
+    "permalink": "/docs/tutorials/prompt_caching"
+  },
+  "next": {
+    "title": "Using Anthropic File API with LiteLLM Proxy",
+    "permalink": "/docs/tutorials/anthropic_file_usage"
+  }
+}

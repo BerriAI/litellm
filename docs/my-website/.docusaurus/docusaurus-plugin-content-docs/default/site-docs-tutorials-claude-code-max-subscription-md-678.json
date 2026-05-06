@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/claude_code_max_subscription",
+  "title": "Using Claude Code Max Subscription",
+  "description": "Route Claude Code Max subscription traffic through LiteLLM AI Gateway.",
+  "source": "@site/docs/tutorials/claude_code_max_subscription.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/claude_code_max_subscription",
+  "permalink": "/docs/tutorials/claude_code_max_subscription",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Claude Code Quickstart",
+    "permalink": "/docs/tutorials/claude_responses_api"
+  },
+  "next": {
+    "title": "Claude Code with Bring Your Own Key (BYOK)",
+    "permalink": "/docs/tutorials/claude_code_byok"
+  }
+}

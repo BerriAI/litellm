@@ -1,0 +1,23 @@
+{
+  "id": "proxy/public_teams",
+  "title": "[BETA] Public Teams",
+  "description": "Expose available teams to your users to join on signup.",
+  "source": "@site/docs/proxy/public_teams.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/public_teams",
+  "permalink": "/docs/proxy/public_teams",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Internal User Self-Serve",
+    "permalink": "/docs/proxy/self_serve"
+  },
+  "next": {
+    "title": "[Beta] Project Management UI",
+    "permalink": "/docs/proxy/ui_project_management"
+  }
+}

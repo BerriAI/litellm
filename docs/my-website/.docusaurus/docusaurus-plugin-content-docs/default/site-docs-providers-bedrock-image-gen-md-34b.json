@@ -1,0 +1,23 @@
+{
+  "id": "providers/bedrock_image_gen",
+  "title": "AWS Bedrock - Image Generation",
+  "description": "Use Bedrock for image generation with Stable Diffusion, Amazon Titan Image Generator, and Amazon Nova Canvas models.",
+  "source": "@site/docs/providers/bedrock_image_gen.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/bedrock_image_gen",
+  "permalink": "/docs/providers/bedrock_image_gen",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Bedrock Imported Models",
+    "permalink": "/docs/providers/bedrock_imported"
+  },
+  "next": {
+    "title": "AWS Bedrock - Rerank API",
+    "permalink": "/docs/providers/bedrock_rerank"
+  }
+}

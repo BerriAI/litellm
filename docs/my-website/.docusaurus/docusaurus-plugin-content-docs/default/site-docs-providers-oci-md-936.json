@@ -1,0 +1,23 @@
+{
+  "id": "providers/oci",
+  "title": "Oracle Cloud Infrastructure (OCI)",
+  "description": "LiteLLM supports the following models for OCI on-demand GenAI API.",
+  "source": "@site/docs/providers/oci.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/oci",
+  "permalink": "/docs/providers/oci",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Nvidia NIM - Rerank",
+    "permalink": "/docs/providers/nvidia_nim_rerank"
+  },
+  "next": {
+    "title": "Ollama",
+    "permalink": "/docs/providers/ollama"
+  }
+}

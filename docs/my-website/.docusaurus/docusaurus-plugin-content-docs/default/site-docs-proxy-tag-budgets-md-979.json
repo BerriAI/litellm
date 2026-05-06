@@ -1,0 +1,23 @@
+{
+  "id": "proxy/tag_budgets",
+  "title": "Setting Tag Budgets",
+  "description": "Track spend and set budgets for your API requests using tags. Tags allow you to categorize and monitor costs across different cost centers, projects, and departments.",
+  "source": "@site/docs/proxy/tag_budgets.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/tag_budgets",
+  "permalink": "/docs/proxy/tag_budgets",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Team Soft Budget Alerts",
+    "permalink": "/docs/proxy/ui_team_soft_budget_alerts"
+  },
+  "next": {
+    "title": "Customers / End-Users",
+    "permalink": "/docs/proxy/customers"
+  }
+}

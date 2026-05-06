@@ -1,0 +1,23 @@
+{
+  "id": "observability/braintrust",
+  "title": "Braintrust - Evals + Logging",
+  "description": "Braintrust manages evaluations, logging, prompt playground, to data management for AI products.",
+  "source": "@site/docs/observability/braintrust.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/braintrust",
+  "permalink": "/docs/observability/braintrust",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Azure Sentinel",
+    "permalink": "/docs/observability/azure_sentinel"
+  },
+  "next": {
+    "title": "Callbacks",
+    "permalink": "/docs/observability/callbacks"
+  }
+}

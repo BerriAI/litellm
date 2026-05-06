@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_ai_agent_engine",
+  "title": "Vertex AI Agent Engine",
+  "description": "Call Vertex AI Agent Engine (Reasoning Engines) in the OpenAI Request/Response format.",
+  "source": "@site/docs/providers/vertex_ai_agent_engine.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex_ai_agent_engine",
+  "permalink": "/docs/providers/vertex_ai_agent_engine",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI OCR",
+    "permalink": "/docs/providers/vertex_ocr"
+  },
+  "next": {
+    "title": "Vertex AI Gemini Live - Realtime API",
+    "permalink": "/docs/providers/vertex_realtime"
+  }
+}

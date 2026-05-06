@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/text_completion",
+  "title": "Using Text Completion Format - with Completion()",
+  "description": "If your prefer interfacing with the OpenAI Text Completion format this tutorial covers how to use LiteLLM in this format",
+  "source": "@site/docs/tutorials/text_completion.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/text_completion",
+  "permalink": "/docs/tutorials/text_completion",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Create your first LLM playground",
+    "permalink": "/docs/tutorials/first_playground"
+  },
+  "next": {
+    "title": "Mock Completion Responses - Save Testing Costs",
+    "permalink": "/docs/tutorials/mock_completion"
+  }
+}

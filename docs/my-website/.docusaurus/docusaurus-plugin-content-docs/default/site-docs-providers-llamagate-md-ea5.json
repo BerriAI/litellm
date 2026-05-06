@@ -1,0 +1,23 @@
+{
+  "id": "providers/llamagate",
+  "title": "LlamaGate",
+  "description": "Overview",
+  "source": "@site/docs/providers/llamagate.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/llamagate",
+  "permalink": "/docs/providers/llamagate",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Llamafile",
+    "permalink": "/docs/providers/llamafile"
+  },
+  "next": {
+    "title": "LM Studio",
+    "permalink": "/docs/providers/lm_studio"
+  }
+}

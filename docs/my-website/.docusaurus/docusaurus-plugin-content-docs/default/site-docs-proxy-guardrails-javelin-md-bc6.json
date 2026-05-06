@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/javelin",
+  "title": "Javelin Guardrails",
+  "description": "Javelin provides AI safety and content moderation services with support for prompt injection detection, trust & safety violations, and language detection.",
+  "source": "@site/docs/proxy/guardrails/javelin.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/javelin",
+  "permalink": "/docs/proxy/guardrails/javelin",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "IBM Guardrails",
+    "permalink": "/docs/proxy/guardrails/ibm_guardrails"
+  },
+  "next": {
+    "title": "Lakera AI",
+    "permalink": "/docs/proxy/guardrails/lakera_ai"
+  }
+}

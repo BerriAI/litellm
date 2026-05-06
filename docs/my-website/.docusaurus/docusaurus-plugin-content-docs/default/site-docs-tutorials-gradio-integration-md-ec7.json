@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/gradio_integration",
+  "title": "Gradio Chatbot + LiteLLM Tutorial",
+  "description": "Simple tutorial for integrating LiteLLM completion calls with streaming Gradio chatbot demos",
+  "source": "@site/docs/tutorials/gradio_integration.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/gradio_integration",
+  "permalink": "/docs/tutorials/gradio_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Python SDK",
+    "permalink": "/docs/tutorials/python_sdk"
+  },
+  "next": {
+    "title": "provider_specific_params",
+    "permalink": "/docs/tutorials/provider_specific_params"
+  }
+}

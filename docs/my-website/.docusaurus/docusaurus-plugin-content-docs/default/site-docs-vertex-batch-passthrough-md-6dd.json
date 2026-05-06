@@ -1,0 +1,14 @@
+{
+  "id": "vertex_batch_passthrough",
+  "title": "/batchPredictionJobs",
+  "description": "LiteLLM supports Vertex AI batch prediction jobs through passthrough endpoints, allowing you to create and manage batch jobs directly through the proxy server.",
+  "source": "@site/docs/vertex_batch_passthrough.md",
+  "sourceDirName": ".",
+  "slug": "/vertex_batch_passthrough",
+  "permalink": "/docs/vertex_batch_passthrough",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

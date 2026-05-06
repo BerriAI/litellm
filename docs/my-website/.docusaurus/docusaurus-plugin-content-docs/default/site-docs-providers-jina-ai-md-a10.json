@@ -1,0 +1,23 @@
+{
+  "id": "providers/jina_ai",
+  "title": "Jina AI",
+  "description": "https://jina.ai/embeddings/",
+  "source": "@site/docs/providers/jina_ai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/jina_ai",
+  "permalink": "/docs/providers/jina_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Infinity",
+    "permalink": "/docs/providers/infinity"
+  },
+  "next": {
+    "title": "Lambda AI",
+    "permalink": "/docs/providers/lambda_ai"
+  }
+}

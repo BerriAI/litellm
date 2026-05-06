@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/ibm_guardrails",
+  "title": "IBM Guardrails",
+  "description": "LiteLLM works with IBM's FMS Guardrails for content safety. You can use it to detect jailbreaks, PII, hate speech, and more.",
+  "source": "@site/docs/proxy/guardrails/ibm_guardrails.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/ibm_guardrails",
+  "permalink": "/docs/proxy/guardrails/ibm_guardrails",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "HiddenLayer Guardrails",
+    "permalink": "/docs/proxy/guardrails/hiddenlayer"
+  },
+  "next": {
+    "title": "Javelin Guardrails",
+    "permalink": "/docs/proxy/guardrails/javelin"
+  }
+}

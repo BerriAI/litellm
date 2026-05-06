@@ -1,0 +1,23 @@
+{
+  "id": "providers/wandb_inference",
+  "title": "Weights & Biases Inference",
+  "description": "https://weave-docs.wandb.ai/quickstart-inference",
+  "source": "@site/docs/providers/wandb_inference.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/wandb_inference",
+  "permalink": "/docs/providers/wandb_inference",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Voyage AI",
+    "permalink": "/docs/providers/voyage"
+  },
+  "next": {
+    "title": "IBM watsonx.ai",
+    "permalink": "/docs/providers/watsonx/"
+  }
+}

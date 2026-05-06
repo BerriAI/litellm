@@ -1,0 +1,23 @@
+{
+  "id": "providers/ai21",
+  "title": "AI21",
+  "description": "LiteLLM supports the following AI21 models:",
+  "source": "@site/docs/providers/ai21.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/ai21",
+  "permalink": "/docs/providers/ai21",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Abliteration",
+    "permalink": "/docs/providers/abliteration"
+  },
+  "next": {
+    "title": "AI/ML API",
+    "permalink": "/docs/providers/aiml"
+  }
+}

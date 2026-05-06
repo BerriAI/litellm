@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ui",
+  "title": "Quick Start",
+  "description": "Create keys, track spend, add models without worrying about the config / CRUD endpoints.",
+  "source": "@site/docs/proxy/ui.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/ui",
+  "permalink": "/docs/proxy/ui",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Release Cycle",
+    "permalink": "/docs/proxy/release_cycle"
+  },
+  "next": {
+    "title": "✨ SSO for Admin UI",
+    "permalink": "/docs/proxy/admin_ui_sso"
+  }
+}

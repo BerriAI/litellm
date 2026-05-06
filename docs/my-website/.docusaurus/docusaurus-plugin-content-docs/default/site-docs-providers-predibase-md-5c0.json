@@ -1,0 +1,23 @@
+{
+  "id": "providers/predibase",
+  "title": "Predibase",
+  "description": "LiteLLM supports all models on Predibase",
+  "source": "@site/docs/providers/predibase.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/predibase",
+  "permalink": "/docs/providers/predibase",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "PublicAI",
+    "permalink": "/docs/providers/publicai"
+  },
+  "next": {
+    "title": "Pydantic AI Agents",
+    "permalink": "/docs/providers/pydantic_ai_agent"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "text_to_speech",
+  "title": "/audio/speech",
+  "description": "Overview",
+  "source": "@site/docs/text_to_speech.md",
+  "sourceDirName": ".",
+  "slug": "/text_to_speech",
+  "permalink": "/docs/text_to_speech",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "transcription()",
+    "permalink": "/docs/audio_transcription"
+  },
+  "next": {
+    "title": "Setting API Keys, Base, Version",
+    "permalink": "/docs/set_keys"
+  }
+}

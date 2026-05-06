@@ -1,0 +1,23 @@
+{
+  "id": "providers/publicai",
+  "title": "PublicAI",
+  "description": "Overview",
+  "source": "@site/docs/providers/publicai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/publicai",
+  "permalink": "/docs/providers/publicai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Poe",
+    "permalink": "/docs/providers/poe"
+  },
+  "next": {
+    "title": "Predibase",
+    "permalink": "/docs/providers/predibase"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "providers/anthropic_tool_input_examples",
+  "title": "Anthropic Tool Input Examples",
+  "description": "Provide concrete examples of valid tool inputs to help Claude understand how to use your tools more effectively. This is particularly useful for complex tools with nested objects, optional parameters, or format-sensitive inputs.",
+  "source": "@site/docs/providers/anthropic_tool_input_examples.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/anthropic_tool_input_examples",
+  "permalink": "/docs/providers/anthropic_tool_input_examples",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

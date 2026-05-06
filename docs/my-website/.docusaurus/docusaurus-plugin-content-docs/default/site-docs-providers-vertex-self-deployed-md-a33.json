@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_self_deployed",
+  "title": "Vertex AI - Self Deployed Models",
+  "description": "Deploy and use your own models on Vertex AI through Model Garden or custom endpoints.",
+  "source": "@site/docs/providers/vertex_self_deployed.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex_self_deployed",
+  "permalink": "/docs/providers/vertex_self_deployed",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI - Anthropic, DeepSeek, Model Garden",
+    "permalink": "/docs/providers/vertex_partner"
+  },
+  "next": {
+    "title": "Vertex AI Embedding",
+    "permalink": "/docs/providers/vertex_embedding"
+  }
+}

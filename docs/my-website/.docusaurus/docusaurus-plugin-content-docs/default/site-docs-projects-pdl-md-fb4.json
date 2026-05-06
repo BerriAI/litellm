@@ -1,0 +1,23 @@
+{
+  "id": "projects/PDL",
+  "title": "PDL",
+  "description": "PDL - A YAML-based approach to prompt programming",
+  "source": "@site/docs/projects/PDL.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/PDL",
+  "permalink": "/docs/projects/PDL",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Docq.AI",
+    "permalink": "/docs/projects/Docq.AI"
+  },
+  "next": {
+    "title": "OpenInterpreter",
+    "permalink": "/docs/projects/OpenInterpreter"
+  }
+}

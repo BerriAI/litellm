@@ -1,0 +1,23 @@
+{
+  "id": "proxy/alerting",
+  "title": "Alerting / Webhooks",
+  "description": "Get alerts for:",
+  "source": "@site/docs/proxy/alerting.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/alerting",
+  "permalink": "/docs/proxy/alerting",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Zscaler AI Guard",
+    "permalink": "/docs/proxy/guardrails/zscaler_ai_guard"
+  },
+  "next": {
+    "title": "PagerDuty Alerting",
+    "permalink": "/docs/proxy/pagerduty"
+  }
+}

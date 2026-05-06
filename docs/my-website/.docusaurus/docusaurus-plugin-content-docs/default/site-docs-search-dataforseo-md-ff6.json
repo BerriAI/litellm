@@ -1,0 +1,23 @@
+{
+  "id": "search/dataforseo",
+  "title": "DataForSEO Search",
+  "description": "Get API Access: DataForSEO",
+  "source": "@site/docs/search/dataforseo.md",
+  "sourceDirName": "search",
+  "slug": "/search/dataforseo",
+  "permalink": "/docs/search/dataforseo",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Google Programmable Search Engine (PSE)",
+    "permalink": "/docs/search/google_pse"
+  },
+  "next": {
+    "title": "Firecrawl Search",
+    "permalink": "/docs/search/firecrawl"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/virtual_keys",
+  "title": "Virtual Keys",
+  "description": "Track Spend, and control model access via virtual keys for the proxy",
+  "source": "@site/docs/proxy/virtual_keys.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/virtual_keys",
+  "permalink": "/docs/proxy/virtual_keys",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "✨ Enterprise Features",
+    "permalink": "/docs/proxy/enterprise"
+  },
+  "next": {
+    "title": "OIDC - JWT-based Auth",
+    "permalink": "/docs/proxy/token_auth"
+  }
+}

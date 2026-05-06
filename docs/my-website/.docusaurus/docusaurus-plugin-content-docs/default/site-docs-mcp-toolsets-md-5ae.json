@@ -1,0 +1,23 @@
+{
+  "id": "mcp_toolsets",
+  "title": "MCP Toolsets",
+  "description": "A Toolset is a named collection of specific tools drawn from one or more MCP servers. Instead of giving an agent access to every tool on every server, you pick exactly which tools it needs — from whichever servers they live on — and bundle them under a single name.",
+  "source": "@site/docs/mcp_toolsets.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_toolsets",
+  "permalink": "/docs/mcp_toolsets",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Guardrails",
+    "permalink": "/docs/mcp_guardrail"
+  },
+  "next": {
+    "title": "Overview",
+    "permalink": "/docs/proxy/configs"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "completion/mock_requests",
+  "title": "Mock Completion() Responses - Save Testing Costs 💰",
+  "description": "For testing purposes, you can use completion() with mock_response to mock calling the completion endpoint.",
+  "source": "@site/docs/completion/mock_requests.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/mock_requests",
+  "permalink": "/docs/completion/mock_requests",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Reliability, Testing & Spend",
+    "permalink": "/docs/guides/reliability_testing_spend"
+  },
+  "next": {
+    "title": "Reliability - Retries, Fallbacks",
+    "permalink": "/docs/completion/reliable_completions"
+  }
+}

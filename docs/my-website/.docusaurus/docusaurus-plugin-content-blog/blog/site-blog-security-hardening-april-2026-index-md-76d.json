@@ -1,0 +1,52 @@
+{
+  "permalink": "/blog/security-hardening-april-2026",
+  "source": "@site/blog/security_hardening_april_2026/index.md",
+  "title": "Security Update: Vulnerability Disclosures and Ongoing Hardening",
+  "description": "Disclosure of security vulnerabilities fixed in LiteLLM v1.83.0, and the launch of our bug bounty program.",
+  "date": "2026-04-03T12:00:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "security",
+      "permalink": "/blog/tags/security"
+    }
+  ],
+  "hasTruncateMarker": true,
+  "authors": [
+    {
+      "name": "Krrish Dholakia",
+      "title": "CEO, LiteLLM",
+      "url": "https://www.linkedin.com/in/krish-d/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg",
+      "key": "krrish",
+      "page": null
+    },
+    {
+      "name": "Ishaan Jaff",
+      "title": "CTO, LiteLLM",
+      "url": "https://www.linkedin.com/in/reffajnaahsi/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg",
+      "key": "ishaan-alt",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "security-hardening-april-2026",
+    "title": "Security Update: Vulnerability Disclosures and Ongoing Hardening",
+    "date": "2026-04-03T12:00:00.000Z",
+    "authors": [
+      "krrish",
+      "ishaan-alt"
+    ],
+    "description": "Disclosure of security vulnerabilities fixed in LiteLLM v1.83.0, and the launch of our bug bounty program.",
+    "tags": [
+      "security"
+    ],
+    "hide_table_of_contents": false
+  },
+  "unlisted": false,
+  "nextItem": {
+    "title": "April Townhall: Security + Product Roadmap",
+    "permalink": "/blog/april-townhall-announcement"
+  }
+}

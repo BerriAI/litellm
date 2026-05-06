@@ -1,0 +1,23 @@
+{
+  "id": "mcp",
+  "title": "MCP Overview",
+  "description": "LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint for all MCP tools and control MCP access by Key, Team.",
+  "source": "@site/docs/mcp.md",
+  "sourceDirName": ".",
+  "slug": "/mcp",
+  "permalink": "/docs/mcp",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Agent Iteration Budgets",
+    "permalink": "/docs/a2a_iteration_budgets"
+  },
+  "next": {
+    "title": "Using your MCP",
+    "permalink": "/docs/mcp_usage"
+  }
+}

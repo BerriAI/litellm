@@ -1,0 +1,23 @@
+{
+  "id": "completion/output",
+  "title": "Output",
+  "description": "Format",
+  "source": "@site/docs/completion/output.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/output",
+  "permalink": "/docs/completion/output",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Input Params",
+    "permalink": "/docs/completion/input"
+  },
+  "next": {
+    "title": "Usage",
+    "permalink": "/docs/completion/usage"
+  }
+}

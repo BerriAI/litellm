@@ -1,0 +1,14 @@
+{
+  "id": "providers/empower",
+  "title": "Empower",
+  "description": "LiteLLM supports all models on Empower.",
+  "source": "@site/docs/providers/empower.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/empower",
+  "permalink": "/docs/providers/empower",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

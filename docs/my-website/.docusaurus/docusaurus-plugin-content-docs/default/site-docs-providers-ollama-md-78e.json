@@ -1,0 +1,23 @@
+{
+  "id": "providers/ollama",
+  "title": "Ollama",
+  "description": "LiteLLM supports all models from Ollama",
+  "source": "@site/docs/providers/ollama.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/ollama",
+  "permalink": "/docs/providers/ollama",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Oracle Cloud Infrastructure (OCI)",
+    "permalink": "/docs/providers/oci"
+  },
+  "next": {
+    "title": "OpenRouter",
+    "permalink": "/docs/providers/openrouter"
+  }
+}

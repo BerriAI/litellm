@@ -1,0 +1,23 @@
+{
+  "id": "proxy/provider_discounts",
+  "title": "Provider Discounts",
+  "description": "Apply percentage-based discounts to specific providers. This is useful for negotiated enterprise pricing with providers.",
+  "source": "@site/docs/proxy/provider_discounts.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/provider_discounts",
+  "permalink": "/docs/proxy/provider_discounts",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Fee/Price Margin on LLM Costs",
+    "permalink": "/docs/proxy/provider_margins"
+  },
+  "next": {
+    "title": "Auto Sync New Models (Day-0 Launches)",
+    "permalink": "/docs/proxy/sync_models_github"
+  }
+}

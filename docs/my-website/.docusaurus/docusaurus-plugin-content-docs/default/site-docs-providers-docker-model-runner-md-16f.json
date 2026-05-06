@@ -1,0 +1,23 @@
+{
+  "id": "providers/docker_model_runner",
+  "title": "Docker Model Runner",
+  "description": "Overview",
+  "source": "@site/docs/providers/docker_model_runner.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/docker_model_runner",
+  "permalink": "/docs/providers/docker_model_runner",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Deepseek",
+    "permalink": "/docs/providers/deepseek"
+  },
+  "next": {
+    "title": "ElevenLabs",
+    "permalink": "/docs/providers/elevenlabs"
+  }
+}

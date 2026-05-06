@@ -1,0 +1,23 @@
+{
+  "id": "providers/baseten",
+  "title": "Baseten",
+  "description": "LiteLLM supports both Baseten Model APIs and dedicated deployments with automatic routing.",
+  "source": "@site/docs/providers/baseten.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/baseten",
+  "permalink": "/docs/providers/baseten",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Apertis AI (Stima API)",
+    "permalink": "/docs/providers/apertis"
+  },
+  "next": {
+    "title": "Black Forest Labs Image Generation",
+    "permalink": "/docs/providers/black_forest_labs"
+  }
+}

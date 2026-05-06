@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure_ai/azure_ai_vector_stores_passthrough",
+  "title": "Azure AI Search - Vector Store (Passthrough API)",
+  "description": "Use this to allow developers to create and search vector stores using the Azure AI Search API in the native Azure AI Search API format, without giving them the Azure AI credentials.",
+  "source": "@site/docs/providers/azure_ai/azure_ai_vector_stores_passthrough.md",
+  "sourceDirName": "providers/azure_ai",
+  "slug": "/providers/azure_ai/azure_ai_vector_stores_passthrough",
+  "permalink": "/docs/providers/azure_ai/azure_ai_vector_stores_passthrough",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure AI Search - Vector Store (Unified API)",
+    "permalink": "/docs/providers/azure_ai_vector_stores"
+  },
+  "next": {
+    "title": "VertexAI [Gemini]",
+    "permalink": "/docs/providers/vertex"
+  }
+}

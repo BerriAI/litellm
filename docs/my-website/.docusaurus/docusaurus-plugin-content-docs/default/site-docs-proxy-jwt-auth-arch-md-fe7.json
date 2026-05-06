@@ -1,0 +1,23 @@
+{
+  "id": "proxy/jwt_auth_arch",
+  "title": "Control Model Access with OIDC (Azure AD/Keycloak/etc.)",
+  "description": "✨ JWT Auth is on LiteLLM Enterprise",
+  "source": "@site/docs/proxy/jwt_auth_arch.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/jwt_auth_arch",
+  "permalink": "/docs/proxy/jwt_auth_arch",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Image URL Handling",
+    "permalink": "/docs/proxy/image_handling"
+  },
+  "next": {
+    "title": "✨ Maximum Retention Period for Spend Logs",
+    "permalink": "/docs/proxy/spend_logs_deletion"
+  }
+}

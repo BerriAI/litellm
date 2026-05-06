@@ -1,0 +1,59 @@
+{
+  "permalink": "/blog/ci-cd-v2-improvements",
+  "source": "@site/blog/ci_cd_v2_improvements/index.md",
+  "title": "Announcing CI/CD v2 for LiteLLM",
+  "description": "CI/CD v2 introduces isolated environments, stronger security gates, and safer release separation for LiteLLM.",
+  "date": "2026-03-30T21:30:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "engineering",
+      "permalink": "/blog/tags/engineering"
+    },
+    {
+      "inline": true,
+      "label": "ci-cd",
+      "permalink": "/blog/tags/ci-cd"
+    },
+    {
+      "inline": true,
+      "label": "security",
+      "permalink": "/blog/tags/security"
+    }
+  ],
+  "hasTruncateMarker": false,
+  "authors": [
+    {
+      "name": "Krrish Dholakia",
+      "title": "CEO, LiteLLM",
+      "url": "https://www.linkedin.com/in/krish-d/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg",
+      "key": "krrish",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "ci-cd-v2-improvements",
+    "title": "Announcing CI/CD v2 for LiteLLM",
+    "date": "2026-03-30T21:30:00.000Z",
+    "authors": [
+      "krrish"
+    ],
+    "description": "CI/CD v2 introduces isolated environments, stronger security gates, and safer release separation for LiteLLM.",
+    "tags": [
+      "engineering",
+      "ci-cd",
+      "security"
+    ],
+    "hide_table_of_contents": false
+  },
+  "unlisted": false,
+  "prevItem": {
+    "title": "April Townhall: Security + Product Roadmap",
+    "permalink": "/blog/april-townhall-announcement"
+  },
+  "nextItem": {
+    "title": "LiteLLM + Vanta: SOC 2 Type 2 and ISO 27001 Recertification",
+    "permalink": "/blog/vanta-compliance-recertification"
+  }
+}

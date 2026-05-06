@@ -1,0 +1,23 @@
+{
+  "id": "observability/lunary_integration",
+  "title": "🌙 Lunary - GenAI Observability",
+  "description": "Lunary is an open-source platform providing observability, prompt management, and analytics to help team manage and improve LLM chatbots.",
+  "source": "@site/docs/observability/lunary_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/lunary_integration",
+  "permalink": "/docs/observability/lunary_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Logfire",
+    "permalink": "/docs/observability/logfire_integration"
+  },
+  "next": {
+    "title": "🔁 MLflow - OSS LLM Observability and Evaluation",
+    "permalink": "/docs/observability/mlflow"
+  }
+}

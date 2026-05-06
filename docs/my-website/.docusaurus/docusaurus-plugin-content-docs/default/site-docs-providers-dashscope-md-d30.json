@@ -1,0 +1,23 @@
+{
+  "id": "providers/dashscope",
+  "title": "Dashscope API (Qwen models)",
+  "description": "https://dashscope.console.aliyun.com/",
+  "source": "@site/docs/providers/dashscope.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/dashscope",
+  "permalink": "/docs/providers/dashscope",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Custom API Server (Custom Format)",
+    "permalink": "/docs/providers/custom_llm_server"
+  },
+  "next": {
+    "title": "Databricks",
+    "permalink": "/docs/providers/databricks"
+  }
+}

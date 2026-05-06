@@ -1,0 +1,23 @@
+{
+  "id": "providers/petals",
+  "title": "Petals",
+  "description": "Petals//github.com/bigscience-workshop/petals",
+  "source": "@site/docs/providers/petals.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/petals",
+  "permalink": "/docs/providers/petals",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Perplexity Embeddings",
+    "permalink": "/docs/providers/perplexity_embedding"
+  },
+  "next": {
+    "title": "Poe",
+    "permalink": "/docs/providers/poe"
+  }
+}

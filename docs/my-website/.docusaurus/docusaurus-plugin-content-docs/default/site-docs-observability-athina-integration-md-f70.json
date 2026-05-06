@@ -1,0 +1,23 @@
+{
+  "id": "observability/athina_integration",
+  "title": "Athina",
+  "description": "This is community maintained, Please make an issue if you run into a bug",
+  "source": "@site/docs/observability/athina_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/athina_integration",
+  "permalink": "/docs/observability/athina_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Arize AI",
+    "permalink": "/docs/observability/arize_integration"
+  },
+  "next": {
+    "title": "Azure Sentinel",
+    "permalink": "/docs/observability/azure_sentinel"
+  }
+}

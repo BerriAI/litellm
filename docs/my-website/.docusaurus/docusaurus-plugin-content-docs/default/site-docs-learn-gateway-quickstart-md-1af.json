@@ -1,0 +1,27 @@
+{
+  "id": "learn/gateway_quickstart",
+  "title": "Gateway Quickstart",
+  "description": "Start LiteLLM Gateway, add models and keys, then connect applications and SDKs to one shared endpoint.",
+  "source": "@site/docs/learn/gateway_quickstart.md",
+  "sourceDirName": "learn",
+  "slug": "/learn/gateway_quickstart",
+  "permalink": "/docs/learn/gateway_quickstart",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Gateway Quickstart",
+    "sidebar_label": "Gateway Quickstart",
+    "description": "Start LiteLLM Gateway, add models and keys, then connect applications and SDKs to one shared endpoint."
+  },
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "SDK Quickstart",
+    "permalink": "/docs/learn/sdk_quickstart"
+  },
+  "next": {
+    "title": "Overview",
+    "permalink": "/docs/guides/"
+  }
+}

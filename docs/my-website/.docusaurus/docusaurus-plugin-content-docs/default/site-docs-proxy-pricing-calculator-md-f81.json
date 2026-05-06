@@ -1,0 +1,23 @@
+{
+  "id": "proxy/pricing_calculator",
+  "title": "Pricing Calculator (Cost Estimation)",
+  "description": "Estimate LLM costs based on expected token usage and request volume. This tool helps developers and platform teams forecast spending before deploying models to production.",
+  "source": "@site/docs/proxy/pricing_calculator.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/pricing_calculator",
+  "permalink": "/docs/proxy/pricing_calculator",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Custom LLM Pricing",
+    "permalink": "/docs/proxy/custom_pricing"
+  },
+  "next": {
+    "title": "Fee/Price Margin on LLM Costs",
+    "permalink": "/docs/proxy/provider_margins"
+  }
+}

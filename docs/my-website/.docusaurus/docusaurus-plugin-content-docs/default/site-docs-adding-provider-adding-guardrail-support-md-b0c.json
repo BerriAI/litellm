@@ -1,0 +1,23 @@
+{
+  "id": "adding_provider/adding_guardrail_support",
+  "title": "Adding Guardrail Support to Endpoints",
+  "description": "This guide explains how to add guardrail translation support to new LiteLLM endpoints (e.g., Chat Completions, Responses API, etc.).",
+  "source": "@site/docs/adding_provider/adding_guardrail_support.md",
+  "sourceDirName": "adding_provider",
+  "slug": "/adding_provider/adding_guardrail_support",
+  "permalink": "/docs/adding_provider/adding_guardrail_support",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Adding a New Guardrail Integration",
+    "permalink": "/docs/adding_provider/simple_guardrail_tutorial"
+  },
+  "next": {
+    "title": "[Beta] Guardrail Policies",
+    "permalink": "/docs/proxy/guardrails/guardrail_policies"
+  }
+}

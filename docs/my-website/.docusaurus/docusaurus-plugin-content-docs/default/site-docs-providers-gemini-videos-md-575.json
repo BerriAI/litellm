@@ -1,0 +1,23 @@
+{
+  "id": "providers/gemini/videos",
+  "title": "Gemini Video Generation (Veo)",
+  "description": "LiteLLM supports Google's Veo video generation models through a unified API interface.",
+  "source": "@site/docs/providers/gemini/videos.md",
+  "sourceDirName": "providers/gemini",
+  "slug": "/providers/gemini/videos",
+  "permalink": "/docs/providers/gemini/videos",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Gemini - Google AI Studio",
+    "permalink": "/docs/providers/gemini"
+  },
+  "next": {
+    "title": "Gemini — Lyria (music generation)",
+    "permalink": "/docs/providers/gemini/music"
+  }
+}

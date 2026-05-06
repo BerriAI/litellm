@@ -1,0 +1,23 @@
+{
+  "id": "proxy/architecture",
+  "title": "Life of a Request",
+  "description": "High Level architecture",
+  "source": "@site/docs/proxy/architecture.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/architecture",
+  "permalink": "/docs/proxy/architecture",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Deleted Keys & Teams Audit Logs",
+    "permalink": "/docs/proxy/deleted_keys_teams"
+  },
+  "next": {
+    "title": "Multi-Tenant Architecture with LiteLLM",
+    "permalink": "/docs/proxy/multi_tenant_architecture"
+  }
+}

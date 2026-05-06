@@ -1,0 +1,23 @@
+{
+  "id": "providers/minimax",
+  "title": "MiniMax",
+  "description": "Overview",
+  "source": "@site/docs/providers/minimax.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/minimax",
+  "permalink": "/docs/providers/minimax",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Mistral AI API",
+    "permalink": "/docs/providers/mistral"
+  },
+  "next": {
+    "title": "Moonshot AI",
+    "permalink": "/docs/providers/moonshot"
+  }
+}

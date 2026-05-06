@@ -1,0 +1,23 @@
+{
+  "id": "proxy/request_tags",
+  "title": "Request Tags for Spend Tracking",
+  "description": "Add tags to model deployments to track spend by environment, AWS account, or any custom label.",
+  "source": "@site/docs/proxy/request_tags.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/request_tags",
+  "permalink": "/docs/proxy/request_tags",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI PayGo and Priority",
+    "permalink": "/docs/tutorials/vertex_ai_pay_go"
+  },
+  "next": {
+    "title": "Custom LLM Pricing",
+    "permalink": "/docs/proxy/custom_pricing"
+  }
+}

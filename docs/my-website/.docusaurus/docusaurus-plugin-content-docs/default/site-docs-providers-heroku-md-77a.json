@@ -1,0 +1,23 @@
+{
+  "id": "providers/heroku",
+  "title": "Heroku",
+  "description": "Provision a Model",
+  "source": "@site/docs/providers/heroku.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/heroku",
+  "permalink": "/docs/providers/heroku",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Helicone",
+    "permalink": "/docs/providers/helicone"
+  },
+  "next": {
+    "title": "Hugging Face",
+    "permalink": "/docs/providers/huggingface"
+  }
+}

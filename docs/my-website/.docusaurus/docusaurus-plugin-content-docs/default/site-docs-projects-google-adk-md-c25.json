@@ -1,0 +1,23 @@
+{
+  "id": "projects/Google ADK",
+  "title": "Google ADK (Agent Development Kit)",
+  "description": "Google ADK is an open-source, code-first Python framework for building, evaluating, and deploying sophisticated AI agents. While optimized for Gemini, ADK is model-agnostic and supports LiteLLM for using 100+ providers.",
+  "source": "@site/docs/projects/Google ADK.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Google ADK",
+  "permalink": "/docs/projects/Google ADK",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "OpenAI Agents SDK",
+    "permalink": "/docs/projects/openai-agents"
+  },
+  "next": {
+    "title": "Agent Lightning",
+    "permalink": "/docs/projects/Agent Lightning"
+  }
+}

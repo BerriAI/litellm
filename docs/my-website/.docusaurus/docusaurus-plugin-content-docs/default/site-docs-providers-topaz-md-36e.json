@@ -1,0 +1,23 @@
+{
+  "id": "providers/topaz",
+  "title": "Topaz",
+  "description": "| Property | Details |",
+  "source": "@site/docs/providers/topaz.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/topaz",
+  "permalink": "/docs/providers/topaz",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Together AI",
+    "permalink": "/docs/providers/togetherai"
+  },
+  "next": {
+    "title": "Triton Inference Server",
+    "permalink": "/docs/providers/triton-inference-server"
+  }
+}

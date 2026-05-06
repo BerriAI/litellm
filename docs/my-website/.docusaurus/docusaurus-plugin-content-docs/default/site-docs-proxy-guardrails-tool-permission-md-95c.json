@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/tool_permission",
+  "title": "LiteLLM Tool Permission Guardrail",
+  "description": "LiteLLM provides the LiteLLM Tool Permission Guardrail that lets you control which tool calls a model is allowed to invoke, using configurable allow/deny rules. This offers fine-grained, provider-agnostic control over tool execution (e.g., OpenAI Chat Completions toolcalls, Anthropic Messages tooluse, MCP tools).",
+  "source": "@site/docs/proxy/guardrails/tool_permission.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/tool_permission",
+  "permalink": "/docs/proxy/guardrails/tool_permission",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "✨ Secret Detection/Redaction (Enterprise-only)",
+    "permalink": "/docs/proxy/guardrails/secret_detection"
+  },
+  "next": {
+    "title": "Zscaler AI Guard",
+    "permalink": "/docs/proxy/guardrails/zscaler_ai_guard"
+  }
+}

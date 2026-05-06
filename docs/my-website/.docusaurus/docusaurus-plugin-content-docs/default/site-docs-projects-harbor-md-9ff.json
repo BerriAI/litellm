@@ -1,0 +1,23 @@
+{
+  "id": "projects/Harbor",
+  "title": "Harbor",
+  "description": "Harbor is a framework from the creators of Terminal-Bench for evaluating and optimizing agents and language models. It uses LiteLLM to call 100+ LLM providers.",
+  "source": "@site/docs/projects/Harbor.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Harbor",
+  "permalink": "/docs/projects/Harbor",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Agent Lightning",
+    "permalink": "/docs/projects/Agent Lightning"
+  },
+  "next": {
+    "title": "Microsoft GraphRAG",
+    "permalink": "/docs/projects/GraphRAG"
+  }
+}

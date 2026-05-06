@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/fallbacks",
+  "title": "Using completion() with Fallbacks for Reliability",
+  "description": "This tutorial demonstrates how to employ the completion() function with model fallbacks to ensure reliability. LLM APIs can be unstable, completion() with fallbacks ensures you'll always get a response from your calls",
+  "source": "@site/docs/tutorials/fallbacks.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/fallbacks",
+  "permalink": "/docs/tutorials/fallbacks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Model Fallbacks w/ LiteLLM",
+    "permalink": "/docs/tutorials/model_fallbacks"
+  },
+  "next": {
+    "title": "Provider Setup",
+    "permalink": "/docs/tutorials/provider_tutorials"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/cerebras",
+  "title": "Cerebras",
+  "description": "https://inference-docs.cerebras.ai/api-reference/chat-completions",
+  "source": "@site/docs/providers/cerebras.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/cerebras",
+  "permalink": "/docs/providers/cerebras",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Bytez",
+    "permalink": "/docs/providers/bytez"
+  },
+  "next": {
+    "title": "Chutes",
+    "permalink": "/docs/providers/chutes"
+  }
+}

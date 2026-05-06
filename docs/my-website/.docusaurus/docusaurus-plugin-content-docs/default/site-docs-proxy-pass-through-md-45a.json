@@ -1,0 +1,23 @@
+{
+  "id": "proxy/pass_through",
+  "title": "Create Pass Through Endpoints",
+  "description": "Route requests from your LiteLLM proxy to any external API. Perfect for custom models, image generation APIs, or any service you want to proxy through LiteLLM.",
+  "source": "@site/docs/proxy/pass_through.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/pass_through",
+  "permalink": "/docs/proxy/pass_through",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "VLLM",
+    "permalink": "/docs/pass_through/vllm"
+  },
+  "next": {
+    "title": "Guardrails on Pass-Through Endpoints",
+    "permalink": "/docs/proxy/pass_through_guardrails"
+  }
+}

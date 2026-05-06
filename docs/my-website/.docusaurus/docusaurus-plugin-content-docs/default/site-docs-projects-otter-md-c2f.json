@@ -1,0 +1,23 @@
+{
+  "id": "projects/Otter",
+  "title": "Otter",
+  "description": "🦦 Otter, a multi-modal model based on OpenFlamingo (open-sourced version of DeepMind's Flamingo), trained on MIMIC-IT and showcasing improved instruction-following and in-context learning ability.",
+  "source": "@site/docs/projects/Otter.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Otter",
+  "permalink": "/docs/projects/Otter",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Langstream",
+    "permalink": "/docs/projects/Langstream"
+  },
+  "next": {
+    "title": "YiVal",
+    "permalink": "/docs/projects/YiVal"
+  }
+}

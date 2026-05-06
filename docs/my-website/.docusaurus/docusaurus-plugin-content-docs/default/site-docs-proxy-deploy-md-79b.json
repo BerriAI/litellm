@@ -1,0 +1,23 @@
+{
+  "id": "proxy/deploy",
+  "title": "Docker, Helm, Terraform",
+  "description": "There are no limits on the number of users, keys, or teams you can create on LiteLLM OSS.",
+  "source": "@site/docs/proxy/deploy.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/deploy",
+  "permalink": "/docs/proxy/deploy",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Diagnosing Errors - Provider vs Gateway",
+    "permalink": "/docs/proxy/error_diagnosis"
+  },
+  "next": {
+    "title": "Health Checks",
+    "permalink": "/docs/proxy/health"
+  }
+}

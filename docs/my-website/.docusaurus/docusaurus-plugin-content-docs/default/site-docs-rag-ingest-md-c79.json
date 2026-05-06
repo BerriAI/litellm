@@ -1,0 +1,23 @@
+{
+  "id": "rag_ingest",
+  "title": "/rag/ingest",
+  "description": "All-in-one document ingestion pipeline: Upload → Chunk → Embed → Vector Store",
+  "source": "@site/docs/rag_ingest.md",
+  "sourceDirName": ".",
+  "slug": "/rag_ingest",
+  "permalink": "/docs/rag_ingest",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Guardrails on Pass-Through Endpoints",
+    "permalink": "/docs/proxy/pass_through_guardrails"
+  },
+  "next": {
+    "title": "/rag/query",
+    "permalink": "/docs/rag_query"
+  }
+}

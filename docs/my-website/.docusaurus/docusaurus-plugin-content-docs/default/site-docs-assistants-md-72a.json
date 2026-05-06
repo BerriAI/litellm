@@ -1,0 +1,23 @@
+{
+  "id": "assistants",
+  "title": "/assistants",
+  "description": "OpenAI has deprecated the Assistants API. It will shut down on August 26, 2026.",
+  "source": "@site/docs/assistants.md",
+  "sourceDirName": ".",
+  "slug": "/assistants",
+  "permalink": "/docs/assistants",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Supported Endpoints",
+    "permalink": "/docs/supported_endpoints"
+  },
+  "next": {
+    "title": "/audio/transcriptions",
+    "permalink": "/docs/audio_transcription"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "projects/OpenInterpreter",
+  "title": "OpenInterpreter",
+  "description": "Open Interpreter lets LLMs run code on your computer to complete tasks.",
+  "source": "@site/docs/projects/OpenInterpreter.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/OpenInterpreter",
+  "permalink": "/docs/projects/OpenInterpreter",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "PDL",
+    "permalink": "/docs/projects/PDL"
+  },
+  "next": {
+    "title": "🐕 Elroy",
+    "permalink": "/docs/projects/Elroy"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "index",
+  "title": "Release Notes",
+  "description": "LiteLLM ships new releases regularly with new provider support, performance improvements, and enterprise features. Use the sidebar to browse all releases.",
+  "source": "@site/release_notes/index.md",
+  "sourceDirName": ".",
+  "slug": "/",
+  "permalink": "/release_notes/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Release Notes",
+    "sidebar_label": "Overview",
+    "slug": "/"
+  },
+  "sidebar": "releaseNotesSidebar",
+  "next": {
+    "title": "v1.83.3",
+    "permalink": "/release_notes/v1.83.3/v1-83-3-rc-1"
+  }
+}

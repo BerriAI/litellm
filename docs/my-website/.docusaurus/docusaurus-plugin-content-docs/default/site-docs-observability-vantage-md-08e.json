@@ -1,0 +1,23 @@
+{
+  "id": "observability/vantage",
+  "title": "Vantage Integration",
+  "description": "LiteLLM can export proxy spend data to Vantage as FOCUS 1.2 formatted cost reports. This lets you visualize LLM spend alongside your cloud infrastructure costs in the Vantage dashboard.",
+  "source": "@site/docs/observability/vantage.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/vantage",
+  "permalink": "/docs/observability/vantage",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Telemetry",
+    "permalink": "/docs/observability/telemetry"
+  },
+  "next": {
+    "title": "Weights & Biases - Logging LLM Input/Output",
+    "permalink": "/docs/observability/wandb_integration"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "skills",
+  "title": "/skills - Anthropic Skills API",
+  "description": "| Feature | Supported |",
+  "source": "@site/docs/skills.md",
+  "sourceDirName": ".",
+  "slug": "/skills",
+  "permalink": "/docs/skills",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Serper Search",
+    "permalink": "/docs/search/serper"
+  },
+  "next": {
+    "title": "Supported Models & Providers",
+    "permalink": "/docs/providers"
+  }
+}

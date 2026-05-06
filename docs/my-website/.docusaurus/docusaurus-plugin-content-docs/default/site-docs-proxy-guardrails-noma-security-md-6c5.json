@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/noma_security",
+  "title": "Noma Security",
+  "description": "Use Noma Security to protect your LLM applications with comprehensive AI content moderation and safety guardrails.",
+  "source": "@site/docs/proxy/guardrails/noma_security.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/noma_security",
+  "permalink": "/docs/proxy/guardrails/noma_security",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Google Cloud Model Armor",
+    "permalink": "/docs/proxy/guardrails/model_armor"
+  },
+  "next": {
+    "title": "Onyx Security",
+    "permalink": "/docs/proxy/guardrails/onyx_security"
+  }
+}

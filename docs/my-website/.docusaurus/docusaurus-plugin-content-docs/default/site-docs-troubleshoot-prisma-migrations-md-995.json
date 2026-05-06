@@ -1,0 +1,23 @@
+{
+  "id": "troubleshoot/prisma_migrations",
+  "title": "Troubleshooting Prisma Migration Errors",
+  "description": "Common Prisma migration issues encountered when upgrading or downgrading LiteLLM proxy versions, and how to fix them.",
+  "source": "@site/docs/troubleshoot/prisma_migrations.md",
+  "sourceDirName": "troubleshoot",
+  "slug": "/troubleshoot/prisma_migrations",
+  "permalink": "/docs/troubleshoot/prisma_migrations",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MAX_CALLBACKS Limit",
+    "permalink": "/docs/troubleshoot/max_callbacks"
+  },
+  "next": {
+    "title": "Upgrading LiteLLM Proxy (pip/venv)",
+    "permalink": "/docs/troubleshoot/pip_venv_upgrade"
+  }
+}

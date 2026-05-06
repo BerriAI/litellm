@@ -1,0 +1,23 @@
+{
+  "id": "proxy/model_compare_ui",
+  "title": "Model Compare Playground UI",
+  "description": "Compare multiple LLM models side-by-side in an interactive playground interface. Evaluate model responses, performance metrics, and costs to make informed decisions about which models work best for your use case.",
+  "source": "@site/docs/proxy/model_compare_ui.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/model_compare_ui",
+  "permalink": "/docs/proxy/model_compare_ui",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "AI Hub",
+    "permalink": "/docs/proxy/ai_hub"
+  },
+  "next": {
+    "title": "Store Model in DB Settings",
+    "permalink": "/docs/proxy/ui_store_model_db_setting"
+  }
+}

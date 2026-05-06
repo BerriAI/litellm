@@ -1,0 +1,17 @@
+{
+  "id": "default_code_snippet",
+  "title": "Get Started",
+  "description": "This section assumes you've already added your API keys in",
+  "source": "@site/docs/default_code_snippet.md",
+  "sourceDirName": ".",
+  "slug": "/default_code_snippet",
+  "permalink": "/docs/default_code_snippet",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "displayed_sidebar": "tutorialSidebar"
+  },
+  "sidebar": "tutorialSidebar"
+}

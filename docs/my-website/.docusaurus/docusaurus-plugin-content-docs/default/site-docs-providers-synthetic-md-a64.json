@@ -1,0 +1,23 @@
+{
+  "id": "providers/synthetic",
+  "title": "Synthetic",
+  "description": "Overview",
+  "source": "@site/docs/providers/synthetic.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/synthetic",
+  "permalink": "/docs/providers/synthetic",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Stability AI",
+    "permalink": "/docs/providers/stability"
+  },
+  "next": {
+    "title": "Snowflake",
+    "permalink": "/docs/providers/snowflake"
+  }
+}

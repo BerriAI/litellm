@@ -1,0 +1,23 @@
+{
+  "id": "proxy/admin_ui_sso",
+  "title": "✨ SSO for Admin UI",
+  "description": "From v1.76.0, SSO is now Free for up to 5 users.",
+  "source": "@site/docs/proxy/admin_ui_sso.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/admin_ui_sso",
+  "permalink": "/docs/proxy/admin_ui_sso",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Quick Start",
+    "permalink": "/docs/proxy/ui"
+  },
+  "next": {
+    "title": "Customize UI Logo",
+    "permalink": "/docs/proxy/ui/ui_edit_logo"
+  }
+}

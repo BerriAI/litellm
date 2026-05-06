@@ -1,0 +1,23 @@
+{
+  "id": "sdk_custom_pricing",
+  "title": "Custom Pricing - SageMaker, Azure, etc",
+  "description": "Register custom pricing for sagemaker completion model.",
+  "source": "@site/docs/sdk_custom_pricing.md",
+  "sourceDirName": ".",
+  "slug": "/sdk_custom_pricing",
+  "permalink": "/docs/sdk_custom_pricing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Contributing - UI",
+    "permalink": "/docs/contributing"
+  },
+  "next": {
+    "title": "Migration Guide - LiteLLM v1.0.0+",
+    "permalink": "/docs/migration"
+  }
+}

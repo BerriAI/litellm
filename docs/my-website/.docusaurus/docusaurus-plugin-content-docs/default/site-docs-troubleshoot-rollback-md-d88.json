@@ -1,0 +1,23 @@
+{
+  "id": "troubleshoot/rollback",
+  "title": "Safe Rollback Guide",
+  "description": "This guide outlines the process for safely rolling back a LiteLLM Proxy deployment to a previous version.",
+  "source": "@site/docs/troubleshoot/rollback.md",
+  "sourceDirName": "troubleshoot",
+  "slug": "/troubleshoot/rollback",
+  "permalink": "/docs/troubleshoot/rollback",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Upgrading LiteLLM Proxy (pip/venv)",
+    "permalink": "/docs/troubleshoot/pip_venv_upgrade"
+  },
+  "next": {
+    "title": "Issue Reporting",
+    "permalink": "/docs/troubleshoot"
+  }
+}

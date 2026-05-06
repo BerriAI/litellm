@@ -1,0 +1,23 @@
+{
+  "id": "search/searxng",
+  "title": "SearXNG Search",
+  "description": "Open Source//github.com/searxng/searxng",
+  "source": "@site/docs/search/searxng.md",
+  "sourceDirName": "search",
+  "slug": "/search/searxng",
+  "permalink": "/docs/search/searxng",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Firecrawl Search",
+    "permalink": "/docs/search/firecrawl"
+  },
+  "next": {
+    "title": "Linkup Search",
+    "permalink": "/docs/search/linkup"
+  }
+}

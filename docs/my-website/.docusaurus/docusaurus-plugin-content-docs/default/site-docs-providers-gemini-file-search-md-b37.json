@@ -1,0 +1,14 @@
+{
+  "id": "providers/gemini_file_search",
+  "title": "Gemini File Search",
+  "description": "Use Google Gemini's File Search for Retrieval Augmented Generation (RAG) with LiteLLM.",
+  "source": "@site/docs/providers/gemini_file_search.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/gemini_file_search",
+  "permalink": "/docs/providers/gemini_file_search",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

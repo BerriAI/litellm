@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/bedrock",
+  "title": "Bedrock Guardrails",
+  "description": "If you haven't set up or authenticated your Bedrock provider yet, see the Bedrock Provider Setup & Authentication Guide.",
+  "source": "@site/docs/proxy/guardrails/bedrock.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/bedrock",
+  "permalink": "/docs/proxy/guardrails/bedrock",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Azure Content Safety Guardrail",
+    "permalink": "/docs/proxy/guardrails/azure_content_guardrail"
+  },
+  "next": {
+    "title": "CrowdStrike AIDR",
+    "permalink": "/docs/proxy/guardrails/crowdstrike_aidr"
+  }
+}

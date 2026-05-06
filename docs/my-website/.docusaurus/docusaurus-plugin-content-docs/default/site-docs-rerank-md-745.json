@@ -1,0 +1,23 @@
+{
+  "id": "rerank",
+  "title": "/rerank",
+  "description": "LiteLLM Follows the cohere api request / response for the rerank api",
+  "source": "@site/docs/rerank.md",
+  "sourceDirName": ".",
+  "slug": "/rerank",
+  "permalink": "/docs/rerank",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/realtime - WebRTC Support",
+    "permalink": "/docs/proxy/realtime_webrtc"
+  },
+  "next": {
+    "title": "/responses",
+    "permalink": "/docs/response_api"
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "permalink": "/blog/server-root-path-incident",
+  "source": "@site/blog/server_root_path/index.md",
+  "title": "Incident Report: SERVER_ROOT_PATH regression broke UI routing",
+  "description": "Date: January 22, 2026",
+  "date": "2026-02-21T10:00:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "incident-report",
+      "permalink": "/blog/tags/incident-report"
+    },
+    {
+      "inline": true,
+      "label": "ui",
+      "permalink": "/blog/tags/ui"
+    },
+    {
+      "inline": true,
+      "label": "stability",
+      "permalink": "/blog/tags/stability"
+    }
+  ],
+  "hasTruncateMarker": true,
+  "authors": [
+    {
+      "name": "Yuneng Jiang",
+      "title": "SWE @ LiteLLM (Full Stack)",
+      "url": "https://www.linkedin.com/in/yuneng-david-jiang-455676139/",
+      "imageURL": "https://avatars.githubusercontent.com/u/171294688?v=4",
+      "key": "yuneng",
+      "page": null
+    },
+    {
+      "name": "Ishaan Jaff",
+      "title": "CTO, LiteLLM",
+      "url": "https://www.linkedin.com/in/reffajnaahsi/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg",
+      "key": "ishaan-alt",
+      "page": null
+    },
+    {
+      "name": "Krrish Dholakia",
+      "title": "CEO, LiteLLM",
+      "url": "https://www.linkedin.com/in/krish-d/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg",
+      "key": "krrish",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "server-root-path-incident",
+    "title": "Incident Report: SERVER_ROOT_PATH regression broke UI routing",
+    "date": "2026-02-21T10:00:00.000Z",
+    "authors": [
+      "yuneng",
+      "ishaan-alt",
+      "krrish"
+    ],
+    "tags": [
+      "incident-report",
+      "ui",
+      "stability"
+    ],
+    "hide_table_of_contents": false
+  },
+  "unlisted": false,
+  "prevItem": {
+    "title": "Incident Report: Wildcard Blocking New Models After Cost Map Reload",
+    "permalink": "/blog/anthropic-wildcard-model-access-incident"
+  },
+  "nextItem": {
+    "title": "DAY 0 Support: Gemini 3.1 Pro on LiteLLM",
+    "permalink": "/blog/gemini_3_1_pro"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "response_api_compact",
+  "title": "/responses/compact",
+  "description": "Compress conversation history using OpenAI's /responses/compact endpoint.",
+  "source": "@site/docs/response_api_compact.md",
+  "sourceDirName": ".",
+  "slug": "/response_api_compact",
+  "permalink": "/docs/response_api_compact",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Prompt Management with Responses API",
+    "permalink": "/docs/prompt_management"
+  },
+  "next": {
+    "title": "Overview",
+    "permalink": "/docs/search/"
+  }
+}

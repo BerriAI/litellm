@@ -1,0 +1,23 @@
+{
+  "id": "providers/openrouter",
+  "title": "OpenRouter",
+  "description": "LiteLLM supports all the text / chat / vision / embedding models from OpenRouter",
+  "source": "@site/docs/providers/openrouter.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/openrouter",
+  "permalink": "/docs/providers/openrouter",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Ollama",
+    "permalink": "/docs/providers/ollama"
+  },
+  "next": {
+    "title": "Sarvam.ai",
+    "permalink": "/docs/providers/sarvam"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "projects/FastREPL",
+  "title": "FastREPL",
+  "description": "⚡Fast Run-Eval-Polish Loop for LLM Applications",
+  "source": "@site/docs/projects/FastREPL.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/FastREPL",
+  "permalink": "/docs/projects/FastREPL",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "dbally",
+    "permalink": "/docs/projects/dbally"
+  },
+  "next": {
+    "title": "PROMPTMETHEUS",
+    "permalink": "/docs/projects/PROMPTMETHEUS"
+  }
+}

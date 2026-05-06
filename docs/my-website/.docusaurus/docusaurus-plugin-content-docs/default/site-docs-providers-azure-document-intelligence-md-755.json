@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure_document_intelligence",
+  "title": "Azure Document Intelligence OCR",
+  "description": "Overview",
+  "source": "@site/docs/providers/azure_document_intelligence.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/azure_document_intelligence",
+  "permalink": "/docs/providers/azure_document_intelligence",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure AI OCR (Mistral)",
+    "permalink": "/docs/providers/azure_ocr"
+  },
+  "next": {
+    "title": "Azure AI Speech (Cognitive Services)",
+    "permalink": "/docs/providers/azure_ai_speech"
+  }
+}

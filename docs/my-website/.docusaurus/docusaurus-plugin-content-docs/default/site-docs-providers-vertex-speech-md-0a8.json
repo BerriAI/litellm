@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_speech",
+  "title": "Vertex AI Text to Speech",
+  "description": "| Property | Details |",
+  "source": "@site/docs/providers/vertex_speech.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex_speech",
+  "permalink": "/docs/providers/vertex_speech",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI Image Generation",
+    "permalink": "/docs/providers/vertex_image"
+  },
+  "next": {
+    "title": "Vertex Batch APIs",
+    "permalink": "/docs/providers/vertex_batch"
+  }
+}

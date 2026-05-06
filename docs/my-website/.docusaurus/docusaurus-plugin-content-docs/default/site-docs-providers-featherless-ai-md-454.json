@@ -1,0 +1,23 @@
+{
+  "id": "providers/featherless_ai",
+  "title": "Featherless AI",
+  "description": "https://featherless.ai/",
+  "source": "@site/docs/providers/featherless_ai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/featherless_ai",
+  "permalink": "/docs/providers/featherless_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Fal AI",
+    "permalink": "/docs/providers/fal_ai"
+  },
+  "next": {
+    "title": "Fireworks AI",
+    "permalink": "/docs/providers/fireworks_ai"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "troubleshoot/pip_venv_upgrade",
+  "title": "Upgrading LiteLLM Proxy (pip/venv)",
+  "description": "Guide for upgrading LiteLLM Proxy when installed via pip in a virtual environment.",
+  "source": "@site/docs/troubleshoot/pip_venv_upgrade.md",
+  "sourceDirName": "troubleshoot",
+  "slug": "/troubleshoot/pip_venv_upgrade",
+  "permalink": "/docs/troubleshoot/pip_venv_upgrade",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Troubleshooting Prisma Migration Errors",
+    "permalink": "/docs/troubleshoot/prisma_migrations"
+  },
+  "next": {
+    "title": "Safe Rollback Guide",
+    "permalink": "/docs/troubleshoot/rollback"
+  }
+}

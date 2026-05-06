@@ -1,0 +1,23 @@
+{
+  "id": "mcp_guardrail",
+  "title": "MCP Guardrails",
+  "description": "LiteLLM supports applying guardrails to MCP tool calls to ensure security and compliance. You can configure guardrails to run before or during MCP calls to validate inputs and block or mask sensitive information.",
+  "source": "@site/docs/mcp_guardrail.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_guardrail",
+  "permalink": "/docs/mcp_guardrail",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Cost Tracking",
+    "permalink": "/docs/mcp_cost"
+  },
+  "next": {
+    "title": "MCP Toolsets",
+    "permalink": "/docs/mcp_toolsets"
+  }
+}

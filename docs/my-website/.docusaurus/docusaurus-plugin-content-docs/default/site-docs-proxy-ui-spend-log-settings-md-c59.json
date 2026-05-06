@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ui_spend_log_settings",
+  "title": "UI Spend Log Settings",
+  "description": "Configure spend log behavior directly from the Admin UI—no config file edits or proxy restart required. This is especially useful for cloud deployments where updating the config is difficult or requires a long release process.",
+  "source": "@site/docs/proxy/ui_spend_log_settings.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/ui_spend_log_settings",
+  "permalink": "/docs/proxy/ui_spend_log_settings",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Getting Started with UI Logs",
+    "permalink": "/docs/proxy/ui_logs"
+  },
+  "next": {
+    "title": "Session Logs",
+    "permalink": "/docs/proxy/ui_logs_sessions"
+  }
+}

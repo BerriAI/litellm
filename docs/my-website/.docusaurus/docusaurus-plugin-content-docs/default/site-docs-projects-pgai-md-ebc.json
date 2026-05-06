@@ -1,0 +1,23 @@
+{
+  "id": "projects/pgai",
+  "title": "pgai",
+  "description": "pgai is a suite of tools to develop RAG, semantic search, and other AI applications more easily with PostgreSQL.",
+  "source": "@site/docs/projects/pgai.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/pgai",
+  "permalink": "/docs/projects/pgai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "llmcord.py",
+    "permalink": "/docs/projects/llm_cord"
+  },
+  "next": {
+    "title": "GPTLocalhost",
+    "permalink": "/docs/projects/GPTLocalhost"
+  }
+}

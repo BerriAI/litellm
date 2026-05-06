@@ -1,0 +1,23 @@
+{
+  "id": "providers/lambda_ai",
+  "title": "Lambda AI",
+  "description": "Overview",
+  "source": "@site/docs/providers/lambda_ai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/lambda_ai",
+  "permalink": "/docs/providers/lambda_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Jina AI",
+    "permalink": "/docs/providers/jina_ai"
+  },
+  "next": {
+    "title": "LangGraph",
+    "permalink": "/docs/providers/langgraph"
+  }
+}

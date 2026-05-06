@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/claude_code_beta_headers",
+  "title": "Claude Code - Managing Anthropic Beta Headers",
+  "description": "When using Claude Code with LiteLLM and non-Anthropic providers (Bedrock, Azure AI, Vertex AI), you need to ensure that only supported beta headers are sent to each provider. This guide explains how to add support for new beta headers or fix invalid beta header errors.",
+  "source": "@site/docs/tutorials/claude_code_beta_headers.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/claude_code_beta_headers",
+  "permalink": "/docs/tutorials/claude_code_beta_headers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Claude Code Plugin Marketplace (Managed Skills)",
+    "permalink": "/docs/tutorials/claude_code_plugin_marketplace"
+  },
+  "next": {
+    "title": "OpenCode Quickstart",
+    "permalink": "/docs/tutorials/opencode_integration"
+  }
+}

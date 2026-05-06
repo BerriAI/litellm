@@ -1,0 +1,23 @@
+{
+  "id": "projects/GraphRAG",
+  "title": "Microsoft GraphRAG",
+  "description": "GraphRAG is a data pipeline and transformation suite that extracts meaningful, structured data from unstructured text using the power of LLMs. It uses a graph-based approach to RAG (Retrieval-Augmented Generation) that leverages knowledge graphs to improve reasoning over private datasets.",
+  "source": "@site/docs/projects/GraphRAG.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/GraphRAG",
+  "permalink": "/docs/projects/GraphRAG",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Harbor",
+    "permalink": "/docs/projects/Harbor"
+  },
+  "next": {
+    "title": "Docq.AI",
+    "permalink": "/docs/projects/Docq.AI"
+  }
+}

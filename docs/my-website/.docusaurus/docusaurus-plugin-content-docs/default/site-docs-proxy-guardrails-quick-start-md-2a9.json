@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/quick_start",
+  "title": "Guardrails - Quick Start",
+  "description": "Setup Prompt Injection Detection, PII Masking on LiteLLM Proxy (AI Gateway)",
+  "source": "@site/docs/proxy/guardrails/quick_start.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/quick_start",
+  "permalink": "/docs/proxy/guardrails/quick_start",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Caching",
+    "permalink": "/docs/proxy/caching"
+  },
+  "next": {
+    "title": "Team Bring-Your-Own Guardrails",
+    "permalink": "/docs/proxy/guardrails/team_based_guardrails"
+  }
+}

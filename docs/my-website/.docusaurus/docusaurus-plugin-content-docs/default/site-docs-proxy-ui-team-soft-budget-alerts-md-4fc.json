@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ui_team_soft_budget_alerts",
+  "title": "Team Soft Budget Alerts",
+  "description": "Set a soft budget on a team and get email alerts when spending crosses the threshold — without blocking any requests.",
+  "source": "@site/docs/proxy/ui_team_soft_budget_alerts.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/ui_team_soft_budget_alerts",
+  "permalink": "/docs/proxy/ui_team_soft_budget_alerts",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[Beta] Project Management",
+    "permalink": "/docs/proxy/project_management"
+  },
+  "next": {
+    "title": "Setting Tag Budgets",
+    "permalink": "/docs/proxy/tag_budgets"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/control_plane_and_data_plane",
+  "title": "Control Plane for Multi-region Architecture (Enterprise)",
+  "description": "Learn how to deploy LiteLLM across multiple regions while maintaining centralized administration and avoiding duplication of management overhead.",
+  "source": "@site/docs/proxy/control_plane_and_data_plane.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/control_plane_and_data_plane",
+  "permalink": "/docs/proxy/control_plane_and_data_plane",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Multi-Tenant Architecture with LiteLLM",
+    "permalink": "/docs/proxy/multi_tenant_architecture"
+  },
+  "next": {
+    "title": "[BETA] High Availability Control Plane",
+    "permalink": "/docs/proxy/high_availability_control_plane"
+  }
+}

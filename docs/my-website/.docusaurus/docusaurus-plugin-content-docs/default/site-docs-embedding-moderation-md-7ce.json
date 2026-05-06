@@ -1,0 +1,14 @@
+{
+  "id": "embedding/moderation",
+  "title": "litellm.moderation()",
+  "description": "LiteLLM supports the moderation endpoint for OpenAI",
+  "source": "@site/docs/embedding/moderation.md",
+  "sourceDirName": "embedding",
+  "slug": "/embedding/moderation",
+  "permalink": "/docs/embedding/moderation",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

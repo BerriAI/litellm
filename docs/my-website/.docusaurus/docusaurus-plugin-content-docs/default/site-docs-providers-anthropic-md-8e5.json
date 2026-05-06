@@ -1,0 +1,23 @@
+{
+  "id": "providers/anthropic",
+  "title": "Anthropic",
+  "description": "LiteLLM supports all anthropic models.",
+  "source": "@site/docs/providers/anthropic.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/anthropic",
+  "permalink": "/docs/providers/anthropic",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Gemini Realtime API - Google AI Studio",
+    "permalink": "/docs/providers/google_ai_studio/realtime"
+  },
+  "next": {
+    "title": "AWS Sagemaker",
+    "permalink": "/docs/providers/aws_sagemaker"
+  }
+}

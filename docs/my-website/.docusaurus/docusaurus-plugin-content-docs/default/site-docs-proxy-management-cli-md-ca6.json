@@ -1,0 +1,23 @@
+{
+  "id": "proxy/management_cli",
+  "title": "LiteLLM Proxy CLI",
+  "description": "The litellm-proxy CLI is a command-line tool for managing your LiteLLM proxy",
+  "source": "@site/docs/proxy/management_cli.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/management_cli",
+  "permalink": "/docs/proxy/management_cli",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Post-Call Rules",
+    "permalink": "/docs/proxy/rules"
+  },
+  "next": {
+    "title": "A/B Testing - Traffic Mirroring",
+    "permalink": "/docs/traffic_mirroring"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "migration_policy",
+  "title": "Migration Policy",
+  "description": "New Beta Feature Introduction",
+  "source": "@site/docs/migration_policy.md",
+  "sourceDirName": ".",
+  "slug": "/migration_policy",
+  "permalink": "/docs/migration_policy",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "LiteLLM Self-Hosted Security & Encryption FAQ",
+    "permalink": "/docs/proxy/security_encryption_faq"
+  },
+  "next": {
+    "title": "❤️ 🚅 Projects built on LiteLLM",
+    "permalink": "/docs/project"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/milvus_vector_stores",
+  "title": "Milvus - Vector Store",
+  "description": "Use Milvus as a vector store for RAG.",
+  "source": "@site/docs/providers/milvus_vector_stores.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/milvus_vector_stores",
+  "permalink": "/docs/providers/milvus_vector_stores",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Meta Llama",
+    "permalink": "/docs/providers/meta_llama"
+  },
+  "next": {
+    "title": "Mistral AI API",
+    "permalink": "/docs/providers/mistral"
+  }
+}

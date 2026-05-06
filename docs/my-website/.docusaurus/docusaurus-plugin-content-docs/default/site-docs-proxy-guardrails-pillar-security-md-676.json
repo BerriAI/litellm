@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/pillar_security",
+  "title": "Pillar Security",
+  "description": "Pillar Security integrates with LiteLLM Proxy via the Generic Guardrail API, providing comprehensive AI security scanning for your LLM applications.",
+  "source": "@site/docs/proxy/guardrails/pillar_security.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/pillar_security",
+  "permalink": "/docs/proxy/guardrails/pillar_security",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "PII, PHI Masking - Presidio",
+    "permalink": "/docs/proxy/guardrails/pii_masking_v2"
+  },
+  "next": {
+    "title": "In-memory Prompt Injection Detection",
+    "permalink": "/docs/proxy/guardrails/prompt_injection"
+  }
+}

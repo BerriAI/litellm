@@ -1,0 +1,23 @@
+{
+  "id": "proxy/model_access_guide",
+  "title": "How Model Access Works",
+  "description": "Concept",
+  "source": "@site/docs/proxy/model_access_guide.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/model_access_guide",
+  "permalink": "/docs/proxy/model_access_guide",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Model Discovery",
+    "permalink": "/docs/proxy/model_discovery"
+  },
+  "next": {
+    "title": "Restrict Model Access",
+    "permalink": "/docs/proxy/model_access"
+  }
+}

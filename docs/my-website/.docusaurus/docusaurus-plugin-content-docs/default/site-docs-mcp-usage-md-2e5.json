@@ -1,0 +1,23 @@
+{
+  "id": "mcp_usage",
+  "title": "Using your MCP",
+  "description": "This document covers how to use LiteLLM as an MCP Gateway. You can see how to use it with Responses API, Cursor IDE, and OpenAI SDK.",
+  "source": "@site/docs/mcp_usage.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_usage",
+  "permalink": "/docs/mcp_usage",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Overview",
+    "permalink": "/docs/mcp"
+  },
+  "next": {
+    "title": "MCP from OpenAPI Specs",
+    "permalink": "/docs/mcp_openapi"
+  }
+}

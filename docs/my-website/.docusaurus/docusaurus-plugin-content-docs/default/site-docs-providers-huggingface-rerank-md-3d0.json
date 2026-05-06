@@ -1,0 +1,23 @@
+{
+  "id": "providers/huggingface_rerank",
+  "title": "HuggingFace Rerank",
+  "description": "HuggingFace Rerank allows you to use reranking models hosted on Hugging Face infrastructure or your custom endpoints to reorder documents based on their relevance to a query.",
+  "source": "@site/docs/providers/huggingface_rerank.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/huggingface_rerank",
+  "permalink": "/docs/providers/huggingface_rerank",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Hugging Face",
+    "permalink": "/docs/providers/huggingface"
+  },
+  "next": {
+    "title": "Hyperbolic",
+    "permalink": "/docs/providers/hyperbolic"
+  }
+}

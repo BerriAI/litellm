@@ -1,0 +1,23 @@
+{
+  "id": "proxy/custom_auth",
+  "title": "Custom Auth",
+  "description": "You can now override the default api key auth.",
+  "source": "@site/docs/proxy/custom_auth.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/custom_auth",
+  "permalink": "/docs/proxy/custom_auth",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "CLI Authentication",
+    "permalink": "/docs/proxy/cli_sso"
+  },
+  "next": {
+    "title": "IP Address Filtering",
+    "permalink": "/docs/proxy/ip_address"
+  }
+}

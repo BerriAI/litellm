@@ -1,0 +1,23 @@
+{
+  "id": "oidc",
+  "title": "[BETA] OpenID Connect (OIDC)",
+  "description": "LiteLLM supports using OpenID Connect (OIDC) for authentication to upstream services . This allows you to avoid storing sensitive credentials in your configuration files.",
+  "source": "@site/docs/oidc.md",
+  "sourceDirName": ".",
+  "slug": "/oidc",
+  "permalink": "/docs/oidc",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Custom Secret Manager",
+    "permalink": "/docs/secret_managers/custom_secret_manager"
+  },
+  "next": {
+    "title": "Spend Tracking",
+    "permalink": "/docs/proxy/cost_tracking"
+  }
+}

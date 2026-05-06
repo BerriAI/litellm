@@ -1,0 +1,23 @@
+{
+  "id": "proxy/image_handling",
+  "title": "Image URL Handling",
+  "description": "Some LLM API's don't support url's for images, but do support base-64 strings.",
+  "source": "@site/docs/proxy/image_handling.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/image_handling",
+  "permalink": "/docs/proxy/image_handling",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "What is stored in the DB",
+    "permalink": "/docs/proxy/db_info"
+  },
+  "next": {
+    "title": "Control Model Access with OIDC (Azure AD/Keycloak/etc.)",
+    "permalink": "/docs/proxy/jwt_auth_arch"
+  }
+}

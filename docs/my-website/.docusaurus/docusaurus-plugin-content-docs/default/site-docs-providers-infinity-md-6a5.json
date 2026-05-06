@@ -1,0 +1,23 @@
+{
+  "id": "providers/infinity",
+  "title": "Infinity",
+  "description": "| Property                  | Details                                                                                                    |",
+  "source": "@site/docs/providers/infinity.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/infinity",
+  "permalink": "/docs/providers/infinity",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Hyperbolic",
+    "permalink": "/docs/providers/hyperbolic"
+  },
+  "next": {
+    "title": "Jina AI",
+    "permalink": "/docs/providers/jina_ai"
+  }
+}

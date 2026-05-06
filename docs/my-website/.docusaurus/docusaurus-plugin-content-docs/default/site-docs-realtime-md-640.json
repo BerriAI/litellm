@@ -1,0 +1,23 @@
+{
+  "id": "realtime",
+  "title": "/realtime",
+  "description": "Use this to loadbalance across Azure + OpenAI + xAI and more.",
+  "source": "@site/docs/realtime.md",
+  "sourceDirName": ".",
+  "slug": "/realtime",
+  "permalink": "/docs/realtime",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/rag/query",
+    "permalink": "/docs/rag_query"
+  },
+  "next": {
+    "title": "/realtime - WebRTC Support",
+    "permalink": "/docs/proxy/realtime_webrtc"
+  }
+}

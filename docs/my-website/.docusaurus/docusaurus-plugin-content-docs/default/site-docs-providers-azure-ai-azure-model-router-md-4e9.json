@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure_ai/azure_model_router",
+  "title": "Azure Model Router",
+  "description": "Azure Model Router is a feature in Azure AI Foundry that automatically routes your requests to the best available model based on your requirements. This allows you to use a single endpoint that intelligently selects the optimal model for each request.",
+  "source": "@site/docs/providers/azure_ai/azure_model_router.md",
+  "sourceDirName": "providers/azure_ai",
+  "slug": "/providers/azure_ai/azure_model_router",
+  "permalink": "/docs/providers/azure_ai/azure_model_router",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure AI Studio",
+    "permalink": "/docs/providers/azure_ai"
+  },
+  "next": {
+    "title": "Azure AI Foundry Agents",
+    "permalink": "/docs/providers/azure_ai_agents"
+  }
+}

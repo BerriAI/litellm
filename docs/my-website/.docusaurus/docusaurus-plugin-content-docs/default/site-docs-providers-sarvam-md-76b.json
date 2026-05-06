@@ -1,0 +1,23 @@
+{
+  "id": "providers/sarvam",
+  "title": "Sarvam.ai",
+  "description": "LiteLLM supports all the text models from Sarvam ai",
+  "source": "@site/docs/providers/sarvam.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/sarvam",
+  "permalink": "/docs/providers/sarvam",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "OpenRouter",
+    "permalink": "/docs/providers/openrouter"
+  },
+  "next": {
+    "title": "🆕 OVHCloud AI Endpoints",
+    "permalink": "/docs/providers/ovhcloud"
+  }
+}

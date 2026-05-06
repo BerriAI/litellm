@@ -1,0 +1,23 @@
+{
+  "id": "providers/ovhcloud",
+  "title": "🆕 OVHCloud AI Endpoints",
+  "description": "Leading French Cloud provider in Europe with data sovereignty and privacy.",
+  "source": "@site/docs/providers/ovhcloud.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/ovhcloud",
+  "permalink": "/docs/providers/ovhcloud",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Sarvam.ai",
+    "permalink": "/docs/providers/sarvam"
+  },
+  "next": {
+    "title": "Perplexity AI (pplx-api)",
+    "permalink": "/docs/providers/perplexity"
+  }
+}

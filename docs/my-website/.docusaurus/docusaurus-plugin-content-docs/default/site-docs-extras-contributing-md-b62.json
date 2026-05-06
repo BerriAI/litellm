@@ -1,0 +1,23 @@
+{
+  "id": "extras/contributing",
+  "title": "Contributing to Documentation",
+  "description": "This website is built using Docusaurus 2, a modern static website generator.",
+  "source": "@site/docs/extras/contributing.md",
+  "sourceDirName": "extras",
+  "slug": "/extras/contributing",
+  "permalink": "/docs/extras/contributing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Add Rerank Provider",
+    "permalink": "/docs/adding_provider/new_rerank_provider"
+  },
+  "next": {
+    "title": "Contributing - UI",
+    "permalink": "/docs/contributing"
+  }
+}

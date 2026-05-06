@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/azure_openai",
+  "title": "Replacing OpenAI ChatCompletion with Completion()",
+  "description": "* Supported OpenAI LLMs",
+  "source": "@site/docs/tutorials/azure_openai.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/azure_openai",
+  "permalink": "/docs/tutorials/azure_openai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Provider Setup",
+    "permalink": "/docs/tutorials/provider_tutorials"
+  },
+  "next": {
+    "title": "Llama2 Together AI Tutorial",
+    "permalink": "/docs/tutorials/TogetherAI_liteLLM"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/xai_realtime",
+  "title": "xAI Voice Agent (Realtime API)",
+  "description": "xAI's Grok Voice Agent provides real-time voice conversation capabilities through WebSocket connections, enabling natural bidirectional audio interactions.",
+  "source": "@site/docs/providers/xai_realtime.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/xai_realtime",
+  "permalink": "/docs/providers/xai_realtime",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "xAI",
+    "permalink": "/docs/providers/xai"
+  },
+  "next": {
+    "title": "Xiaomi MiMo",
+    "permalink": "/docs/providers/xiaomi_mimo"
+  }
+}

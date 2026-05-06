@@ -1,0 +1,23 @@
+{
+  "id": "proxy/call_hooks",
+  "title": "Modify / Reject Incoming Requests",
+  "description": "- Modify data before making llm api calls on proxy",
+  "source": "@site/docs/proxy/call_hooks.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/call_hooks",
+  "permalink": "/docs/proxy/call_hooks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Tag-Based Policy Attachments",
+    "permalink": "/docs/proxy/guardrails/policy_tags"
+  },
+  "next": {
+    "title": "Post-Call Rules",
+    "permalink": "/docs/proxy/rules"
+  }
+}

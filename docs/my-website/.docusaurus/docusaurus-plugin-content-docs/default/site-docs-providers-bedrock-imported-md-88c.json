@@ -1,0 +1,23 @@
+{
+  "id": "providers/bedrock_imported",
+  "title": "Bedrock Imported Models",
+  "description": "Bedrock Imported Models (Deepseek, Deepseek R1, Qwen, OpenAI-compatible models)",
+  "source": "@site/docs/providers/bedrock_imported.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/bedrock_imported",
+  "permalink": "/docs/providers/bedrock_imported",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Bedrock Embedding",
+    "permalink": "/docs/providers/bedrock_embedding"
+  },
+  "next": {
+    "title": "AWS Bedrock - Image Generation",
+    "permalink": "/docs/providers/bedrock_image_gen"
+  }
+}

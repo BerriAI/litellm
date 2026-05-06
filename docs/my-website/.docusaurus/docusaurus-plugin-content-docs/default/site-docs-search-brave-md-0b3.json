@@ -1,0 +1,23 @@
+{
+  "id": "search/brave",
+  "title": "Brave Search",
+  "description": "Get started by creating a free API key via https://brave.com/search/api/.",
+  "source": "@site/docs/search/brave.md",
+  "sourceDirName": "search",
+  "slug": "/search/brave",
+  "permalink": "/docs/search/brave",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Exa AI Search",
+    "permalink": "/docs/search/exa_ai"
+  },
+  "next": {
+    "title": "Parallel AI Search",
+    "permalink": "/docs/search/parallel_ai"
+  }
+}

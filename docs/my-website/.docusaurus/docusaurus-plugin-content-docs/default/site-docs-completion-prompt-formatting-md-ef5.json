@@ -1,0 +1,23 @@
+{
+  "id": "completion/prompt_formatting",
+  "title": "Prompt Formatting",
+  "description": "LiteLLM automatically translates the OpenAI ChatCompletions prompt format, to other models. You can control this by setting a custom prompt template for a model as well.",
+  "source": "@site/docs/completion/prompt_formatting.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/prompt_formatting",
+  "permalink": "/docs/completion/prompt_formatting",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Prompt Caching",
+    "permalink": "/docs/completion/prompt_caching"
+  },
+  "next": {
+    "title": "Compatibility & Extensibility",
+    "permalink": "/docs/guides/compatibility_extensibility"
+  }
+}

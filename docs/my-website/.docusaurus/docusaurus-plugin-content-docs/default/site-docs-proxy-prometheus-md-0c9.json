@@ -1,0 +1,23 @@
+{
+  "id": "proxy/prometheus",
+  "title": "📈 Prometheus metrics",
+  "description": "LiteLLM Exposes a /metrics endpoint for Prometheus to Poll",
+  "source": "@site/docs/proxy/prometheus.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/prometheus",
+  "permalink": "/docs/proxy/prometheus",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "PagerDuty Alerting",
+    "permalink": "/docs/proxy/pagerduty"
+  },
+  "next": {
+    "title": "Grafana Pyroscope CPU profiling",
+    "permalink": "/docs/proxy/pyroscope_profiling"
+  }
+}

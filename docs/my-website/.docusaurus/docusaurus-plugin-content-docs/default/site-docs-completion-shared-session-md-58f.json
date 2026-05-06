@@ -1,0 +1,14 @@
+{
+  "id": "completion/shared_session",
+  "title": "Shared Session Support",
+  "description": "Overview",
+  "source": "@site/docs/completion/shared_session.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/shared_session",
+  "permalink": "/docs/completion/shared_session",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

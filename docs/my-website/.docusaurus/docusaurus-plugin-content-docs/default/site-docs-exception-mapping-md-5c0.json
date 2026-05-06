@@ -1,0 +1,23 @@
+{
+  "id": "exception_mapping",
+  "title": "Exception Mapping",
+  "description": "LiteLLM maps exceptions across all providers to their OpenAI counterparts.",
+  "source": "@site/docs/exception_mapping.md",
+  "sourceDirName": ".",
+  "slug": "/exception_mapping",
+  "permalink": "/docs/exception_mapping",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Completion Token Usage & Cost",
+    "permalink": "/docs/completion/token_usage"
+  },
+  "next": {
+    "title": "LiteLLM AI Gateway (Proxy)",
+    "permalink": "/docs/simple_proxy"
+  }
+}

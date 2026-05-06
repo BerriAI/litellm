@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/intro",
+  "title": "Why Pass-Through Endpoints?",
+  "description": "These endpoints are useful for 2 scenarios:",
+  "source": "@site/docs/pass_through/intro.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/intro",
+  "permalink": "/docs/pass_through/intro",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/ocr",
+    "permalink": "/docs/ocr"
+  },
+  "next": {
+    "title": "Anthropic Passthrough",
+    "permalink": "/docs/pass_through/anthropic_completion"
+  }
+}

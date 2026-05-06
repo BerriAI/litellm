@@ -1,0 +1,23 @@
+{
+  "id": "proxy/dynamic_logging",
+  "title": "Dynamic Callback Management",
+  "description": "✨ This is an enterprise feature.",
+  "source": "@site/docs/proxy/dynamic_logging.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/dynamic_logging",
+  "permalink": "/docs/proxy/dynamic_logging",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "A/B Testing - Traffic Mirroring",
+    "permalink": "/docs/traffic_mirroring"
+  },
+  "next": {
+    "title": "Logging",
+    "permalink": "/docs/proxy/logging"
+  }
+}

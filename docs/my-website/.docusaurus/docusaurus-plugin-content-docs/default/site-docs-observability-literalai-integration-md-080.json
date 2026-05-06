@@ -1,0 +1,23 @@
+{
+  "id": "observability/literalai_integration",
+  "title": "Literal AI - Log, Evaluate, Monitor",
+  "description": "Literal AI is a collaborative observability, evaluation and analytics platform for building production-grade LLM apps.",
+  "source": "@site/docs/observability/literalai_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/literalai_integration",
+  "permalink": "/docs/observability/literalai_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Levo AI",
+    "permalink": "/docs/observability/levo_integration"
+  },
+  "next": {
+    "title": "Logfire",
+    "permalink": "/docs/observability/logfire_integration"
+  }
+}

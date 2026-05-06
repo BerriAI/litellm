@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure_ai_agents",
+  "title": "Azure AI Foundry Agents",
+  "description": "Call Azure AI Foundry Agents in the OpenAI Request/Response format.",
+  "source": "@site/docs/providers/azure_ai_agents.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/azure_ai_agents",
+  "permalink": "/docs/providers/azure_ai_agents",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure Model Router",
+    "permalink": "/docs/providers/azure_ai/azure_model_router"
+  },
+  "next": {
+    "title": "Azure AI OCR (Mistral)",
+    "permalink": "/docs/providers/azure_ocr"
+  }
+}

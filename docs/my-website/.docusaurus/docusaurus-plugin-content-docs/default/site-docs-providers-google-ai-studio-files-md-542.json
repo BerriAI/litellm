@@ -1,0 +1,23 @@
+{
+  "id": "providers/google_ai_studio/files",
+  "title": "[BETA] Google AI Studio (Gemini) Files API",
+  "description": "Use this to upload files to Google AI Studio (Gemini).",
+  "source": "@site/docs/providers/google_ai_studio/files.md",
+  "sourceDirName": "providers/google_ai_studio",
+  "slug": "/providers/google_ai_studio/files",
+  "permalink": "/docs/providers/google_ai_studio/files",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Gemini — Lyria (music generation)",
+    "permalink": "/docs/providers/gemini/music"
+  },
+  "next": {
+    "title": "Google AI Studio Image Generation",
+    "permalink": "/docs/providers/google_ai_studio/image_gen"
+  }
+}

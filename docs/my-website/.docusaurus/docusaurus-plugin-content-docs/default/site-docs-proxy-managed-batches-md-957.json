@@ -1,0 +1,23 @@
+{
+  "id": "proxy/managed_batches",
+  "title": "[BETA] LiteLLM Managed Files with Batches",
+  "description": "This is a free LiteLLM Enterprise feature.",
+  "source": "@site/docs/proxy/managed_batches.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/managed_batches",
+  "permalink": "/docs/proxy/managed_batches",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/batches",
+    "permalink": "/docs/batches"
+  },
+  "next": {
+    "title": "/containers",
+    "permalink": "/docs/containers"
+  }
+}

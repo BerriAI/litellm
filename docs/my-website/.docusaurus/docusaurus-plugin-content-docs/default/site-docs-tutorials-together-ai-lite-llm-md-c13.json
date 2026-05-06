@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/TogetherAI_liteLLM",
+  "title": "Llama2 Together AI Tutorial",
+  "description": "https://together.ai/",
+  "source": "@site/docs/tutorials/TogetherAI_liteLLM.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/TogetherAI_liteLLM",
+  "permalink": "/docs/tutorials/TogetherAI_liteLLM",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Replacing OpenAI ChatCompletion with Completion()",
+    "permalink": "/docs/tutorials/azure_openai"
+  },
+  "next": {
+    "title": "Llama2 - Huggingface Tutorial",
+    "permalink": "/docs/tutorials/huggingface_tutorial"
+  }
+}

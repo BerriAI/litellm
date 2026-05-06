@@ -1,0 +1,23 @@
+{
+  "id": "observability/opik_integration",
+  "title": "Comet Opik - Logging + Evals",
+  "description": "Opik is an open source end-to-end LLM Evaluation Platform that helps developers track their LLM prompts and responses during both development and production. Users can define and run evaluations to test their LLMs apps before deployment to check for hallucinations, accuracy, context retrevial, and more!",
+  "source": "@site/docs/observability/opik_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/opik_integration",
+  "permalink": "/docs/observability/opik_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "OpenTelemetry - Tracing LLMs with any observability tool",
+    "permalink": "/docs/observability/opentelemetry_integration"
+  },
+  "next": {
+    "title": "Arize Phoenix OSS",
+    "permalink": "/docs/observability/phoenix_integration"
+  }
+}

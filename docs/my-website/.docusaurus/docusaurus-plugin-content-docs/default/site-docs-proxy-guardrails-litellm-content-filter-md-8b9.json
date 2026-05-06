@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/litellm_content_filter",
+  "title": "LiteLLM Content Filter (Built-in Guardrails)",
+  "description": "Built-in guardrail for detecting and filtering sensitive information using regex patterns and keyword matching. No external dependencies required.",
+  "source": "@site/docs/proxy/guardrails/litellm_content_filter.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/litellm_content_filter",
+  "permalink": "/docs/proxy/guardrails/litellm_content_filter",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Guardrail Testing Playground",
+    "permalink": "/docs/proxy/guardrails/test_playground"
+  },
+  "next": {
+    "title": "Realtime API Guardrails",
+    "permalink": "/docs/proxy/guardrails/realtime_guardrails"
+  }
+}

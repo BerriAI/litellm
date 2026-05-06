@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/litellm_proxy_aporia",
+  "title": "Aporia Guardrails with LiteLLM Gateway",
+  "description": "In this tutorial we will use LiteLLM AI Gateway with Aporia to detect PII in requests and profanity in responses",
+  "source": "@site/docs/tutorials/litellm_proxy_aporia.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/litellm_proxy_aporia",
+  "permalink": "/docs/tutorials/litellm_proxy_aporia",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Call Gemini Realtime API with Audio Input/Output",
+    "permalink": "/docs/tutorials/gemini_realtime_with_audio"
+  },
+  "next": {
+    "title": "Presidio PII Masking with LiteLLM - Complete Tutorial",
+    "permalink": "/docs/tutorials/presidio_pii_masking"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "mcp_openapi",
+  "title": "MCP from OpenAPI Specs",
+  "description": "LiteLLM can convert any OpenAPI/Swagger spec into an MCP server — no custom MCP server code required.",
+  "source": "@site/docs/mcp_openapi.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_openapi",
+  "permalink": "/docs/mcp_openapi",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Using your MCP",
+    "permalink": "/docs/mcp_usage"
+  },
+  "next": {
+    "title": "MCP OAuth",
+    "permalink": "/docs/mcp_oauth"
+  }
+}

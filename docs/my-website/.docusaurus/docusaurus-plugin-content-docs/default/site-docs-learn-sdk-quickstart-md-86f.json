@@ -1,0 +1,27 @@
+{
+  "id": "learn/sdk_quickstart",
+  "title": "SDK Quickstart",
+  "description": "Make your first LiteLLM SDK call, then jump to the right docs for the next feature you need.",
+  "source": "@site/docs/learn/sdk_quickstart.md",
+  "sourceDirName": "learn",
+  "slug": "/learn/sdk_quickstart",
+  "permalink": "/docs/learn/sdk_quickstart",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "SDK Quickstart",
+    "sidebar_label": "SDK Quickstart",
+    "description": "Make your first LiteLLM SDK call, then jump to the right docs for the next feature you need."
+  },
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Learn",
+    "permalink": "/docs/learn"
+  },
+  "next": {
+    "title": "Gateway Quickstart",
+    "permalink": "/docs/learn/gateway_quickstart"
+  }
+}

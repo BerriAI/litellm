@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/grayswan",
+  "title": "Gray Swan Cygnal Guardrail",
+  "description": "Use Gray Swan Cygnal to continuously monitor conversations for policy violations, indirect prompt injection (IPI), jailbreak attempts, and other safety risks.",
+  "source": "@site/docs/proxy/guardrails/grayswan.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/grayswan",
+  "permalink": "/docs/proxy/guardrails/grayswan",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "EnkryptAI Guardrails",
+    "permalink": "/docs/proxy/guardrails/enkryptai"
+  },
+  "next": {
+    "title": "Guardrails AI",
+    "permalink": "/docs/proxy/guardrails/guardrails_ai"
+  }
+}

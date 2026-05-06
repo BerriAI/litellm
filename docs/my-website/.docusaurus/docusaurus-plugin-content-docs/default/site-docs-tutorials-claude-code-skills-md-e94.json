@@ -1,0 +1,19 @@
+{
+  "id": "tutorials/claude_code_skills",
+  "title": "LiteLLM Skills",
+  "description": "litellm-skills is a collection of Agent Skills for managing a live LiteLLM proxy. Install them once and any agent that supports the Agent Skills standard (Claude Code, OpenCode, OpenClaw, etc.) can create users, teams, keys, models, MCP servers, agents, and query usage — all by running curl commands against your proxy.",
+  "source": "@site/docs/tutorials/claude_code_skills.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/claude_code_skills",
+  "permalink": "/docs/tutorials/claude_code_skills",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Manage with AI Agents",
+    "permalink": "/docs/manage_with_ai_agents"
+  }
+}

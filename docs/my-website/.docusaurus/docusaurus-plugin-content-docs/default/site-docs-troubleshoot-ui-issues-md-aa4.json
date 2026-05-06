@@ -1,0 +1,23 @@
+{
+  "id": "troubleshoot/ui_issues",
+  "title": "UI Troubleshooting",
+  "description": "If you're experiencing issues with the LiteLLM Admin UI, please include the following information when reporting.",
+  "source": "@site/docs/troubleshoot/ui_issues.md",
+  "sourceDirName": "troubleshoot",
+  "slug": "/troubleshoot/ui_issues",
+  "permalink": "/docs/troubleshoot/ui_issues",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[OLD PROXY 👉 [NEW proxy here](./simple_proxy)] Local LiteLLM Proxy Server",
+    "permalink": "/docs/proxy_server"
+  },
+  "next": {
+    "title": "MCP Troubleshooting Guide",
+    "permalink": "/docs/mcp_troubleshoot"
+  }
+}

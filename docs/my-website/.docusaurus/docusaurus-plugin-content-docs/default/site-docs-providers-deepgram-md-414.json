@@ -1,0 +1,23 @@
+{
+  "id": "providers/deepgram",
+  "title": "Deepgram",
+  "description": "LiteLLM supports Deepgram's /listen endpoint.",
+  "source": "@site/docs/providers/deepgram.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/deepgram",
+  "permalink": "/docs/providers/deepgram",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "DataRobot",
+    "permalink": "/docs/providers/datarobot"
+  },
+  "next": {
+    "title": "DeepInfra",
+    "permalink": "/docs/providers/deepinfra"
+  }
+}

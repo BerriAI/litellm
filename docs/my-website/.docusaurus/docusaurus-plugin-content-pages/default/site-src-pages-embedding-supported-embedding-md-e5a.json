@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/embedding/supported_embedding",
+  "source": "@site/src/pages/embedding/supported_embedding.md",
+  "title": "Embedding Models",
+  "description": "| Model Name           | Function Call                               | Required OS Variables                |",
+  "frontMatter": {},
+  "unlisted": false
+}

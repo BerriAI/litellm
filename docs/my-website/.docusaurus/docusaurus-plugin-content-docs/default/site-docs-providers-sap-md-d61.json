@@ -1,0 +1,23 @@
+{
+  "id": "providers/sap",
+  "title": "SAP Generative AI Hub",
+  "description": "LiteLLM supports SAP Generative AI Hub's Orchestration Service.",
+  "source": "@site/docs/providers/sap.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/sap",
+  "permalink": "/docs/providers/sap",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "SambaNova",
+    "permalink": "/docs/providers/sambanova"
+  },
+  "next": {
+    "title": "Scaleway",
+    "permalink": "/docs/providers/scaleway"
+  }
+}

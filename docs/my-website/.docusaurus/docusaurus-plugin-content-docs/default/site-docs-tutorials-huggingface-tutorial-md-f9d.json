@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/huggingface_tutorial",
+  "title": "Llama2 - Huggingface Tutorial",
+  "description": "Huggingface is an open source platform to deploy machine-learnings models.",
+  "source": "@site/docs/tutorials/huggingface_tutorial.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/huggingface_tutorial",
+  "permalink": "/docs/tutorials/huggingface_tutorial",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Llama2 Together AI Tutorial",
+    "permalink": "/docs/tutorials/TogetherAI_liteLLM"
+  },
+  "next": {
+    "title": "CodeLlama - Code Infilling",
+    "permalink": "/docs/tutorials/huggingface_codellama"
+  }
+}

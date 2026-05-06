@@ -1,0 +1,23 @@
+{
+  "id": "proxy/veo_video_generation",
+  "title": "Veo Video Generation with Google AI Studio",
+  "description": "Generate videos using Google's Veo model through LiteLLM's pass-through endpoints.",
+  "source": "@site/docs/proxy/veo_video_generation.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/veo_video_generation",
+  "permalink": "/docs/proxy/veo_video_generation",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Image Generation in Chat Completions, Responses API",
+    "permalink": "/docs/completion/image_generation_chat"
+  },
+  "next": {
+    "title": "Retrieval & Knowledge",
+    "permalink": "/docs/guides/retrieval_knowledge"
+  }
+}

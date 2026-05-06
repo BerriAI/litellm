@@ -1,0 +1,14 @@
+{
+  "id": "tutorials/model_config_proxy",
+  "title": "Customize Prompt Templates on OpenAI-Compatible server",
+  "description": "You will learn: How to set a custom prompt template on our OpenAI compatible server.",
+  "source": "@site/docs/tutorials/model_config_proxy.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/model_config_proxy",
+  "permalink": "/docs/tutorials/model_config_proxy",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

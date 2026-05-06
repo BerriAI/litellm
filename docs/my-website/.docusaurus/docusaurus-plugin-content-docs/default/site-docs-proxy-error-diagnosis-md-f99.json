@@ -1,0 +1,23 @@
+{
+  "id": "proxy/error_diagnosis",
+  "title": "Diagnosing Errors - Provider vs Gateway",
+  "description": "Having trouble diagnosing if an error is from the LLM Provider (OpenAI, Anthropic, etc.) or from the LiteLLM AI Gateway itself? Here's how to tell.",
+  "source": "@site/docs/proxy/error_diagnosis.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/error_diagnosis",
+  "permalink": "/docs/proxy/error_diagnosis",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Debugging",
+    "permalink": "/docs/proxy/debugging"
+  },
+  "next": {
+    "title": "Docker, Helm, Terraform",
+    "permalink": "/docs/proxy/deploy"
+  }
+}

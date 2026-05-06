@@ -1,0 +1,23 @@
+{
+  "id": "completion/usage",
+  "title": "Usage",
+  "description": "LiteLLM returns the OpenAI compatible usage object across all providers.",
+  "source": "@site/docs/completion/usage.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/usage",
+  "permalink": "/docs/completion/usage",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Output",
+    "permalink": "/docs/completion/output"
+  },
+  "next": {
+    "title": "Custom HTTP Handler",
+    "permalink": "/docs/completion/http_handler_config"
+  }
+}

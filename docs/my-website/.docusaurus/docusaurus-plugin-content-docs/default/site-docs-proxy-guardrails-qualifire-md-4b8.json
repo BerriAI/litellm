@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/qualifire",
+  "title": "Qualifire",
+  "description": "Use Qualifire to evaluate LLM outputs for quality, safety, and reliability. Detect prompt injections, hallucinations, PII, harmful content, and validate that your AI follows instructions.",
+  "source": "@site/docs/proxy/guardrails/qualifire.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/qualifire",
+  "permalink": "/docs/proxy/guardrails/qualifire",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "In-memory Prompt Injection Detection",
+    "permalink": "/docs/proxy/guardrails/prompt_injection"
+  },
+  "next": {
+    "title": "✨ Secret Detection/Redaction (Enterprise-only)",
+    "permalink": "/docs/proxy/guardrails/secret_detection"
+  }
+}

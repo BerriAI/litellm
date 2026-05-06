@@ -1,0 +1,23 @@
+{
+  "id": "contribute_integration/custom_webhook_api",
+  "title": "Contribute Custom Webhook API",
+  "description": "If your API just needs a Webhook event from LiteLLM, here's how to add a 'native' integration for it on LiteLLM:",
+  "source": "@site/docs/contribute_integration/custom_webhook_api.md",
+  "sourceDirName": "contribute_integration",
+  "slug": "/contribute_integration/custom_webhook_api",
+  "permalink": "/docs/contribute_integration/custom_webhook_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Overview",
+    "permalink": "/docs/integrations/observability_integrations"
+  },
+  "next": {
+    "title": "🖇️ AgentOps - LLM Observability Platform",
+    "permalink": "/docs/observability/agentops_integration"
+  }
+}

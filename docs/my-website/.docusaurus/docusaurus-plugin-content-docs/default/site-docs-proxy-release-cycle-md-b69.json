@@ -1,0 +1,23 @@
+{
+  "id": "proxy/release_cycle",
+  "title": "Release Cycle",
+  "description": "Litellm Proxy has the following release cycle:",
+  "source": "@site/docs/proxy/release_cycle.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/release_cycle",
+  "permalink": "/docs/proxy/release_cycle",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Worker Startup Hooks",
+    "permalink": "/docs/proxy/worker_startup_hooks"
+  },
+  "next": {
+    "title": "Quick Start",
+    "permalink": "/docs/proxy/ui"
+  }
+}

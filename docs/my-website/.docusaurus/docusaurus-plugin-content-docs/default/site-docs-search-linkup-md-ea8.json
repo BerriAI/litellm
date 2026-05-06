@@ -1,0 +1,23 @@
+{
+  "id": "search/linkup",
+  "title": "Linkup Search",
+  "description": "Get API Key//linkup.so",
+  "source": "@site/docs/search/linkup.md",
+  "sourceDirName": "search",
+  "slug": "/search/linkup",
+  "permalink": "/docs/search/linkup",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "SearXNG Search",
+    "permalink": "/docs/search/searxng"
+  },
+  "next": {
+    "title": "Serper Search",
+    "permalink": "/docs/search/serper"
+  }
+}

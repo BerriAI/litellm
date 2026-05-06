@@ -1,0 +1,23 @@
+{
+  "id": "proxy/rules",
+  "title": "Post-Call Rules",
+  "description": "Use this to fail a request based on the output of an llm api call.",
+  "source": "@site/docs/proxy/rules.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/rules",
+  "permalink": "/docs/proxy/rules",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Modify / Reject Incoming Requests",
+    "permalink": "/docs/proxy/call_hooks"
+  },
+  "next": {
+    "title": "LiteLLM Proxy CLI",
+    "permalink": "/docs/proxy/management_cli"
+  }
+}

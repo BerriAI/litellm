@@ -1,0 +1,23 @@
+{
+  "id": "proxy/temporary_budget_increase",
+  "title": "✨ Temporary Budget Increase",
+  "description": "Set temporary budget increase for a LiteLLM Virtual Key. Use this if you get asked to increase the budget for a key temporarily.",
+  "source": "@site/docs/proxy/temporary_budget_increase.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/temporary_budget_increase",
+  "permalink": "/docs/proxy/temporary_budget_increase",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "✨ Budget / Rate Limit Tiers",
+    "permalink": "/docs/proxy/rate_limit_tiers"
+  },
+  "next": {
+    "title": "Budget Reset Times and Timezones",
+    "permalink": "/docs/proxy/budget_reset_and_tz"
+  }
+}

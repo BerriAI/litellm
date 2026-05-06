@@ -1,0 +1,23 @@
+{
+  "id": "integrations/community",
+  "title": "Be an Integration Partner",
+  "description": "Welcome, integration partners! 👋",
+  "source": "@site/docs/integrations/community.md",
+  "sourceDirName": "integrations",
+  "slug": "/integrations/community",
+  "permalink": "/docs/integrations/community",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Overview",
+    "permalink": "/docs/integrations/"
+  },
+  "next": {
+    "title": "Overview",
+    "permalink": "/docs/integrations/observability_integrations"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/master_key_rotations",
+  "title": "Rotating Master Key",
+  "description": "Here are our recommended steps for rotating your master key.",
+  "source": "@site/docs/proxy/master_key_rotations.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/master_key_rotations",
+  "permalink": "/docs/proxy/master_key_rotations",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Health Checks",
+    "permalink": "/docs/proxy/health"
+  },
+  "next": {
+    "title": "Model Management",
+    "permalink": "/docs/proxy/model_management"
+  }
+}

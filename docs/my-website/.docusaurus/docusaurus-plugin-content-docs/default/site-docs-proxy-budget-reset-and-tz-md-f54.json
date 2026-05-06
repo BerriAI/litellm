@@ -1,0 +1,23 @@
+{
+  "id": "proxy/budget_reset_and_tz",
+  "title": "Budget Reset Times and Timezones",
+  "description": "LiteLLM supports predictable budget reset times that align with natural calendar boundaries.",
+  "source": "@site/docs/proxy/budget_reset_and_tz.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/budget_reset_and_tz",
+  "permalink": "/docs/proxy/budget_reset_and_tz",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "✨ Temporary Budget Increase",
+    "permalink": "/docs/proxy/temporary_budget_increase"
+  },
+  "next": {
+    "title": "Caching",
+    "permalink": "/docs/proxy/caching"
+  }
+}

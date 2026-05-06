@@ -1,0 +1,23 @@
+{
+  "id": "proxy/rate_limit_tiers",
+  "title": "✨ Budget / Rate Limit Tiers",
+  "description": "Define tiers with rate limits. Assign them to keys.",
+  "source": "@site/docs/proxy/rate_limit_tiers.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/rate_limit_tiers",
+  "permalink": "/docs/proxy/rate_limit_tiers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Dynamic TPM/RPM Allocation",
+    "permalink": "/docs/proxy/dynamic_rate_limit"
+  },
+  "next": {
+    "title": "✨ Temporary Budget Increase",
+    "permalink": "/docs/proxy/temporary_budget_increase"
+  }
+}

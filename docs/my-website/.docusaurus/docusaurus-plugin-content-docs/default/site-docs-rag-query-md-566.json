@@ -1,0 +1,23 @@
+{
+  "id": "rag_query",
+  "title": "/rag/query",
+  "description": "RAG Query endpoint: Search Vector Store → (Rerank) → LLM Completion",
+  "source": "@site/docs/rag_query.md",
+  "sourceDirName": ".",
+  "slug": "/rag_query",
+  "permalink": "/docs/rag_query",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/rag/ingest",
+    "permalink": "/docs/rag_ingest"
+  },
+  "next": {
+    "title": "/realtime",
+    "permalink": "/docs/realtime"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/bedrock_vector_store",
+  "title": "Bedrock Knowledge Bases",
+  "description": "AWS Bedrock Knowledge Bases allows you to connect your LLM's to your organization's data, letting your models retrieve and reference information specific to your business.",
+  "source": "@site/docs/providers/bedrock_vector_store.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/bedrock_vector_store",
+  "permalink": "/docs/providers/bedrock_vector_store",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "AWS Polly Text to Speech (tts)",
+    "permalink": "/docs/providers/aws_polly"
+  },
+  "next": {
+    "title": "Amazon Bedrock Mantle",
+    "permalink": "/docs/providers/bedrock_mantle"
+  }
+}

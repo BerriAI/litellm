@@ -1,0 +1,23 @@
+{
+  "id": "providers/langgraph",
+  "title": "LangGraph",
+  "description": "Call LangGraph agents through LiteLLM using the OpenAI chat completions format.",
+  "source": "@site/docs/providers/langgraph.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/langgraph",
+  "permalink": "/docs/providers/langgraph",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Lambda AI",
+    "permalink": "/docs/providers/lambda_ai"
+  },
+  "next": {
+    "title": "Lemonade",
+    "permalink": "/docs/providers/lemonade"
+  }
+}

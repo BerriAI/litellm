@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/opencode_integration",
+  "title": "OpenCode Quickstart",
+  "description": "This tutorial shows how to connect OpenCode to your existing LiteLLM instance and switch between models.",
+  "source": "@site/docs/tutorials/opencode_integration.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/opencode_integration",
+  "permalink": "/docs/tutorials/opencode_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Claude Code - Managing Anthropic Beta Headers",
+    "permalink": "/docs/tutorials/claude_code_beta_headers"
+  },
+  "next": {
+    "title": "OpenClaw",
+    "permalink": "/docs/tutorials/openclaw_integration"
+  }
+}

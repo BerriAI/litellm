@@ -1,0 +1,23 @@
+{
+  "id": "proxy_auth",
+  "title": "SDK Proxy Authentication (OAuth2/JWT Auto-Refresh)",
+  "description": "Automatically obtain and refresh OAuth2/JWT tokens when using the LiteLLM Python SDK with a LiteLLM Proxy that requires JWT authentication.",
+  "source": "@site/docs/proxy_auth.md",
+  "sourceDirName": ".",
+  "slug": "/proxy_auth",
+  "permalink": "/docs/proxy_auth",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Setting API Keys, Base, Version",
+    "permalink": "/docs/set_keys"
+  },
+  "next": {
+    "title": "Caching - In-Memory, Redis, s3, gcs, Redis Semantic Cache, Disk",
+    "permalink": "/docs/caching/all_caches"
+  }
+}

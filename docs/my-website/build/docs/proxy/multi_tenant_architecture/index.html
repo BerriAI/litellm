@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-proxy/multi_tenant_architecture" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.8.1">
+<title data-rh="true">Multi-Tenant Architecture with LiteLLM | liteLLM</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" name="twitter:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" property="og:url" content="https://docs.litellm.ai/docs/proxy/multi_tenant_architecture"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Multi-Tenant Architecture with LiteLLM | liteLLM"><meta data-rh="true" name="description" content="Overview"><meta data-rh="true" property="og:description" content="Overview"><link data-rh="true" rel="icon" href="/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://docs.litellm.ai/docs/proxy/multi_tenant_architecture"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/docs/proxy/multi_tenant_architecture" hreflang="en"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/docs/proxy/multi_tenant_architecture" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"LiteLLM AI Gateway (Proxy)","item":"https://docs.litellm.ai/docs/simple_proxy"},{"@type":"ListItem","position":2,"name":"Multi-Tenant Architecture with LiteLLM","item":"https://docs.litellm.ai/docs/proxy/multi_tenant_architecture"}]}</script><link rel="preconnect" href="https://www.google-analytics.com">
+<link rel="preconnect" href="https://www.googletagmanager.com">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-K7K215ZVNC"></script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],gtag("js",new Date),gtag("config","G-K7K215ZVNC",{anonymize_ip:!0})</script>
+
+
+
+
+
+
+<link rel="alternate" type="application/rss+xml" href="/blog/rss.xml" title="liteLLM RSS Feed">
+<link rel="alternate" type="application/atom+xml" href="/blog/atom.xml" title="liteLLM Atom Feed">
+<script>window.$crisp=[],window.CRISP_WEBSITE_ID="be07a4d6-dba0-4df7-961d-9302c86b7ebc",d=document,s=d.createElement("script"),s.src="https://client.crisp.chat/l.js",s.async=1,d.getElementsByTagName("head")[0].appendChild(s)</script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],window.gtag||(window.gtag=gtag)</script>
+
+<script async src="https://www.feedbackrocket.io/sdk/v1.2.js" data-fr-id="GQwepB0f0L-x_ZH63kR_V" data-fr-theme="dynamic"></script><link rel="stylesheet" href="/assets/css/styles.f56ea1ab.css">
+<script src="/assets/js/runtime~main.b9bf1bac.js" defer="defer"></script>
+<script src="/assets/js/main.028e115a.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="navbar__brand-col"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/"><b class="navbar__title text--truncate">🚅 LiteLLM</b></a></div><div class="navbar__center-col"><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/docs/">Docs</a><a class="navbar__item navbar__link" href="/docs/learn">Learn</a><a class="navbar__item navbar__link" href="/docs/integrations/">Integrations</a><a class="navbar__item navbar__link" href="/docs/enterprise">Enterprise</a><a class="navbar__item navbar__link" href="/release_notes">Changelog</a><a class="navbar__item navbar__link" href="/blog">Blog</a></div><div class="navbar__right-col"><a href="https://github.com/BerriAI/litellm" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-github-link" aria-label="GitHub repository"></a><a href="https://www.litellm.ai/support" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-discord-link" aria-label="Discord / Slack community"></a><div class="navbarSearchContainer_Bca1"><div id="inkeep-shadowradix-:Rtr5a5:" style="display:contents"></div><span></span></div><div class="toggle_vylO"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebarContainer_YAFp"><div class="searchBarContainer_wiet"><div id="inkeep-shadowradix-:R5aqlda5:" style="display:contents"></div><span></span></div><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link">Get Started</a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/">Quickstart</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a href="https://models.litellm.ai" target="_blank" rel="noopener noreferrer" class="menu__link menuExternalLink_NmtK" tabindex="0">Models &amp; Pricing<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes">Changelog</a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/#litellm-python-sdk">LiteLLM Python SDK</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--active" href="/docs/simple_proxy">LiteLLM AI Gateway (Proxy)</a><button aria-label="Collapse sidebar category &#x27;LiteLLM AI Gateway (Proxy)&#x27;" aria-expanded="true" type="button" class="clean-btn menu__caret"></button></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/docker_quick_start">Getting Started Tutorial</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/a2a">Agent &amp; MCP Gateway</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/configs">Config.yaml</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/quick_start">Setup &amp; Deployment</a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a href="https://www.litellm.ai/cloud" target="_blank" rel="noopener noreferrer" class="menu__link menuExternalLink_NmtK" tabindex="0">Demo LiteLLM Cloud<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/ui">Admin UI</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" tabindex="0" href="/docs/proxy/architecture">Architecture</a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/architecture">Life of a Request</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/docs/proxy/multi_tenant_architecture">Multi-Tenant Architecture with LiteLLM</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/control_plane_and_data_plane">Control Plane for Multi-region Architecture (Enterprise)</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/high_availability_control_plane">[BETA] High Availability Control Plane</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/db_deadlocks">High Availability Setup (Resolve DB Deadlocks)</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/db_info">What is stored in the DB</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/image_handling">Image URL Handling</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/jwt_auth_arch">Control Model Access with OIDC (Azure AD/Keycloak/etc.)</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/spend_logs_deletion">✨ Maximum Retention Period for Spend Logs</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/user_management_heirarchy">User Management Hierarchy</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-3 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/router_architecture">Router Architecture (Fallbacks / Retries)</a></li></ul></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a href="https://litellm-api.up.railway.app/" target="_blank" rel="noopener noreferrer" class="menu__link menuExternalLink_NmtK" tabindex="0">All Endpoints (Swagger)<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/enterprise">✨ Enterprise Features</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/virtual_keys">Authentication</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/users">Budgets + Rate Limits</a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/caching">Caching</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/guardrails/quick_start">Guardrails</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/guardrails/guardrail_policies">Policies</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/call_hooks">Create Custom Plugins</a></div></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/proxy/management_cli">LiteLLM Proxy CLI</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a href="https://docs.litellm.ai/docs/routing-load-balancing" target="_blank" rel="noopener noreferrer" class="menu__link menuExternalLink_NmtK" tabindex="0">Load Balancing, Routing, Fallbacks<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/traffic_mirroring">A/B Testing - Traffic Mirroring</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/dynamic_logging">Logging, Alerting, Metrics</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/user_keys">Making LLM Requests</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/model_access_guide">Model Access</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/secret_managers/overview">Secret Managers</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-2 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" tabindex="0" href="/docs/proxy/cost_tracking">Spend Tracking</a></div></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist" href="/docs/supported_endpoints">Supported Endpoints</a><button aria-label="Expand sidebar category &#x27;Supported Endpoints&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist" href="/docs/providers">Supported Models &amp; Providers</a><button aria-label="Expand sidebar category &#x27;Supported Models &amp; Providers&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist" href="/docs/routing-load-balancing">Routing &amp; Load Balancing</a><button aria-label="Expand sidebar category &#x27;Routing &amp; Load Balancing&#x27;" aria-expanded="false" type="button" class="clean-btn menu__caret"></button></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/benchmarks">Load Testing</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/extras/contributing_code">Contributing</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/sdk_custom_pricing">Extras</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/troubleshoot/ui_issues">Troubleshooting</a></div></li></ul></nav></div></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><a class="breadcrumbs__link" href="/docs/simple_proxy"><span>LiteLLM AI Gateway (Proxy)</span></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">Architecture</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Multi-Tenant Architecture with LiteLLM</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Multi-Tenant Architecture with LiteLLM</h1></header>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="overview">Overview<a href="#overview" class="hash-link" aria-label="Direct link to Overview" title="Direct link to Overview">​</a></h2>
+<p>LiteLLM provides a centralized solution that scales across multiple tenants, enabling organizations to:</p>
+<ul>
+<li><strong>Centrally manage</strong> LLM access for multiple tenants (organizations, teams, departments)</li>
+<li><strong>Isolate spend and usage</strong> across different organizational units</li>
+<li><strong>Delegate administration</strong> without compromising security</li>
+<li><strong>Track costs</strong> at granular levels (organization → team → user → key)</li>
+<li><strong>Scale seamlessly</strong> as new teams and users are added</li>
+</ul>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>Open Source vs. Enterprise</div><div class="admonitionContent_BuS1"><ul>
+<li><strong>Teams + Virtual Keys</strong>: ✅ Available in open source</li>
+<li><strong>Organizations + Org Admins</strong>: ✨ Enterprise feature (<a href="https://www.litellm.ai/#trial" target="_blank" rel="noopener noreferrer">Get a 7 day trial</a>)</li>
+</ul><p>You can implement multi-tenancy using <strong>Teams</strong> alone in the open source version, or add <strong>Organizations</strong> on top for additional hierarchy in the enterprise version.</p></div></div>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="the-multi-tenant-challenge">The Multi-Tenant Challenge<a href="#the-multi-tenant-challenge" class="hash-link" aria-label="Direct link to The Multi-Tenant Challenge" title="Direct link to The Multi-Tenant Challenge">​</a></h2>
+<p>Organizations with multi-tenant architectures face several challenges when deploying LLM solutions:</p>
+<ol>
+<li><strong>Centralized vs. Decentralized</strong>: Need a single unified gateway while maintaining tenant isolation</li>
+<li><strong>Cost Attribution</strong>: Tracking spend across different business units, departments, or customers</li>
+<li><strong>Access Control</strong>: Different teams need different models, budgets, and rate limits</li>
+<li><strong>Delegation</strong>: Team leads should manage their teams without platform-wide admin access</li>
+<li><strong>Scalability</strong>: Solution must scale from 10 to 10,000+ users without architectural changes</li>
+</ol>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="how-litellm-solves-multi-tenancy">How LiteLLM Solves Multi-Tenancy<a href="#how-litellm-solves-multi-tenancy" class="hash-link" aria-label="Direct link to How LiteLLM Solves Multi-Tenancy" title="Direct link to How LiteLLM Solves Multi-Tenancy">​</a></h2>
+<div style="background-size:cover;background-repeat:no-repeat;position:relative;background-image:url(&quot;data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAHCAYAAAAxrNxjAAAACXBIWXMAACxLAAAsSwGlPZapAAAAfElEQVR4nGWPjQrDMAiE+/6POvbDYjI1UW/EtiOsBycnHh+4YZU7hkh65lVbzoi0qeJDBa0UWO8wM4zel+IY4NZgIjCL3aJ4v57Q1hARR9EdnRlD9YSji0CZ9+VHPDQmmTktqnD3pF2K81BrBRFlvj7zVz4pHsDt/gBRwRfqMRRERbwvCAAAAABJRU5ErkJggg==&quot;)"><svg style="width:100%;height:auto;max-width:100%;margin-bottom:-4px" width="640" height="480"></svg><noscript><img style="width:100%;height:auto;max-width:100%;margin-bottom:-4px;position:absolute;top:0;left:0" src="/assets/ideal-img/litellm_user_heirarchy.bc91e20.640.png" srcset="/assets/ideal-img/litellm_user_heirarchy.bc91e20.640.png 640w,/assets/ideal-img/litellm_user_heirarchy.c6b7d4a.1920.png 1920w" width="640" height="480"></noscript></div>
+<p>LiteLLM implements a hierarchical multi-tenant architecture with four levels:</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="1-organizations-top-level-tenants--enterprise-feature">1. Organizations (Top-Level Tenants) ✨ Enterprise Feature<a href="#1-organizations-top-level-tenants--enterprise-feature" class="hash-link" aria-label="Direct link to 1. Organizations (Top-Level Tenants) ✨ Enterprise Feature" title="Direct link to 1. Organizations (Top-Level Tenants) ✨ Enterprise Feature">​</a></h3>
+<p><strong>Organizations</strong> represent the highest level of tenant isolation - typically different business units, departments, or customers.</p>
+<ul>
+<li>Each organization has its own:<!-- -->
+<ul>
+<li>Budget limits</li>
+<li>Allowed models</li>
+<li>Admin users (org admins)</li>
+<li>Teams</li>
+<li>Spend tracking</li>
+</ul>
+</li>
+</ul>
+<p><strong>Use Cases:</strong></p>
+<ul>
+<li><strong>Enterprise Departments</strong>: Separate organizations for Engineering, Marketing, Sales</li>
+<li><strong>Multi-Customer SaaS</strong>: Each customer is an organization with full isolation</li>
+<li><strong>Geographic Regions</strong>: EMEA, APAC, Americas as separate organizations</li>
+</ul>
+<p><strong>Key Features:</strong></p>
+<ul>
+<li>Organizations cannot see each other&#x27;s data</li>
+<li>Each organization can have multiple teams</li>
+<li>Organization admins manage teams within their organization only</li>
+<li>Spend and usage tracked at organization level</li>
+</ul>
+<p><a href="https://litellm-api.up.railway.app/#/organization%20management" target="_blank" rel="noopener noreferrer">API Reference for Organizations</a></p>
+<hr>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="2-teams-mid-level-grouping--open-source">2. Teams (Mid-Level Grouping) ✅ Open Source<a href="#2-teams-mid-level-grouping--open-source" class="hash-link" aria-label="Direct link to 2. Teams (Mid-Level Grouping) ✅ Open Source" title="Direct link to 2. Teams (Mid-Level Grouping) ✅ Open Source">​</a></h3>
+<p><strong>Teams</strong> can work independently or sit within organizations, representing logical groupings of users working together.</p>
+<div class="theme-admonition theme-admonition-tip admonition_xJq3 alert alert--success"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M6.5 0C3.48 0 1 2.19 1 5c0 .92.55 2.25 1 3 1.34 2.25 1.78 2.78 2 4v1h5v-1c.22-1.22.66-1.75 2-4 .45-.75 1-2.08 1-3 0-2.81-2.48-5-5.5-5zm3.64 7.48c-.25.44-.47.8-.67 1.11-.86 1.41-1.25 2.06-1.45 3.23-.02.05-.02.11-.02.17H5c0-.06 0-.13-.02-.17-.2-1.17-.59-1.83-1.45-3.23-.2-.31-.42-.67-.67-1.11C2.44 6.78 2 5.65 2 5c0-2.2 2.02-4 4.5-4 1.22 0 2.36.42 3.22 1.19C10.55 2.94 11 3.94 11 5c0 .66-.44 1.78-.86 2.48zM4 14h5c-.23 1.14-1.3 2-2.5 2s-2.27-.86-2.5-2z"></path></svg></span>tip</div><div class="admonitionContent_BuS1"><p>Teams are available in <strong>open source</strong> and can be used as your primary multi-tenant boundary without needing Organizations. Organizations provide an additional layer of hierarchy for enterprise deployments.</p></div></div>
+<ul>
+<li>Each team has:<!-- -->
+<ul>
+<li>Team-specific budgets and rate limits</li>
+<li>Team admins who manage members</li>
+<li>Service account keys for shared resources</li>
+<li>Model access controls</li>
+<li>Granular team member permissions</li>
+</ul>
+</li>
+</ul>
+<p><strong>Use Cases:</strong></p>
+<ul>
+<li><strong>Project Teams</strong>: ML Research team, Product team, Data Science team</li>
+<li><strong>Customer Sub-Groups</strong>: Different divisions within a customer organization</li>
+<li><strong>Environment Separation</strong>: Development, Staging, Production teams</li>
+</ul>
+<p><strong>Key Features:</strong></p>
+<ul>
+<li>Teams inherit organization constraints (can&#x27;t exceed org budget/models)</li>
+<li>Team admins can manage their team without affecting others</li>
+<li>Service account keys survive team member changes</li>
+<li>Per-team spend tracking and billing</li>
+</ul>
+<p><a href="https://litellm-api.up.railway.app/#/team%20management" target="_blank" rel="noopener noreferrer">API Reference for Teams</a></p>
+<hr>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="3-users-individual-members--open-source">3. Users (Individual Members) ✅ Open Source<a href="#3-users-individual-members--open-source" class="hash-link" aria-label="Direct link to 3. Users (Individual Members) ✅ Open Source" title="Direct link to 3. Users (Individual Members) ✅ Open Source">​</a></h3>
+<p><strong>Users</strong> are individuals who belong to teams and create/use API keys.</p>
+<ul>
+<li>Each user can:<!-- -->
+<ul>
+<li>Belong to multiple teams</li>
+<li>Have their own budget limits</li>
+<li>Create personal API keys</li>
+<li>Track individual spend</li>
+</ul>
+</li>
+</ul>
+<p><strong>User Types:</strong></p>
+<ul>
+<li><strong>Internal Users</strong>: Employees, developers, data scientists</li>
+<li><strong>Team Admins</strong>: Lead their teams, manage members</li>
+<li><strong>Org Admins</strong>: Manage multiple teams within their organization</li>
+<li><strong>Proxy Admins</strong>: Platform-wide administrators</li>
+</ul>
+<p><strong>Key Features:</strong></p>
+<ul>
+<li>User spend tracked individually</li>
+<li>Users can be on multiple teams simultaneously</li>
+<li>Role-based permissions control what users can do</li>
+<li>User keys deleted when user is removed</li>
+</ul>
+<p><a href="https://litellm-api.up.railway.app/#/user%20management" target="_blank" rel="noopener noreferrer">API Reference for Users</a></p>
+<hr>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="4-virtual-keys-authentication-layer--open-source">4. Virtual Keys (Authentication Layer) ✅ Open Source<a href="#4-virtual-keys-authentication-layer--open-source" class="hash-link" aria-label="Direct link to 4. Virtual Keys (Authentication Layer) ✅ Open Source" title="Direct link to 4. Virtual Keys (Authentication Layer) ✅ Open Source">​</a></h3>
+<p><strong>Virtual Keys</strong> are the API keys used to authenticate requests and track spend.</p>
+<p>Each key can be one of three types:</p>
+<table><thead><tr><th>Key Type</th><th>Configuration</th><th>Use Case</th><th>Spend Tracking</th><th>Lifecycle</th></tr></thead><tbody><tr><td><strong>User-only</strong></td><td><code>user_id</code> only</td><td>Developer personal keys</td><td>User level</td><td>Deleted with user</td></tr><tr><td><strong>Team Service Account</strong></td><td><code>team_id</code> only</td><td>Production apps, CI/CD</td><td>Team level</td><td>Survives member changes</td></tr><tr><td><strong>User + Team</strong></td><td>Both <code>user_id</code> and <code>team_id</code></td><td>User within team context</td><td>User AND Team</td><td>Deleted with user</td></tr></tbody></table>
+<p><strong>Example Scenarios:</strong></p>
+<ul>
+<li>Use <strong>user-only keys</strong> for developers testing locally</li>
+<li>Use <strong>team service account keys</strong> for your production application that shouldn&#x27;t break when employees leave</li>
+<li>Use <strong>user + team keys</strong> when you want individual accountability within a team budget</li>
+</ul>
+<p><a href="https://litellm-api.up.railway.app/#/key%20management" target="_blank" rel="noopener noreferrer">API Reference for Keys</a></p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="role-based-access-control-rbac">Role-Based Access Control (RBAC)<a href="#role-based-access-control-rbac" class="hash-link" aria-label="Direct link to Role-Based Access Control (RBAC)" title="Direct link to Role-Based Access Control (RBAC)">​</a></h2>
+<p>LiteLLM provides granular RBAC across the hierarchy:</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="global-proxy-roles-platform-wide">Global Proxy Roles (Platform-Wide)<a href="#global-proxy-roles-platform-wide" class="hash-link" aria-label="Direct link to Global Proxy Roles (Platform-Wide)" title="Direct link to Global Proxy Roles (Platform-Wide)">​</a></h3>
+<table><thead><tr><th>Role</th><th>Scope</th><th>Permissions</th></tr></thead><tbody><tr><td><strong>Proxy Admin</strong></td><td>Entire platform</td><td>Create orgs, teams, users. View all spend. Full control.</td></tr><tr><td><strong>Proxy Admin Viewer</strong></td><td>Entire platform</td><td>View-only access to all data. Cannot make changes.</td></tr><tr><td><strong>Internal User</strong></td><td>Own resources</td><td>Create/delete own keys. View own spend.</td></tr></tbody></table>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="organizationteam-roles-scoped">Organization/Team Roles (Scoped)<a href="#organizationteam-roles-scoped" class="hash-link" aria-label="Direct link to Organization/Team Roles (Scoped)" title="Direct link to Organization/Team Roles (Scoped)">​</a></h3>
+<table><thead><tr><th>Role</th><th>Scope</th><th>Permissions</th></tr></thead><tbody><tr><td><strong>Org Admin</strong> ✨</td><td>Specific organization</td><td>Create teams, add users, view org spend within their org only.</td></tr><tr><td><strong>Team Admin</strong> ✨</td><td>Specific team</td><td>Manage team members, budgets, keys within their team only.</td></tr></tbody></table>
+<p>✨ = Premium Feature</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="team-member-permissions">Team Member Permissions<a href="#team-member-permissions" class="hash-link" aria-label="Direct link to Team Member Permissions" title="Direct link to Team Member Permissions">​</a></h3>
+<p>Team admins can configure granular permissions for regular team members:</p>
+<p><strong>Read-only</strong> (default):</p>
+<div class="language-json codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-json codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token punctuation" style="color:rgb(4, 81, 165)">[</span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/info&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/health&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">]</span><br></span></code></pre></div></div>
+<p><strong>Allow key creation</strong>:</p>
+<div class="language-json codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-json codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token punctuation" style="color:rgb(4, 81, 165)">[</span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/info&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/health&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/generate&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/update&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">]</span><br></span></code></pre></div></div>
+<p><strong>Full key management</strong>:</p>
+<div class="language-json codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-json codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token punctuation" style="color:rgb(4, 81, 165)">[</span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/info&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/health&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/generate&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/update&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/delete&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/regenerate&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/block&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">,</span><span class="token plain"> </span><span class="token string" style="color:rgb(163, 21, 21)">&quot;/key/unblock&quot;</span><span class="token punctuation" style="color:rgb(4, 81, 165)">]</span><br></span></code></pre></div></div>
+<p><a href="/docs/proxy/access_control">Learn more about RBAC</a></p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="spend-tracking--cost-attribution">Spend Tracking &amp; Cost Attribution<a href="#spend-tracking--cost-attribution" class="hash-link" aria-label="Direct link to Spend Tracking &amp; Cost Attribution" title="Direct link to Spend Tracking &amp; Cost Attribution">​</a></h2>
+<p>LiteLLM provides multi-level spend tracking that flows through the hierarchy:</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="hierarchical-spend-flow">Hierarchical Spend Flow<a href="#hierarchical-spend-flow" class="hash-link" aria-label="Direct link to Hierarchical Spend Flow" title="Direct link to Hierarchical Spend Flow">​</a></h3>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">Organization Spend</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    ├── Team 1 Spend</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    │   ├── User A Spend</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    │   │   ├── Key 1 Spend</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    │   │   └── Key 2 Spend</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    │   └── Service Account Spend</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    │       └── Key 3 Spend</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    └── Team 2 Spend</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        └── User B Spend</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">            └── Key 4 Spend</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="budget-enforcement">Budget Enforcement<a href="#budget-enforcement" class="hash-link" aria-label="Direct link to Budget Enforcement" title="Direct link to Budget Enforcement">​</a></h3>
+<p>Budgets can be set at every level with inheritance:</p>
+<ol>
+<li><strong>Organization Budget</strong>: <code>$10,000/month</code>
+<ul>
+<li>Team 1: <code>$6,000/month</code> (within org limit)<!-- -->
+<ul>
+<li>User A: <code>$3,000/month</code> (within team limit)</li>
+<li>User B: <code>$3,000/month</code> (within team limit)</li>
+</ul>
+</li>
+<li>Team 2: <code>$4,000/month</code> (within org limit)</li>
+</ul>
+</li>
+</ol>
+<p><strong>Enforcement Rules:</strong></p>
+<ul>
+<li>Team budgets cannot exceed organization budget</li>
+<li>User budgets cannot exceed team budget</li>
+<li>Requests blocked when any level exceeds budget</li>
+<li>Real-time tracking prevents overruns</li>
+</ul>
+<p><a href="/docs/proxy/team_budgets">Learn more about Budgets</a></p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="common-multi-tenant-patterns">Common Multi-Tenant Patterns<a href="#common-multi-tenant-patterns" class="hash-link" aria-label="Direct link to Common Multi-Tenant Patterns" title="Direct link to Common Multi-Tenant Patterns">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="pattern-1-enterprise-departments">Pattern 1: Enterprise Departments<a href="#pattern-1-enterprise-departments" class="hash-link" aria-label="Direct link to Pattern 1: Enterprise Departments" title="Direct link to Pattern 1: Enterprise Departments">​</a></h3>
+<p><strong>Scenario</strong>: Large enterprise with multiple departments needing centralized LLM access</p>
+<p><strong>Enterprise Setup</strong> (with Organizations):</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">Platform (LiteLLM Instance)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Engineering Organization ✨</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   ├── Backend Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   ├── Frontend Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   └── ML Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Marketing Organization ✨</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   ├── Content Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   └── Analytics Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">└── Sales Organization ✨</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    ├── Sales Ops Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    └── Customer Success Team</span><br></span></code></pre></div></div>
+<p><strong>Open Source Alternative</strong> (Teams only):</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">Platform (LiteLLM Instance)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Engineering Backend Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Engineering Frontend Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Engineering ML Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Marketing Content Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Marketing Analytics Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Sales Ops Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">└── Customer Success Team</span><br></span></code></pre></div></div>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>Each department/team manages their own budget</li>
+<li>Department leads (org/team admins) control their teams</li>
+<li>Centralized billing and model access</li>
+<li>Cross-department cost visibility for finance</li>
+</ul>
+<hr>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="pattern-2-multi-customer-saas">Pattern 2: Multi-Customer SaaS<a href="#pattern-2-multi-customer-saas" class="hash-link" aria-label="Direct link to Pattern 2: Multi-Customer SaaS" title="Direct link to Pattern 2: Multi-Customer SaaS">​</a></h3>
+<p><strong>Scenario</strong>: SaaS provider offering LLM-powered features to multiple customers</p>
+<p><strong>Enterprise Setup</strong> (with Organizations):</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">Platform (LiteLLM Instance)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Customer A Organization ✨</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   ├── Production Team (Service Accounts)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   ├── Development Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   └── QA Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Customer B Organization ✨</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   ├── Production Team (Service Accounts)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">│   └── Development Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">└── Customer C Organization ✨</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    └── Production Team (Service Accounts)</span><br></span></code></pre></div></div>
+<p><strong>Open Source Alternative</strong> (Teams only):</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">Platform (LiteLLM Instance)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Customer A Production Team (Service Accounts)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Customer A Development Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Customer A QA Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Customer B Production Team (Service Accounts)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">├── Customer B Development Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">└── Customer C Production Team (Service Accounts)</span><br></span></code></pre></div></div>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>Complete isolation between customers/teams</li>
+<li>Per-customer/team billing and usage tracking</li>
+<li>Customer/team admins can self-serve</li>
+<li>Production service account keys survive employee turnover</li>
+</ul>
+<hr>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="pattern-3-environment-separation">Pattern 3: Environment Separation<a href="#pattern-3-environment-separation" class="hash-link" aria-label="Direct link to Pattern 3: Environment Separation" title="Direct link to Pattern 3: Environment Separation">​</a></h3>
+<p><strong>Scenario</strong>: Single organization with multiple environments</p>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">Platform (LiteLLM Instance)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">└── Company Organization</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    ├── Production Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    │   └── Service Account Keys (strict rate limits)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    ├── Staging Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    │   └── Service Account Keys (moderate limits)</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    └── Development Team</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        └── User Keys (generous limits for testing)</span><br></span></code></pre></div></div>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>Separate budgets for each environment</li>
+<li>Different model access (production vs. development)</li>
+<li>Prevent development usage from affecting production budget</li>
+<li>Easy cost attribution by environment</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="delegation--self-service">Delegation &amp; Self-Service<a href="#delegation--self-service" class="hash-link" aria-label="Direct link to Delegation &amp; Self-Service" title="Direct link to Delegation &amp; Self-Service">​</a></h2>
+<p>One of LiteLLM&#x27;s key advantages is delegated administration:</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="without-litellm">Without LiteLLM<a href="#without-litellm" class="hash-link" aria-label="Direct link to Without LiteLLM" title="Direct link to Without LiteLLM">​</a></h3>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">Every team → Requests platform admin → Admin makes changes</span><br></span></code></pre></div></div>
+<p>❌ Bottleneck on platform team<br>
+<!-- -->❌ Slow onboarding<br>
+<!-- -->❌ Poor scalability</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="with-litellm">With LiteLLM<a href="#with-litellm" class="hash-link" aria-label="Direct link to With LiteLLM" title="Direct link to With LiteLLM">​</a></h3>
+<div class="language-text codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-text codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">Proxy Admin → Creates org + org admin</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">Org Admin → Creates teams + team admins  </span><br></span><span class="token-line" style="color:#000000"><span class="token plain">Team Admin → Manages their team independently</span><br></span></code></pre></div></div>
+<p>✅ Decentralized management<br>
+<!-- -->✅ Fast onboarding<br>
+<!-- -->✅ Scales to thousands of users</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="self-service-capabilities">Self-Service Capabilities<a href="#self-service-capabilities" class="hash-link" aria-label="Direct link to Self-Service Capabilities" title="Direct link to Self-Service Capabilities">​</a></h3>
+<p><strong>Team Admins Can:</strong></p>
+<ul>
+<li>Add/remove team members</li>
+<li>Create API keys for team members</li>
+<li>Update team budgets (within org limits)</li>
+<li>Configure team member permissions</li>
+<li>View team usage and spend</li>
+</ul>
+<p><strong>Org Admins Can:</strong></p>
+<ul>
+<li>Create new teams within their organization</li>
+<li>Assign team admins</li>
+<li>View organization-wide spend</li>
+<li>Manage users across their teams</li>
+</ul>
+<p><strong>Platform Admins Can:</strong></p>
+<ul>
+<li>Create organizations</li>
+<li>Assign org admins</li>
+<li>Set organization-level policies</li>
+<li>View platform-wide analytics</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="scalability">Scalability<a href="#scalability" class="hash-link" aria-label="Direct link to Scalability" title="Direct link to Scalability">​</a></h2>
+<p>LiteLLM&#x27;s architecture scales from small teams to enterprise deployments:</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="small-team-10-100-users">Small Team (10-100 users)<a href="#small-team-10-100-users" class="hash-link" aria-label="Direct link to Small Team (10-100 users)" title="Direct link to Small Team (10-100 users)">​</a></h3>
+<ul>
+<li>Single organization</li>
+<li>Few teams (5-10)</li>
+<li>Proxy admins manage everything</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="mid-size-100-1000-users">Mid-Size (100-1,000 users)<a href="#mid-size-100-1000-users" class="hash-link" aria-label="Direct link to Mid-Size (100-1,000 users)" title="Direct link to Mid-Size (100-1,000 users)">​</a></h3>
+<ul>
+<li>Multiple organizations</li>
+<li>Many teams (50+)</li>
+<li>Org admins delegate to team admins</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="enterprise-1000-users">Enterprise (1,000+ users)<a href="#enterprise-1000-users" class="hash-link" aria-label="Direct link to Enterprise (1,000+ users)" title="Direct link to Enterprise (1,000+ users)">​</a></h3>
+<ul>
+<li>Many organizations (departments/regions)</li>
+<li>Hundreds of teams</li>
+<li>Fully delegated admin structure</li>
+<li>Centralized observability and billing</li>
+</ul>
+<p><strong>Key Scalability Features:</strong></p>
+<ul>
+<li>No architectural changes needed as you grow</li>
+<li>Database-backed (PostgreSQL) for reliability</li>
+<li>Horizontal scaling support</li>
+<li>Efficient spend tracking and logging</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="security--isolation">Security &amp; Isolation<a href="#security--isolation" class="hash-link" aria-label="Direct link to Security &amp; Isolation" title="Direct link to Security &amp; Isolation">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="tenant-isolation">Tenant Isolation<a href="#tenant-isolation" class="hash-link" aria-label="Direct link to Tenant Isolation" title="Direct link to Tenant Isolation">​</a></h3>
+<p>Each tenant (organization) is isolated:</p>
+<ul>
+<li>✅ Cannot view other organizations&#x27; data</li>
+<li>✅ Cannot access other organizations&#x27; keys</li>
+<li>✅ Cannot exceed their budget limits</li>
+<li>✅ Cannot access models not in their allowed list</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="authentication-security">Authentication Security<a href="#authentication-security" class="hash-link" aria-label="Direct link to Authentication Security" title="Direct link to Authentication Security">​</a></h3>
+<ul>
+<li>Master key for platform admins</li>
+<li>Virtual keys with scoped permissions</li>
+<li>SSO integration support</li>
+<li>JWT authentication</li>
+<li>IP allowlisting</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="audit--compliance">Audit &amp; Compliance<a href="#audit--compliance" class="hash-link" aria-label="Direct link to Audit &amp; Compliance" title="Direct link to Audit &amp; Compliance">​</a></h3>
+<ul>
+<li>All API calls logged with user/team/org context</li>
+<li>Spend tracking for chargeback/showback</li>
+<li>Admin actions audited</li>
+<li>Integration with observability tools</li>
+</ul>
+<p><a href="/docs/data_security">Learn more about Security</a></p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="getting-started">Getting Started<a href="#getting-started" class="hash-link" aria-label="Direct link to Getting Started" title="Direct link to Getting Started">​</a></h2>
+<div class="theme-admonition theme-admonition-info admonition_xJq3 alert alert--info"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 14 16"><path fill-rule="evenodd" d="M7 2.3c3.14 0 5.7 2.56 5.7 5.7s-2.56 5.7-5.7 5.7A5.71 5.71 0 0 1 1.3 8c0-3.14 2.56-5.7 5.7-5.7zM7 1C3.14 1 0 4.14 0 8s3.14 7 7 7 7-3.14 7-7-3.14-7-7-7zm1 3H6v5h2V4zm0 6H6v2h2v-2z"></path></svg></span>Enterprise vs. Open Source Setup</div><div class="admonitionContent_BuS1"><p>The steps below show the <strong>full enterprise hierarchy</strong> with Organizations.</p><p>For <strong>open source</strong>, skip Steps 1-2 and start directly with <strong>Step 3</strong> (creating teams). Teams can function as your top-level tenant boundary without Organizations.</p></div></div>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="step-1-set-up-organizations--enterprise">Step 1: Set Up Organizations ✨ Enterprise<a href="#step-1-set-up-organizations--enterprise" class="hash-link" aria-label="Direct link to Step 1: Set Up Organizations ✨ Enterprise" title="Direct link to Step 1: Set Up Organizations ✨ Enterprise">​</a></h3>
+<p>Create your first organization:</p>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">curl --location &#x27;http://0.0.0.0:4000/organization/new&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --header &#x27;Authorization: Bearer sk-1234&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --header &#x27;Content-Type: application/json&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --data &#x27;{</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;organization_alias&quot;: &quot;engineering_department&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;models&quot;: [&quot;gpt-4&quot;, &quot;gpt-4o&quot;, &quot;claude-3-5-sonnet&quot;],</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;max_budget&quot;: 10000</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    }&#x27;</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="step-2-add-an-organization-admin--enterprise">Step 2: Add an Organization Admin ✨ Enterprise<a href="#step-2-add-an-organization-admin--enterprise" class="hash-link" aria-label="Direct link to Step 2: Add an Organization Admin ✨ Enterprise" title="Direct link to Step 2: Add an Organization Admin ✨ Enterprise">​</a></h3>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">curl -X POST &#x27;http://0.0.0.0:4000/organization/member_add&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    -H &#x27;Authorization: Bearer sk-1234&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    -H &#x27;Content-Type: application/json&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    -d &#x27;{</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;organization_id&quot;: &quot;org-123&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;member&quot;: {</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">            &quot;role&quot;: &quot;org_admin&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">            &quot;user_id&quot;: &quot;admin@company.com&quot;</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        }</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    }&#x27;</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="step-3-create-teams--open-source">Step 3: Create Teams ✅ Open Source<a href="#step-3-create-teams--open-source" class="hash-link" aria-label="Direct link to Step 3: Create Teams ✅ Open Source" title="Direct link to Step 3: Create Teams ✅ Open Source">​</a></h3>
+<p><strong>For Enterprise:</strong> Organization admin creates team within their organization<br>
+<strong>For Open Source:</strong> Proxy admin creates team directly (no <code>organization_id</code> needed)</p>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain"># Enterprise: Org admin creates team in their organization</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">curl --location &#x27;http://0.0.0.0:4000/team/new&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --header &#x27;Authorization: Bearer sk-org-admin-key&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --header &#x27;Content-Type: application/json&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --data &#x27;{</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;team_alias&quot;: &quot;ml_team&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;organization_id&quot;: &quot;org-123&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;max_budget&quot;: 5000</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    }&#x27;</span><br></span><span class="token-line" style="color:#000000"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#000000"><span class="token plain"># Open Source: Proxy admin creates team directly</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">curl --location &#x27;http://0.0.0.0:4000/team/new&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --header &#x27;Authorization: Bearer sk-1234&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --header &#x27;Content-Type: application/json&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --data &#x27;{</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;team_alias&quot;: &quot;ml_team&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;max_budget&quot;: 5000</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    }&#x27;</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="step-4-add-team-admin">Step 4: Add Team Admin<a href="#step-4-add-team-admin" class="hash-link" aria-label="Direct link to Step 4: Add Team Admin" title="Direct link to Step 4: Add Team Admin">​</a></h3>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">curl -X POST &#x27;http://0.0.0.0:4000/team/member_add&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    -H &#x27;Authorization: Bearer sk-org-admin-key&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    -H &#x27;Content-Type: application/json&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    -d &#x27;{</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;team_id&quot;: &quot;team-456&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;member&quot;: {</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">            &quot;role&quot;: &quot;admin&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">            &quot;user_id&quot;: &quot;team-lead@company.com&quot;</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        }</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    }&#x27;</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="step-5-team-admin-manages-their-team">Step 5: Team Admin Manages Their Team<a href="#step-5-team-admin-manages-their-team" class="hash-link" aria-label="Direct link to Step 5: Team Admin Manages Their Team" title="Direct link to Step 5: Team Admin Manages Their Team">​</a></h3>
+<div class="language-bash codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-bash codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain"># Team admin adds members</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">curl -X POST &#x27;http://0.0.0.0:4000/team/member_add&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    -H &#x27;Authorization: Bearer sk-team-admin-key&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    -H &#x27;Content-Type: application/json&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    -d &#x27;{</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;team_id&quot;: &quot;team-456&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;member&quot;: {</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">            &quot;role&quot;: &quot;user&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">            &quot;user_id&quot;: &quot;developer@company.com&quot;</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        }</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    }&#x27;</span><br></span><span class="token-line" style="color:#000000"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#000000"><span class="token plain"># Team admin creates keys for members</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">curl --location &#x27;http://0.0.0.0:4000/key/generate&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --header &#x27;Authorization: Bearer sk-team-admin-key&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --header &#x27;Content-Type: application/json&#x27; \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    --data &#x27;{</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;user_id&quot;: &quot;developer@company.com&quot;,</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">        &quot;team_id&quot;: &quot;team-456&quot;</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">    }&#x27;</span><br></span></code></pre></div></div>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="use-case-examples">Use Case Examples<a href="#use-case-examples" class="hash-link" aria-label="Direct link to Use Case Examples" title="Direct link to Use Case Examples">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="example-1-chargeback-model">Example 1: Chargeback Model<a href="#example-1-chargeback-model" class="hash-link" aria-label="Direct link to Example 1: Chargeback Model" title="Direct link to Example 1: Chargeback Model">​</a></h3>
+<p><strong>Goal</strong>: Each business unit pays for their own LLM usage</p>
+<p><strong>Setup:</strong></p>
+<ol>
+<li>Create organization per business unit</li>
+<li>Set budgets based on allocated budgets</li>
+<li>Track spend per organization</li>
+<li>Generate monthly reports for finance</li>
+</ol>
+<p><strong>Result</strong>: Finance can charge back costs to respective departments with accurate attribution.</p>
+<hr>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="example-2-customer-facing-ai-product">Example 2: Customer-Facing AI Product<a href="#example-2-customer-facing-ai-product" class="hash-link" aria-label="Direct link to Example 2: Customer-Facing AI Product" title="Direct link to Example 2: Customer-Facing AI Product">​</a></h3>
+<p><strong>Goal</strong>: Provide LLM capabilities to customers with isolation and cost tracking</p>
+<p><strong>Setup:</strong></p>
+<ol>
+<li>Create organization per customer</li>
+<li>Use service account keys for production workloads</li>
+<li>Track spend per customer organization</li>
+<li>Set rate limits per customer tier</li>
+</ol>
+<p><strong>Result</strong>: Bill customers accurately, prevent noisy neighbors, maintain isolation.</p>
+<hr>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="example-3-development-vs-production">Example 3: Development vs. Production<a href="#example-3-development-vs-production" class="hash-link" aria-label="Direct link to Example 3: Development vs. Production" title="Direct link to Example 3: Development vs. Production">​</a></h3>
+<p><strong>Goal</strong>: Separate development and production environments with different policies</p>
+<p><strong>Setup:</strong></p>
+<ol>
+<li>Create &quot;Development&quot; and &quot;Production&quot; teams</li>
+<li>Development: Generous budgets, all models, user keys</li>
+<li>Production: Strict budgets, approved models only, service account keys</li>
+<li>Different rate limits per environment</li>
+</ol>
+<p><strong>Result</strong>: Developers can experiment freely without impacting production budget or reliability.</p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="best-practices">Best Practices<a href="#best-practices" class="hash-link" aria-label="Direct link to Best Practices" title="Direct link to Best Practices">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="1-organization-design">1. Organization Design<a href="#1-organization-design" class="hash-link" aria-label="Direct link to 1. Organization Design" title="Direct link to 1. Organization Design">​</a></h3>
+<ul>
+<li>✅ Map organizations to cost centers or customers</li>
+<li>✅ Set realistic budgets with buffer for growth</li>
+<li>✅ Assign 1-2 org admins per organization</li>
+<li>❌ Don&#x27;t create too many organizations (adds management overhead)</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="2-team-structure">2. Team Structure<a href="#2-team-structure" class="hash-link" aria-label="Direct link to 2. Team Structure" title="Direct link to 2. Team Structure">​</a></h3>
+<ul>
+<li>✅ Keep teams aligned with actual working groups</li>
+<li>✅ Use service account keys for production</li>
+<li>✅ Give team admins enough permissions to self-serve</li>
+<li>❌ Don&#x27;t create single-user teams (use user-only keys instead)</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="3-key-management">3. Key Management<a href="#3-key-management" class="hash-link" aria-label="Direct link to 3. Key Management" title="Direct link to 3. Key Management">​</a></h3>
+<ul>
+<li>✅ Use descriptive key names</li>
+<li>✅ Rotate keys regularly</li>
+<li>✅ Delete unused keys</li>
+<li>✅ Use appropriate key type for use case</li>
+<li>❌ Don&#x27;t share keys across users/teams</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="4-budget-management">4. Budget Management<a href="#4-budget-management" class="hash-link" aria-label="Direct link to 4. Budget Management" title="Direct link to 4. Budget Management">​</a></h3>
+<ul>
+<li>✅ Set budgets at multiple levels (org → team → user)</li>
+<li>✅ Monitor spend regularly</li>
+<li>✅ Alert before budget exhaustion</li>
+<li>❌ Don&#x27;t set budgets too tight (may block legitimate usage)</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="5-delegation">5. Delegation<a href="#5-delegation" class="hash-link" aria-label="Direct link to 5. Delegation" title="Direct link to 5. Delegation">​</a></h3>
+<ul>
+<li>✅ Assign org admins for large organizations</li>
+<li>✅ Assign team admins for active teams</li>
+<li>✅ Configure team member permissions appropriately</li>
+<li>❌ Don&#x27;t make everyone a proxy admin</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="monitoring--observability">Monitoring &amp; Observability<a href="#monitoring--observability" class="hash-link" aria-label="Direct link to Monitoring &amp; Observability" title="Direct link to Monitoring &amp; Observability">​</a></h2>
+<p>LiteLLM provides comprehensive monitoring:</p>
+<ul>
+<li><strong>Spend Tracking</strong>: Real-time spend by org/team/user/key</li>
+<li><strong>Usage Analytics</strong>: Request counts, token usage, model usage</li>
+<li><strong>Admin UI</strong>: Visual dashboard for all metrics</li>
+<li><strong>Logging</strong>: Detailed logs with tenant context</li>
+<li><strong>Alerting</strong>: Budget alerts, rate limit alerts, error alerts</li>
+</ul>
+<p><a href="/docs/proxy/logging">Learn more about Logging</a></p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="comparison-with-other-approaches">Comparison with Other Approaches<a href="#comparison-with-other-approaches" class="hash-link" aria-label="Direct link to Comparison with Other Approaches" title="Direct link to Comparison with Other Approaches">​</a></h2>
+<table><thead><tr><th>Approach</th><th>Pros</th><th>Cons</th><th>LiteLLM Advantage</th></tr></thead><tbody><tr><td><strong>Separate instances per tenant</strong></td><td>Strong isolation</td><td>High operational overhead, cost inefficient</td><td>Single instance, same isolation, 90% cost reduction</td></tr><tr><td><strong>Single shared pool</strong></td><td>Simple setup</td><td>No cost attribution, no access control</td><td>Full attribution, granular access control</td></tr><tr><td><strong>API key prefixes</strong></td><td>Basic separation</td><td>Manual tracking, no hierarchy, no RBAC</td><td>Automatic tracking, hierarchical, full RBAC</td></tr><tr><td><strong>External auth layer</strong></td><td>Flexible</td><td>Complex integration, no built-in budgets</td><td>Native integration, built-in budgets</td></tr></tbody></table>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="faq">FAQ<a href="#faq" class="hash-link" aria-label="Direct link to FAQ" title="Direct link to FAQ">​</a></h2>
+<p><strong>Q: Can users belong to multiple teams?</strong><br>
+<!-- -->A: Yes, users can be members of multiple teams and have different keys for each team.</p>
+<p><strong>Q: What happens when a user leaves?</strong><br>
+<!-- -->A: User-specific keys are deleted, but team service account keys remain active.</p>
+<p><strong>Q: Can team budgets exceed organization budget?</strong><br>
+<!-- -->A: No, the system enforces that team budgets cannot exceed their organization&#x27;s budget.</p>
+<p><strong>Q: How granular is the cost tracking?</strong><br>
+<!-- -->A: Every API call is tracked with organization, team, user, and key context.</p>
+<p><strong>Q: Can I have teams without organizations?</strong><br>
+<!-- -->A: Yes! Teams work independently in <strong>open source</strong> without needing Organizations. Organizations are an <strong>enterprise feature</strong> that adds an additional hierarchy layer on top of teams.</p>
+<p><strong>Q: Is there a limit to hierarchy depth?</strong><br>
+<!-- -->A: The hierarchy is: Organization → Team → User → Key (4 levels). This covers most use cases.</p>
+<p><strong>Q: How do I migrate from flat structure to hierarchical?</strong><br>
+<!-- -->A: You can gradually create organizations and teams, then move existing users/keys into them.</p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="related-documentation">Related Documentation<a href="#related-documentation" class="hash-link" aria-label="Direct link to Related Documentation" title="Direct link to Related Documentation">​</a></h2>
+<ul>
+<li><a href="/docs/proxy/user_management_heirarchy">User Management Hierarchy</a> - Visual hierarchy overview</li>
+<li><a href="/docs/proxy/access_control">Access Control (RBAC)</a> - Detailed role permissions</li>
+<li><a href="/docs/proxy/team_budgets">Team Budgets</a> - Budget management guide</li>
+<li><a href="/docs/proxy/virtual_keys">Virtual Keys</a> - API key management</li>
+<li><a href="/docs/proxy/ui">Admin UI</a> - Visual dashboard for management</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="summary">Summary<a href="#summary" class="hash-link" aria-label="Direct link to Summary" title="Direct link to Summary">​</a></h2>
+<p>LiteLLM solves multi-tenant architecture challenges through:</p>
+<ol>
+<li><strong>Hierarchical Structure</strong>: Organizations → Teams → Users → Keys</li>
+<li><strong>Granular RBAC</strong>: Platform-wide and tenant-scoped roles</li>
+<li><strong>Cost Attribution</strong>: Spend tracking at every level</li>
+<li><strong>Delegation</strong>: Org admins and team admins self-manage</li>
+<li><strong>Isolation</strong>: Strong tenant boundaries</li>
+<li><strong>Scalability</strong>: Handles 10 to 10,000+ users with same architecture</li>
+</ol>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="open-source-vs-enterprise">Open Source vs. Enterprise<a href="#open-source-vs-enterprise" class="hash-link" aria-label="Direct link to Open Source vs. Enterprise" title="Direct link to Open Source vs. Enterprise">​</a></h3>
+<p><strong>Open Source</strong> (Teams + Users + Keys):</p>
+<ul>
+<li>✅ Teams as primary tenant boundary</li>
+<li>✅ Team admins manage their teams</li>
+<li>✅ Virtual keys with team/user tracking</li>
+<li>✅ Budget and rate limits per team</li>
+<li>✅ Spend tracking and logging</li>
+</ul>
+<p><strong>Enterprise</strong> (Adds Organizations layer):</p>
+<ul>
+<li>✨ Organizations for top-level tenant isolation</li>
+<li>✨ Organization admins manage multiple teams</li>
+<li>✨ Organization-level budgets and model access</li>
+<li>✨ Hierarchical delegation and reporting</li>
+</ul>
+<p>This makes LiteLLM ideal for:</p>
+<ul>
+<li>✅ Enterprises with multiple departments</li>
+<li>✅ SaaS providers with multiple customers</li>
+<li>✅ Organizations needing cost chargeback/showback</li>
+<li>✅ Teams requiring self-service LLM access</li>
+<li>✅ Any multi-tenant LLM deployment</li>
+</ul>
+<p><a href="/docs/proxy/quick_start">Start with LiteLLM Proxy →</a></p></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/docs/proxy/architecture"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Life of a Request</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/docs/proxy/control_plane_and_data_plane"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Control Plane for Multi-region Architecture (Enterprise)</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_jeP5 theme-doc-toc-desktop"><div class="tocItemsContainer_yosJ thin-scrollbar"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#overview" class="table-of-contents__link toc-highlight">Overview</a></li><li><a href="#the-multi-tenant-challenge" class="table-of-contents__link toc-highlight">The Multi-Tenant Challenge</a></li><li><a href="#how-litellm-solves-multi-tenancy" class="table-of-contents__link toc-highlight">How LiteLLM Solves Multi-Tenancy</a><ul><li><a href="#1-organizations-top-level-tenants--enterprise-feature" class="table-of-contents__link toc-highlight">1. Organizations (Top-Level Tenants) ✨ Enterprise Feature</a></li><li><a href="#2-teams-mid-level-grouping--open-source" class="table-of-contents__link toc-highlight">2. Teams (Mid-Level Grouping) ✅ Open Source</a></li><li><a href="#3-users-individual-members--open-source" class="table-of-contents__link toc-highlight">3. Users (Individual Members) ✅ Open Source</a></li><li><a href="#4-virtual-keys-authentication-layer--open-source" class="table-of-contents__link toc-highlight">4. Virtual Keys (Authentication Layer) ✅ Open Source</a></li></ul></li><li><a href="#role-based-access-control-rbac" class="table-of-contents__link toc-highlight">Role-Based Access Control (RBAC)</a><ul><li><a href="#global-proxy-roles-platform-wide" class="table-of-contents__link toc-highlight">Global Proxy Roles (Platform-Wide)</a></li><li><a href="#organizationteam-roles-scoped" class="table-of-contents__link toc-highlight">Organization/Team Roles (Scoped)</a></li><li><a href="#team-member-permissions" class="table-of-contents__link toc-highlight">Team Member Permissions</a></li></ul></li><li><a href="#spend-tracking--cost-attribution" class="table-of-contents__link toc-highlight">Spend Tracking &amp; Cost Attribution</a><ul><li><a href="#hierarchical-spend-flow" class="table-of-contents__link toc-highlight">Hierarchical Spend Flow</a></li><li><a href="#budget-enforcement" class="table-of-contents__link toc-highlight">Budget Enforcement</a></li></ul></li><li><a href="#common-multi-tenant-patterns" class="table-of-contents__link toc-highlight">Common Multi-Tenant Patterns</a><ul><li><a href="#pattern-1-enterprise-departments" class="table-of-contents__link toc-highlight">Pattern 1: Enterprise Departments</a></li><li><a href="#pattern-2-multi-customer-saas" class="table-of-contents__link toc-highlight">Pattern 2: Multi-Customer SaaS</a></li><li><a href="#pattern-3-environment-separation" class="table-of-contents__link toc-highlight">Pattern 3: Environment Separation</a></li></ul></li><li><a href="#delegation--self-service" class="table-of-contents__link toc-highlight">Delegation &amp; Self-Service</a><ul><li><a href="#without-litellm" class="table-of-contents__link toc-highlight">Without LiteLLM</a></li><li><a href="#with-litellm" class="table-of-contents__link toc-highlight">With LiteLLM</a></li><li><a href="#self-service-capabilities" class="table-of-contents__link toc-highlight">Self-Service Capabilities</a></li></ul></li><li><a href="#scalability" class="table-of-contents__link toc-highlight">Scalability</a><ul><li><a href="#small-team-10-100-users" class="table-of-contents__link toc-highlight">Small Team (10-100 users)</a></li><li><a href="#mid-size-100-1000-users" class="table-of-contents__link toc-highlight">Mid-Size (100-1,000 users)</a></li><li><a href="#enterprise-1000-users" class="table-of-contents__link toc-highlight">Enterprise (1,000+ users)</a></li></ul></li><li><a href="#security--isolation" class="table-of-contents__link toc-highlight">Security &amp; Isolation</a><ul><li><a href="#tenant-isolation" class="table-of-contents__link toc-highlight">Tenant Isolation</a></li><li><a href="#authentication-security" class="table-of-contents__link toc-highlight">Authentication Security</a></li><li><a href="#audit--compliance" class="table-of-contents__link toc-highlight">Audit &amp; Compliance</a></li></ul></li><li><a href="#getting-started" class="table-of-contents__link toc-highlight">Getting Started</a><ul><li><a href="#step-1-set-up-organizations--enterprise" class="table-of-contents__link toc-highlight">Step 1: Set Up Organizations ✨ Enterprise</a></li><li><a href="#step-2-add-an-organization-admin--enterprise" class="table-of-contents__link toc-highlight">Step 2: Add an Organization Admin ✨ Enterprise</a></li><li><a href="#step-3-create-teams--open-source" class="table-of-contents__link toc-highlight">Step 3: Create Teams ✅ Open Source</a></li><li><a href="#step-4-add-team-admin" class="table-of-contents__link toc-highlight">Step 4: Add Team Admin</a></li><li><a href="#step-5-team-admin-manages-their-team" class="table-of-contents__link toc-highlight">Step 5: Team Admin Manages Their Team</a></li></ul></li><li><a href="#use-case-examples" class="table-of-contents__link toc-highlight">Use Case Examples</a><ul><li><a href="#example-1-chargeback-model" class="table-of-contents__link toc-highlight">Example 1: Chargeback Model</a></li><li><a href="#example-2-customer-facing-ai-product" class="table-of-contents__link toc-highlight">Example 2: Customer-Facing AI Product</a></li><li><a href="#example-3-development-vs-production" class="table-of-contents__link toc-highlight">Example 3: Development vs. Production</a></li></ul></li><li><a href="#best-practices" class="table-of-contents__link toc-highlight">Best Practices</a><ul><li><a href="#1-organization-design" class="table-of-contents__link toc-highlight">1. Organization Design</a></li><li><a href="#2-team-structure" class="table-of-contents__link toc-highlight">2. Team Structure</a></li><li><a href="#3-key-management" class="table-of-contents__link toc-highlight">3. Key Management</a></li><li><a href="#4-budget-management" class="table-of-contents__link toc-highlight">4. Budget Management</a></li><li><a href="#5-delegation" class="table-of-contents__link toc-highlight">5. Delegation</a></li></ul></li><li><a href="#monitoring--observability" class="table-of-contents__link toc-highlight">Monitoring &amp; Observability</a></li><li><a href="#comparison-with-other-approaches" class="table-of-contents__link toc-highlight">Comparison with Other Approaches</a></li><li><a href="#faq" class="table-of-contents__link toc-highlight">FAQ</a></li><li><a href="#related-documentation" class="table-of-contents__link toc-highlight">Related Documentation</a></li><li><a href="#summary" class="table-of-contents__link toc-highlight">Summary</a><ul><li><a href="#open-source-vs-enterprise" class="table-of-contents__link toc-highlight">Open Source vs. Enterprise</a></li></ul></li></ul></div><div class="promoCard_SGxZ"><div class="promoEmoji_Dg1q">🚅</div><div class="promoHeading_s_Ub">LiteLLM Enterprise</div><div class="promoDescription_qSAY">SSO/SAML, audit logs, spend tracking, multi-team management, and guardrails — built for production.</div><a class="promoButton_KLlx" href="/docs/enterprise">Learn more →</a></div></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Docs</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Getting Started</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Community</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://discord.com/invite/wuPM9dRgDw" target="_blank" rel="noopener noreferrer" class="footer__link-item">Discord<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://twitter.com/LiteLLM" target="_blank" rel="noopener noreferrer" class="footer__link-item">Twitter<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/BerriAI/litellm/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 liteLLM</div></div></div></footer><div id="inkeep-shadowradix-:Rp:" style="display:contents"></div><span></span></div>
+</body>
+</html>

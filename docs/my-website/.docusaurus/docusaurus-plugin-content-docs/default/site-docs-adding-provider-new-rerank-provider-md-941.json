@@ -1,0 +1,23 @@
+{
+  "id": "adding_provider/new_rerank_provider",
+  "title": "Add Rerank Provider",
+  "description": "LiteLLM follows the Cohere Rerank API format for all rerank providers. Here's how to add a new rerank provider:",
+  "source": "@site/docs/adding_provider/new_rerank_provider.md",
+  "sourceDirName": "adding_provider",
+  "slug": "/adding_provider/new_rerank_provider",
+  "permalink": "/docs/adding_provider/new_rerank_provider",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Directory Structure",
+    "permalink": "/docs/adding_provider/directory_structure"
+  },
+  "next": {
+    "title": "Contributing to Documentation",
+    "permalink": "/docs/extras/contributing"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/openai_agents_sdk",
+  "title": "OpenAI Agents SDK with LiteLLM",
+  "description": "Use OpenAI's Agents SDK with any LLM provider through LiteLLM Proxy.",
+  "source": "@site/docs/tutorials/openai_agents_sdk.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/openai_agents_sdk",
+  "permalink": "/docs/tutorials/openai_agents_sdk",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Agent SDKs",
+    "permalink": "/docs/agent_sdks"
+  },
+  "next": {
+    "title": "Claude Agent SDK with LiteLLM",
+    "permalink": "/docs/tutorials/claude_agent_sdk"
+  }
+}

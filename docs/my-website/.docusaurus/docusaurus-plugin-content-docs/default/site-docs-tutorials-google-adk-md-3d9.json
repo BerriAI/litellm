@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/google_adk",
+  "title": "Google ADK with LiteLLM",
+  "description": "<Image",
+  "source": "@site/docs/tutorials/google_adk.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/google_adk",
+  "permalink": "/docs/tutorials/google_adk",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "CopilotKit SDK with LiteLLM",
+    "permalink": "/docs/tutorials/copilotkit_sdk"
+  },
+  "next": {
+    "title": "Google GenAI SDK with LiteLLM",
+    "permalink": "/docs/tutorials/google_genai_sdk"
+  }
+}

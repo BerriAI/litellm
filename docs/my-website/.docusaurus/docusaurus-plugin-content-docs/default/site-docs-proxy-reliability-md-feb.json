@@ -1,0 +1,23 @@
+{
+  "id": "proxy/reliability",
+  "title": "Fallbacks",
+  "description": "If a call fails after num_retries, fallback to another model group.",
+  "source": "@site/docs/proxy/reliability.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/reliability",
+  "permalink": "/docs/proxy/reliability",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Budget Routing",
+    "permalink": "/docs/proxy/provider_budget_routing"
+  },
+  "next": {
+    "title": "[New] Fallback Management Endpoints",
+    "permalink": "/docs/proxy/fallback_management"
+  }
+}

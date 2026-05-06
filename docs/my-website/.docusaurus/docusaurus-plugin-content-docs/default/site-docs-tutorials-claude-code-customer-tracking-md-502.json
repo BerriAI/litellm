@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/claude_code_customer_tracking",
+  "title": "Claude Code - Granular Cost Tracking",
+  "description": "Track Claude Code usage by customer or tags using LiteLLM proxy. This enables granular cost attribution for billing, budgeting, and analytics.",
+  "source": "@site/docs/tutorials/claude_code_customer_tracking.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/claude_code_customer_tracking",
+  "permalink": "/docs/tutorials/claude_code_customer_tracking",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Claude Code with Bring Your Own Key (BYOK)",
+    "permalink": "/docs/tutorials/claude_code_byok"
+  },
+  "next": {
+    "title": "Claude Code - Prompt Cache Routing",
+    "permalink": "/docs/tutorials/claude_code_prompt_cache_routing"
+  }
+}

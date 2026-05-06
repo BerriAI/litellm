@@ -1,0 +1,23 @@
+{
+  "id": "projects/SalesGPT",
+  "title": "SalesGPT",
+  "description": "🤖 SalesGPT - Your Context-Aware AI Sales Assistant",
+  "source": "@site/docs/projects/SalesGPT.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/SalesGPT",
+  "permalink": "/docs/projects/SalesGPT",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Prompt2Model",
+    "permalink": "/docs/projects/Prompt2Model"
+  },
+  "next": {
+    "title": "Softgen",
+    "permalink": "/docs/projects/Softgen"
+  }
+}

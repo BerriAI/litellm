@@ -1,0 +1,23 @@
+{
+  "id": "observability/callbacks",
+  "title": "Callbacks",
+  "description": "Use Callbacks to send Output Data to Posthog, Sentry etc",
+  "source": "@site/docs/observability/callbacks.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/callbacks",
+  "permalink": "/docs/observability/callbacks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Braintrust - Evals + Logging",
+    "permalink": "/docs/observability/braintrust"
+  },
+  "next": {
+    "title": "CloudZero Integration",
+    "permalink": "/docs/observability/cloudzero"
+  }
+}

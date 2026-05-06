@@ -1,0 +1,23 @@
+{
+  "id": "providers/sambanova",
+  "title": "SambaNova",
+  "description": "https://cloud.sambanova.ai/",
+  "source": "@site/docs/providers/sambanova.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/sambanova",
+  "permalink": "/docs/providers/sambanova",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "SaladCloud AI Gateway",
+    "permalink": "/docs/providers/salad_cloud"
+  },
+  "next": {
+    "title": "SAP Generative AI Hub",
+    "permalink": "/docs/providers/sap"
+  }
+}

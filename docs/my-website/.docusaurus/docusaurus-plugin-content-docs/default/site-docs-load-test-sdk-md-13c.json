@@ -1,0 +1,23 @@
+{
+  "id": "load_test_sdk",
+  "title": "LiteLLM SDK vs OpenAI",
+  "description": "Here is a script to load test LiteLLM vs OpenAI",
+  "source": "@site/docs/load_test_sdk.md",
+  "sourceDirName": ".",
+  "slug": "/load_test_sdk",
+  "permalink": "/docs/load_test_sdk",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "LiteLLM Proxy - 1K RPS Load test on locust",
+    "permalink": "/docs/load_test_advanced"
+  },
+  "next": {
+    "title": "Multi-Instance TPM/RPM (litellm.Router)",
+    "permalink": "/docs/load_test_rpm"
+  }
+}

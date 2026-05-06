@@ -1,0 +1,23 @@
+{
+  "id": "proxy/security_encryption_faq",
+  "title": "LiteLLM Self-Hosted Security & Encryption FAQ",
+  "description": "Data in Transit Encryption",
+  "source": "@site/docs/proxy/security_encryption_faq.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/security_encryption_faq",
+  "permalink": "/docs/proxy/security_encryption_faq",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Data Retention Policy",
+    "permalink": "/docs/data_retention"
+  },
+  "next": {
+    "title": "Migration Policy",
+    "permalink": "/docs/migration_policy"
+  }
+}

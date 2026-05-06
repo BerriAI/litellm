@@ -1,0 +1,23 @@
+{
+  "id": "providers/voyage",
+  "title": "Voyage AI",
+  "description": "https://docs.voyageai.com/embeddings/",
+  "source": "@site/docs/providers/voyage.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/voyage",
+  "permalink": "/docs/providers/voyage",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Volcano Engine (Volcengine)",
+    "permalink": "/docs/providers/volcano"
+  },
+  "next": {
+    "title": "Weights & Biases Inference",
+    "permalink": "/docs/providers/wandb_inference"
+  }
+}

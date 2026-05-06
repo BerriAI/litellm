@@ -1,0 +1,23 @@
+{
+  "id": "vector_store_files",
+  "title": "/vector_stores/\\{vector_store_id\\}/files",
+  "description": "Vector store files represent the individual files that live inside a vector store.",
+  "source": "@site/docs/vector_store_files.md",
+  "sourceDirName": ".",
+  "slug": "/vector_store_files",
+  "permalink": "/docs/vector_store_files",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/videos",
+    "permalink": "/docs/videos"
+  },
+  "next": {
+    "title": "/vector_stores - Create Vector Store",
+    "permalink": "/docs/vector_stores/create"
+  }
+}

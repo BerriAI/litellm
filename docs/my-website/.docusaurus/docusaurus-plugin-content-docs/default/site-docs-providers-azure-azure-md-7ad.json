@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure/azure",
+  "title": "Azure OpenAI",
+  "description": "Overview",
+  "source": "@site/docs/providers/azure/azure.md",
+  "sourceDirName": "providers/azure",
+  "slug": "/providers/azure/",
+  "permalink": "/docs/providers/azure/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "OpenAI-Compatible Endpoints",
+    "permalink": "/docs/providers/openai_compatible"
+  },
+  "next": {
+    "title": "Azure Responses API",
+    "permalink": "/docs/providers/azure/azure_responses"
+  }
+}

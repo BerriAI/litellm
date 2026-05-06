@@ -1,0 +1,23 @@
+{
+  "id": "providers/ragflow",
+  "title": "RAGFlow",
+  "description": "Litellm supports Ragflow's chat completions APIs",
+  "source": "@site/docs/providers/ragflow.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/ragflow",
+  "permalink": "/docs/providers/ragflow",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Pydantic AI Agents",
+    "permalink": "/docs/providers/pydantic_ai_agent"
+  },
+  "next": {
+    "title": "Recraft",
+    "permalink": "/docs/providers/recraft"
+  }
+}

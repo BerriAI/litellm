@@ -1,0 +1,23 @@
+{
+  "id": "projects/Elroy",
+  "title": "🐕 Elroy",
+  "description": "Elroy is a scriptable AI assistant that remembers and sets goals.",
+  "source": "@site/docs/projects/Elroy.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Elroy",
+  "permalink": "/docs/projects/Elroy",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "OpenInterpreter",
+    "permalink": "/docs/projects/OpenInterpreter"
+  },
+  "next": {
+    "title": "dbally",
+    "permalink": "/docs/projects/dbally"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "proxy_api",
+  "title": "🔑 LiteLLM Keys (Access Claude-2, Llama2-70b, etc.)",
+  "description": "Use this if you're trying to add support for new LLMs and need access for testing. We provide a free $10 community-key for testing all providers on LiteLLM:",
+  "source": "@site/docs/proxy_api.md",
+  "sourceDirName": ".",
+  "slug": "/proxy_api",
+  "permalink": "/docs/proxy_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

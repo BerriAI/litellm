@@ -1,0 +1,23 @@
+{
+  "id": "providers/openai/text_to_speech",
+  "title": "OpenAI - Text-to-speech",
+  "description": "Overview",
+  "source": "@site/docs/providers/openai/text_to_speech.md",
+  "sourceDirName": "providers/openai",
+  "slug": "/providers/openai/text_to_speech",
+  "permalink": "/docs/providers/openai/text_to_speech",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "OpenAI - Response API",
+    "permalink": "/docs/providers/openai/responses_api"
+  },
+  "next": {
+    "title": "OpenAI Video Generation",
+    "permalink": "/docs/providers/openai/videos"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "bedrock_invoke",
+  "title": "/invoke",
+  "description": "Call Bedrock's /invoke endpoint through LiteLLM Proxy.",
+  "source": "@site/docs/bedrock_invoke.md",
+  "sourceDirName": ".",
+  "slug": "/bedrock_invoke",
+  "permalink": "/docs/bedrock_invoke",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/guardrails/apply_guardrail",
+    "permalink": "/docs/apply_guardrail"
+  },
+  "next": {
+    "title": "/interactions",
+    "permalink": "/docs/interactions"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/access_groups",
+  "title": "Access Groups",
+  "description": "Access Groups simplify how you define and manage resource access across your organization. Instead of configuring models, MCP servers, and agents separately on each key or team, you create one group that bundles the resources you want to grant, then attach that group to your keys or teams.",
+  "source": "@site/docs/proxy/access_groups.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/access_groups",
+  "permalink": "/docs/proxy/access_groups",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Model Access Groups",
+    "permalink": "/docs/proxy/model_access_groups"
+  },
+  "next": {
+    "title": "✨ Allow Teams to Add Models",
+    "permalink": "/docs/proxy/team_model_add"
+  }
+}

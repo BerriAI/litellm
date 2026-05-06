@@ -1,0 +1,23 @@
+{
+  "id": "search/google_pse",
+  "title": "Google Programmable Search Engine (PSE)",
+  "description": "Get API Key: Google Cloud Console",
+  "source": "@site/docs/search/google_pse.md",
+  "sourceDirName": "search",
+  "slug": "/search/google_pse",
+  "permalink": "/docs/search/google_pse",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Parallel AI Search",
+    "permalink": "/docs/search/parallel_ai"
+  },
+  "next": {
+    "title": "DataForSEO Search",
+    "permalink": "/docs/search/dataforseo"
+  }
+}

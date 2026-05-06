@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/observability/callbacks",
+  "source": "@site/src/pages/observability/callbacks.md",
+  "title": "Callbacks",
+  "description": "Use Callbacks to send Output Data to Posthog, Sentry etc",
+  "frontMatter": {},
+  "unlisted": false
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/high_availability_control_plane",
+  "title": "[BETA] High Availability Control Plane",
+  "description": "Deploy a single LiteLLM UI that manages multiple independent LiteLLM proxy instances, each with its own database, Redis, and master key.",
+  "source": "@site/docs/proxy/high_availability_control_plane.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/high_availability_control_plane",
+  "permalink": "/docs/proxy/high_availability_control_plane",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Control Plane for Multi-region Architecture (Enterprise)",
+    "permalink": "/docs/proxy/control_plane_and_data_plane"
+  },
+  "next": {
+    "title": "High Availability Setup (Resolve DB Deadlocks)",
+    "permalink": "/docs/proxy/db_deadlocks"
+  }
+}

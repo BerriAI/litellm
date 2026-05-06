@@ -1,0 +1,23 @@
+{
+  "id": "projects/Agent Lightning",
+  "title": "Agent Lightning",
+  "description": "Agent Lightning is Microsoft's open-source framework for training and optimizing AI agents with Reinforcement Learning, Automatic Prompt Optimization, and Supervised Fine-tuning — with almost zero code changes.",
+  "source": "@site/docs/projects/Agent Lightning.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Agent Lightning",
+  "permalink": "/docs/projects/Agent Lightning",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Google ADK (Agent Development Kit)",
+    "permalink": "/docs/projects/Google ADK"
+  },
+  "next": {
+    "title": "Harbor",
+    "permalink": "/docs/projects/Harbor"
+  }
+}

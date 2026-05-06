@@ -1,0 +1,23 @@
+{
+  "id": "search/parallel_ai",
+  "title": "Parallel AI Search",
+  "description": "Get API Key//www.parallel.ai",
+  "source": "@site/docs/search/parallel_ai.md",
+  "sourceDirName": "search",
+  "slug": "/search/parallel_ai",
+  "permalink": "/docs/search/parallel_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Brave Search",
+    "permalink": "/docs/search/brave"
+  },
+  "next": {
+    "title": "Google Programmable Search Engine (PSE)",
+    "permalink": "/docs/search/google_pse"
+  }
+}

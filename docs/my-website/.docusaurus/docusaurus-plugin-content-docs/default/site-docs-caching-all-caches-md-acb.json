@@ -1,0 +1,23 @@
+{
+  "id": "caching/all_caches",
+  "title": "Caching - In-Memory, Redis, s3, gcs, Redis Semantic Cache, Disk",
+  "description": "See Code",
+  "source": "@site/docs/caching/all_caches.md",
+  "sourceDirName": "caching",
+  "slug": "/caching/all_caches",
+  "permalink": "/docs/caching/all_caches",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "SDK Proxy Authentication (OAuth2/JWT Auto-Refresh)",
+    "permalink": "/docs/proxy_auth"
+  },
+  "next": {
+    "title": "Completion Token Usage & Cost",
+    "permalink": "/docs/completion/token_usage"
+  }
+}

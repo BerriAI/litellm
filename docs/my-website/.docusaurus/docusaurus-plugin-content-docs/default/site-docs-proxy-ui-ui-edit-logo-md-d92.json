@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ui/ui_edit_logo",
+  "title": "Customize UI Logo",
+  "description": "Personalize your LiteLLM dashboard by replacing the default logo with your own company branding. You can set a custom logo via the UI or the API.",
+  "source": "@site/docs/proxy/ui/ui_edit_logo.md",
+  "sourceDirName": "proxy/ui",
+  "slug": "/proxy/ui/ui_edit_logo",
+  "permalink": "/docs/proxy/ui/ui_edit_logo",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "✨ SSO for Admin UI",
+    "permalink": "/docs/proxy/admin_ui_sso"
+  },
+  "next": {
+    "title": "✨ Event Hooks for SSO Login",
+    "permalink": "/docs/proxy/custom_sso"
+  }
+}

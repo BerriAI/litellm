@@ -1,0 +1,23 @@
+{
+  "id": "providers/xiaomi_mimo",
+  "title": "Xiaomi MiMo",
+  "description": "https://platform.xiaomimimo.com/#/docs",
+  "source": "@site/docs/providers/xiaomi_mimo.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/xiaomi_mimo",
+  "permalink": "/docs/providers/xiaomi_mimo",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "xAI Voice Agent (Realtime API)",
+    "permalink": "/docs/providers/xai_realtime"
+  },
+  "next": {
+    "title": "Xinference [Xorbits Inference]",
+    "permalink": "/docs/providers/xinference"
+  }
+}

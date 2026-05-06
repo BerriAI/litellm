@@ -1,0 +1,23 @@
+{
+  "id": "providers/xinference",
+  "title": "Xinference [Xorbits Inference]",
+  "description": "https://inference.readthedocs.io/en/latest/index.html",
+  "source": "@site/docs/providers/xinference.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/xinference",
+  "permalink": "/docs/providers/xinference",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Xiaomi MiMo",
+    "permalink": "/docs/providers/xiaomi_mimo"
+  },
+  "next": {
+    "title": "Z.AI (Zhipu AI)",
+    "permalink": "/docs/providers/zai"
+  }
+}

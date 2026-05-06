@@ -1,0 +1,25 @@
+{
+  "id": "tutorials/github_copilot_integration",
+  "title": "GitHub Copilot",
+  "description": "This tutorial shows you how to integrate GitHub Copilot with LiteLLM Proxy, allowing you to route requests through LiteLLM's unified interface.",
+  "source": "@site/docs/tutorials/github_copilot_integration.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/github_copilot_integration",
+  "permalink": "/docs/tutorials/github_copilot_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "sidebar_label": "GitHub Copilot"
+  },
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Cursor Integration",
+    "permalink": "/docs/tutorials/cursor_integration"
+  },
+  "next": {
+    "title": "Gemini CLI",
+    "permalink": "/docs/tutorials/litellm_gemini_cli"
+  }
+}

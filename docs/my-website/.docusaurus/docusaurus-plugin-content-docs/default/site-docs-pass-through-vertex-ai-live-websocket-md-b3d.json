@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/vertex_ai_live_websocket",
+  "title": "Vertex AI Live API WebSocket Passthrough",
+  "description": "LiteLLM now supports WebSocket passthrough for the Vertex AI Live API, enabling real-time bidirectional communication with Gemini models.",
+  "source": "@site/docs/pass_through/vertex_ai_live_websocket.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/vertex_ai_live_websocket",
+  "permalink": "/docs/pass_through/vertex_ai_live_websocket",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI SDK",
+    "permalink": "/docs/pass_through/vertex_ai"
+  },
+  "next": {
+    "title": "Vertex AI Search Datastores",
+    "permalink": "/docs/pass_through/vertex_ai_search_datastores"
+  }
+}

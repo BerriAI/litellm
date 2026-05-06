@@ -1,0 +1,23 @@
+{
+  "id": "a2a",
+  "title": "Agent Gateway (A2A Protocol) - Overview",
+  "description": "Add A2A Agents on LiteLLM AI Gateway, Invoke agents in A2A Protocol, track request/response logs in LiteLLM Logs. Manage which Teams, Keys can access which Agents onboarded.",
+  "source": "@site/docs/a2a.md",
+  "sourceDirName": ".",
+  "slug": "/a2a",
+  "permalink": "/docs/a2a",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Getting Started Tutorial",
+    "permalink": "/docs/proxy/docker_quick_start"
+  },
+  "next": {
+    "title": "Invoking A2A Agents",
+    "permalink": "/docs/a2a_invoking_agents"
+  }
+}

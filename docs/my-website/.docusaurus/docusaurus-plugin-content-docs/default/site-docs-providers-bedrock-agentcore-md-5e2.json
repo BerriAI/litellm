@@ -1,0 +1,23 @@
+{
+  "id": "providers/bedrock_agentcore",
+  "title": "Bedrock AgentCore",
+  "description": "Call Bedrock AgentCore in the OpenAI Request/Response format.",
+  "source": "@site/docs/providers/bedrock_agentcore.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/bedrock_agentcore",
+  "permalink": "/docs/providers/bedrock_agentcore",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "AWS Bedrock - Rerank API",
+    "permalink": "/docs/providers/bedrock_rerank"
+  },
+  "next": {
+    "title": "Bedrock Agents",
+    "permalink": "/docs/providers/bedrock_agents"
+  }
+}

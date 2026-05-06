@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure/azure_responses",
+  "title": "Azure Responses API",
+  "description": "| Property | Details |",
+  "source": "@site/docs/providers/azure/azure_responses.md",
+  "sourceDirName": "providers/azure",
+  "slug": "/providers/azure/azure_responses",
+  "permalink": "/docs/providers/azure/azure_responses",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure OpenAI",
+    "permalink": "/docs/providers/azure/"
+  },
+  "next": {
+    "title": "Azure OpenAI Embeddings",
+    "permalink": "/docs/providers/azure/azure_embedding"
+  }
+}

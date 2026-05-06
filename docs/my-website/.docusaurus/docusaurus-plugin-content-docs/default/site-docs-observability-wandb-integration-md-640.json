@@ -1,0 +1,23 @@
+{
+  "id": "observability/wandb_integration",
+  "title": "Weights & Biases - Logging LLM Input/Output",
+  "description": "This is community maintained, Please make an issue if you run into a bug",
+  "source": "@site/docs/observability/wandb_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/wandb_integration",
+  "permalink": "/docs/observability/wandb_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Vantage Integration",
+    "permalink": "/docs/observability/vantage"
+  },
+  "next": {
+    "title": "Guardrail Providers",
+    "permalink": "/docs/guardrail_providers"
+  }
+}

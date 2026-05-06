@@ -1,0 +1,23 @@
+{
+  "id": "providers/openai",
+  "title": "OpenAI",
+  "description": "LiteLLM supports OpenAI Chat + Embedding calls.",
+  "source": "@site/docs/providers/openai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/openai",
+  "permalink": "/docs/providers/openai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Add Model Pricing & Context Window",
+    "permalink": "/docs/provider_registration/add_model_pricing"
+  },
+  "next": {
+    "title": "OpenAI - Response API",
+    "permalink": "/docs/providers/openai/responses_api"
+  }
+}

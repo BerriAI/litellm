@@ -1,0 +1,23 @@
+{
+  "id": "scheduler",
+  "title": "[BETA] Request Prioritization",
+  "description": "Beta feature. Use for testing only.",
+  "source": "@site/docs/scheduler.md",
+  "sourceDirName": ".",
+  "slug": "/scheduler",
+  "permalink": "/docs/scheduler",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Router - Load Balancing",
+    "permalink": "/docs/routing"
+  },
+  "next": {
+    "title": "Auto Routing",
+    "permalink": "/docs/proxy/auto_routing"
+  }
+}

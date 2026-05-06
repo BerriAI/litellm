@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/instructor",
+  "title": "Instructor",
+  "description": "Combine LiteLLM with jxnl's instructor library for more robust structured outputs. Outputs are automatically validated into Pydantic types and validation errors are provided back to the model to increase the chance of a successful response in the retries.",
+  "source": "@site/docs/tutorials/instructor.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/instructor",
+  "permalink": "/docs/tutorials/instructor",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Letta Integration",
+    "permalink": "/docs/integrations/letta"
+  },
+  "next": {
+    "title": "LangChain with LiteLLM",
+    "permalink": "/docs/langchain/"
+  }
+}

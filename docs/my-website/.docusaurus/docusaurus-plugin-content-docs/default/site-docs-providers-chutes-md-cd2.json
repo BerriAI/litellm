@@ -1,0 +1,23 @@
+{
+  "id": "providers/chutes",
+  "title": "Chutes",
+  "description": "Overview",
+  "source": "@site/docs/providers/chutes.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/chutes",
+  "permalink": "/docs/providers/chutes",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Cerebras",
+    "permalink": "/docs/providers/cerebras"
+  },
+  "next": {
+    "title": "Clarifai",
+    "permalink": "/docs/providers/clarifai"
+  }
+}

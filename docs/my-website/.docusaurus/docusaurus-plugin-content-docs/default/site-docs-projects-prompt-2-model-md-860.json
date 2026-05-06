@@ -1,0 +1,23 @@
+{
+  "id": "projects/Prompt2Model",
+  "title": "Prompt2Model",
+  "description": "Prompt2Model - Generate Deployable Models from Instructions",
+  "source": "@site/docs/projects/Prompt2Model.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Prompt2Model",
+  "permalink": "/docs/projects/Prompt2Model",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Codium PR Agent",
+    "permalink": "/docs/projects/Codium PR Agent"
+  },
+  "next": {
+    "title": "SalesGPT",
+    "permalink": "/docs/projects/SalesGPT"
+  }
+}

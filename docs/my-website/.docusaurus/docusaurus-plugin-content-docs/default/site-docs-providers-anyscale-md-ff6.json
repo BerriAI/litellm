@@ -1,0 +1,23 @@
+{
+  "id": "providers/anyscale",
+  "title": "Anyscale",
+  "description": "https://app.endpoints.anyscale.com/",
+  "source": "@site/docs/providers/anyscale.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/anyscale",
+  "permalink": "/docs/providers/anyscale",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Amazon Nova",
+    "permalink": "/docs/providers/amazon_nova"
+  },
+  "next": {
+    "title": "Apertis AI (Stima API)",
+    "permalink": "/docs/providers/apertis"
+  }
+}

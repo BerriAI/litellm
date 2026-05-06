@@ -1,0 +1,23 @@
+{
+  "id": "embedding/supported_embedding",
+  "title": "/embeddings",
+  "description": "Quick Start",
+  "source": "@site/docs/embedding/supported_embedding.md",
+  "sourceDirName": "embedding",
+  "slug": "/embedding/supported_embedding",
+  "permalink": "/docs/embedding/supported_embedding",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "completion()",
+    "permalink": "/docs/completion/input"
+  },
+  "next": {
+    "title": "responses()",
+    "permalink": "/docs/response_api"
+  }
+}

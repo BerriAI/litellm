@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/observability/supabase_integration",
+  "source": "@site/src/pages/observability/supabase_integration.md",
+  "title": "Supabase Tutorial",
+  "description": "Supabase is an open source Firebase alternative.",
+  "frontMatter": {},
+  "unlisted": false
+}

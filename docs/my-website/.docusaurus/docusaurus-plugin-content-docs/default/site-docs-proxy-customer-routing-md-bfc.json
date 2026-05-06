@@ -1,0 +1,23 @@
+{
+  "id": "proxy/customer_routing",
+  "title": "[DEPRECATED] Region-based Routing",
+  "description": "This is deprecated, please use Tag Based Routing instead",
+  "source": "@site/docs/proxy/customer_routing.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/customer_routing",
+  "permalink": "/docs/proxy/customer_routing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[DEPRECATED] Team-based Routing",
+    "permalink": "/docs/proxy/team_based_routing"
+  },
+  "next": {
+    "title": "[OLD PROXY 👉 [NEW proxy here](./simple_proxy)] Local LiteLLM Proxy Server",
+    "permalink": "/docs/proxy_server"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ai_hub",
+  "title": "AI Hub",
+  "description": "Share models and agents with your organization. Show developers what's available without needing to rebuild them.",
+  "source": "@site/docs/proxy/ai_hub.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/ai_hub",
+  "permalink": "/docs/proxy/ai_hub",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Adding LLM Credentials",
+    "permalink": "/docs/proxy/ui_credentials"
+  },
+  "next": {
+    "title": "Model Compare Playground UI",
+    "permalink": "/docs/proxy/model_compare_ui"
+  }
+}

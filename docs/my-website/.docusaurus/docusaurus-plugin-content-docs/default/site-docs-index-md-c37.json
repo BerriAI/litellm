@@ -1,0 +1,23 @@
+{
+  "id": "index",
+  "title": "Getting Started",
+  "description": "LiteLLM is an open-source library that gives you a single, unified interface to call 100+ LLMs — OpenAI, Anthropic, Vertex AI, Bedrock, and more — using the OpenAI format.",
+  "source": "@site/docs/index.md",
+  "sourceDirName": ".",
+  "slug": "/",
+  "permalink": "/docs/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "index",
+    "title": "Getting Started",
+    "sidebar_label": "Quickstart"
+  },
+  "sidebar": "tutorialSidebar",
+  "next": {
+    "title": "completion()",
+    "permalink": "/docs/completion/input"
+  }
+}

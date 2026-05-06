@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/installation",
+  "title": "Set up environment",
+  "description": "Let's get the necessary keys to set up our demo environment.",
+  "source": "@site/docs/tutorials/installation.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/installation",
+  "permalink": "/docs/tutorials/installation",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Getting Started",
+    "permalink": "/docs/tutorials/getting_started"
+  },
+  "next": {
+    "title": "Create your first LLM playground",
+    "permalink": "/docs/tutorials/first_playground"
+  }
+}

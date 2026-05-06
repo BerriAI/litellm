@@ -1,0 +1,23 @@
+{
+  "id": "proxy/custom_root_ui",
+  "title": "UI - Custom Root Path",
+  "description": "💥 Use this when you want to serve LiteLLM on a custom base url path like https4000/api/v1",
+  "source": "@site/docs/proxy/custom_root_ui.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/custom_root_ui",
+  "permalink": "/docs/proxy/custom_root_ui",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "✨ Event Hooks for SSO Login",
+    "permalink": "/docs/proxy/custom_sso"
+  },
+  "next": {
+    "title": "SCIM with LiteLLM",
+    "permalink": "/docs/tutorials/scim_litellm"
+  }
+}

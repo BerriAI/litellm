@@ -1,0 +1,23 @@
+{
+  "id": "observability/argilla",
+  "title": "Argilla",
+  "description": "Argilla is a collaborative annotation tool for AI engineers and domain experts who need to build high-quality datasets for their projects.",
+  "source": "@site/docs/observability/argilla.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/argilla",
+  "permalink": "/docs/observability/argilla",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "🖇️ AgentOps - LLM Observability Platform",
+    "permalink": "/docs/observability/agentops_integration"
+  },
+  "next": {
+    "title": "Arize AI",
+    "permalink": "/docs/observability/arize_integration"
+  }
+}

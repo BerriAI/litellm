@@ -1,0 +1,23 @@
+{
+  "id": "observability/qualifire_integration",
+  "title": "Qualifire - LLM Evaluation, Guardrails & Observability",
+  "description": "Qualifire provides real-time Agentic evaluations, guardrails and observability for production AI applications.",
+  "source": "@site/docs/observability/qualifire_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/qualifire_integration",
+  "permalink": "/docs/observability/qualifire_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Promptlayer Tutorial",
+    "permalink": "/docs/observability/promptlayer_integration"
+  },
+  "next": {
+    "title": "Raw Request/Response Logging",
+    "permalink": "/docs/observability/raw_request_response"
+  }
+}

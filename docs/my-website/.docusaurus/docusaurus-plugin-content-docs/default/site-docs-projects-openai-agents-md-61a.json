@@ -1,0 +1,23 @@
+{
+  "id": "projects/openai-agents",
+  "title": "OpenAI Agents SDK",
+  "description": "Use OpenAI Agents SDK with any LLM provider through LiteLLM Proxy.",
+  "source": "@site/docs/projects/openai-agents.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/openai-agents",
+  "permalink": "/docs/projects/openai-agents",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "mini-swe-agent",
+    "permalink": "/docs/projects/mini-swe-agent"
+  },
+  "next": {
+    "title": "Google ADK (Agent Development Kit)",
+    "permalink": "/docs/projects/Google ADK"
+  }
+}

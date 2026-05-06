@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/huggingface_codellama",
+  "title": "CodeLlama - Code Infilling",
+  "description": "This tutorial shows how you can call CodeLlama (hosted on Huggingface PRO Inference Endpoints), to fill code.",
+  "source": "@site/docs/tutorials/huggingface_codellama.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/huggingface_codellama",
+  "permalink": "/docs/tutorials/huggingface_codellama",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Llama2 - Huggingface Tutorial",
+    "permalink": "/docs/tutorials/huggingface_tutorial"
+  },
+  "next": {
+    "title": "Using Fine-Tuned gpt-3.5-turbo",
+    "permalink": "/docs/tutorials/finetuned_chat_gpt"
+  }
+}

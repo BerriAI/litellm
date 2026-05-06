@@ -1,0 +1,23 @@
+{
+  "id": "a2a_agent_headers",
+  "title": "A2A Agent Authentication Headers",
+  "description": "Forward authentication credentials (Bearer tokens, API keys, etc.) from clients to backend A2A agents.",
+  "source": "@site/docs/a2a_agent_headers.md",
+  "sourceDirName": ".",
+  "slug": "/a2a_agent_headers",
+  "permalink": "/docs/a2a_agent_headers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Invoking A2A Agents",
+    "permalink": "/docs/a2a_invoking_agents"
+  },
+  "next": {
+    "title": "A2A Agent Cost Tracking",
+    "permalink": "/docs/a2a_cost_tracking"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_batch",
+  "title": "Vertex Batch APIs",
+  "description": "Just add the following Vertex env vars to your environment.",
+  "source": "@site/docs/providers/vertex_batch.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex_batch",
+  "permalink": "/docs/providers/vertex_batch",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI Text to Speech",
+    "permalink": "/docs/providers/vertex_speech"
+  },
+  "next": {
+    "title": "Vertex AI OCR",
+    "permalink": "/docs/providers/vertex_ocr"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/claude_non_anthropic_models",
+  "title": "Use Claude Code with Non-Anthropic Models",
+  "description": "This tutorial shows how to use Claude Code with non-Anthropic models like OpenAI, Gemini, and other LLM providers through LiteLLM proxy.",
+  "source": "@site/docs/tutorials/claude_non_anthropic_models.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/claude_non_anthropic_models",
+  "permalink": "/docs/tutorials/claude_non_anthropic_models",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Use Claude Code with MCPs",
+    "permalink": "/docs/tutorials/claude_mcp"
+  },
+  "next": {
+    "title": "Claude Code Plugin Marketplace (Managed Skills)",
+    "permalink": "/docs/tutorials/claude_code_plugin_marketplace"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/litellm_proxy",
+  "title": "LiteLLM Proxy (LLM Gateway)",
+  "description": "| Property | Details |",
+  "source": "@site/docs/providers/litellm_proxy.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/litellm_proxy",
+  "permalink": "/docs/providers/litellm_proxy",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Amazon Bedrock Mantle",
+    "permalink": "/docs/providers/bedrock_mantle"
+  },
+  "next": {
+    "title": "Abliteration",
+    "permalink": "/docs/providers/abliteration"
+  }
+}

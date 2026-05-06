@@ -1,0 +1,23 @@
+{
+  "id": "reasoning_content",
+  "title": "'Thinking' / 'Reasoning Content'",
+  "description": "Requires LiteLLM v1.63.0+",
+  "source": "@site/docs/reasoning_content.md",
+  "sourceDirName": ".",
+  "slug": "/reasoning_content",
+  "permalink": "/docs/reasoning_content",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Structured Outputs (JSON Mode)",
+    "permalink": "/docs/completion/json_mode"
+  },
+  "next": {
+    "title": "Tool Calling",
+    "permalink": "/docs/guides/tools_integrations"
+  }
+}

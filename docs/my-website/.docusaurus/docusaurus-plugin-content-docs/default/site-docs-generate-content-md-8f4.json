@@ -1,0 +1,23 @@
+{
+  "id": "generateContent",
+  "title": "/generateContent",
+  "description": "Use LiteLLM to call Google AI's generateContent endpoints for text generation, multimodal interactions, and streaming responses.",
+  "source": "@site/docs/generateContent.md",
+  "sourceDirName": ".",
+  "slug": "/generateContent",
+  "permalink": "/docs/generateContent",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/evals",
+    "permalink": "/docs/evals_api"
+  },
+  "next": {
+    "title": "/guardrails/apply_guardrail",
+    "permalink": "/docs/apply_guardrail"
+  }
+}

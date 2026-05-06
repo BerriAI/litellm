@@ -1,0 +1,23 @@
+{
+  "id": "completion/web_fetch",
+  "title": "Web Fetch",
+  "description": "The web fetch tool allows LLMs to retrieve full content from specified web pages and PDF documents. This enables AI models to access real-time information from the internet and incorporate web content into their responses.",
+  "source": "@site/docs/completion/web_fetch.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/web_fetch",
+  "permalink": "/docs/completion/web_fetch",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Web Search Interception",
+    "permalink": "/docs/integrations/websearch_interception"
+  },
+  "next": {
+    "title": "Computer Use",
+    "permalink": "/docs/completion/computer_use"
+  }
+}

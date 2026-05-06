@@ -1,0 +1,23 @@
+{
+  "id": "completion/web_search",
+  "title": "Web Search",
+  "description": "Use web search with litellm",
+  "source": "@site/docs/completion/web_search.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/web_search",
+  "permalink": "/docs/completion/web_search",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Function Calling",
+    "permalink": "/docs/completion/function_call"
+  },
+  "next": {
+    "title": "Web Search Interception",
+    "permalink": "/docs/integrations/websearch_interception"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/enterprise",
+  "title": "✨ Enterprise Features",
+  "description": "To get a license, get in touch with us here",
+  "source": "@site/docs/proxy/enterprise.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/enterprise",
+  "permalink": "/docs/proxy/enterprise",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Router Architecture (Fallbacks / Retries)",
+    "permalink": "/docs/router_architecture"
+  },
+  "next": {
+    "title": "Virtual Keys",
+    "permalink": "/docs/proxy/virtual_keys"
+  }
+}
