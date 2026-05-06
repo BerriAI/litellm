@@ -101,18 +101,71 @@ def test_run_claude_overlays_proxy_env():
     assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-abc"
 
 
-def test_run_claude_extra_env_takes_precedence_over_os_environ(monkeypatch):
-    monkeypatch.setenv("FOO", "from-os")
+def test_run_claude_extra_env_is_added_to_subprocess_env():
+    """Caller-supplied extra_env entries land on the subprocess env."""
     runner, captured = _make_runner(stdout="")
     run_claude(
         prompt="hi",
         model="claude-opus-4-7",
         base_url="http://localhost",
         api_key="sk-abc",
-        extra_env={"FOO": "from-arg"},
+        extra_env={"MAX_THINKING_TOKENS": "4096"},
         runner=runner,
     )
-    assert captured["env"]["FOO"] == "from-arg"
+    assert captured["env"]["MAX_THINKING_TOKENS"] == "4096"
+
+
+def test_run_claude_inherits_only_allowlisted_os_environ(monkeypatch):
+    """Process-runtime vars (PATH, HOME) flow through; credentials don't.
+
+    The `claude` CLI is a Node binary installed dynamically from npm in
+    CI. If the package were ever compromised, inheriting the entire
+    parent environment would hand it every credential the surrounding
+    proxy job loads (AWS keys, Azure Foundry key, GitHub token, etc.).
+    Pin the contract: only the small allowlist of runtime vars is
+    inherited; everything else is dropped unless the caller passes it
+    explicitly via extra_env.
+    """
+    monkeypatch.setenv("PATH", "/usr/bin:/usr/local/bin")
+    monkeypatch.setenv("HOME", "/home/runner")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "totally-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-proxy-only")
+    monkeypatch.setenv("AZURE_FOUNDRY_API_KEY", "azure-secret")
+    monkeypatch.setenv("VERTEXAI_CREDENTIALS", '{"private_key": "leak"}')
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_xxx")
+
+    runner, captured = _make_runner(stdout="")
+    run_claude(
+        prompt="hi",
+        model="claude-opus-4-7",
+        base_url="http://localhost",
+        api_key="sk-abc",
+        runner=runner,
+    )
+    env = captured["env"]
+    assert env["PATH"] == "/usr/bin:/usr/local/bin"
+    assert env["HOME"] == "/home/runner"
+    assert "AWS_SECRET_ACCESS_KEY" not in env
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "AZURE_FOUNDRY_API_KEY" not in env
+    assert "VERTEXAI_CREDENTIALS" not in env
+    assert "GITHUB_TOKEN" not in env
+
+
+def test_run_claude_extra_env_can_pass_through_otherwise_blocked_var(monkeypatch):
+    """The allowlist applies to inherited os.environ; extra_env is the
+    sanctioned way for a test to opt-in to passing something extra."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "from-os")
+    runner, captured = _make_runner(stdout="")
+    run_claude(
+        prompt="hi",
+        model="claude-opus-4-7",
+        base_url="http://localhost",
+        api_key="sk-abc",
+        extra_env={"ANTHROPIC_API_KEY": "from-arg"},
+        runner=runner,
+    )
+    assert captured["env"]["ANTHROPIC_API_KEY"] == "from-arg"
 
 
 def test_run_claude_parses_stream_json_assistant_text():
