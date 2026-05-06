@@ -54,10 +54,11 @@ export class SessionHandle {
 
   /** Queue a follow-up message into the active run. */
   async followup(message: string): Promise<void> {
+    // Wire shape matches backend `FollowupCreate`: {prompt: {text: "..."}}.
     await requestJson<void>(this._client, {
       method: "POST",
       path: `/v2/sessions/${encodeURIComponent(this.id)}/followup`,
-      body: { message },
+      body: { prompt: { text: message } },
     });
   }
 
@@ -78,7 +79,7 @@ export class SessionHandle {
         method: "GET",
         path: `/v2/sessions/${encodeURIComponent(this.id)}/runs`,
         query: { limit: options.limit, cursor: options.cursor },
-      }
+      },
     );
     return {
       items: (data.items ?? []).map((info) => new Run(info, this._client)),
@@ -88,10 +89,13 @@ export class SessionHandle {
 
   /** Snapshot of the full conversation across runs. */
   async conversation(): Promise<ConversationTurn[]> {
-    const data = await requestJson<{ turns: ConversationTurn[] }>(this._client, {
-      method: "GET",
-      path: `/v2/sessions/${encodeURIComponent(this.id)}/conversation`,
-    });
+    const data = await requestJson<{ turns: ConversationTurn[] }>(
+      this._client,
+      {
+        method: "GET",
+        path: `/v2/sessions/${encodeURIComponent(this.id)}/conversation`,
+      },
+    );
     return data.turns ?? [];
   }
 
