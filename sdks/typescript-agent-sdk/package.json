@@ -7,7 +7,7 @@
   "homepage": "https://github.com/BerriAI/litellm/tree/main/sdks/typescript-agent-sdk",
   "repository": {
     "type": "git",
-    "url": "https://github.com/BerriAI/litellm.git",
+    "url": "git+https://github.com/BerriAI/litellm.git",
     "directory": "sdks/typescript-agent-sdk"
   },
   "main": "dist/index.js",
