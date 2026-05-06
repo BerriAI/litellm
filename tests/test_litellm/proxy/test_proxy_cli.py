@@ -161,10 +161,10 @@ class TestProxyInitializationHelpers:
 
         assert opts["reload"] is True
         assert opts["reload_dirs"] == [str(cwd_dir), str(elsewhere)]
-        # When config lives outside cwd, the reload_includes entry must be the
-        # absolute path so that a same-named file in cwd does not trigger an
-        # unintended reload.
-        assert opts["reload_includes"] == ["*.py", str(config_file)]
+        # The reload_includes entry must be a relative pattern (basename)
+        # because uvicorn's resolve_reload_patterns() calls pathlib.Path.glob(),
+        # which raises NotImplementedError on absolute patterns.
+        assert opts["reload_includes"] == ["*.py", "proxy.yaml"]
 
     @patch("asyncio.run")
     @patch("builtins.print")

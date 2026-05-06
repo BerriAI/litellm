@@ -188,13 +188,13 @@ class ProxyInitializationHelpers:
         if config_dir and config_dir != cwd:
             reload_dirs.append(config_dir)
         options["reload_dirs"] = reload_dirs
-        # Qualify the config-file pattern with its directory so only the
-        # specific config file (not any same-named file in cwd) triggers a
-        # reload when config_dir != cwd.
-        if config_dir and config_dir != cwd:
-            config_include = config_abs
-        else:
-            config_include = os.path.basename(config_abs)
+        # Use the basename as the include pattern. Uvicorn's
+        # resolve_reload_patterns() calls pathlib.Path.glob(), which raises
+        # NotImplementedError on absolute patterns (uvicorn discussion #2156),
+        # so an absolute path here would crash startup. The config_dir is
+        # already added to reload_dirs above, so a basename pattern is enough
+        # to match the specific config file uvicorn is watching.
+        config_include = os.path.basename(config_abs)
         options["reload_includes"] = ["*.py", config_include]
         return options
 
