@@ -1,7 +1,9 @@
+import ast
 import datetime as real_datetime
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -18,6 +20,12 @@ sys.path.insert(
 from unittest.mock import MagicMock
 
 from litellm.proxy.utils import get_custom_url, join_paths
+
+
+def test_proxy_types_utils_has_module_docstring():
+    path = Path("litellm/proxy/types_utils/utils.py")
+    module = ast.parse(path.read_text())
+    assert ast.get_docstring(module)
 
 
 def test_get_custom_url(monkeypatch):

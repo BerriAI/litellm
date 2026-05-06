@@ -1,3 +1,5 @@
+"""Utility helpers for loading proxy type-related instances and annotations."""
+
 import asyncio
 import importlib
 import importlib.util
