@@ -291,8 +291,8 @@ class SemanticMCPToolFilter:
                 # A unique-ID segment contains no separator at all (it's a
                 # short hex or alphanumeric string). Reject remainders that
                 # contain either underscore or dash, since both are valid
-                # separators in MCP tool names regardless of the configured
-                # MCP_TOOL_PREFIX_SEPARATOR.
+            if remainder and remainder[0] in ("_", "-"):
+                rest = remainder[1:]
                 if "_" not in rest and "-" not in rest:
                     return True
 
