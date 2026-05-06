@@ -484,19 +484,23 @@ class WonderFenceGuardrail(CustomGuardrail):
             raise WonderFenceBlockedError(detail)
         if action == "MASK":
             masked_text = result.action_text or "[MASKED]"
+            wrote = False
             if text_source == "structured_messages":
                 inputs["structured_messages"] = set_last_user_message(
                     inputs.get("structured_messages", []), masked_text
                 )
-            elif text_source == "texts":
-                texts = inputs.get("texts", [])
+                wrote = True
+            # Always also overwrite texts[-1] when texts is populated. The
+            # OpenAI chat translation layer reads back only `texts` after
+            # apply_guardrail returns and maps it onto messages — masking
+            # only `structured_messages` lets the unmasked `texts` slot win
+            # and the original prompt reaches the LLM.
+            texts = inputs.get("texts")
+            if texts:
                 texts[-1] = masked_text
                 inputs["texts"] = texts
-            else:  # pragma: no cover
-                # Should be unreachable: apply_guardrail short-circuits on no
-                # text. Raise rather than silently drop the mask, which would
-                # send the original prompt to the LLM while the header still
-                # claims the guardrail applied.
+                wrote = True
+            if not wrote:  # pragma: no cover
                 raise RuntimeError(
                     "Alice WonderFence MASK requested but no text source — refusing "
                     "to silently no-op."

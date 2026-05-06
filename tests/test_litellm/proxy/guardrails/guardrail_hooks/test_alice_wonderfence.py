@@ -386,6 +386,41 @@ async def test_apply_guardrail_mask_replaces_structured_messages(guardrail_and_c
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_mask_rewrites_texts_when_both_slots_present(
+    guardrail_and_client,
+):
+    """OpenAI chat translation populates both `structured_messages` and `texts`,
+    then reads back only `texts`. MASK must overwrite `texts[-1]` even when
+    the analyzed text was extracted from `structured_messages`, otherwise the
+    unmasked `texts` slot wins downstream and the original prompt reaches the
+    LLM while the response header still claims the guardrail applied."""
+    guardrail, client = guardrail_and_client
+    result_obj = Mock()
+    result_obj.action = "MASK"
+    result_obj.action_text = "[REDACTED]"
+    result_obj.detections = []
+    result_obj.correlation_id = None
+    client.evaluate_prompt.return_value = result_obj
+
+    inputs = {
+        "structured_messages": [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "ack"},
+            {"role": "user", "content": "sensitive content"},
+        ],
+        "texts": ["first", "ack", "sensitive content"],
+    }
+    out = await guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data=_request_data(),
+        input_type="request",
+    )
+    assert out["texts"] == ["first", "ack", "[REDACTED]"]
+    last_user = [m for m in out["structured_messages"] if m.get("role") == "user"][-1]
+    assert last_user["content"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_mask_replaces_last_text_response(guardrail_and_client):
     guardrail, client = guardrail_and_client
     result_obj = Mock()
