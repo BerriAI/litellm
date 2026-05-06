@@ -197,3 +197,73 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert parsed.output_text == "Hello!"
+
+
+class TestResponsesFunctionArgsDoneHandling:
+    """Tests for response.function_call_arguments.done event handling (issue #27144)."""
+
+    def _make_iterator(self):
+        from unittest.mock import MagicMock
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            OpenAiResponsesToChatCompletionStreamIterator,
+        )
+        # Build a minimal iterator without a real stream
+        obj = object.__new__(OpenAiResponsesToChatCompletionStreamIterator)
+        obj._tool_call_has_deltas = set()
+        return obj
+
+    def test_done_only_emits_arguments(self):
+        """Model sends only .done (no .delta): arguments must appear in output."""
+        iterator = self._make_iterator()
+
+        done_chunk = {
+            "type": "response.function_call_arguments.done",
+            "arguments": '{"a": 5, "b": 7}',
+            "output_index": 1,
+        }
+        result = iterator.chunk_parser(done_chunk)
+
+        tool_calls = result.choices[0].delta.tool_calls
+        assert tool_calls is not None and len(tool_calls) == 1
+        assert tool_calls[0].function.arguments == '{"a": 5, "b": 7}'
+        assert tool_calls[0].index == 1
+
+    def test_done_after_delta_does_not_duplicate(self):
+        """Model sends .delta then .done: arguments must NOT be emitted twice."""
+        iterator = self._make_iterator()
+
+        # First, a delta arrives for output_index=0
+        delta_chunk = {
+            "type": "response.function_call_arguments.delta",
+            "delta": '{"a": 1}',
+            "output_index": 0,
+        }
+        iterator.chunk_parser(delta_chunk)  # consumes delta, marks index 0
+
+        # Now .done arrives for the same index
+        done_chunk = {
+            "type": "response.function_call_arguments.done",
+            "arguments": '{"a": 1}',
+            "output_index": 0,
+        }
+        result = iterator.chunk_parser(done_chunk)
+
+        # Should fall through to the static method pass-through (empty chunk, no args)
+        tool_calls = result.choices[0].delta.tool_calls if result.choices else None
+        assert tool_calls is None or all(
+            tc.function is None or tc.function.arguments in (None, "")
+            for tc in (tool_calls or [])
+        ), "args must not be re-emitted after deltas were already streamed"
+
+    def test_done_without_arguments_is_noop(self):
+        """A .done event with empty arguments should produce an empty chunk."""
+        iterator = self._make_iterator()
+
+        done_chunk = {
+            "type": "response.function_call_arguments.done",
+            "arguments": "",
+            "output_index": 0,
+        }
+        result = iterator.chunk_parser(done_chunk)
+        # Should return a minimal chunk without crashing
+        assert result is not None
