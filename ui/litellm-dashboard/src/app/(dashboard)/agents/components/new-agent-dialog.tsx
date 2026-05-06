@@ -11,12 +11,7 @@ interface NewAgentDialogProps {
   accessToken: string | null;
 }
 
-export default function NewAgentDialog({
-  open,
-  onClose,
-  onCreated,
-  accessToken,
-}: NewAgentDialogProps) {
+export default function NewAgentDialog({ open, onClose, onCreated, accessToken }: NewAgentDialogProps) {
   const [form] = Form.useForm<{ name: string; model: string; system_prompt?: string }>();
   const [submitting, setSubmitting] = useState(false);
 
@@ -52,26 +47,14 @@ export default function NewAgentDialog({
       data-testid="new-agent-dialog"
     >
       <Form form={form} layout="vertical" preserve={false}>
-        <Form.Item
-          name="name"
-          label="Name"
-          rules={[{ required: true, message: "Name is required" }]}
-        >
+        <Form.Item name="name" label="Name" rules={[{ required: true, message: "Name is required" }]}>
           <Input placeholder="my-coding-agent" data-testid="new-agent-name" />
         </Form.Item>
-        <Form.Item
-          name="model"
-          label="Model"
-          rules={[{ required: true, message: "Model is required" }]}
-        >
+        <Form.Item name="model" label="Model" rules={[{ required: true, message: "Model is required" }]}>
           <Input placeholder="claude-3-5-sonnet-20241022" data-testid="new-agent-model" />
         </Form.Item>
         <Form.Item name="system_prompt" label="System prompt (optional)">
-          <Input.TextArea
-            rows={3}
-            placeholder="You are a helpful coding agent."
-            data-testid="new-agent-prompt"
-          />
+          <Input.TextArea rows={3} placeholder="You are a helpful coding agent." data-testid="new-agent-prompt" />
         </Form.Item>
       </Form>
     </Modal>
