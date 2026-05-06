@@ -22,7 +22,6 @@ from litellm.proxy.agent_session_endpoints.constants import (
     CLEANUP_SWEEPER_INTERVAL_SECONDS,
     DAEMON_HEARTBEAT_DEAD_AFTER_SECONDS,
     EVENT_TYPE_RUN_ERROR,
-    RUN_ACTIVE_STATUSES,
     RUN_IDLE_TIMEOUT_SECONDS,
     RUN_STATUS_ERROR,
     SESSION_STATUS_ERROR,
@@ -67,7 +66,15 @@ async def _sweep_dead_daemons(prisma_client) -> int:
 
     Skips ``provisioning`` sessions (they haven't registered yet — their
     own timeout is governed by `expires_at`).
+
+    Routes through ``_terminate_session_internal`` so the VM provider
+    is notified — Greptile P1: bypassing this would orphan EC2 instances
+    once a real provider replaces ``NoopVMProvider``.
     """
+    from litellm.proxy.agent_session_endpoints.session_endpoints import (
+        _terminate_session_internal,
+    )
+
     threshold = _now() - timedelta(seconds=DAEMON_HEARTBEAT_DEAD_AFTER_SECONDS)
     rows = await prisma_client.db.litellm_agentsession.find_many(
         where={
@@ -82,57 +89,34 @@ async def _sweep_dead_daemons(prisma_client) -> int:
     if not rows:
         return 0
 
+    # Terminate via the shared helper. It cancels active runs (with
+    # `run_cancelled` events), flips the session status, AND fires
+    # ``provider.terminate`` — exactly what we want here.
+    for row in rows:
+        try:
+            await _terminate_session_internal(row.id, reason="daemon_dead")
+        except Exception as exc:
+            verbose_proxy_logger.exception(
+                "sweeper: failed to terminate dead-daemon session=%s: %s",
+                row.id,
+                exc,
+            )
+
+    # Daemon-dead sessions land in ``error`` (not ``terminated``); the
+    # shared helper sets ``terminated`` so we explicitly downgrade to
+    # ``error`` here. (Both are terminal — no further state transitions.)
     now = _now()
     ids = [r.id for r in rows]
     await prisma_client.db.litellm_agentsession.update_many(
         where={"id": {"in": ids}},
         data={
             "status": SESSION_STATUS_ERROR,
-            "terminated_at": now,
             "updated_at": now,
         },
     )
 
-    # Also flip any active runs in those sessions to error.
-    runs = await prisma_client.db.litellm_agentrun.find_many(
-        where={
-            "session_id": {"in": ids},
-            "status": {"in": list(RUN_ACTIVE_STATUSES)},
-        },
-        take=500,
-    )
-    for run in runs:
-        await prisma_client.db.litellm_agentrun.update(
-            where={"id": run.id},
-            data={
-                "status": RUN_STATUS_ERROR,
-                "terminated_at": now,
-                "updated_at": now,
-            },
-        )
-        last_evt = await prisma_client.db.litellm_agentrunevent.find_first(
-            where={"run_id": run.id}, order={"seq": "desc"}
-        )
-        next_seq = (last_evt.seq + 1) if last_evt else 1
-        try:
-            await prisma_client.db.litellm_agentrunevent.create(
-                data={
-                    "run_id": run.id,
-                    "seq": next_seq,
-                    "event_type": EVENT_TYPE_RUN_ERROR,
-                    "payload": {"reason": "daemon_dead"},
-                }
-            )
-        except Exception as exc:
-            verbose_proxy_logger.warning(
-                "sweeper: skipped run_error event run=%s seq=%s: %s",
-                run.id,
-                next_seq,
-                exc,
-            )
-
     verbose_proxy_logger.info(
-        "sweeper: marked %d sessions error (dead daemon)", len(ids)
+        "sweeper: terminated %d sessions (dead daemon, via provider)", len(ids)
     )
     return len(ids)
 
