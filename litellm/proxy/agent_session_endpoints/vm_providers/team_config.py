@@ -174,14 +174,14 @@ async def get_team_vm_config(
             creds.region = ec2_config.region
         return TeamVMConfig(aws_creds=creds, ec2_config=ec2_config)
 
-    creds = _creds_from_env(default_region=default_region)
-    if creds is None:
+    env_creds = _creds_from_env(default_region=default_region)
+    if env_creds is None:
         raise InvalidCredentialsError(
             f"Team {team_id} has no AWS credentials configured "
             "(no DB row, no LITELLM_AGENT_AWS_* env vars). "
             "Add them under Settings → Agent VM."
         )
     return TeamVMConfig(
-        aws_creds=creds,
-        ec2_config=Ec2Config(region=creds.region),
+        aws_creds=env_creds,
+        ec2_config=Ec2Config(region=env_creds.region),
     )
