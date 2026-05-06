@@ -191,8 +191,17 @@ fi
 # checked-out tag asks for, cached under .uv-bin/ inside the worktree
 # so subsequent runs skip the download.
 PINNED_UV_VERSION="$(
-  awk -F'"' '/^required-version[[:space:]]*=/{ for (i=2; i<=NF; i++) if ($i ~ /^[=<>!~]+/) { gsub(/^[=<>!~]+/, "", $i); print $i; exit } }' \
-    "${WORKTREE}/pyproject.toml"
+  awk -F'"' '
+    /^required-version[[:space:]]*=/ {
+      # Field 2 is the value between the quotes, e.g. ">=0.10.9" or
+      # "0.10.9". Strip any leading specifier prefix so we end up with
+      # the bare version string, which is what /releases/download/<v>/
+      # expects.
+      v = $2
+      sub(/^[[:space:]=<>!~]+/, "", v)
+      if (v != "") { print v; exit }
+    }
+  ' "${WORKTREE}/pyproject.toml"
 )"
 if [[ -z "${PINNED_UV_VERSION}" ]]; then
   log "no uv version pin in pyproject.toml; using system uv"
