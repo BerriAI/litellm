@@ -106,6 +106,7 @@
     "base_url": "https://aihubmix.com/v1",
     "api_key_env": "AIHUBMIX_API_KEY",
     "api_base_env": "AIHUBMIX_API_BASE"
+  },
   "salad_cloud": {
     "base_url": "https://ai.salad.cloud/v1",
     "api_key_env": "SALAD_CLOUD_API_KEY"
