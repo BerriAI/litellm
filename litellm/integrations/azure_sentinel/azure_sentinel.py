@@ -61,64 +61,76 @@ class AzureSentinelLogger(CustomBatchLogger):
             client_secret (str, optional): Azure Client Secret for OAuth2 authentication.
                 If not provided, will use AZURE_SENTINEL_CLIENT_SECRET or AZURE_CLIENT_SECRET env var.
             audit_stream_name (str, optional): Stream name from DCR for audit logs.
-                If not provided, will use AZURE_SENTINEL_AUDIT_STREAM_NAME env var or the standard stream name.
+                If not provided, audit logs use the standard stream name.
         """
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
         )
 
-        self.dcr_immutable_id = dcr_immutable_id or os.getenv(
+        resolved_dcr_immutable_id = dcr_immutable_id or os.getenv(
             "AZURE_SENTINEL_DCR_IMMUTABLE_ID"
         )
-        self.stream_name = stream_name or os.getenv(
-            "AZURE_SENTINEL_STREAM_NAME", "Custom-LiteLLM"
+        resolved_stream_name = (
+            stream_name or os.getenv("AZURE_SENTINEL_STREAM_NAME") or "Custom-LiteLLM"
         )
-        self.audit_stream_name = (
-            audit_stream_name
-            or os.getenv("AZURE_SENTINEL_AUDIT_STREAM_NAME")
-            or self.stream_name
-        )
-        self.endpoint = endpoint or os.getenv("AZURE_SENTINEL_ENDPOINT")
-        self.tenant_id = (
+        resolved_audit_stream_name = audit_stream_name or resolved_stream_name
+        resolved_endpoint = endpoint or os.getenv("AZURE_SENTINEL_ENDPOINT")
+        resolved_tenant_id = (
             tenant_id
             or os.getenv("AZURE_SENTINEL_TENANT_ID")
             or os.getenv("AZURE_TENANT_ID")
         )
-        self.client_id = (
+        resolved_client_id = (
             client_id
             or os.getenv("AZURE_SENTINEL_CLIENT_ID")
             or os.getenv("AZURE_CLIENT_ID")
         )
-        self.client_secret = (
+        resolved_client_secret = (
             client_secret
             or os.getenv("AZURE_SENTINEL_CLIENT_SECRET")
             or os.getenv("AZURE_CLIENT_SECRET")
         )
 
-        if not self.dcr_immutable_id:
+        if not resolved_dcr_immutable_id:
             raise ValueError(
                 "AZURE_SENTINEL_DCR_IMMUTABLE_ID is required. Set it as an environment variable or pass dcr_immutable_id parameter."
             )
-        if not self.endpoint:
+        if not resolved_endpoint:
             raise ValueError(
                 "AZURE_SENTINEL_ENDPOINT is required. Set it as an environment variable or pass endpoint parameter."
             )
-        if not self.tenant_id:
+        if not resolved_tenant_id:
             raise ValueError(
                 "AZURE_SENTINEL_TENANT_ID or AZURE_TENANT_ID is required. Set it as an environment variable or pass tenant_id parameter."
             )
-        if not self.client_id:
+        if not resolved_client_id:
             raise ValueError(
                 "AZURE_SENTINEL_CLIENT_ID or AZURE_CLIENT_ID is required. Set it as an environment variable or pass client_id parameter."
             )
-        if not self.client_secret:
+        if not resolved_client_secret:
             raise ValueError(
                 "AZURE_SENTINEL_CLIENT_SECRET or AZURE_CLIENT_SECRET is required. Set it as an environment variable or pass client_secret parameter."
             )
 
+        self.dcr_immutable_id = resolved_dcr_immutable_id
+        self.stream_name = resolved_stream_name
+        self.audit_stream_name = resolved_audit_stream_name
+        self.endpoint = resolved_endpoint
+        self.tenant_id = resolved_tenant_id
+        self.client_id = resolved_client_id
+        self.client_secret = resolved_client_secret
+
         # Build API endpoint: {Endpoint}/dataCollectionRules/{DCR Immutable ID}/streams/{Stream Name}?api-version=2023-01-01
-        self.api_endpoint = self._build_api_endpoint(self.stream_name)
-        self.audit_api_endpoint = self._build_api_endpoint(self.audit_stream_name)
+        self.api_endpoint = self._build_api_endpoint(
+            endpoint=resolved_endpoint,
+            dcr_immutable_id=resolved_dcr_immutable_id,
+            stream_name=resolved_stream_name,
+        )
+        self.audit_api_endpoint = self._build_api_endpoint(
+            endpoint=resolved_endpoint,
+            dcr_immutable_id=resolved_dcr_immutable_id,
+            stream_name=resolved_audit_stream_name,
+        )
 
         # OAuth2 scope for Azure Monitor
         self.oauth_scope = "https://monitor.azure.com/.default"
@@ -131,8 +143,11 @@ class AzureSentinelLogger(CustomBatchLogger):
         self.log_queue: List[StandardLoggingPayload] = []
         self.audit_log_queue: List[StandardAuditLogPayload] = []
 
-    def _build_api_endpoint(self, stream_name: str) -> str:
-        return f"{self.endpoint.rstrip('/')}/dataCollectionRules/{self.dcr_immutable_id}/streams/{stream_name}?api-version=2023-01-01"
+    @staticmethod
+    def _build_api_endpoint(
+        endpoint: str, dcr_immutable_id: str, stream_name: str
+    ) -> str:
+        return f"{endpoint.rstrip('/')}/dataCollectionRules/{dcr_immutable_id}/streams/{stream_name}?api-version=2023-01-01"
 
     async def _get_oauth_token(self) -> str:
         """
