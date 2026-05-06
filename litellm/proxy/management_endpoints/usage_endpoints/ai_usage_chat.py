@@ -438,6 +438,17 @@ async def _acompletion(**kwargs: Any) -> Any:
     from litellm.proxy.proxy_server import llm_router
 
     if llm_router is not None:
+        # Honor `pass_through_all_models`: if the model isn't managed by the
+        # router, fall back to litellm.acompletion just like route_llm_request
+        # does. Otherwise proxies that route some models via the router but
+        # allow pass-through for everything else would 400 here.
+        model = kwargs.get("model")
+        if (
+            llm_router.router_general_settings.pass_through_all_models
+            and model not in llm_router.model_names
+            and not llm_router.has_model_id(model or "")
+        ):
+            return await litellm.acompletion(**kwargs)
         return await llm_router.acompletion(**kwargs)
     return await litellm.acompletion(**kwargs)
 
