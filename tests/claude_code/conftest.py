@@ -146,6 +146,17 @@ def pytest_runtest_makereport(item, call):
     )
 
 
+def pytest_sessionstart(session):
+    """Clear collected results at the start of each session.
+
+    The `_COLLECTOR` is a module-level singleton, so it survives across
+    `pytest.main()` invocations within the same Python process. Without
+    this reset, results from a prior session would leak into the next
+    run's `compat-results.json` artifact.
+    """
+    _COLLECTOR.items.clear()
+
+
 def pytest_sessionfinish(session, exitstatus):
     """Write the structured results artifact at end of session."""
     artifact_path = os.environ.get(RESULTS_ARTIFACT_ENV) or DEFAULT_ARTIFACT_PATH

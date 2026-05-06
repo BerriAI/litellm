@@ -204,7 +204,7 @@ log "starting proxy on :${PROXY_PORT}"
 # SIGTERM the whole tree by passing the pgid as a negative pid. We
 # write that pid to a file so cleanup() doesn't need to remember a
 # variable that might be stale by the time the trap fires.
-setsid bash -c '
+setsid env LITELLM_MASTER_KEY="${PROXY_API_KEY}" bash -c '
   echo "$$" > "$0"
   cd "$1"
   exec "$2" run litellm --config "$3" --port "$4"
