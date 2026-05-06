@@ -1,0 +1,97 @@
+{
+  "scan_metadata": {
+    "repository": "BerriAI/litellm",
+    "branch": "litellm_internal_staging",
+    "scan_date": "2026-05-06",
+    "scanner": "Vulnerability Hunter - At-Rest Security Review Agent"
+  },
+  "summary": {
+    "total_findings": 5,
+    "critical": 0,
+    "high": 2,
+    "medium": 3
+  },
+  "findings": [
+    {
+      "id": "VULN-001",
+      "severity": "high",
+      "location": "litellm/proxy/spend_tracking/spend_management_endpoints.py:34-66",
+      "description": "**IDOR: Unauthenticated data dump in `/spend/keys`** — The `/spend/keys` endpoint returns ALL virtual API key records from the database without any ownership or role-based filtering. Any authenticated user (including `INTERNAL_USER_VIEW_ONLY`) can retrieve the complete key table including hashed tokens, permissions, config JSON, metadata, team/org linkage, and budget information for every key in the system.",
+      "impact": "An attacker with any valid API key (even a low-privilege view-only key) can enumerate the entire virtual key infrastructure. Exposed data includes: SHA-256 hashed tokens (enabling offline verification of suspected keys), model access lists, permissions JSON, routing config, team and organization associations, and nested budget data. This provides a complete map of the proxy's access control structure and could be used to plan privilege escalation or lateral movement.",
+      "verified": true,
+      "attack_path": "1. Attacker obtains any valid LiteLLM API key (even a restricted one)\n2. Attacker sends `GET /spend/keys` with their key in the Authorization header\n3. The endpoint passes auth (any valid key with INTERNAL_USER_VIEW_ONLY+ role suffices since `/spend/keys` is in `spend_tracking_routes` which is in `internal_user_view_only_routes`)\n4. `spend_key_fn()` calls `prisma_client.get_data(table_name=\"key\", query_type=\"find_all\")` with NO filter\n5. All rows from `LiteLLM_VerificationToken` table are returned including hashed tokens, permissions, config, metadata\n6. Attacker receives the complete key database dump",
+      "evidence": [
+        "litellm/proxy/spend_tracking/spend_management_endpoints.py:34-66 (no user_api_key_dict parameter, no scoping)",
+        "litellm/proxy/utils.py:2993-3014 (find_all with empty where_filter returns all rows)",
+        "litellm/proxy/_types.py:587-597 (spend_tracking_routes includes /spend/keys)",
+        "litellm/proxy/_types.py:680-681 (internal_user_view_only_routes = spend_tracking_routes)",
+        "litellm/proxy/management_endpoints/key_management_endpoints.py:2937-3016 (/key/info properly scopes access - contrast)"
+      ],
+      "remediation": "1. Add `user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)` as a parameter to `spend_key_fn()`\n2. For non-PROXY_ADMIN users, filter results to only keys owned by the calling user or their team\n3. Strip the `token` field from all returned records (as `/key/info` does)\n4. Consider restricting this endpoint to PROXY_ADMIN only, or deprecating it in favor of the properly-secured `/key/info` endpoint",
+      "poc_video_notes": "Video PoC not feasible - requires a running proxy instance with database and valid API keys. The vulnerability is trivially reproducible with: curl -H 'Authorization: Bearer sk-any-valid-key' http://proxy:4000/spend/keys"
+    },
+    {
+      "id": "VULN-002",
+      "severity": "high",
+      "location": "litellm/proxy/spend_tracking/spend_management_endpoints.py:78-125",
+      "description": "**IDOR: Arbitrary user data access in `/spend/users`** — The `/spend/users` endpoint allows any authenticated user to read any other user's record by supplying an arbitrary `user_id` query parameter, or to dump all user records when no `user_id` is provided. The only sanitization is stripping the `password` field. All other user data (email, SSO IDs, metadata, team associations, spend, budget info) is exposed.",
+      "impact": "An attacker with any valid API key can: (1) enumerate all users in the system including their emails, SSO identifiers, team memberships, and spending data; (2) target specific users by user_id to retrieve their profile data. This enables social engineering, account correlation attacks, and information gathering for further exploitation.",
+      "verified": true,
+      "attack_path": "1. Attacker obtains any valid LiteLLM API key\n2. Attacker sends `GET /spend/users` to list ALL users, or `GET /spend/users?user_id=target-uuid` for a specific user\n3. Endpoint passes auth (same route permission as VULN-001)\n4. `spend_user_fn()` calls `prisma_client.get_data(table_name=\"user\", query_type=\"find_unique\", user_id=user_id)` or `find_all`\n5. Full user rows returned with only `password` stripped\n6. Attacker receives user_email, sso_user_id, metadata, teams, organization_id, spend, max_budget for all/targeted users",
+      "evidence": [
+        "litellm/proxy/spend_tracking/spend_management_endpoints.py:78-125 (no ownership check, user_id is caller-controlled)",
+        "litellm/proxy/utils.py:3061-3075 (find_all uses SELECT u.* returning all columns)",
+        "litellm/proxy/schema.prisma:233-247 (LiteLLM_UserTable has user_email, sso_user_id, metadata)"
+      ],
+      "remediation": "1. Add `user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)` parameter\n2. For INTERNAL_USER role: only allow querying their own user_id (override `user_id` parameter with `user_api_key_dict.user_id`)\n3. For PROXY_ADMIN: allow full access\n4. Remove the `find_all` path for non-admin callers, or restrict returned fields to non-sensitive ones",
+      "poc_video_notes": "Video PoC not feasible without running infrastructure. Reproducible with: curl -H 'Authorization: Bearer sk-any-valid-key' 'http://proxy:4000/spend/users?user_id=target-user-id'"
+    },
+    {
+      "id": "VULN-003",
+      "severity": "medium",
+      "location": "litellm/proxy/management_endpoints/internal_user_endpoints.py:1101-1152,1332-1343",
+      "description": "**Mass Assignment: Self-serve budget manipulation via `/user/update`** — The `/user/update` endpoint allows internal users to modify their own records. While `user_role` changes are admin-gated, the `spend` and `max_budget` fields are not. A user can reset their own `spend` to 0 or set `max_budget` to an arbitrarily high value, bypassing financial controls enforced by the budget system.",
+      "impact": "A user who has exceeded their budget can reset their `spend` field to 0, immediately regaining access. Alternatively, they can set `max_budget` to an extremely high value, effectively removing budget constraints. This undermines the proxy's cost control and billing enforcement for multi-tenant deployments.",
+      "verified": true,
+      "attack_path": "1. User has a valid API key and knows their own user_id\n2. User sends `POST /user/update` with body `{\"user_id\": \"their-id\", \"spend\": 0.0}` or `{\"user_id\": \"their-id\", \"max_budget\": 999999}`\n3. `can_user_call_user_update()` passes because `user_api_key_dict.user_id == user_info.user_id`\n4. `_update_internal_user_params()` includes `spend` in `non_default_values` (spend=0 passes the `v is not None and v not in ([], {})` check since 0 is not in that tuple)\n5. For `max_budget`: explicitly included when in `fields_set` (line 1108-1110)\n6. User's DB record is updated with the attacker-controlled values\n7. Budget enforcement (which reads `get_current_spend` falling back to DB spend) now sees the manipulated values",
+      "evidence": [
+        "litellm/proxy/management_endpoints/internal_user_endpoints.py:1101-1120 (_update_internal_user_params passes spend/max_budget through)",
+        "litellm/proxy/management_endpoints/internal_user_endpoints.py:1332-1343 (can_user_call_user_update allows self-update)",
+        "litellm/proxy/management_endpoints/internal_user_endpoints.py:1171-1179 (only user_role is admin-gated)",
+        "litellm/proxy/_types.py:1578-1593 (UpdateUserRequestNoUserIDorEmail includes spend and max_budget fields)"
+      ],
+      "remediation": "Add an explicit allowlist of fields that non-admin users can modify on their own record. Budget-related fields (`spend`, `max_budget`, `budget_duration`, `budget_reset_at`) should be admin-only:\n\n```python\n_ADMIN_ONLY_USER_FIELDS = {'spend', 'max_budget', 'budget_duration', 'budget_reset_at', 'models'}\n\n# In _update_single_user_helper, after can_user_call_user_update:\nif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:\n    for field in _ADMIN_ONLY_USER_FIELDS:\n        non_default_values.pop(field, None)\n```",
+      "poc_video_notes": "Video PoC not feasible without running infrastructure. Reproducible with: curl -X POST -H 'Authorization: Bearer sk-user-key' -H 'Content-Type: application/json' -d '{\"user_id\":\"user-uuid\",\"spend\":0,\"max_budget\":999999}' http://proxy:4000/user/update"
+    },
+    {
+      "id": "VULN-004",
+      "severity": "medium",
+      "location": "litellm/proxy/auth/auth_checks.py:3644-3676",
+      "description": "**Logic Flaw: Team budget enforcement uses `>` instead of `>=`** — The team budget check at line 3653 uses `spend > team_object.max_budget` (strict greater-than), while the equivalent user budget check correctly uses `spend >= user_budget`. This off-by-one allows one additional request to proceed when team spend exactly equals the max budget.",
+      "impact": "Teams can exceed their configured budget by the cost of one additional LLM request. In high-cost scenarios (e.g., large context window models costing $10+ per request), this could represent meaningful budget overrun. The inconsistency also indicates a potential for confusion about budget semantics.",
+      "verified": true,
+      "attack_path": "1. A team has max_budget set to $100\n2. Team spend reaches exactly $100.00 (e.g., through incremental usage)\n3. A new request arrives; `get_current_spend` returns 100.0\n4. Check: `100.0 > 100.0` evaluates to `False`\n5. Request is allowed to proceed, consuming additional budget\n6. After completion, spend becomes e.g. $100.50\n7. Next request: `100.50 > 100.0` → True → blocked\n8. Net result: team spent $0.50 over their max_budget",
+      "evidence": [
+        "litellm/proxy/auth/auth_checks.py:3653 (spend > team_object.max_budget — should be >=)",
+        "litellm/proxy/auth/auth_checks.py:641-652 (user budget correctly uses >= for comparison)"
+      ],
+      "remediation": "Change the comparison operator from `>` to `>=` to match the user budget enforcement pattern:\n\n```python\n# Line 3653 in litellm/proxy/auth/auth_checks.py\nif spend >= team_object.max_budget:  # was: spend > team_object.max_budget\n```"
+    },
+    {
+      "id": "VULN-005",
+      "severity": "medium",
+      "location": "litellm/proxy/spend_tracking/budget_reservation.py:98-104,litellm/proxy/auth/user_api_key_auth.py:1942-2013",
+      "description": "**Race Condition: Budget enforcement TOCTOU when reservation is skipped** — The budget enforcement system has a time-of-check-to-time-of-use gap. When cost estimation fails or returns ≤ 0 (common for streaming requests or models without pricing data), budget reservation is skipped entirely. Multiple concurrent requests can all pass the same `get_current_spend` snapshot in `common_checks` before any of them records their actual spend, allowing the budget to be exceeded.",
+      "impact": "In multi-tenant deployments, users can exceed their budget limits by sending many concurrent requests, especially for models where cost estimation is unavailable (new models, custom deployments, streaming). The overshoot is bounded by (number of concurrent requests × actual cost per request), which could be substantial with expensive models.",
+      "verified": true,
+      "attack_path": "1. Attacker identifies a model where cost estimation returns None (e.g., custom model, or model not in pricing DB)\n2. Attacker's budget is nearly exhausted (e.g., $99.50 of $100 used)\n3. Attacker sends 50 concurrent requests simultaneously\n4. `reserve_budget_for_request` returns None for all 50 (reservation_cost is None)\n5. All 50 requests enter `common_checks` and read the SAME `get_current_spend` value ($99.50)\n6. All 50 pass the budget check ($99.50 < $100)\n7. All 50 requests proceed to the LLM, each costing $0.50+\n8. Actual spend: $99.50 + (50 × $0.50) = $124.50, far exceeding the $100 budget",
+      "evidence": [
+        "litellm/proxy/spend_tracking/budget_reservation.py:98-104 (reservation skipped when cost is None/≤0)",
+        "litellm/proxy/auth/user_api_key_auth.py:1942-2013 (common_checks runs before reservation attempt)",
+        "litellm/proxy/hooks/parallel_request_limiter.py:72-109 (local_only=True cache means multi-pod bypass)"
+      ],
+      "remediation": "1. When cost estimation is unavailable, use a configurable default reservation amount (e.g., `LITELLM_DEFAULT_BUDGET_RESERVATION` env var)\n2. Consider using Redis WATCH/MULTI or Lua scripts for atomic check-and-reserve operations\n3. For the parallel request limiter, move from local-only cache to Redis-backed atomic counters (the v3 limiter partially addresses this)\n4. Add a `max_parallel_requests` default for budget-constrained keys to limit concurrent usage even without cost estimation",
+      "poc_video_notes": "Video PoC not feasible - requires running proxy with Redis and DB, plus concurrent request tooling. The race is reproducible with any HTTP load testing tool (e.g., wrk, hey) sending simultaneous requests to a budget-limited key."
+    }
+  ]
+}
