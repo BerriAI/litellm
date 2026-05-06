@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Card, Table, Tag, Typography, Empty } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import dayjs from "dayjs";
+import { relativeOrAbsolute } from "@/app/(dashboard)/agents/components/_dayjs";
 import type { CloudAgent } from "@/types/cloud-agents";
 
 const { Text } = Typography;
@@ -41,8 +41,7 @@ export default function AgentList({ agents, loading }: AgentListProps) {
       title: "Last activity",
       dataIndex: "last_activity_at",
       key: "last_activity_at",
-      render: (value: string | null) =>
-        value ? dayjs(value).fromNow?.() ?? dayjs(value).format("YYYY-MM-DD HH:mm") : "—",
+      render: (value: string | null) => relativeOrAbsolute(value),
     },
   ];
 
