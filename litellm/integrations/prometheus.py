@@ -995,7 +995,12 @@ class PrometheusLogger(CustomLogger):
         labels: Dict[str, Optional[str]],
         apply_metric_update: Callable[[Any], None],
     ) -> None:
-        with self._bounded_prometheus_series_tracker.lock:
+        tracker = getattr(self, "_bounded_prometheus_series_tracker", None)
+        if not isinstance(tracker, BoundedPrometheusSeriesTracker):
+            apply_metric_update(metric.labels(**labels))
+            return
+
+        with tracker.lock:
             labeled_metric = metric.labels(**labels)
             self._track_bounded_prometheus_metric_series(metric, metric_name, labels)
             apply_metric_update(labeled_metric)
@@ -1051,7 +1056,8 @@ class PrometheusLogger(CustomLogger):
             enum_values=enum_values,
             label_context=label_context,
         )
-        self._apply_labeled_metric(
+        PrometheusLogger._apply_labeled_metric(
+            self,
             metric=counter,
             metric_name=metric_name,
             labels=_labels,

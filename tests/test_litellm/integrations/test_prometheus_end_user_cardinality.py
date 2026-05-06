@@ -1,4 +1,5 @@
 from time import monotonic
+from unittest.mock import MagicMock
 
 import pytest
 from prometheus_client import REGISTRY
@@ -224,6 +225,22 @@ def test_prometheus_failure_metric_uses_filtered_labels_for_bounded_tracking():
     assert "litellm_llm_api_failed_requests_metric" not in (
         logger._bounded_prometheus_series_tracker._series
     )
+
+
+def test_inc_labeled_counter_supports_uninitialized_logger_test_doubles():
+    mock_logger = MagicMock()
+    mock_logger.get_labels_for_metric.return_value = ["model"]
+    counter = MagicMock()
+
+    PrometheusLogger._inc_labeled_counter(
+        mock_logger,
+        counter,
+        "litellm_cache_hits_metric",
+        UserAPIKeyLabelValues(model="gpt-4o-mini"),
+    )
+
+    counter.labels.assert_called_once_with(model="gpt-4o-mini")
+    counter.labels().inc.assert_called_once_with(1.0)
 
 
 def test_prometheus_end_user_not_tracked_by_default():
