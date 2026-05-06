@@ -18,6 +18,7 @@ sys.path.insert(
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    _parse_request_data_by_content_type,
     pass_through_request,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -2618,3 +2619,106 @@ def test_get_response_headers_strips_server_and_date():
     assert lowered["content-type"] == "application/json"
     assert lowered["x-request-id"] == "req_abc"
     assert lowered["anthropic-ratelimit-requests-remaining"] == "100"
+
+
+# Test _parse_request_data_by_content_type with multipart/form-data containing binary files
+@pytest.mark.asyncio
+async def test_parse_request_data_multipart_binary_file():
+    """
+    Test that _parse_request_data_by_content_type correctly handles multipart/form-data
+    with binary files (e.g., PDF uploads) without raising UnicodeDecodeError.
+
+    This is a regression test for the issue where calling request.json() on multipart
+    form-data with binary content caused:
+    UnicodeDecodeError: 'utf-8' codec can't decode byte 0xc4 in position X: invalid continuation byte
+    """
+    # Create a mock request with multipart/form-data content type
+    request = MagicMock(spec=Request)
+
+    # Simulate a PDF file upload with multipart/form-data
+    # PDF files contain binary data that cannot be decoded as UTF-8
+    pdf_header = b"%PDF-1.4\n"  # Standard PDF header
+    binary_content = pdf_header + bytes([0xC4, 0x80, 0x81, 0x82])  # Binary data that fails UTF-8
+
+    request.headers = Headers({
+        "content-type": "multipart/form-data; boundary=--------------------------7oKZJmK2xoAobYu7SoXyay"
+    })
+
+    # Mock the form data to simulate a file upload
+    file_content = binary_content
+    file = BytesIO(file_content)
+    headers = Headers({"content-type": "application/pdf"})
+    upload_file = UploadFile(file=file, filename="document.pdf", headers=headers)
+    upload_file.read = AsyncMock(return_value=file_content)
+
+    form_data = {"file": upload_file, "field1": "value1"}
+    request.form = AsyncMock(return_value=form_data)
+
+    # Mock query_params
+    request.query_params = QueryParams({})
+
+    # This should NOT raise UnicodeDecodeError
+    # Before the fix, calling request.json() on multipart data would fail
+    query_params_data, custom_body_data, file_data, stream = await _parse_request_data_by_content_type(
+        request
+    )
+
+    # For multipart/form-data, the function should skip parsing and return None for all fields
+    # The actual multipart handling is done by make_multipart_http_request
+    assert query_params_data is None
+    assert custom_body_data is None
+    assert file_data is None
+    assert stream is None
+
+
+# Test _parse_request_data_by_content_type with JSON (should still work)
+@pytest.mark.asyncio
+async def test_parse_request_data_json():
+    """
+    Test that _parse_request_data_by_content_type still correctly handles JSON requests.
+    """
+    request = MagicMock(spec=Request)
+    request.headers = Headers({"content-type": "application/json"})
+
+    mock_body = {
+        "query_params": {"param1": "value1"},
+        "custom_body": {"key": "value"},
+        "stream": True
+    }
+    request.json = AsyncMock(return_value=mock_body)
+    request.query_params = QueryParams({})
+
+    query_params_data, custom_body_data, file_data, stream = await _parse_request_data_by_content_type(
+        request
+    )
+
+    assert query_params_data == {"param1": "value1"}
+    assert custom_body_data == {"key": "value"}
+    assert stream is True
+    assert file_data is None
+
+
+# Test _parse_request_data_by_content_type with application/x-www-form-urlencoded
+@pytest.mark.asyncio
+async def test_parse_request_data_form_urlencoded():
+    """
+    Test that _parse_request_data_by_content_type correctly handles URL-encoded form data.
+    """
+    request = MagicMock(spec=Request)
+    request.headers = Headers({"content-type": "application/x-www-form-urlencoded"})
+
+    form_data = {
+        "query_params": '{"param1": "value1"}',
+        "custom_body": '{"key": "value"}'
+    }
+    request.form = AsyncMock(return_value=form_data)
+    request.query_params = QueryParams({})
+
+    query_params_data, custom_body_data, file_data, stream = await _parse_request_data_by_content_type(
+        request
+    )
+
+    assert query_params_data == '{"param1": "value1"}'
+    assert custom_body_data == '{"key": "value"}'
+    assert file_data is None
+    assert stream is None
