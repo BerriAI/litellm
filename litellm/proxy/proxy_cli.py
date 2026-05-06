@@ -177,6 +177,12 @@ class ProxyInitializationHelpers:
 
         Uvicorn defaults to watching only `*.py` files in CWD; we extend the
         watch set to include the config file's directory and filename.
+
+        Note: uvicorn's `reload_includes` is only honored by the
+        `WatchFilesReload` reloader (requires the optional `watchfiles`
+        package). Without `watchfiles`, uvicorn falls back to `StatReload`
+        which hard-codes `*.py` and silently ignores `reload_includes`.
+        :func:`_patch_statreload_for_config` handles that fallback.
         """
         options: dict = {"reload": True}
         if not config_path:
@@ -197,6 +203,66 @@ class ProxyInitializationHelpers:
         config_include = os.path.basename(config_abs)
         options["reload_includes"] = ["*.py", config_include]
         return options
+
+    @staticmethod
+    def _patch_statreload_for_config(config_path: str) -> bool:
+        """
+        Make uvicorn's `StatReload` reloader also notice changes to the
+        YAML config file at ``config_path``.
+
+        Background:
+        - Uvicorn picks `WatchFilesReload` if the optional `watchfiles`
+          package is installed, otherwise `StatReload`.
+        - `StatReload.iter_py_files()` only iterates `*.py` files in
+          `reload_dirs` (it ignores `reload_includes` and just logs a
+          warning saying so). That means setting `reload_includes` alone
+          is not enough to trigger a reload on YAML edits in environments
+          that lack `watchfiles` (e.g. plain `uvicorn`, not
+          `uvicorn[standard]`).
+        - `WatchFilesReload` honors `reload_includes` correctly, so this
+          patch is a no-op there.
+
+        We monkey-patch `StatReload.iter_py_files` (idempotently) to also
+        yield the absolute path of the config file. The patch is applied
+        in the parent process before `uvicorn.run` spawns the reloader,
+        which means the same Python process becomes the reloader and
+        inherits the patched method.
+
+        Returns True if the patch was applied (or was already applied),
+        False if uvicorn isn't importable (should never happen at runtime
+        but keeps this helper safe to call from tests).
+        """
+        try:
+            from uvicorn.supervisors.statreload import StatReload
+        except ImportError:  # pragma: no cover - uvicorn is a hard dep
+            return False
+
+        if not config_path:
+            return False
+
+        from pathlib import Path
+
+        config_abs = Path(config_path).resolve()
+
+        # Track the set of patched config files on the class so multiple
+        # invocations (e.g. tests, repeat calls) compose correctly without
+        # wrapping the original method N times.
+        patched_paths = getattr(StatReload, "_litellm_patched_config_paths", None)
+        if patched_paths is None:
+            original_iter = StatReload.iter_py_files
+            patched_paths = set()
+
+            def _iter_with_config(self):  # type: ignore[no-untyped-def]
+                yield from original_iter(self)
+                for path in StatReload._litellm_patched_config_paths:
+                    if path.exists():
+                        yield path
+
+            StatReload.iter_py_files = _iter_with_config  # type: ignore[assignment]
+            StatReload._litellm_patched_config_paths = patched_paths  # type: ignore[attr-defined]
+
+        patched_paths.add(config_abs)
+        return True
 
     @staticmethod
     def _init_hypercorn_server(
@@ -1060,6 +1126,12 @@ def run_server(  # noqa: PLR0915
                 uvicorn_args.update(
                     ProxyInitializationHelpers._get_reload_options(config)
                 )
+                # When `watchfiles` is not installed uvicorn falls back to
+                # `StatReload`, which hard-codes `*.py` and silently ignores
+                # `reload_includes`. Patch it so YAML edits also trigger a
+                # restart in that environment.
+                if config:
+                    ProxyInitializationHelpers._patch_statreload_for_config(config)
 
             uvicorn.run(
                 **uvicorn_args,
