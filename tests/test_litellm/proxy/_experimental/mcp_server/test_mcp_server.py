@@ -1453,6 +1453,19 @@ async def test_owner_fingerprint_distinguishes_oauth_callers():
     assert fp_no_oauth == "anonymous"
     assert "Bearer token-A" not in fp_a
 
+    # When no API key, user_id, or OAuth bearer is available, fall back to
+    # client IP so two unrelated unauthenticated callers from different
+    # sources don't collapse to a single 'anonymous' owner and end up able
+    # to drive each other's stateful sessions.
+    fp_ip_a = _owner_fingerprint_for(anon_auth, None, "10.0.0.1")
+    fp_ip_b = _owner_fingerprint_for(anon_auth, None, "10.0.0.2")
+    fp_ip_a_again = _owner_fingerprint_for(anon_auth, None, "10.0.0.1")
+
+    assert fp_ip_a != fp_ip_b
+    assert fp_ip_a == fp_ip_a_again
+    assert fp_ip_a.startswith("ip:")
+    assert "10.0.0.1" not in fp_ip_a
+
 
 @pytest.mark.asyncio
 async def test_stateful_mcp_session_owner_mismatch_returns_403():

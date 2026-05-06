@@ -2674,6 +2674,7 @@ if MCP_AVAILABLE:
     def _owner_fingerprint_for(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         oauth2_headers: Optional[Dict[str, str]] = None,
+        client_ip: Optional[str] = None,
     ) -> str:
         """
         Stable, non-reversible identifier for the caller used to bind an
@@ -2684,6 +2685,13 @@ if MCP_AVAILABLE:
         the caller's identity is the upstream OAuth bearer; hash it so two
         OAuth callers with different tokens don't both fingerprint to
         ``anonymous`` and end up sharing a session.
+
+        When no caller-identifying credentials are available at all
+        (e.g. proxy running without master key, or an unauthenticated
+        passthrough path), fall back to the client IP so two unrelated
+        anonymous callers from different sources do not collapse to a
+        single ``anonymous`` owner and end up able to drive each other's
+        stateful sessions.
         """
         if user_api_key_auth is not None:
             if user_api_key_auth.api_key:
@@ -2696,6 +2704,8 @@ if MCP_AVAILABLE:
             )
             if authz:
                 return f"oauth:{hashlib.sha256(authz.encode('utf-8')).hexdigest()}"
+        if client_ip:
+            return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
     def _is_initialize_request(body: bytes) -> bool:
@@ -3003,7 +3013,7 @@ if MCP_AVAILABLE:
             if session_id:
                 expected_owner = _stateful_session_owners.get(session_id)
                 request_owner = _owner_fingerprint_for(
-                    user_api_key_auth, oauth2_headers
+                    user_api_key_auth, oauth2_headers, _client_ip
                 )
                 if expected_owner is not None and expected_owner != request_owner:
                     verbose_logger.warning(
@@ -3074,7 +3084,9 @@ if MCP_AVAILABLE:
                     local_send = _wrap_send_with_stateful_session_auth_context(
                         local_send,
                         auth_user,
-                        _owner_fingerprint_for(user_api_key_auth, oauth2_headers),
+                        _owner_fingerprint_for(
+                            user_api_key_auth, oauth2_headers, _client_ip
+                        ),
                     )
 
                 async with _gateway_initialize_instructions_request_scope(
