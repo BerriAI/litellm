@@ -171,19 +171,7 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def _get_reload_options(config_path: Optional[str]) -> dict:
-        """
-        Build uvicorn reload kwargs so --reload also reloads when the YAML
-        config file (passed via --config) changes.
-
-        Uvicorn defaults to watching only `*.py` files in CWD; we extend the
-        watch set to include the config file's directory and filename.
-
-        Note: uvicorn's `reload_includes` is only honored by the
-        `WatchFilesReload` reloader (requires the optional `watchfiles`
-        package). Without `watchfiles`, uvicorn falls back to `StatReload`
-        which hard-codes `*.py` and silently ignores `reload_includes`.
-        :func:`_patch_statreload_for_config` handles that fallback.
-        """
+        """Build uvicorn reload kwargs so --reload also reacts to YAML edits."""
         options: dict = {"reload": True}
         if not config_path:
             return options
@@ -194,43 +182,23 @@ class ProxyInitializationHelpers:
         if config_dir and config_dir != cwd:
             reload_dirs.append(config_dir)
         options["reload_dirs"] = reload_dirs
-        # Use the basename as the include pattern. Uvicorn's
+        # Must be a basename, not an absolute path: uvicorn's
         # resolve_reload_patterns() calls pathlib.Path.glob(), which raises
-        # NotImplementedError on absolute patterns (uvicorn discussion #2156),
-        # so an absolute path here would crash startup. The config_dir is
-        # already added to reload_dirs above, so a basename pattern is enough
-        # to match the specific config file uvicorn is watching.
-        config_include = os.path.basename(config_abs)
-        options["reload_includes"] = ["*.py", config_include]
+        # NotImplementedError on absolute patterns (uvicorn discussion #2156).
+        options["reload_includes"] = ["*.py", os.path.basename(config_abs)]
         return options
 
     @staticmethod
     def _patch_statreload_for_config(config_path: str) -> bool:
-        """
-        Make uvicorn's `StatReload` reloader also notice changes to the
-        YAML config file at ``config_path``.
+        """Make uvicorn's StatReload reloader notice YAML config changes.
 
-        Background:
-        - Uvicorn picks `WatchFilesReload` if the optional `watchfiles`
-          package is installed, otherwise `StatReload`.
-        - `StatReload.iter_py_files()` only iterates `*.py` files in
-          `reload_dirs` (it ignores `reload_includes` and just logs a
-          warning saying so). That means setting `reload_includes` alone
-          is not enough to trigger a reload on YAML edits in environments
-          that lack `watchfiles` (e.g. plain `uvicorn`, not
-          `uvicorn[standard]`).
-        - `WatchFilesReload` honors `reload_includes` correctly, so this
-          patch is a no-op there.
+        Uvicorn uses WatchFilesReload when the optional `watchfiles` package
+        is installed, otherwise StatReload. StatReload hard-codes `*.py` in
+        `iter_py_files()` and silently ignores `reload_includes`, so the
+        kwargs from `_get_reload_options` alone don't trigger reloads on YAML
+        edits. We monkey-patch `iter_py_files` to also yield the config path.
 
-        We monkey-patch `StatReload.iter_py_files` (idempotently) to also
-        yield the absolute path of the config file. The patch is applied
-        in the parent process before `uvicorn.run` spawns the reloader,
-        which means the same Python process becomes the reloader and
-        inherits the patched method.
-
-        Returns True if the patch was applied (or was already applied),
-        False if uvicorn isn't importable (should never happen at runtime
-        but keeps this helper safe to call from tests).
+        Idempotent across calls and a no-op for the WatchFilesReload path.
         """
         try:
             from uvicorn.supervisors.statreload import StatReload
@@ -244,9 +212,6 @@ class ProxyInitializationHelpers:
 
         config_abs = Path(config_path).resolve()
 
-        # Track the set of patched config files on the class so multiple
-        # invocations (e.g. tests, repeat calls) compose correctly without
-        # wrapping the original method N times.
         patched_paths = getattr(StatReload, "_litellm_patched_config_paths", None)
         if patched_paths is None:
             original_iter = StatReload.iter_py_files
@@ -1126,10 +1091,6 @@ def run_server(  # noqa: PLR0915
                 uvicorn_args.update(
                     ProxyInitializationHelpers._get_reload_options(config)
                 )
-                # When `watchfiles` is not installed uvicorn falls back to
-                # `StatReload`, which hard-codes `*.py` and silently ignores
-                # `reload_includes`. Patch it so YAML edits also trigger a
-                # restart in that environment.
                 if config:
                     ProxyInitializationHelpers._patch_statreload_for_config(config)
 

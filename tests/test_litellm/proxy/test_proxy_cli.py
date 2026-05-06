@@ -161,23 +161,13 @@ class TestProxyInitializationHelpers:
 
         assert opts["reload"] is True
         assert opts["reload_dirs"] == [str(cwd_dir), str(elsewhere)]
-        # The reload_includes entry must be a relative pattern (basename)
-        # because uvicorn's resolve_reload_patterns() calls pathlib.Path.glob(),
-        # which raises NotImplementedError on absolute patterns.
         assert opts["reload_includes"] == ["*.py", "proxy.yaml"]
 
     def test_patch_statreload_for_config_yields_yaml(self, tmp_path):
-        """
-        When uvicorn falls back to StatReload (no watchfiles installed),
-        the patched iter_py_files() must yield the YAML config file alongside
-        the .py files so saving the config triggers a reload.
-        """
         from pathlib import Path
 
         from uvicorn.supervisors.statreload import StatReload
 
-        # Reset any state from previous tests so we get a clean reading
-        # of the patched behavior.
         if hasattr(StatReload, "_litellm_patched_config_paths"):
             StatReload._litellm_patched_config_paths.clear()
 
@@ -191,31 +181,15 @@ class TestProxyInitializationHelpers:
         )
         assert applied is True
 
-        # Build a fake StatReload-like object whose `config.reload_dirs`
-        # points at tmp_path. We don't want to instantiate the real
-        # StatReload (which spawns processes); we just need to drive the
-        # patched iter_py_files() method directly.
         fake_self = types.SimpleNamespace(
             config=types.SimpleNamespace(reload_dirs=[tmp_path])
         )
-        yielded = list(StatReload.iter_py_files(fake_self))
-        yielded_paths = {Path(p).resolve() for p in yielded}
+        yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
 
-        assert config_file.resolve() in yielded_paths, (
-            "Patched StatReload should yield the YAML config file so "
-            "edits trigger a reload"
-        )
-        assert py_file.resolve() in yielded_paths, (
-            "Patched StatReload must still yield .py files (we extend, "
-            "not replace, the original behavior)"
-        )
+        assert config_file.resolve() in yielded_paths
+        assert py_file.resolve() in yielded_paths
 
     def test_patch_statreload_for_config_is_idempotent(self, tmp_path):
-        """
-        Re-applying the patch with the same config path should not wrap the
-        original iter_py_files() multiple times (which would cause the .py
-        files to be yielded N times per poll cycle).
-        """
         from pathlib import Path
 
         from uvicorn.supervisors.statreload import StatReload
@@ -235,7 +209,6 @@ class TestProxyInitializationHelpers:
             config=types.SimpleNamespace(reload_dirs=[tmp_path])
         )
         yielded = list(StatReload.iter_py_files(fake_self))
-        # Each path should appear at most once.
         assert len(yielded) == len(set(map(str, yielded)))
         yielded_paths = {Path(p).resolve() for p in yielded}
         assert config_file.resolve() in yielded_paths
