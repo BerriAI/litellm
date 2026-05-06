@@ -132,6 +132,7 @@ class OCIChatConfig(BaseConfig):
             "logit_bias": "logitBias",
             "n": "numGenerations",
             "presence_penalty": "presencePenalty",
+            "reasoning_effort": "reasoningEffort",
             "seed": "seed",
             "stop": "stop",
             "tool_choice": "toolChoice",
@@ -150,14 +151,17 @@ class OCIChatConfig(BaseConfig):
             "response_format": "responseFormat",
         }
 
-        # Cohere param map differs from GENERIC in three ways:
+        # Cohere param map differs from GENERIC in four ways:
         # - tool_choice is unsupported
         # - stop sequences key is "stopSequences" not "stop"
         # - n (numGenerations) is GENERIC-only
+        # - reasoning_effort is GENERIC-only (CohereChatRequest v1 has no
+        #   reasoningEffort field; Cohere reasoning models like
+        #   command-a-reasoning use COHEREV2 which is a separate request type)
         self.openai_to_oci_cohere_param_map = {
             k: ("stopSequences" if k == "stop" else v)
             for k, v in self.openai_to_oci_generic_param_map.items()
-            if k not in ("tool_choice", "max_retries", "n")
+            if k not in ("tool_choice", "max_retries", "n", "reasoning_effort")
         }
 
     def get_supported_openai_params(self, model: str) -> List[str]:

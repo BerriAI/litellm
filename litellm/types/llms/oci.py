@@ -103,6 +103,10 @@ class OCIChatRequestPayload(BaseModel):
     seed: Optional[int] = None
     frequencyPenalty: Optional[float] = None
     presencePenalty: Optional[float] = None
+    # Reasoning-token budget knob (OCI: NONE/MINIMAL/LOW/MEDIUM/HIGH).
+    # Honoured by GPT-5 family, Gemini 2.5, Grok reasoning variants,
+    # Cohere Command-A-Reasoning. Ignored by non-reasoning models.
+    reasoningEffort: Optional[str] = None
     responseFormat: Optional[Dict[str, Any]] = None
     toolChoice: Optional[Union[str, Dict[str, Any]]] = None
     logitBias: Optional[Dict[str, Any]] = None
