@@ -136,6 +136,9 @@ def rerank(  # noqa: PLR0915
             api_key=optional_params.api_key,
         )
 
+        if isinstance(optional_params.timeout, str):
+            optional_params.timeout = float(optional_params.timeout)
+
         # Handle custom providers registered via custom_provider_map before
         # attempting to cast the provider string to the LlmProviders enum.
         if _custom_llm_provider in litellm._custom_providers:
@@ -191,8 +194,6 @@ def rerank(  # noqa: PLR0915
             non_default_params=kwargs,
         )
         verbose_logger.info(f"optional_rerank_params: {optional_rerank_params}")
-        if isinstance(optional_params.timeout, str):
-            optional_params.timeout = float(optional_params.timeout)
 
         model_response = RerankResponse()
 
