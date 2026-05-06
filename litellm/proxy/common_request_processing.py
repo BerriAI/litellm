@@ -30,6 +30,7 @@ from litellm.constants import (
     LITELLM_DETAILED_TIMING,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     STREAM_SSE_DATA_PREFIX,
+    ROUTER_ALWAYS_INCLUDE_STREAM_USAGE,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -916,7 +917,8 @@ class ProxyBaseLLMRequestProcessing:
         # If always_include_stream_usage is enabled and this is a streaming request
         # automatically add stream_options={'include_usage': True} if not already set
         if (
-            general_settings.get("always_include_stream_usage", False) is True
+            (general_settings.get("always_include_stream_usage", False) is True
+            or ROUTER_ALWAYS_INCLUDE_STREAM_USAGE is True )
             and self.data.get("stream", False) is True
         ):
             # Only set if stream_options is not already provided by the client

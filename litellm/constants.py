@@ -1680,3 +1680,11 @@ ADVISOR_TOOL_DESCRIPTION: str = (
     "want to verify your reasoning, or face a complex decision. "
     "Describe your question or challenge clearly in the 'question' field."
 )
+
+# Router settings 
+
+ROUTER_ALWAYS_INCLUDE_STREAM_USAGE = bool(os.getenv("ROUTER_ALWAYS_INCLUDE_STREAM_USAGE", False))
+
+
+
+
