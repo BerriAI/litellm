@@ -47,6 +47,12 @@ CONFIG_DIR = Path("/etc/litellm-agent")
 REPOS_FILE = CONFIG_DIR / "repos.json"
 ENV_FILE = CONFIG_DIR / "env.json"
 
+# Warm-pool hydrate (LIT-2890): the proxy pushes a JSON payload here via
+# SSM RunCommand and signals the daemon with SIGUSR1.
+HYDRATE_FILE = Path("/var/run/litellm-agent/hydrate.json")
+HYDRATE_POLL_INTERVAL_SECONDS = 0.05  # 50ms — tight loop after signal received
+HYDRATE_TIMEOUT_SECONDS = 10  # max wait between SIGUSR1 and file appearing
+
 
 def _redact(value: Optional[str]) -> str:
     if not value:
@@ -129,7 +135,9 @@ def _bootstrap(env: Dict[str, str]) -> None:
             last_err,
         )
         time.sleep(BOOTSTRAP_RETRY_INTERVAL_SECONDS)
-    LOG.error("bootstrap failed after %d attempts: %s", BOOTSTRAP_MAX_ATTEMPTS, last_err)
+    LOG.error(
+        "bootstrap failed after %d attempts: %s", BOOTSTRAP_MAX_ATTEMPTS, last_err
+    )
     sys.exit(1)
 
 
@@ -151,11 +159,115 @@ def _heartbeat_loop(env: Dict[str, str]) -> None:
         time.sleep(HEARTBEAT_INTERVAL_SECONDS)
 
 
+def _wait_for_hydrate() -> Optional[Dict[str, Any]]:
+    """Block until SIGUSR1 lands AND the hydrate file appears.
+
+    The proxy's SSM RunCommand script writes the JSON, then signals the
+    daemon. Returns the parsed payload, or ``None`` if the file never
+    appears within ``HYDRATE_TIMEOUT_SECONDS`` of the signal (retry-able).
+    """
+    signal_received = {"flag": False}
+
+    def _on_sigusr1(_signum, _frame):  # noqa: ANN001
+        signal_received["flag"] = True
+
+    signal.signal(signal.SIGUSR1, _on_sigusr1)
+
+    LOG.info("warm-pool: waiting for SIGUSR1 hydrate signal...")
+    while not signal_received["flag"]:
+        # `signal.pause` is unavailable on some platforms; sleep is portable.
+        time.sleep(1)
+
+    LOG.info("warm-pool: SIGUSR1 received; reading hydrate file...")
+    deadline = time.monotonic() + HYDRATE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if HYDRATE_FILE.exists():
+            try:
+                payload = json.loads(HYDRATE_FILE.read_text())
+                LOG.info(
+                    "warm-pool: hydrate ok session=%s",
+                    payload.get("session_id", "<unknown>"),
+                )
+                return payload
+            except (ValueError, OSError) as e:
+                LOG.warning("hydrate file unreadable: %s", e)
+                return None
+        time.sleep(HYDRATE_POLL_INTERVAL_SECONDS)
+
+    LOG.error("warm-pool: hydrate file never appeared after SIGUSR1")
+    return None
+
+
+def _apply_hydrate(payload: Dict[str, Any]) -> Dict[str, str]:
+    """Materialize payload onto disk and return the new runtime env.
+
+    Writes:
+      - env_vars  -> /etc/litellm-agent/env       (mode 0644)
+      - secrets   -> /etc/litellm-agent/secrets.env (mode 0600 root-only)
+      - repos     -> /etc/litellm-agent/repos.json  (overwrite)
+    Network policy (iptables) is left to the production daemon — out of scope
+    for this stub.
+    """
+    env_vars = payload.get("env_vars") or {}
+    secrets = payload.get("secrets") or {}
+    repos = payload.get("repos") or []
+
+    env_path = CONFIG_DIR / "env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
+        "".join(f"{k}={v}\n" for k, v in env_vars.items()),
+    )
+    os.chmod(env_path, 0o644)
+
+    secrets_path = CONFIG_DIR / "secrets.env"
+    # Restrict ownership BEFORE we write — chmod after open is racy.
+    fd = os.open(secrets_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        for k, v in secrets.items():
+            f.write(f"{k}={v}\n")
+    os.chmod(secrets_path, 0o600)
+
+    REPOS_FILE.write_text(json.dumps(repos))
+    os.chmod(REPOS_FILE, 0o600)
+
+    return {
+        "session_id": str(payload.get("session_id", "")),
+        "agent_id": str(payload.get("agent_id", "")),
+        "team_id": "",
+        "base_url": os.environ.get("LITELLM_BASE_URL", "").rstrip("/"),
+        "mode": "session",
+        "jwt": str(payload.get("jwt", "")),
+    }
+
+
 def _warm_idle(env: Dict[str, str]) -> None:
-    """Warm-pool path: idle until B2's hydrate flow lands. Stub just heartbeats."""
-    LOG.info("warm-pool mode (stub) — idling. Real implementation lands in B2.")
-    while True:
-        time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+    """Warm-pool path (LIT-2890): wait for hydrate, then drop into session mode.
+
+    Flow:
+      1. Block on SIGUSR1 — signal raised by SSM RunCommand from the proxy
+      2. Read /var/run/litellm-agent/hydrate.json (written by the same
+         RunCommand script)
+      3. Materialize env/secrets/repos onto disk
+      4. Switch to session mode and run the normal bootstrap+heartbeat loop
+    """
+    LOG.info("warm-pool mode: idling for SIGUSR1 hydrate.")
+
+    payload = _wait_for_hydrate()
+    if payload is None:
+        LOG.error("warm-pool: hydrate failed; exiting so AWS terminates the VM.")
+        sys.exit(3)
+
+    new_env = _apply_hydrate(payload)
+    if not new_env["jwt"] or not new_env["session_id"]:
+        LOG.error("warm-pool: hydrate payload missing jwt or session_id; aborting.")
+        sys.exit(4)
+
+    LOG.info(
+        "warm-pool: hydrate applied session=%s; entering session mode",
+        new_env["session_id"],
+    )
+    _bootstrap(new_env)
+    _heartbeat_loop(new_env)
 
 
 def _install_signal_handlers() -> None:
@@ -179,16 +291,21 @@ def main() -> None:
         _redact(env["jwt"]),
     )
 
+    if env["mode"] == "warm":
+        # In warm mode the JWT and session_id arrive at hydrate time, not
+        # boot time. Only base_url is required so the daemon can call back.
+        if not env["base_url"]:
+            LOG.error("missing required runtime env (LITELLM_BASE_URL) in warm mode")
+            sys.exit(2)
+        _warm_idle(env)
+        return
+
     if not env["session_id"] or not env["base_url"] or not env["jwt"]:
         LOG.error(
             "missing required runtime env "
             "(LITELLM_SESSION_ID / LITELLM_BASE_URL / LITELLM_DAEMON_JWT)"
         )
         sys.exit(2)
-
-    if env["mode"] == "warm":
-        _warm_idle(env)
-        return
 
     _bootstrap(env)
     _heartbeat_loop(env)
