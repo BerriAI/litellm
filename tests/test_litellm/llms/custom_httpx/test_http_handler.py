@@ -4,6 +4,7 @@ import os
 import pathlib
 import ssl
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 import certifi
@@ -73,6 +74,55 @@ async def test_async_post_streaming_status_error_should_not_wait_forever_for_bod
         assert exc_info.value.response.status_code == 400
     finally:
         await litellm_handler.close()
+
+
+def test_sync_post_streaming_status_error_should_not_wait_forever_for_body(
+    monkeypatch,
+):
+    """
+    Keep the sync streaming error path aligned with the async path so a
+    non-terminating streamed error body cannot block a worker thread forever.
+    """
+
+    class HangingSyncErrorStream(httpx.SyncByteStream):
+        def __init__(self):
+            self.closed_event = threading.Event()
+
+        def __iter__(self):
+            self.closed_event.wait()
+            if False:
+                yield b""
+
+        def close(self):
+            self.closed_event.set()
+
+    def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=request,
+            headers={"content-type": "application/json"},
+            stream=HangingSyncErrorStream(),
+        )
+
+    monkeypatch.setattr(
+        "litellm.llms.custom_httpx.http_handler._STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    litellm_handler = HTTPHandler()
+    litellm_handler.client.close()
+    litellm_handler.client = httpx.Client(transport=httpx.MockTransport(mock_handler))
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as exc_info:
+            litellm_handler.post(
+                "https://vertex.example/streamRawPredict",
+                stream=True,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.response.status_code == 400
+    finally:
+        litellm_handler.close()
 
 
 @pytest.mark.asyncio
