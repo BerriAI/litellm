@@ -319,6 +319,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     response_cost=response_cost,
                 )
 
+        if self.dual_cache.redis_cache is not None:
+            await self._push_in_memory_increments_to_redis()
+
         verbose_proxy_logger.debug(
             "current state of in memory cache %s",
             json.dumps(
