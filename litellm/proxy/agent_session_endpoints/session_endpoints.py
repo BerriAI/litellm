@@ -48,6 +48,13 @@ from litellm.proxy.agent_session_endpoints.ownership import (
     caller_api_key_hash,
     owner_filter_for_caller,
 )
+from litellm.proxy.agent_session_endpoints.pagination import (
+    DEFAULT_PAGE_LIMIT,
+    MAX_PAGE_LIMIT,
+    build_page_response,
+    cursor_where_clause,
+    normalize_limit,
+)
 from litellm.proxy.agent_session_endpoints.schemas import (
     FollowupCreate,
     FollowupResponse,
@@ -223,18 +230,26 @@ async def _find_idempotent_session(user_api_key_hash: str, idempotency_key: str)
 
 
 @router.post(
-    "/v2/sessions",
+    "/v2/agents/{agent_id}/sessions",
     response_class=ORJSONResponse,
     response_model=SessionResponse,
     tags=["sessions"],
     dependencies=[Depends(user_api_key_auth)],
 )
 async def create_session(
+    agent_id: str,
     body: SessionCreate,
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
 ):
+    """Create a new session under the given agent.
+
+    The session inherits the agent's defaults for repos/env_vars; the
+    body provides per-session overrides. Path-nested under
+    ``/v2/agents/{agent_id}/sessions`` to match Cursor's API shape and
+    so the URL itself documents the parent relationship.
+    """
     assert_caller_can_mutate(user_api_key_dict)
     prisma_client = await _get_prisma_client_or_503()
 
@@ -248,7 +263,7 @@ async def create_session(
 
     # Validate parent agent + ownership.
     agent_row = await prisma_client.db.litellm_agent.find_unique(
-        where={"id": body.agent_id}
+        where={"id": agent_id}
     )
     assert_caller_owns_agent(user_api_key_dict, agent_row)
 
@@ -263,12 +278,12 @@ async def create_session(
     session_id = new_session_id()
     daemon_token = mint_daemon_token(
         session_id=session_id,
-        agent_id=body.agent_id,
+        agent_id=agent_id,
         expires_at_epoch=int(expires_at.timestamp()),
     )
     payload = {
         "id": session_id,
-        "agent_id": body.agent_id,
+        "agent_id": agent_id,
         "user_api_key_hash": user_hash,
         "team_id": user_api_key_dict.team_id,
         "vm_provider": DEFAULT_VM_PROVIDER_NAME,
@@ -287,7 +302,7 @@ async def create_session(
     asyncio.create_task(
         _provision_in_background(
             session_id=session_id,
-            agent_id=body.agent_id,
+            agent_id=agent_id,
             repos=resolved_repos,
             env_vars=resolved_env_vars,
             daemon_token=daemon_token,
@@ -298,7 +313,7 @@ async def create_session(
     verbose_proxy_logger.info(
         "session.create id=%s agent_id=%s expires_at=%s",
         session_id,
-        body.agent_id,
+        agent_id,
         expires_at.isoformat(),
     )
     return session_row_to_response(row, daemon_token=daemon_token)
@@ -332,27 +347,33 @@ async def get_session(
 async def list_sessions(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     agent_id: Optional[str] = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
 ):
+    """List sessions, optionally filtered by ``agent_id``.
+
+    Cursor-paginated. Pass ``?cursor=<next_cursor>`` from the previous
+    response to fetch the next page. Sort: newest first, with ``id`` as
+    a tiebreaker so the page boundary is deterministic.
+    """
     prisma_client = await _get_prisma_client_or_503()
-    where: Dict[str, Any] = {}
+    base_where: Dict[str, Any] = {}
     owner = owner_filter_for_caller(user_api_key_dict)
     if owner:
-        where.update(owner)
+        base_where.update(owner)
     if agent_id:
-        where["agent_id"] = agent_id
+        base_where["agent_id"] = agent_id
+    page_limit = normalize_limit(limit)
     rows = await prisma_client.db.litellm_agentsession.find_many(
-        where=where or None,
-        order={"created_at": "desc"},
-        take=limit,
-        skip=offset,
+        where=cursor_where_clause(base_where, cursor),
+        order=[{"created_at": "desc"}, {"id": "desc"}],
+        take=page_limit + 1,
     )
-    return {
-        "data": [
-            session_row_to_response(r, daemon_token=None).model_dump() for r in rows
-        ]
-    }
+    return build_page_response(
+        rows,
+        page_limit,
+        lambda r: session_row_to_response(r, daemon_token=None).model_dump(),
+    )
 
 
 @router.delete(
