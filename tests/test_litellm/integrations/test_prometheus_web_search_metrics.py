@@ -129,3 +129,29 @@ async def test_prometheus_tracks_web_search_requests_from_server_tool_use(
     }
 
     assert samples["litellm_web_search_requests_metric_total"] == 3.0
+
+
+@pytest.mark.parametrize(
+    "usage_object, expected_requests",
+    [
+        ({"web_search_requests": 2}, 2),
+        ({"prompt_tokens_details": {"web_search_requests": 4}}, 4),
+        ({"server_tool_use": {"web_search_requests": "5"}}, 5),
+        ({"server_tool_use": {"web_search_requests": 0}}, 0),
+        ({"server_tool_use": {"web_search_requests": "not-an-int"}}, None),
+    ],
+)
+def test_get_web_search_requests_from_standard_payload(
+    usage_object,
+    expected_requests,
+):
+    standard_logging_payload = _create_standard_logging_payload(
+        usage_object=usage_object
+    )
+
+    assert (
+        PrometheusLogger._get_web_search_requests_from_standard_payload(
+            standard_logging_payload
+        )
+        == expected_requests
+    )
