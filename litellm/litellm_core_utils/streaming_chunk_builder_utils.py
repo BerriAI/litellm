@@ -464,12 +464,15 @@ class ChunkProcessor:
             id=id,
         )
 
-    def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> dict:
+    def _usage_chunk_calculation_helper(
+        self, usage_chunk: Union[Usage, Dict[str, Any]]
+    ) -> dict:
         prompt_tokens = 0
         completion_tokens = 0
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
+        server_tool_use: Optional[ServerToolUse] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
 
@@ -499,12 +502,19 @@ class ChunkProcessor:
                 usage_chunk.prompt_tokens_details, PromptTokensDetailsWrapper
             ):
                 prompt_tokens_details = usage_chunk.prompt_tokens_details
+        if "server_tool_use" in usage_chunk:
+            raw_server_tool_use = usage_chunk.get("server_tool_use")
+            if isinstance(raw_server_tool_use, dict):
+                server_tool_use = ServerToolUse(**raw_server_tool_use)
+            elif isinstance(raw_server_tool_use, ServerToolUse):
+                server_tool_use = raw_server_tool_use
 
         return {
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "cache_creation_input_tokens": cache_creation_input_tokens,
             "cache_read_input_tokens": cache_read_input_tokens,
+            "server_tool_use": server_tool_use,
             "completion_tokens_details": completion_tokens_details,
             "prompt_tokens_details": prompt_tokens_details,
         }
@@ -584,11 +594,8 @@ class ChunkProcessor:
                     completion_tokens_details = usage_chunk_dict[
                         "completion_tokens_details"
                     ]
-                if (
-                    hasattr(usage_chunk, "server_tool_use")
-                    and usage_chunk.server_tool_use is not None
-                ):
-                    server_tool_use = usage_chunk.server_tool_use
+                if usage_chunk_dict["server_tool_use"] is not None:
+                    server_tool_use = usage_chunk_dict["server_tool_use"]
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(
