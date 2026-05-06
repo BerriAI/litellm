@@ -32,7 +32,6 @@ from litellm.proxy.agent_session_endpoints.constants import (
     RUN_TERMINAL_EVENT_TYPES,
     SESSION_STATUS_PROVISIONING,
     SESSION_STATUS_READY,
-    SESSION_TERMINAL_STATUSES,
 )
 from litellm.proxy.agent_session_endpoints.schemas import (
     DaemonHeartbeatRequest,

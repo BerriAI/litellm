@@ -37,7 +37,6 @@ from litellm.proxy.agent_session_endpoints.constants import (
     RUN_STATUS_QUEUED,
     SESSION_STATUS_ERROR,
     SESSION_STATUS_PROVISIONING,
-    SESSION_STATUS_READY,
     SESSION_STATUS_TERMINATED,
     SESSION_TERMINAL_STATUSES,
 )
