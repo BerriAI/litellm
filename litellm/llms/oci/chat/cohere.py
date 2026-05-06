@@ -70,7 +70,8 @@ def adapt_messages_to_cohere_standard(
     tool_call_lookup: Dict[str, CohereToolCall] = {}
     for msg in messages:
         if msg.get("role") == "assistant":
-            for tc in msg.get("tool_calls") or []:  # type: ignore[union-attr]
+            tool_calls_raw: Any = msg.get("tool_calls") or []
+            for tc in tool_calls_raw:
                 tc_id = tc.get("id", "")
                 raw_args: Any = tc.get("function", {}).get("arguments", "{}")
                 try:
@@ -115,7 +116,7 @@ def adapt_messages_to_cohere_standard(
                 CohereMessage(role="CHATBOT", message=content, toolCalls=tool_calls)
             )
         elif role == "tool":
-            tool_call_id = msg.get("tool_call_id", "")  # type: ignore[union-attr]
+            tool_call_id = str(msg.get("tool_call_id", "") or "")
             cohere_call = tool_call_lookup.get(
                 tool_call_id, CohereToolCall(name="", parameters={})
             )
