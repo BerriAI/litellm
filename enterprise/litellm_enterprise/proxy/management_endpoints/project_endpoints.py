@@ -877,15 +877,18 @@ async def project_info(
             )
             if team:
                 caller_user_id = user_api_key_dict.user_id
-                for m in team.members_with_roles or []:
-                    m_user_id = (
-                        m.get("user_id")
-                        if isinstance(m, dict)
-                        else getattr(m, "user_id", None)
-                    )
-                    if m_user_id == caller_user_id:
-                        is_team_member = True
-                        break
+                if team.admins and caller_user_id in team.admins:
+                    is_team_member = True
+                else:
+                    for m in team.members_with_roles or []:
+                        m_user_id = (
+                            m.get("user_id")
+                            if isinstance(m, dict)
+                            else getattr(m, "user_id", None)
+                        )
+                        if m_user_id == caller_user_id:
+                            is_team_member = True
+                            break
 
         if not (is_admin or is_team_member):
             raise HTTPException(
