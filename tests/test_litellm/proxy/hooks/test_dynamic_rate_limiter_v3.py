@@ -1677,3 +1677,98 @@ async def test_async_log_success_event_uses_team_priority_from_auth_metadata():
     assert (
         "default_pool" not in priority_keys[0]
     ), f"Priority key should NOT use 'default_pool', should use team's priority. Got: {priority_keys[0]}"
+
+
+@pytest.mark.asyncio
+async def test_priority_429_includes_model_name_and_configured_limits():
+    """
+    The priority-based 429 should tell operators which model was hit and what
+    the model's configured TPM/RPM are, so they can decide whether to tune the
+    priority allocation or the model limits.
+
+    Regression test for the previous message that read:
+        "Priority-based rate limit exceeded. Priority: prod,
+         Rate limit type: tokens, Remaining: -664145,
+         Model saturation: 86.3%"
+    -- with no indication of which model was hit.
+    """
+    from fastapi import HTTPException
+
+    os.environ["LITELLM_LICENSE"] = "test-license-key"
+    litellm.priority_reservation = {"prod": 0.5}
+
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+
+    model = "gpt-4o-test"
+    total_tpm = 1_000_000
+    total_rpm = 10_000
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gpt-3.5-turbo",
+                    "api_key": "test-key",
+                    "api_base": "test-base",
+                    "tpm": total_tpm,
+                    "rpm": total_rpm,
+                },
+            }
+        ]
+    )
+    handler.update_variables(llm_router=llm_router)
+
+    user = UserAPIKeyAuth()
+    user.metadata = {"priority": "prod"}
+    user.user_id = "prod_user"
+
+    model_group_info = handler.llm_router.get_model_group_info(model_group=model)
+
+    # Force the atomic check+increment to return OVER_LIMIT for the
+    # priority_model descriptor. saturation=0.95 keeps us above the
+    # default saturation threshold so priority limits are enforced.
+    over_limit_response = {
+        "overall_code": "OVER_LIMIT",
+        "statuses": [
+            {
+                "code": "OVER_LIMIT",
+                "descriptor_key": "priority_model",
+                "rate_limit_type": "tokens",
+                "limit_remaining": -664145,
+                "current_limit": int(total_tpm * 0.5),
+            }
+        ],
+    }
+
+    with patch.object(
+        handler.v3_limiter,
+        "atomic_check_and_increment_by_n",
+        new=AsyncMock(return_value=over_limit_response),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handler._check_rate_limits(
+                model=model,
+                model_group_info=model_group_info,
+                user_api_key_dict=user,
+                priority="prod",
+                saturation=0.95,
+                data={"model": model},
+            )
+
+    assert exc_info.value.status_code == 429
+    detail = exc_info.value.detail
+    assert isinstance(detail, dict)
+    error_msg = detail["error"]
+
+    # New fields added by this change -- the whole point of the fix.
+    assert f"Model: {model}" in error_msg, error_msg
+    assert f"Model TPM: {total_tpm}" in error_msg, error_msg
+    assert f"Model RPM: {total_rpm}" in error_msg, error_msg
+
+    # Existing fields must still be present (no regression).
+    assert "Priority-based rate limit exceeded" in error_msg, error_msg
+    assert "Priority: prod" in error_msg, error_msg
+    assert "Rate limit type: tokens" in error_msg, error_msg
+    assert "Model saturation:" in error_msg, error_msg
