@@ -1,3 +1,5 @@
+# LiteLLM main module: public completion, embedding, streaming, and moderation entrypoints.
+#
 # +-----------------------------------------------+
 # |                                               |
 # |           Give Feedback / Get Help            |
