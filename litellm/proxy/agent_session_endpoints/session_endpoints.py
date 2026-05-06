@@ -77,6 +77,13 @@ router = APIRouter()
 
 DEFAULT_VM_PROVIDER_NAME = "noop"
 
+# Hold strong references to background provisioning tasks. Per CPython
+# docs the event loop only stores a weak reference to tasks created
+# with ``asyncio.create_task``, so without this the GC can drop the
+# task object before it finishes — and with it any pending VM-provision
+# work. Tasks remove themselves on completion via the discard callback.
+_BACKGROUND_TASKS: set = set()
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -262,9 +269,7 @@ async def create_session(
             return session_row_to_response(existing, daemon_token=None)
 
     # Validate parent agent + ownership.
-    agent_row = await prisma_client.db.litellm_agent.find_unique(
-        where={"id": agent_id}
-    )
+    agent_row = await prisma_client.db.litellm_agent.find_unique(where={"id": agent_id})
     assert_caller_owns_agent(user_api_key_dict, agent_row)
 
     # Resolve repos/env_vars (overlay caller over agent defaults).
@@ -299,7 +304,12 @@ async def create_session(
 
     # Fire-and-forget VM provisioning. The client polls / subscribes
     # for status flips.
-    asyncio.create_task(
+    #
+    # Hold a strong reference to the task in ``_BACKGROUND_TASKS``: per
+    # CPython docs the event loop only weak-refs tasks, so the GC could
+    # otherwise drop the task before it finishes. The discard callback
+    # keeps the set bounded.
+    task = asyncio.create_task(
         _provision_in_background(
             session_id=session_id,
             agent_id=agent_id,
@@ -309,6 +319,8 @@ async def create_session(
             provider_name=DEFAULT_VM_PROVIDER_NAME,
         )
     )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
     verbose_proxy_logger.info(
         "session.create id=%s agent_id=%s expires_at=%s",
