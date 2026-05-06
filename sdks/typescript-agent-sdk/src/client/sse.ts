@@ -29,7 +29,7 @@ export async function* streamRunEvents(
   client: ResolvedClient,
   sessionId: string,
   runId: string,
-  opts: StreamRunOptions = {}
+  opts: StreamRunOptions = {},
 ): AsyncIterable<RunEvent> {
   const maxReconnects = opts.maxReconnects ?? 5;
   let lastSeq = opts.startingSeq !== undefined ? opts.startingSeq - 1 : -1;
@@ -42,11 +42,10 @@ export async function* streamRunEvents(
       res = await request(client, {
         method: "GET",
         path: `/v2/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events`,
-        query: startingSeq !== undefined ? { starting_seq: startingSeq } : undefined,
+        query:
+          startingSeq !== undefined ? { starting_seq: startingSeq } : undefined,
         headers:
-          startingSeq !== undefined
-            ? { "Last-Event-ID": String(lastSeq) }
-            : {},
+          startingSeq !== undefined ? { "Last-Event-ID": String(lastSeq) } : {},
         stream: true,
         signal: opts.signal,
       });
@@ -65,6 +64,7 @@ export async function* streamRunEvents(
     }
 
     let droppedMidStream = false;
+    let sawProgressOnThisConnection = false;
     try {
       for await (const event of parseSSE(res.body, opts.signal)) {
         const parsed = decodeEvent(event);
@@ -74,6 +74,7 @@ export async function* streamRunEvents(
           continue;
         }
         lastSeq = parsed.seq;
+        sawProgressOnThisConnection = true;
         yield parsed;
         if (parsed.type === "done" || parsed.type === "error") {
           return;
@@ -87,10 +88,16 @@ export async function* streamRunEvents(
     }
 
     if (!droppedMidStream) return;
+    // Reset the reconnect budget if this connection delivered new events.
+    // The counter tracks *consecutive* failures, not lifetime drops, so a
+    // long-running stream with sporadic transient drops is not penalized.
+    if (sawProgressOnThisConnection) {
+      reconnects = 0;
+    }
     if (reconnects >= maxReconnects) {
       throw new LiteLLMAgentError(
         `SSE reconnect budget exhausted (${maxReconnects})`,
-        { code: "sse_reconnect_exhausted" }
+        { code: "sse_reconnect_exhausted" },
       );
     }
     reconnects++;
@@ -117,7 +124,7 @@ function decodeEvent(msg: EventSourceMessage): RunEvent | null {
 
 async function* parseSSE(
   body: ReadableStream<Uint8Array>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): AsyncIterable<EventSourceMessage> {
   const queue: EventSourceMessage[] = [];
   const state: { resolve: (() => void) | null; done: boolean } = {
