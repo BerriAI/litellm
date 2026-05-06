@@ -83,7 +83,7 @@ class RequestSizeLimitMiddleware:
 def _mb_to_bytes(max_request_size_mb: Optional[Union[int, float]]) -> Optional[int]:
     if max_request_size_mb is None:
         return None
-    if max_request_size_mb < 0:
+    if max_request_size_mb <= 0:
         return None
     return int(max_request_size_mb * 1024 * 1024)
 
@@ -112,7 +112,10 @@ async def _send_request_too_large(
         {
             "type": "http.response.start",
             "status": 413,
-            "headers": [(b"content-type", b"application/json")],
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("latin-1")),
+            ],
         }
     )
-    await send({"type": "http.response.body", "body": body})
+    await send({"type": "http.response.body", "body": body, "more_body": False})

@@ -33,7 +33,36 @@ def test_request_size_limit_middleware_rejects_content_length_before_body_read()
 
     assert response.status_code == 413
     assert response.json() == {"error": "Request size is too large. Max size is 1 MB"}
+    assert response.headers["content-length"] == str(len(response.content))
     assert downstream_called is False
+
+
+def test_request_size_limit_middleware_zero_limit_disables_guard():
+    downstream_called = False
+
+    async def app(scope, receive, send):
+        nonlocal downstream_called
+        downstream_called = True
+        response = JSONResponse({"ok": True})
+        await response(scope, receive, send)
+
+    client = TestClient(
+        RequestSizeLimitMiddleware(
+            app,
+            get_max_request_size_mb=lambda: 0,
+            is_request_size_limit_enabled=lambda: True,
+        )
+    )
+
+    response = client.post(
+        "/chat/completions",
+        content=b"x",
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert downstream_called is True
 
 
 @pytest.mark.asyncio
@@ -89,13 +118,18 @@ async def test_request_size_limit_middleware_rejects_streamed_body_without_conte
         send,
     )
 
+    expected_body = b'{"error":"Request size is too large. Max size is 1 MB"}'
     assert sent_messages[0] == {
         "type": "http.response.start",
         "status": 413,
-        "headers": [(b"content-type", b"application/json")],
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(expected_body)).encode("latin-1")),
+        ],
     }
     assert sent_messages[1] == {
         "type": "http.response.body",
-        "body": b'{"error":"Request size is too large. Max size is 1 MB"}',
+        "body": expected_body,
+        "more_body": False,
     }
     assert received_body_bytes == 1024 * 1024
