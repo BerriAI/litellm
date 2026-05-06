@@ -16,11 +16,27 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+
+from tests.claude_code.rate_limiter import (
+    RateLimiter,
+    get_default_limiter,
+    infer_provider,
+)
 
 CLAUDE_CLI_DEFAULT = "claude"
-DEFAULT_TIMEOUT_SECONDS = 120
+# 120s is fine for a single isolated CLI call against an unloaded
+# upstream, but the matrix run launches up to 75 concurrent calls and
+# upstreams can take several minutes to respond under that contention.
+# We expose the timeout as an env var so binary-search runs can grow
+# it without touching the test code.
+DEFAULT_TIMEOUT_SECONDS = float(
+    os.environ.get("LITELLM_COMPAT_CLI_TIMEOUT_SECONDS") or 120
+)
 
 
 class ClaudeCLIError(RuntimeError):
@@ -57,6 +73,7 @@ def run_claude(
     cli_path: str = CLAUDE_CLI_DEFAULT,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     runner: Optional[Any] = None,
+    rate_limiter: Optional[RateLimiter] = None,
 ) -> DriverResult:
     """Invoke `claude` once in headless stream-JSON mode and return the result.
 
@@ -68,6 +85,12 @@ def run_claude(
     `runner` is an injection seam used by the unit tests: by default we call
     `subprocess.run`, but the test suite swaps in a fake that yields canned
     stream-JSON. Production callers should never set it.
+
+    `rate_limiter` is the second injection seam: the cross-process
+    token-bucket limiter throttles outbound calls per provider so a
+    fully-parallel matrix run doesn't trip 429s. Defaults to the
+    process-wide singleton; unit tests pass a no-op limiter or one
+    backed by a tmp dir to keep tests hermetic.
     """
     if not prompt:
         raise ValueError("prompt must be a non-empty string")
@@ -100,6 +123,15 @@ def run_claude(
     env["ANTHROPIC_BASE_URL"] = base_url
     env["ANTHROPIC_AUTH_TOKEN"] = api_key
 
+    # Throttle by provider *before* launching the CLI. Doing this here
+    # (rather than per-test) means every code path that lands on
+    # `run_claude` is rate-limited automatically — including
+    # `run_claude_models_parallel`, which is the hot path during the
+    # full matrix run.
+    limiter = rate_limiter if rate_limiter is not None else get_default_limiter()
+    provider = infer_provider(model)
+    limiter.acquire(provider)
+
     run_fn = runner or subprocess.run
     try:
         completed = run_fn(
@@ -128,6 +160,134 @@ def run_claude(
         stderr=completed.stderr or "",
         usage=usage,
     )
+
+
+ModelResult = Union[DriverResult, ClaudeCLIError]
+
+
+def run_claude_models_parallel(
+    *,
+    models: Sequence[str],
+    prompt: str,
+    base_url: str,
+    api_key: str,
+    extra_env: Optional[Mapping[str, str]] = None,
+    extra_args: Optional[Sequence[str]] = None,
+    cli_path: str = CLAUDE_CLI_DEFAULT,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    runner: Optional[Callable[..., Any]] = None,
+) -> Dict[str, ModelResult]:
+    """Invoke `run_claude` for every `models[i]` concurrently and collect outcomes.
+
+    Each `claude` CLI invocation is a long-lived subprocess that spends
+    almost all of its time waiting on the upstream API; running the
+    three Claude tiers in parallel cuts the per-cell wall time roughly
+    threefold without changing what each invocation does.
+
+    Threads (rather than asyncio) are the right primitive here because
+    `subprocess.run` releases the GIL while it waits, and we want to
+    keep the synchronous CLI driver unchanged so unit tests can keep
+    injecting a fake `runner`.
+
+    Returns a dict keyed by model id. Each value is either the
+    `DriverResult` produced by `run_claude` or the `ClaudeCLIError`
+    that aborted that model's run — callers decide how to map either
+    into a `compat_result` entry. The shared kwargs (prompt, env, args,
+    timeout, runner) are forwarded verbatim so the per-model wire is
+    identical to what the sequential path produces.
+    """
+    if not models:
+        raise ValueError("models must be a non-empty sequence")
+
+    def _one(model: str) -> Tuple[str, ModelResult, float]:
+        # Per-model wall clock: this is what the matrix run actually pays for.
+        # We record it whether the run succeeded or raised so the breakdown
+        # log below covers both code paths and surfaces "which model is the
+        # long pole?" without requiring per-test instrumentation.
+        started = time.monotonic()
+        try:
+            result = run_claude(
+                prompt=prompt,
+                model=model,
+                base_url=base_url,
+                api_key=api_key,
+                extra_env=extra_env,
+                extra_args=extra_args,
+                cli_path=cli_path,
+                timeout=timeout,
+                runner=runner,
+            )
+            elapsed = time.monotonic() - started
+            # Stamp the duration onto the DriverResult so callers (tests,
+            # diagnostics) can attribute slow cells without re-timing.
+            result.duration_ms = int(elapsed * 1000)
+            return model, result, elapsed
+        except ClaudeCLIError as exc:
+            elapsed = time.monotonic() - started
+            return model, exc, elapsed
+
+    outcomes: Dict[str, ModelResult] = {}
+    durations: Dict[str, float] = {}
+    overall_started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=len(models)) as pool:
+        futures = [pool.submit(_one, model) for model in models]
+        for future in as_completed(futures):
+            model, outcome, elapsed = future.result()
+            outcomes[model] = outcome
+            durations[model] = elapsed
+    overall_elapsed = time.monotonic() - overall_started
+
+    _log_parallel_breakdown(models, durations, outcomes, overall_elapsed)
+    return outcomes
+
+
+def _log_parallel_breakdown(
+    models: Sequence[str],
+    durations: Mapping[str, float],
+    outcomes: Mapping[str, ModelResult],
+    overall_elapsed: float,
+) -> None:
+    """Emit a one-block timing breakdown to stderr.
+
+    Pytest only shows captured output for failing tests by default, but
+    `-s` surfaces it for passing tests too — which is exactly when you
+    care about "did parallelization actually help?". The block reports:
+
+      - per-model wall time and outcome (ok / cli-error / non-zero exit)
+      - the slowest model (the parallel run's wall-time floor)
+      - the sum of sequential model times (what the old serial path
+        would have paid)
+      - the overall parallel wall time and the speedup ratio
+
+    If one model dominates, `slowest ≈ overall ≈ sequential / 1`, and
+    the speedup will be near 1× — exactly the diagnostic that explains
+    "why didn't this get faster?".
+    """
+    sequential_total = sum(durations.values())
+    slowest_model = max(durations, key=durations.get) if durations else None
+    slowest = durations[slowest_model] if slowest_model else 0.0
+    speedup = sequential_total / overall_elapsed if overall_elapsed > 0 else 0.0
+
+    lines: List[str] = []
+    lines.append("[parallel] per-model wall time:")
+    for model in models:
+        elapsed = durations.get(model, 0.0)
+        outcome = outcomes.get(model)
+        if isinstance(outcome, ClaudeCLIError):
+            status = "cli-error"
+        elif isinstance(outcome, DriverResult):
+            status = f"exit={outcome.exit_code}"
+        else:
+            status = "missing"
+        lines.append(f"  {model:<40s} {elapsed:6.2f}s  ({status})")
+    if slowest_model is not None:
+        lines.append(
+            f"[parallel] slowest={slowest_model} ({slowest:.2f}s); "
+            f"sequential_sum={sequential_total:.2f}s; "
+            f"parallel_wall={overall_elapsed:.2f}s; "
+            f"speedup={speedup:.2f}x"
+        )
+    print("\n".join(lines), file=sys.stderr, flush=True)
 
 
 def _parse_stream_json(stdout: str) -> List[Dict[str, Any]]:

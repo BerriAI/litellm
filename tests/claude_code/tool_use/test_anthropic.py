@@ -20,7 +20,11 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
-from tests.claude_code.cli_driver import ClaudeCLIError, failure_diagnostic, run_claude
+from tests.claude_code.cli_driver import (
+    ClaudeCLIError,
+    failure_diagnostic,
+    run_claude_models_parallel,
+)
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -56,8 +60,7 @@ def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
-@pytest.mark.parametrize("model", ANTHROPIC_MODELS)
-def test_tool_use_anthropic(compat_result, model):
+def test_tool_use_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
     tool call was emitted on the wire."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
@@ -76,39 +79,38 @@ def test_tool_use_anthropic(compat_result, model):
             f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured", pytrace=False
         )
 
-    try:
-        result = run_claude(
-            prompt=TOOL_USE_PROMPT,
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            extra_args=TOOL_USE_ARGS,
-        )
-    except ClaudeCLIError as exc:
-        compat_result.set({"status": "fail", "error": f"[{model}] {exc}"})
-        pytest.fail(str(exc), pytrace=False)
-        return
+    outcomes = run_claude_models_parallel(
+        models=ANTHROPIC_MODELS,
+        prompt=TOOL_USE_PROMPT,
+        base_url=base_url,
+        api_key=api_key,
+        extra_args=TOOL_USE_ARGS,
+    )
 
-    if result.exit_code != 0:
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": f"[{model}] claude CLI failed: {failure_diagnostic(result)}",
-            }
-        )
-        pytest.fail(
-            f"[{model}] claude CLI failed: {failure_diagnostic(result)}", pytrace=False
-        )
-        return
+    failures = []
+    for model in ANTHROPIC_MODELS:
+        outcome = outcomes[model]
+        if isinstance(outcome, ClaudeCLIError):
+            error = f"[{model}] {outcome}"
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
 
-    if not _has_tool_use_event(result.events):
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": f"[{model}] no tool_use content block observed in stream-json events",
-            }
-        )
-        pytest.fail(f"no tool_use for {model}", pytrace=False)
-        return
+        if outcome.exit_code != 0:
+            error = f"[{model}] claude CLI failed: {failure_diagnostic(outcome)}"
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
 
-    compat_result.set({"status": "pass"})
+        if not _has_tool_use_event(outcome.events):
+            error = (
+                f"[{model}] no tool_use content block observed in stream-json events"
+            )
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
+
+        compat_result.add({"status": "pass"})
+
+    if failures:
+        pytest.fail("; ".join(failures), pytrace=False)

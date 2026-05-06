@@ -34,3 +34,13 @@ features:
     name: Vision
   - id: extended_thinking
     name: Extended thinking
+  - id: tool_use_streaming
+    name: Tool use (streaming / fine-grained)
+  - id: thinking_with_tool_use
+    name: Extended thinking + tool use
+  - id: pdf_input
+    name: PDF document input
+  - id: prompt_caching_1h
+    name: Prompt caching (1h TTL)
+  - id: web_search
+    name: Web search (server tool)

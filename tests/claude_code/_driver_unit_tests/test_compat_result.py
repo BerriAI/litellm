@@ -68,3 +68,71 @@ def test_set_copies_input():
     r.set(payload)
     payload["error"] = "mutated"
     assert r.value["error"] == "x"
+
+
+# ---------------------------------------------------------------------------
+# add() / collected()
+#
+# When a single test exercises three Claude tiers in parallel, each tier
+# needs its own row in the results artifact so the matrix builder can
+# apply its "all three must pass" aggregation. `add()` is the per-tier
+# recorder; `collected()` is what the conftest hook reads.
+# ---------------------------------------------------------------------------
+
+
+def test_add_appends_each_call_to_values():
+    r = CompatResult()
+    r.add({"status": "pass"})
+    r.add({"status": "fail", "error": "bad"})
+    assert r.values == [
+        {"status": "pass"},
+        {"status": "fail", "error": "bad"},
+    ]
+
+
+def test_add_validates_like_set():
+    """The add() and set() validators are the same; both must reject bad payloads."""
+    r = CompatResult()
+    with pytest.raises(ValueError, match="requires 'error'"):
+        r.add({"status": "fail"})
+    with pytest.raises(ValueError, match="requires 'reason'"):
+        r.add({"status": "not_applicable"})
+    with pytest.raises(ValueError, match="status must be one of"):
+        r.add({"status": "maybe"})
+    with pytest.raises(TypeError):
+        r.add("pass")  # type: ignore[arg-type]
+
+
+def test_add_copies_input():
+    """Same defensive copy contract as set()."""
+    r = CompatResult()
+    payload = {"status": "fail", "error": "x"}
+    r.add(payload)
+    payload["error"] = "mutated"
+    assert r.values[0]["error"] == "x"
+
+
+def test_collected_returns_values_when_added():
+    r = CompatResult()
+    r.add({"status": "pass"})
+    r.add({"status": "pass"})
+    assert r.collected() == [{"status": "pass"}, {"status": "pass"}]
+
+
+def test_collected_returns_single_value_when_only_set_called():
+    """Legacy single-result tests should still surface their one outcome."""
+    r = CompatResult()
+    r.set({"status": "pass"})
+    assert r.collected() == [{"status": "pass"}]
+
+
+def test_collected_prefers_added_values_over_set_value():
+    """If both are populated, the per-tier list wins — that's the multi-model shape."""
+    r = CompatResult()
+    r.set({"status": "pass"})
+    r.add({"status": "fail", "error": "tier-2 broke"})
+    assert r.collected() == [{"status": "fail", "error": "tier-2 broke"}]
+
+
+def test_collected_returns_empty_when_nothing_reported():
+    assert CompatResult().collected() == []

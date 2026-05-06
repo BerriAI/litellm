@@ -1,16 +1,26 @@
 """Pytest plumbing for the Claude Code compatibility matrix.
 
-Two responsibilities live here:
+Three responsibilities live here:
 
 1. The `compat_result` fixture — the only API a test author needs to learn.
    Tests call `compat_result.set({"status": "pass"})` (or fail / not_applicable)
-   to report their outcome as a tagged union. The fixture is per-test and
-   stores the last value reported.
+   to report their outcome as a tagged union. Multi-model tests call
+   `.add(...)` once per Claude tier so each tier lands as its own row in
+   the results artifact.
 
 2. The `pytest_runtest_makereport` hook — captures each test's reported result,
-   infers (feature, provider) from the file path, and writes a single
-   `compat-results.json` artifact next to JUnit XML. The Matrix JSON Builder
-   consumes this artifact to produce the published `compatibility-matrix.json`.
+   infers (feature, provider) from the file path, and accumulates rows into
+   a per-process collector. At session end we serialize them to
+   `compat-results.json` (or a per-worker file under xdist) so the Matrix
+   JSON Builder can consume them.
+
+3. xdist coordination — when `pytest -n auto` is used, every worker writes
+   its own results shard and the controller merges them into the canonical
+   `compat-results.json` in `pytest_sessionfinish`. Without this, the
+   workers race on the same path and the artifact only reflects whichever
+   worker finished last. The same merge step also emits a rate-limit
+   summary that the binary-search helper consumes to decide whether the
+   current X/Y/Z values were too aggressive.
 
 The (feature, provider) inference comes from the test file path: the parent
 directory name is the feature_id (matching `manifest.yaml`), and the file
@@ -22,43 +32,105 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import sys
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
 VALID_STATUSES = {"pass", "fail", "not_applicable", "not_tested"}
 RESULTS_ARTIFACT_ENV = "COMPAT_RESULTS_PATH"
 DEFAULT_ARTIFACT_PATH = "compat-results.json"
+RATE_LIMIT_SUMMARY_ENV = "COMPAT_RATE_LIMIT_SUMMARY_PATH"
+DEFAULT_RATE_LIMIT_SUMMARY_PATH = "compat-rate-limit-summary.json"
+
+# Heuristic: detect 429s and rate-limit-shaped errors anywhere in the
+# error string. The CLI buries upstream errors in `assistant.message.content`
+# text on stdout (see `failure_diagnostic`), so we don't get a structured
+# status code in every code path — a regex over the joined error text is
+# the most reliable signal we have.
+#
+# We also treat a CLI timeout (`claude CLI timed out after Ns`) as a
+# rate-limit-shaped failure for binary-search purposes: in practice the
+# only reason every model in a cell stalls past the timeout is the
+# upstream collapsing under concurrency, which is exactly the situation
+# the rate limiter is supposed to back off from. False positives on a
+# genuinely slow upstream are tolerable here because the worst case is
+# the binary search runs at a slightly lower rate than necessary.
+_RATE_LIMIT_RE = re.compile(
+    r"(?:\b429\b|rate[\s_-]?limit|too\s+many\s+requests|throttl(?:ed|ing)|"
+    r"claude\s+CLI\s+timed\s+out)",
+    re.IGNORECASE,
+)
 
 
 @dataclass
 class CompatResult:
     """Per-test recorder for compatibility outcomes.
 
-    Tests interact only via `.set(...)`. `.value` is read by the
+    Tests interact via `.set(...)` (single result) or `.add(...)` (one
+    result per Claude tier when the test fans the three models out in
+    parallel). `.value` and `.values` are read by the
     `pytest_runtest_makereport` hook after the test body finishes.
+
+    Multi-result usage exists because every cell in the compat matrix is
+    backed by three model invocations (Haiku/Sonnet/Opus) per (feature,
+    provider). When a test runs them concurrently in a single pytest
+    node, each model needs its own entry in the results artifact so the
+    matrix builder's per-cell aggregator can apply its "all three must
+    pass" rule.
     """
 
     value: Optional[Dict[str, Any]] = None
+    values: List[Dict[str, Any]] = field(default_factory=list)
 
     def set(self, result: Dict[str, Any]) -> None:
+        validated = self._validate(result)
+        self.value = validated
+
+    def add(self, result: Dict[str, Any]) -> None:
+        """Append one model's outcome to the per-test results list.
+
+        Use this when a single test exercises multiple Claude tiers
+        concurrently and needs to report one outcome per tier. The
+        conftest hook will emit one entry per appended result.
+        """
+        validated = self._validate(result)
+        self.values.append(validated)
+
+    @staticmethod
+    def _validate(result: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(result, dict):
-            raise TypeError("compat_result.set() requires a dict")
+            raise TypeError("compat_result requires a dict")
         status = result.get("status")
         if status not in VALID_STATUSES:
             raise ValueError(
-                f"compat_result.set() status must be one of {sorted(VALID_STATUSES)}, "
+                f"compat_result status must be one of {sorted(VALID_STATUSES)}, "
                 f"got {status!r}"
             )
         if status == "fail" and not result.get("error"):
-            raise ValueError("compat_result.set({'status': 'fail'}) requires 'error'")
+            raise ValueError("compat_result {'status': 'fail'} requires 'error'")
         if status == "not_applicable" and not result.get("reason"):
             raise ValueError(
-                "compat_result.set({'status': 'not_applicable'}) requires 'reason'"
+                "compat_result {'status': 'not_applicable'} requires 'reason'"
             )
-        self.value = dict(result)
+        return dict(result)
+
+    def collected(self) -> List[Dict[str, Any]]:
+        """Return every result reported during the test, preserving order.
+
+        Multi-model tests use `.add(...)` per model; legacy tests use
+        `.set(...)` once. We surface both shapes in a single list so
+        the makereport hook only has to think about a list of results.
+        """
+        if self.values:
+            return list(self.values)
+        if self.value is not None:
+            return [dict(self.value)]
+        return []
 
 
 @dataclass
@@ -109,7 +181,14 @@ def _infer_feature_and_provider(node_path: Path) -> Optional[tuple]:
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Capture compat_result.value at end-of-test and remember it for the artifact."""
+    """Capture compat_result reports at end-of-test and remember them for the artifact.
+
+    A single test may report multiple results (one per Claude tier when
+    the three are run in parallel inside one node). We emit one
+    `_CollectedResult` per reported entry so the matrix builder's
+    per-cell aggregator sees the same shape it would have seen if the
+    test were parametrized — every model lands in the artifact.
+    """
     outcome = yield
     report = outcome.get_result()
     if report.when != "call":
@@ -121,29 +200,199 @@ def pytest_runtest_makereport(item, call):
     feature_id, provider = inferred
 
     fixture = item.funcargs.get("compat_result") if hasattr(item, "funcargs") else None
-    reported: Optional[Dict[str, Any]] = getattr(fixture, "value", None)
-
-    if reported is None:
-        if report.passed:
-            reported = {
-                "status": "fail",
-                "error": "test passed without calling compat_result.set(); "
-                "every compat test must report a status.",
-            }
-        else:
-            reported = {
-                "status": "fail",
-                "error": (str(report.longrepr) if report.longrepr else "test failed"),
-            }
-
-    _COLLECTOR.items.append(
-        _CollectedResult(
-            feature_id=feature_id,
-            provider=provider,
-            nodeid=report.nodeid,
-            result=reported,
-        )
+    collected: List[Dict[str, Any]] = (
+        fixture.collected() if isinstance(fixture, CompatResult) else []
     )
+
+    if not collected:
+        if report.passed:
+            collected = [
+                {
+                    "status": "fail",
+                    "error": "test passed without reporting via compat_result; "
+                    "every compat test must report a status.",
+                }
+            ]
+        else:
+            collected = [
+                {
+                    "status": "fail",
+                    "error": (
+                        str(report.longrepr) if report.longrepr else "test failed"
+                    ),
+                }
+            ]
+
+    for reported in collected:
+        _COLLECTOR.items.append(
+            _CollectedResult(
+                feature_id=feature_id,
+                provider=provider,
+                nodeid=report.nodeid,
+                result=reported,
+            )
+        )
+
+
+def _is_xdist_worker(session) -> bool:
+    """Return True iff the current pytest session is an xdist worker.
+
+    The standard idiom is to look up `workerinput` on the config; the
+    controller process doesn't have it, the workers do. We deliberately
+    don't `import xdist` because the suite must keep running when xdist
+    isn't installed at all.
+    """
+    return hasattr(session.config, "workerinput")
+
+
+def _xdist_worker_id(session) -> Optional[str]:
+    info = getattr(session.config, "workerinput", None)
+    if not info:
+        return None
+    return info.get("workerid")
+
+
+def _shard_dir(artifact_path: Path) -> Path:
+    """Workers write their shards next to the canonical results path.
+
+    Putting shards in a sibling directory (rather than inline JSON
+    files in the same dir) keeps the controller's merge step simple
+    — it just lists `*.json` in `<artifact>.shards/` — and avoids
+    accidental shard/canonical filename collisions.
+    """
+    return artifact_path.with_name(artifact_path.name + ".shards")
+
+
+def _serialize_items(items: List["_CollectedResult"]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "feature_id": item.feature_id,
+            "provider": item.provider,
+            "nodeid": item.nodeid,
+            "result": item.result,
+        }
+        for item in items
+    ]
+
+
+def _build_rate_limit_summary(
+    rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Aggregate per-provider rate-limit signals from the result rows.
+
+    We classify any failure whose error string matches `_RATE_LIMIT_RE`
+    as a "rate-limited" failure. The binary-search helper reads this
+    summary to decide whether the current X/Y/Z values were too
+    aggressive: if any provider has `rate_limited > 0`, the harness
+    should back off that provider's rate and retry.
+
+    Returns a dict shaped:
+
+        {
+          "totals": {"pass": N, "fail": N, "rate_limited": N, ...},
+          "per_provider": {
+            "anthropic": {"pass": ..., "fail": ..., "rate_limited": ...},
+            ...
+          },
+          "rate_limited_examples": [
+            {"feature_id": ..., "provider": ..., "error": "..."}, ...
+          ],
+        }
+    """
+    totals: Counter = Counter()
+    per_provider: Dict[str, Counter] = defaultdict(Counter)
+    rate_limited_examples: List[Dict[str, Any]] = []
+
+    for row in rows:
+        result = row.get("result") or {}
+        status = result.get("status") or "unknown"
+        provider = row.get("provider") or "unknown"
+        totals[status] += 1
+        per_provider[provider][status] += 1
+
+        if status == "fail":
+            error = str(result.get("error") or "")
+            if _RATE_LIMIT_RE.search(error):
+                totals["rate_limited"] += 1
+                per_provider[provider]["rate_limited"] += 1
+                # Cap examples so a stuck-throttled run doesn't write
+                # a multi-MB summary file the helper has to slurp.
+                if len(rate_limited_examples) < 25:
+                    rate_limited_examples.append(
+                        {
+                            "feature_id": row.get("feature_id"),
+                            "provider": provider,
+                            "error": error[:500],
+                        }
+                    )
+
+    return {
+        "totals": dict(totals),
+        "per_provider": {p: dict(c) for p, c in per_provider.items()},
+        "rate_limited_examples": rate_limited_examples,
+    }
+
+
+def _print_rate_limit_summary(summary: Dict[str, Any]) -> None:
+    """Emit a human-readable per-provider table to stderr.
+
+    Pytest only captures stderr when `-s` isn't set; we deliberately
+    write here anyway because the binary-search workflow runs pytest
+    with `-q` and grep-checks the structured JSON artifact, while a
+    human running locally with `-s` sees the same numbers inline.
+    """
+    totals = summary.get("totals", {})
+    per_provider = summary.get("per_provider", {})
+    lines: List[str] = []
+    lines.append("[compat] session totals:")
+    for status in ("pass", "fail", "rate_limited", "not_applicable", "not_tested"):
+        if status in totals:
+            lines.append(f"  {status:<16s} {totals[status]}")
+    if per_provider:
+        lines.append("[compat] per-provider breakdown:")
+        for provider in sorted(per_provider):
+            counts = per_provider[provider]
+            parts = " ".join(
+                f"{k}={v}"
+                for k, v in sorted(counts.items())
+                if k != "not_tested" or v > 0
+            )
+            lines.append(f"  {provider:<20s} {parts}")
+    if totals.get("rate_limited", 0):
+        lines.append(
+            "[compat] WARNING: at least one cell hit a rate-limit-shaped error; "
+            "lower the corresponding LITELLM_COMPAT_RATE_<PROVIDER> and retry"
+        )
+    print("\n".join(lines), file=sys.stderr, flush=True)
+
+
+def pytest_sessionstart(session):
+    """Clear stale per-worker shards from any prior session.
+
+    Without this, a previous run's shard directory leaks into the next
+    `pytest_sessionfinish` merge — yielding a `compat-results.json`
+    that includes results from runs that aren't part of the current
+    session, and a misleading rate-limit summary that re-flags
+    failures the user already saw and addressed.
+
+    Only the controller (non-xdist-worker) clears; workers must not
+    race the controller while it's wiping the directory.
+    """
+    if _is_xdist_worker(session):
+        return
+    artifact_path = Path(os.environ.get(RESULTS_ARTIFACT_ENV) or DEFAULT_ARTIFACT_PATH)
+    shard_dir = _shard_dir(artifact_path)
+    if not shard_dir.exists():
+        return
+    for stale in shard_dir.glob("*.json"):
+        try:
+            stale.unlink()
+        except OSError:
+            # If we can't remove a stale shard (permissions, race with
+            # an unrelated process), keep going — the merge step is
+            # robust to malformed shards, and a stale row landing in
+            # the artifact is recoverable; aborting the session isn't.
+            continue
 
 
 def pytest_sessionstart(session):
@@ -158,27 +407,74 @@ def pytest_sessionstart(session):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Write the structured results artifact at end of session.
+    """Write the per-process results shard, then merge if we're the controller.
 
-    Skip writing when no compat results were collected — this conftest is
-    loaded by pytest for every test under `tests/claude_code/`, including
-    sibling unit-test trees (e.g. `_driver_unit_tests/`). Writing an empty
-    artifact in those runs would silently overwrite a real artifact from a
-    prior compat-test run on the same checkout.
+    Worker processes (xdist `gw0`, `gw1`, ...) only write their shard
+    under `<artifact>.shards/<workerid>.json`. The controller writes
+    its own shard if it ran any tests itself, then walks the shards
+    directory and produces the canonical `compat-results.json` plus
+    the rate-limit summary. Single-process runs (no xdist) take the
+    same code path with a single shard, so behavior is consistent.
+
+    Skip when no compat results were collected — this conftest is
+    loaded for every test under `tests/claude_code/`, including sibling
+    unit-test trees (e.g. `_driver_unit_tests/`). Writing an empty
+    artifact would silently overwrite a real artifact from a prior
+    compat-test run on the same checkout.
     """
-    if not _COLLECTOR.items:
+    if not _COLLECTOR.items and not _is_xdist_worker(session):
         return
-    artifact_path = os.environ.get(RESULTS_ARTIFACT_ENV) or DEFAULT_ARTIFACT_PATH
-    payload = {
-        "schema_version": "1",
-        "results": [
+    artifact_path = Path(os.environ.get(RESULTS_ARTIFACT_ENV) or DEFAULT_ARTIFACT_PATH)
+    shard_dir = _shard_dir(artifact_path)
+    shard_dir.mkdir(parents=True, exist_ok=True)
+
+    worker_id = _xdist_worker_id(session) or "main"
+    shard_path = shard_dir / f"{worker_id}.json"
+    shard_path.write_text(
+        json.dumps(
             {
-                "feature_id": item.feature_id,
-                "provider": item.provider,
-                "nodeid": item.nodeid,
-                "result": item.result,
-            }
-            for item in _COLLECTOR.items
-        ],
-    }
-    Path(artifact_path).write_text(json.dumps(payload, indent=2, sort_keys=True))
+                "schema_version": "1",
+                "worker_id": worker_id,
+                "results": _serialize_items(_COLLECTOR.items),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+    # Workers stop here. The controller merges; if we're not running
+    # under xdist, we are effectively the controller.
+    if _is_xdist_worker(session):
+        return
+
+    merged_rows: List[Dict[str, Any]] = []
+    for shard_file in sorted(shard_dir.glob("*.json")):
+        try:
+            shard = json.loads(shard_file.read_text())
+        except (OSError, ValueError):
+            continue
+        rows = shard.get("results")
+        if isinstance(rows, list):
+            merged_rows.extend(rows)
+
+    # Skip writing artifact + summary entirely for unit-test-only runs
+    # (no per-feature compat rows). Otherwise every `pytest tests/...`
+    # run — including local unit-test invocations — would silently
+    # overwrite a real artifact from a prior compat-test run.
+    if not merged_rows:
+        return
+
+    artifact_path.write_text(
+        json.dumps(
+            {"schema_version": "1", "results": merged_rows},
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+    summary = _build_rate_limit_summary(merged_rows)
+    summary_path = Path(
+        os.environ.get(RATE_LIMIT_SUMMARY_ENV) or DEFAULT_RATE_LIMIT_SUMMARY_PATH
+    )
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True))
+    _print_rate_limit_summary(summary)

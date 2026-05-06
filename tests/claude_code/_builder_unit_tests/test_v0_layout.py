@@ -46,8 +46,14 @@ def manifest() -> dict:
 
 
 def test_manifest_lists_all_six_v0_features_in_order(manifest):
+    """The PRD's v0 row set must appear at the top of the manifest in
+    order. Features beyond v0 (extensions added after the matrix
+    shipped) are allowed but must not reorder or displace the v0
+    rows — the docs page anchors row links by index, so v0 stays
+    pinned at positions [0:6] for the lifetime of the schema.
+    """
     ids = [feature["id"] for feature in manifest["features"]]
-    assert ids == EXPECTED_FEATURE_IDS
+    assert ids[: len(EXPECTED_FEATURE_IDS)] == EXPECTED_FEATURE_IDS
 
 
 def test_manifest_lists_all_five_v0_providers_in_order(manifest):
