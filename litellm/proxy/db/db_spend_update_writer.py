@@ -1131,10 +1131,12 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                user_id,
-                                response_cost,
-                            ) in user_list_transactions.items():
+                            # Sort by ID for consistent lock ordering across pods to prevent deadlocks.
+                            # batch_() issues statements sequentially within the tx, so iteration
+                            # order = lock acquisition order.
+                            for user_id, response_cost in sorted(
+                                user_list_transactions.items()
+                            ):
                                 batcher.litellm_usertable.update_many(
                                     where={"user_id": user_id},
                                     data={"spend": {"increment": response_cost}},
@@ -1186,10 +1188,10 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                token,
-                                response_cost,
-                            ) in key_list_transactions.items():
+                            # Sort by token for consistent lock ordering across pods to prevent deadlocks.
+                            for token, response_cost in sorted(
+                                key_list_transactions.items()
+                            ):
                                 batcher.litellm_verificationtoken.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"token": token},
                                     data={
@@ -1230,10 +1232,10 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                team_id,
-                                response_cost,
-                            ) in team_list_transactions.items():
+                            # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
+                            for team_id, response_cost in sorted(
+                                team_list_transactions.items()
+                            ):
                                 verbose_proxy_logger.debug(
                                     "Updating spend for team id={} by {}".format(
                                         team_id, response_cost
@@ -1288,10 +1290,11 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                key,
-                                response_cost,
-                            ) in team_member_list_transactions.items():
+                            # Sort by composite key for consistent lock ordering across pods to prevent deadlocks.
+                            # Key format "team_id::<v>::user_id::<v>" makes the string sort equivalent to sorting by (team_id, user_id).
+                            for key, response_cost in sorted(
+                                team_member_list_transactions.items()
+                            ):
                                 # key is "team_id::<value>::user_id::<value>"
                                 team_id = key.split("::")[1]
                                 user_id = key.split("::")[3]
@@ -1348,10 +1351,10 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for (
-                                org_id,
-                                response_cost,
-                            ) in org_list_transactions.items():
+                            # Sort by org_id for consistent lock ordering across pods to prevent deadlocks.
+                            for org_id, response_cost in sorted(
+                                org_list_transactions.items()
+                            ):
                                 batcher.litellm_organizationtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"organization_id": org_id},
                                     data={"spend": {"increment": response_cost}},
@@ -1439,7 +1442,10 @@ class DBSpendUpdateWriter:
                         timeout=timedelta(seconds=60)
                     ) as transaction:
                         async with transaction.batch_() as batcher:
-                            for entity_id, response_cost in transactions.items():
+                            # Sort by entity_id for consistent lock ordering across pods to prevent deadlocks.
+                            for entity_id, response_cost in sorted(
+                                transactions.items()
+                            ):
                                 verbose_proxy_logger.debug(
                                     f"Updating spend for {entity_name} {where_field}={entity_id} by {response_cost}"
                                 )

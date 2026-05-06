@@ -4879,10 +4879,10 @@ class ProxyUpdateSpend:
                     timeout=timedelta(seconds=60)
                 ) as transaction:
                     async with transaction.batch_() as batcher:
-                        for (
-                            end_user_id,
-                            response_cost,
-                        ) in end_user_list_transactions.items():
+                        # Sort by end_user_id for consistent lock ordering across pods to prevent deadlocks.
+                        for end_user_id, response_cost in sorted(
+                            end_user_list_transactions.items()
+                        ):
                             if litellm.max_end_user_budget is not None:
                                 pass
                             batcher.litellm_endusertable.upsert(
