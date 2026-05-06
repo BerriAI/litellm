@@ -1,7 +1,10 @@
 import asyncio
 import copy
+import importlib.metadata
+import json
 import logging
 import os
+import sys
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -9,10 +12,12 @@ from typing import Any, Dict, Iterable, Literal, Optional, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -130,6 +135,104 @@ services = Union[
     ],
     str,
 ]
+
+_DIAGNOSE_REDACTED_VALUE = "[REDACTED]"
+_diagnose_sensitive_masker = SensitiveDataMasker()
+
+
+class DiagnoseRequest(BaseModel):
+    model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional proxy model name to use for generating the diagnostic report. "
+            "When omitted, LiteLLM uses the first configured proxy deployment."
+        ),
+    )
+    issue_description: Optional[str] = Field(
+        default=None,
+        description="Short description of the issue the admin is trying to reproduce.",
+    )
+    reproduction_steps: Optional[str] = Field(
+        default=None,
+        description="Known reproduction steps or the behavior the admin has already tried.",
+    )
+
+
+def _redact_diagnose_payload(payload: Any, sensitive_parent: bool = False) -> Any:
+    if isinstance(payload, dict):
+        redacted: dict = {}
+        for key, value in payload.items():
+            key_is_sensitive = _diagnose_sensitive_masker.is_sensitive_key(str(key))
+            if key_is_sensitive:
+                redacted[key] = _DIAGNOSE_REDACTED_VALUE
+            else:
+                redacted[key] = _redact_diagnose_payload(value, key_is_sensitive)
+        return redacted
+    if isinstance(payload, list):
+        return [_redact_diagnose_payload(item, sensitive_parent) for item in payload]
+    if sensitive_parent:
+        return _DIAGNOSE_REDACTED_VALUE
+    if isinstance(payload, (str, int, float, bool)) or payload is None:
+        return payload
+    return str(payload)
+
+
+def _get_litellm_package_version() -> str:
+    try:
+        return importlib.metadata.version("litellm")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _get_diagnose_model_list(llm_router: Optional[Any]) -> list:
+    if llm_router is None:
+        return []
+    model_list = llm_router.get_model_list(model_name=None)
+    return model_list or []
+
+
+def _select_diagnose_model(
+    requested_model: Optional[str], model_list: list
+) -> Optional[str]:
+    if requested_model:
+        return requested_model
+    for deployment in model_list:
+        if isinstance(deployment, dict) and deployment.get("model_name"):
+            return deployment["model_name"]
+    return None
+
+
+def _build_diagnose_prompt(
+    *,
+    request: DiagnoseRequest,
+    selected_model: str,
+    diagnostic_context: dict,
+) -> str:
+    serialized_context = json.dumps(
+        diagnostic_context, indent=2, sort_keys=True, default=str
+    )
+    return (
+        "You are helping the LiteLLM team reproduce a proxy issue. "
+        "Act like a concise support engineer doing a mini diagnostic grill: "
+        "identify the exact LiteLLM version, summarize the configured proxy models, "
+        "highlight relevant YAML/config settings, list missing details to ask the "
+        "admin, and produce clean Markdown reproduction steps.\n\n"
+        f"Model selected for this diagnostic LLM call: {selected_model}\n"
+        f"Issue description from admin: {request.issue_description or 'Not provided'}\n"
+        f"Known reproduction steps from admin: {request.reproduction_steps or 'Not provided'}\n\n"
+        "Use only this redacted diagnostic context; never invent secrets:\n"
+        f"```json\n{serialized_context}\n```\n\n"
+        "Return Markdown with these headings: Summary, Environment, Config and Models, "
+        "Reproduction Steps, Questions for Admin, Suspected Areas."
+    )
+
+
+def _extract_diagnose_response_text(response: Any) -> str:
+    try:
+        content = response.choices[0].message.content
+    except (AttributeError, IndexError, TypeError):
+        return ""
+    return content or ""
 
 
 @router.get(
@@ -1568,6 +1671,84 @@ async def health_readiness_details(response: Response):
     Authenticated readiness diagnostics with DB/cache/callback metadata.
     """
     return await _get_health_readiness_details(response=response)
+
+
+@router.post(
+    "/diagnose",
+    tags=["health"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def diagnose_endpoint(
+    diagnose_request: DiagnoseRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Generate a redacted Markdown diagnostic report for LiteLLM support.
+
+    This endpoint is restricted to proxy admins and proxy admin view-only users
+    because it summarizes proxy configuration and configured deployments.
+    """
+    if not _is_proxy_admin(user_api_key_dict):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only proxy admins can call /diagnose.",
+        )
+
+    from litellm.proxy.proxy_server import llm_router, proxy_config
+
+    configured_models = _get_diagnose_model_list(llm_router=llm_router)
+    selected_model = _select_diagnose_model(
+        requested_model=diagnose_request.model,
+        model_list=configured_models,
+    )
+    redacted_config = _redact_diagnose_payload(proxy_config.get_config_state())
+    redacted_models = _redact_diagnose_payload(configured_models)
+    diagnostic_context = {
+        "litellm_version": _get_litellm_package_version(),
+        "python_version": sys.version,
+        "configured_models": redacted_models,
+        "config": redacted_config,
+        "admin_user": {
+            "user_id": user_api_key_dict.user_id,
+            "user_role": (
+                user_api_key_dict.user_role.value
+                if hasattr(user_api_key_dict.user_role, "value")
+                else user_api_key_dict.user_role
+            ),
+        },
+    }
+
+    if selected_model is None or llm_router is None:
+        return {
+            "used_llm": False,
+            "selected_model": selected_model,
+            "diagnostic_report": (
+                "# LiteLLM Diagnostic Report\n\n"
+                "No proxy model is configured for the diagnostic LLM call. "
+                "Call `/diagnose` again with a configured `model`, or add a "
+                "model to the proxy config, so LiteLLM can generate the full "
+                "Markdown reproduction report.\n\n"
+                f"```json\n{json.dumps(diagnostic_context, indent=2, sort_keys=True, default=str)}\n```"
+            ),
+            "diagnostic_context": diagnostic_context,
+        }
+
+    prompt = _build_diagnose_prompt(
+        request=diagnose_request,
+        selected_model=selected_model,
+        diagnostic_context=diagnostic_context,
+    )
+    response = await llm_router.acompletion(
+        model=selected_model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+    )
+    return {
+        "used_llm": True,
+        "selected_model": selected_model,
+        "diagnostic_report": _extract_diagnose_response_text(response),
+        "diagnostic_context": diagnostic_context,
+    }
 
 
 @router.get(

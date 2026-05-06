@@ -643,6 +643,135 @@ def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
     assert "cache" in response_data
 
 
+def test_diagnose_requires_admin_view():
+    """
+    /diagnose returns support-ready diagnostics, so it must reject non-admins.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    client = TestClient(app)
+
+    response = client.post("/diagnose", json={"model": "gpt-4o"})
+
+    assert response.status_code == 403, response.text
+
+
+def test_diagnose_generates_redacted_llm_report(monkeypatch):
+    """
+    /diagnose should prompt a configured LLM with redacted proxy state and
+    return the generated Markdown reproduction report.
+    """
+    captured_call = {}
+
+    class FakeRouter:
+        def get_model_list(self, model_name=None):
+            deployments = [
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {
+                        "model": "openai/gpt-4o",
+                        "api_key": "sk-secret-value-that-must-not-leak",
+                        "api_base": "https://api.openai.example",
+                    },
+                    "model_info": {"id": "deployment-1"},
+                }
+            ]
+            if model_name is None:
+                return deployments
+            return [d for d in deployments if d["model_name"] == model_name]
+
+        async def acompletion(self, **kwargs):
+            captured_call.update(kwargs)
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content="# Reproduction report\n\nUse this report."
+                        )
+                    )
+                ]
+            )
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", FakeRouter())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_config",
+        SimpleNamespace(
+            get_config_state=lambda: {
+                "model_list": [
+                    {
+                        "model_name": "gpt-4o",
+                        "litellm_params": {
+                            "model": "openai/gpt-4o",
+                            "api_key": "sk-secret-value-that-must-not-leak",
+                        },
+                    }
+                ],
+                "general_settings": {"master_key": "sk-master-secret"},
+            }
+        ),
+    )
+
+    response = client.post(
+        "/diagnose",
+        json={"issue_description": "Requests fail after enabling the proxy."},
+    )
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["selected_model"] == "gpt-4o"
+    assert response_data["used_llm"] is True
+    assert response_data["diagnostic_report"].startswith("# Reproduction report")
+    assert captured_call["model"] == "gpt-4o"
+
+    prompt_text = captured_call["messages"][0]["content"]
+    assert "Requests fail after enabling the proxy." in prompt_text
+    assert "sk-secret-value-that-must-not-leak" not in prompt_text
+    assert "sk-master-secret" not in prompt_text
+    assert "REDACTED" in prompt_text
+
+
+def test_diagnose_prompts_for_model_when_no_llm_is_configured(monkeypatch):
+    """
+    /diagnose should return redacted context plus next-step instructions when
+    the proxy has no configured LLM to generate the full report.
+    """
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    )
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_config",
+        SimpleNamespace(
+            get_config_state=lambda: {
+                "general_settings": {"master_key": "sk-master-secret"}
+            }
+        ),
+    )
+
+    response = client.post("/diagnose", json={})
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["used_llm"] is False
+    assert response_data["selected_model"] is None
+    assert "configured `model`" in response_data["diagnostic_report"]
+    assert "sk-master-secret" not in response_data["diagnostic_report"]
+
+
 def test_health_readiness_allows_explicit_legacy_public_details(monkeypatch):
     """
     Operators can explicitly preserve the legacy public readiness payload.

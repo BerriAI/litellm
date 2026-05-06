@@ -2,6 +2,7 @@ from fastapi.routing import APIRoute
 
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.debug_utils import router as debug_router
+from litellm.proxy.health_endpoints._health_endpoints import router as health_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_router,
 )
@@ -31,4 +32,10 @@ def test_sensitive_debug_routes_require_auth_dependency():
 def test_provider_budgets_requires_auth_dependency():
     assert user_api_key_auth in _get_route_dependency_calls(
         spend_router, "/provider/budgets", "GET"
+    )
+
+
+def test_diagnose_requires_auth_dependency():
+    assert user_api_key_auth in _get_route_dependency_calls(
+        health_router, "/diagnose", "POST"
     )
