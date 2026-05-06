@@ -75,7 +75,7 @@ def test_sse_emits_all_events_from_zero(client, noop_provider):
     rid = _seed_events(client, sid, daemon_token, count=5)
 
     res = client.get(
-        f"/v2/sessions/{sid}/runs/{rid}/events",
+        f"/v2/sessions/{sid}/runs/{rid}/stream",
         headers={"Authorization": "Bearer k"},
     )
     assert res.status_code == 200
@@ -89,7 +89,7 @@ def test_sse_resumes_with_starting_seq(client, noop_provider):
     rid = _seed_events(client, sid, daemon_token, count=5)
 
     res = client.get(
-        f"/v2/sessions/{sid}/runs/{rid}/events?starting_seq=4",
+        f"/v2/sessions/{sid}/runs/{rid}/stream?starting_seq=4",
         headers={"Authorization": "Bearer k"},
     )
     assert res.status_code == 200
@@ -103,7 +103,7 @@ def test_sse_last_event_id_header_takes_precedence(client, noop_provider):
     rid = _seed_events(client, sid, daemon_token, count=3)
 
     res = client.get(
-        f"/v2/sessions/{sid}/runs/{rid}/events",
+        f"/v2/sessions/{sid}/runs/{rid}/stream",
         headers={
             "Authorization": "Bearer k",
             "Last-Event-ID": "2",
