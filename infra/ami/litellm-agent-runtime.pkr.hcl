@@ -68,7 +68,8 @@ source "amazon-ebs" "litellm-agent-runtime" {
   instance_type = var.instance_type
 
   ami_name        = "${var.ami_name_prefix}-{{timestamp}}"
-  ami_description = "LiteLLM agent runtime — node24/py3.13/git/gh/uv/bun + daemon stub"
+  // AWS DescribeImage rejects non-ASCII; keep description ASCII-only.
+  ami_description = "LiteLLM agent runtime - node24/py3.13/git/gh/uv/bun + daemon stub"
   ami_users       = var.ami_users
 
   source_ami_filter {
