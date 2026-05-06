@@ -1,24 +1,38 @@
 import json
 import re
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    NoReturn,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import httpx
 
 import litellm
 from litellm.constants import (
+    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
     ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES,
     DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS,
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     AllAnthropicMessageValues,
@@ -66,6 +80,7 @@ from litellm.types.utils import (
 from litellm.utils import (
     ModelResponse,
     Usage,
+    _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     get_max_tokens,
@@ -75,7 +90,12 @@ from litellm.utils import (
     token_counter,
 )
 
-from ..common_utils import AnthropicError, AnthropicModelInfo, process_anthropic_headers
+from ..common_utils import (
+    AnthropicError,
+    AnthropicModelInfo,
+    process_anthropic_headers,
+    strip_advisor_blocks_from_messages,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -83,6 +103,22 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT: Dict[str, str] = {
+    "low": "low",
+    "minimal": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
+}
+
+DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING = (
+    "Dropping unsupported `output_config` for model=%s "
+    "(drop_params=True). Effort is only supported on Opus 4.5+, "
+    "Sonnet 4.6+, and Mythos Preview."
+)
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -183,6 +219,109 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             v in model_lower for v in ("opus-4-6", "opus_4_6", "opus-4.6", "opus_4.6")
         )
 
+    @staticmethod
+    def _is_opus_4_7_model(model: str) -> bool:
+        """Check if the model is specifically Claude Opus 4.7."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        )
+
+    @staticmethod
+    def _supports_effort_level(model: str, level: str) -> bool:
+        """Check ``supports_{level}_reasoning_effort`` in the model map.
+
+        Strips bedrock/vertex prefixes so a provider-routed Claude still
+        resolves to the Anthropic model-map entry.
+        """
+        key = f"supports_{level}_reasoning_effort"
+        try:
+            if _supports_factory(
+                model=model,
+                custom_llm_provider="anthropic",
+                key=key,
+            ):
+                return True
+        except Exception:
+            pass
+        candidates = [model]
+        for prefix in (
+            "bedrock/converse/",
+            "bedrock/invoke/",
+            "bedrock/",
+            "vertex_ai/",
+        ):
+            if model.startswith(prefix):
+                candidates.append(model[len(prefix) :])
+        try:
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            base = BedrockModelInfo.get_base_model(model)
+            if base:
+                candidates.append(base)
+                candidates.append(f"bedrock/{base}")
+        except Exception:
+            pass
+        try:
+            import litellm
+
+            for cand in candidates:
+                if cand in litellm.model_cost and (
+                    litellm.model_cost[cand].get(key) is True
+                ):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _validate_effort_for_model(model: str, effort: Optional[str]) -> Optional[str]:
+        """Return ``None`` if ``effort`` is allowed on ``model``, else an error message."""
+        if effort == "max" and not (
+            AnthropicConfig._is_claude_4_6_model(model)
+            or AnthropicConfig._is_claude_4_7_model(model)
+            or AnthropicConfig._supports_effort_level(model, "max")
+        ):
+            return f"effort='max' is not supported by this model. Got model: {model}"
+        if effort == "xhigh" and not AnthropicConfig._supports_effort_level(
+            model, "xhigh"
+        ):
+            return f"effort='xhigh' is not supported by this model. Got model: {model}"
+        return None
+
+    @staticmethod
+    def _model_supports_effort_param(model: str) -> bool:
+        """Whether the model accepts ``output_config.effort`` at all."""
+        return any(
+            AnthropicConfig._supports_effort_level(model, level)
+            for level in ("low", "minimal", "medium", "high", "xhigh", "max")
+        )
+
+    @staticmethod
+    def _raise_invalid_reasoning_effort(
+        model: str, value: Any, llm_provider: str
+    ) -> NoReturn:
+        """Raise a ``BadRequestError`` for an unrecognised ``reasoning_effort``.
+
+        Args:
+            model: The model id the request was routed to (surfaced in the error).
+            value: The offending ``reasoning_effort`` value supplied by the caller.
+            llm_provider: Provider tag for the raised exception (``"anthropic"``,
+                ``"bedrock_converse"``, ``"databricks"``, ...).
+
+        Raises:
+            litellm.exceptions.BadRequestError: Always.
+        """
+        raise litellm.exceptions.BadRequestError(
+            message=(
+                f"Invalid reasoning_effort: {value!r}. "
+                f"Must be one of: 'minimal', 'low', 'medium', "
+                f"'high', 'xhigh', 'max', 'none'"
+            ),
+            model=model,
+            llm_provider=llm_provider,
+        )
+
     def get_supported_openai_params(self, model: str):
         params = [
             "stream",
@@ -206,6 +345,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if (
             "claude-3-7-sonnet" in model
             or AnthropicConfig._is_claude_4_6_model(model)
+            or AnthropicConfig._is_claude_4_7_model(model)
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,
@@ -508,6 +648,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="tool_search_tool_bm25_20251119",
                 name=tool_name,
             )
+        elif tool["type"] == ANTHROPIC_ADVISOR_TOOL_TYPE:
+            from litellm.types.llms.anthropic import AnthropicAdvisorTool
+
+            _tool_dict = cast(dict, tool)
+            advisor_model = _tool_dict.get("model")
+            if not isinstance(advisor_model, str):
+                raise ValueError("Advisor tool must have a valid model")
+            _advisor_tool = AnthropicAdvisorTool(
+                type=ANTHROPIC_ADVISOR_TOOL_TYPE,
+                name="advisor",
+                model=advisor_model,
+            )
+            if _tool_dict.get("max_uses") is not None:
+                _advisor_tool["max_uses"] = _tool_dict["max_uses"]
+            if _tool_dict.get("caching") is not None:
+                _advisor_tool["caching"] = _tool_dict["caching"]
+            returned_tool = _advisor_tool  # type: ignore[assignment]
         if returned_tool is None and mcp_server is None:
             raise ValueError(f"Unsupported tool type: {tool['type']}")
 
@@ -745,10 +902,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def _map_reasoning_effort(
         reasoning_effort: Optional[Union[REASONING_EFFORT, str]],
         model: str,
+        llm_provider: str = "anthropic",
     ) -> Optional[AnthropicThinkingParam]:
         if reasoning_effort is None or reasoning_effort == "none":
             return None
-        if AnthropicConfig._is_claude_4_6_model(model):
+        if AnthropicConfig._is_adaptive_thinking_model(model):
             return AnthropicThinkingParam(
                 type="adaptive",
             )
@@ -767,13 +925,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
             )
+        elif reasoning_effort == "xhigh":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+            )
+        elif reasoning_effort == "max":
+            return AnthropicThinkingParam(
+                type="enabled",
+                budget_tokens=DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+            )
         elif reasoning_effort == "minimal":
             return AnthropicThinkingParam(
                 type="enabled",
-                budget_tokens=DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+                budget_tokens=max(
+                    DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+                    ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+                ),
             )
         else:
-            raise ValueError(f"Unmapped reasoning effort: {reasoning_effort}")
+            raise litellm.exceptions.BadRequestError(
+                message=(
+                    f"Unmapped reasoning effort: {reasoning_effort!r}. "
+                    f"Must be one of: 'minimal', 'low', 'medium', 'high', "
+                    f"'xhigh', 'max', 'none'."
+                ),
+                model=model,
+                llm_provider=llm_provider,
+            )
 
     def _extract_json_schema_from_response_format(
         self, value: Optional[dict]
@@ -964,11 +1143,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if mcp_servers:
                     optional_params["mcp_servers"] = mcp_servers
             elif param == "tool_choice" or param == "parallel_tool_calls":
-                _tool_choice: Optional[
-                    AnthropicMessagesToolChoice
-                ] = self._map_tool_choice(
-                    tool_choice=non_default_params.get("tool_choice"),
-                    parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                _tool_choice: Optional[AnthropicMessagesToolChoice] = (
+                    self._map_tool_choice(
+                        tool_choice=non_default_params.get("tool_choice"),
+                        parallel_tool_use=non_default_params.get("parallel_tool_calls"),
+                    )
                 )
 
                 if _tool_choice is not None:
@@ -997,6 +1176,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         "opus-4-5",
                         "opus-4.6",
                         "opus-4-6",
+                        "opus-4.7",
+                        "opus-4-7",
                         "sonnet-4.6",
                         "sonnet-4-6",
                         "sonnet_4.6",
@@ -1035,21 +1216,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             elif param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                    reasoning_effort=value, model=model
+                mapped_thinking = AnthropicConfig._map_reasoning_effort(
+                    reasoning_effort=value,
+                    model=model,
+                    llm_provider=self.custom_llm_provider or "anthropic",
                 )
-                # For Claude 4.6 models, effort is controlled via output_config,
-                # not thinking budget_tokens. Map reasoning_effort to output_config.
-                if AnthropicConfig._is_claude_4_6_model(model):
-                    effort_map = {
-                        "low": "low",
-                        "minimal": "low",
-                        "medium": "medium",
-                        "high": "high",
-                        "max": "max",
-                    }
-                    mapped_effort = effort_map.get(value, value)
-                    optional_params["output_config"] = {"effort": mapped_effort}
+                if mapped_thinking is None:
+                    optional_params.pop("thinking", None)
+                    optional_params.pop("output_config", None)
+                else:
+                    optional_params["thinking"] = mapped_thinking
+                    if AnthropicConfig._is_adaptive_thinking_model(model):
+                        mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(
+                            value
+                        )
+                        if mapped_effort is None:
+                            AnthropicConfig._raise_invalid_reasoning_effort(
+                                model=model,
+                                value=value,
+                                llm_provider=self.custom_llm_provider or "anthropic",
+                            )
+                        optional_params["output_config"] = {"effort": mapped_effort}
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(
                     cast(OpenAIWebSearchOptions, value)
@@ -1066,9 +1253,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         self.map_openai_context_management_to_anthropic(value)
                     )
                     if anthropic_context_management is not None:
-                        optional_params[
-                            "context_management"
-                        ] = anthropic_context_management
+                        optional_params["context_management"] = (
+                            anthropic_context_management
+                        )
             elif param == "speed" and isinstance(value, str):
                 # Pass through Anthropic-specific speed parameter for fast mode
                 optional_params["speed"] = value
@@ -1142,9 +1329,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text=system_message_block["content"],
                     )
                     if "cache_control" in system_message_block:
-                        anthropic_system_message_content[
-                            "cache_control"
-                        ] = system_message_block["cache_control"]
+                        anthropic_system_message_content["cache_control"] = (
+                            system_message_block["cache_control"]
+                        )
                     anthropic_system_message_list.append(
                         anthropic_system_message_content
                     )
@@ -1168,9 +1355,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             )
                         )
                         if "cache_control" in _content:
-                            anthropic_system_message_content[
-                                "cache_control"
-                            ] = _content["cache_control"]
+                            anthropic_system_message_content["cache_control"] = (
+                                _content["cache_control"]
+                            )
 
                         anthropic_system_message_list.append(
                             anthropic_system_message_content
@@ -1311,6 +1498,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._ensure_beta_header(
                 headers, ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value
             )
+        for tool in _tools:
+            if tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE:
+                self._ensure_beta_header(
+                    headers, ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value
+                )
+                break
         return headers
 
     def transform_request(
@@ -1390,6 +1583,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 message="{}\nReceived Messages={}".format(str(e), messages),
             )  # don't use verbose_logger.exception, if exception is raised
 
+        ## Auto-strip advisor blocks from history if advisor tool is absent.
+        ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
+        _all_tools = optional_params.get("tools") or []
+        _has_advisor = any(
+            isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE
+            for t in _all_tools
+        )
+        if not _has_advisor:
+            anthropic_messages = strip_advisor_blocks_from_messages(anthropic_messages)
+
         ## Add code_execution tool if container_upload is in messages
         _tools = (
             cast(
@@ -1440,46 +1643,88 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             **optional_params,
         }
 
-        ## Handle output_config (Anthropic-specific parameter)
-        if "output_config" in optional_params:
-            output_config = optional_params.get("output_config")
-            if output_config and isinstance(output_config, dict):
-                effort = output_config.get("effort")
-                if effort and effort not in ["high", "medium", "low", "max"]:
-                    raise ValueError(
-                        f"Invalid effort value: {effort}. Must be one of: 'high', 'medium', 'low', 'max'"
-                    )
-                if effort == "max" and not self._is_opus_4_6_model(model):
-                    raise ValueError(
-                        f"effort='max' is only supported by Claude Opus 4.6. Got model: {model}"
-                    )
-                data["output_config"] = output_config
+        self._apply_output_config(
+            data=data, model=model, optional_params=optional_params
+        )
 
         return data
 
-    def _transform_response_for_json_mode(
+    def _apply_output_config(
+        self, data: dict, model: str, optional_params: dict
+    ) -> None:
+        """Validate and apply output_config to the request data."""
+        if "output_config" not in optional_params:
+            return
+        output_config = optional_params.get("output_config")
+        if not output_config or not isinstance(output_config, dict):
+            return
+        if litellm.drop_params is True and not self._model_supports_effort_param(model):
+            litellm.verbose_logger.warning(
+                DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
+                model,
+            )
+            optional_params.pop("output_config", None)
+            data.pop("output_config", None)
+            return
+        effort = output_config.get("effort")
+        valid_efforts = ["high", "medium", "low", "xhigh", "max"]
+        if effort is not None and effort not in valid_efforts:
+            raise litellm.exceptions.BadRequestError(
+                message=(
+                    f"Invalid effort value: {effort!r}. Must be one of: "
+                    f"'high', 'medium', 'low', 'xhigh', 'max'"
+                ),
+                model=model,
+                llm_provider=self.custom_llm_provider or "anthropic",
+            )
+        gate_error = self._validate_effort_for_model(model, effort)
+        if gate_error is not None:
+            raise litellm.exceptions.BadRequestError(
+                message=gate_error,
+                model=model,
+                llm_provider=self.custom_llm_provider or "anthropic",
+            )
+        data["output_config"] = output_config
+
+    def _resolve_json_mode_non_streaming(
         self,
         json_mode: Optional[bool],
         tool_calls: List[ChatCompletionToolCallChunk],
-    ) -> Optional[LitellmMessage]:
-        _message: Optional[LitellmMessage] = None
-        if json_mode is True and len(tool_calls) == 1:
-            # check if tool name is the default tool name
-            json_mode_content_str: Optional[str] = None
-            if (
-                "name" in tool_calls[0]["function"]
-                and tool_calls[0]["function"]["name"] == RESPONSE_FORMAT_TOOL_NAME
-            ):
-                json_mode_content_str = tool_calls[0]["function"].get("arguments")
-            if json_mode_content_str is not None:
-                _message = AnthropicConfig._convert_tool_response_to_message(
-                    tool_calls=tool_calls,
-                )
-        return _message
-
-    def extract_response_content(
-        self, completion_response: dict
     ) -> Tuple[
+        Optional[LitellmMessage],
+        List[ChatCompletionToolCallChunk],
+        Optional[str],
+    ]:
+        """Strip internal response_format tool calls; merge payload into content when mixed with user tools."""
+        if json_mode is not True or not tool_calls:
+            return None, tool_calls, None
+
+        json_indices = [
+            i
+            for i, t in enumerate(tool_calls)
+            if t.get("function", {}).get("name") == RESPONSE_FORMAT_TOOL_NAME
+        ]
+        if not json_indices:
+            return None, tool_calls, None
+
+        if len(json_indices) == len(tool_calls):
+            json_tool = tool_calls[json_indices[0]]
+            if json_tool.get("function", {}).get("arguments") is None:
+                return None, tool_calls, None
+            _message = AnthropicConfig._convert_tool_response_to_message(
+                tool_calls=[json_tool]
+            )
+            return _message, [], None
+
+        first_json = tool_calls[json_indices[0]]
+        json_msg = AnthropicConfig._convert_tool_response_to_message([first_json])
+        extra_content: Optional[str] = (
+            json_msg.content if json_msg is not None else None
+        )
+        filtered_tools = [t for i, t in enumerate(tool_calls) if i not in json_indices]
+        return None, filtered_tools, extra_content
+
+    def extract_response_content(self, completion_response: dict) -> Tuple[
         str,
         Optional[List[Any]],
         Optional[
@@ -1654,10 +1899,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ),
             )
 
+        raw_input_tokens = usage_object.get("input_tokens", 0) or 0
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cache_read_input_tokens,
             cache_creation_tokens=cache_creation_input_tokens,
             cache_creation_token_details=cache_creation_token_details,
+            text_tokens=raw_input_tokens,
         )
         # Always populate completion_token_details, not just when there's reasoning_content
         reasoning_tokens = (
@@ -1773,9 +2020,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             code_interpreter_results = self._build_code_interpreter_results(
                 tool_results, code_by_id, container_id
             )
-            provider_specific_fields[
-                "code_interpreter_results"
-            ] = code_interpreter_results
+            provider_specific_fields["code_interpreter_results"] = (
+                code_interpreter_results
+            )
 
         container = completion_response.get("container")
         if container is not None:
@@ -1835,19 +2082,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_calls,
         )
 
+        json_mode_message, tool_calls_for_message, json_extra_content = (
+            self._resolve_json_mode_non_streaming(
+                json_mode=json_mode,
+                tool_calls=tool_calls,
+            )
+        )
+        merged_text = text_content or ""
+        if json_extra_content:
+            merged_text = (
+                merged_text + json_extra_content if merged_text else json_extra_content
+            )
+
         _message = litellm.Message(
-            tool_calls=tool_calls,
-            content=text_content or None,
+            tool_calls=tool_calls_for_message,
+            content=merged_text or None,
             provider_specific_fields=provider_specific_fields,
             thinking_blocks=thinking_blocks,
             reasoning_content=reasoning_content,
         )
         _message.provider_specific_fields = provider_specific_fields
 
-        json_mode_message = self._transform_response_for_json_mode(
-            json_mode=json_mode,
-            tool_calls=tool_calls,
-        )
         if json_mode_message is not None:
             completion_response["stop_reason"] = "stop"
             _message = json_mode_message

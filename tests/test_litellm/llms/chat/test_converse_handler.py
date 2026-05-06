@@ -81,7 +81,7 @@ class TestBedrockRegionInModelPath:
         _stripped = _model_for_id
         for rp in ["bedrock/converse/", "bedrock/", "converse/"]:
             if _stripped.startswith(rp):
-                _stripped = _stripped[len(rp):]
+                _stripped = _stripped[len(rp) :]
                 break
 
         _region_from_model = None
@@ -100,12 +100,12 @@ class TestBedrockRegionInModelPath:
         if _region_from_model is not None and "aws_region_name" not in optional_params:
             optional_params["aws_region_name"] = _region_from_model
 
-        assert model_id == expected_model_id, (
-            f"modelId mismatch for {model!r}: got {model_id!r}, expected {expected_model_id!r}"
-        )
-        assert optional_params.get("aws_region_name") == expected_region, (
-            f"region mismatch for {model!r}: got {optional_params.get('aws_region_name')!r}, expected {expected_region!r}"
-        )
+        assert (
+            model_id == expected_model_id
+        ), f"modelId mismatch for {model!r}: got {model_id!r}, expected {expected_model_id!r}"
+        assert (
+            optional_params.get("aws_region_name") == expected_region
+        ), f"region mismatch for {model!r}: got {optional_params.get('aws_region_name')!r}, expected {expected_region!r}"
 
     def test_explicit_aws_region_name_not_overridden(self):
         """

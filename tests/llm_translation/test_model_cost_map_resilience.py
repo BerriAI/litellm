@@ -16,9 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import (
@@ -110,11 +108,21 @@ class TestValidateModelCostMap:
 
     def test_should_reject_non_dict(self):
         """Non-dict should fail at check 1."""
-        assert GetModelCostMap.validate_model_cost_map(fetched_map="not a dict", backup_model_count=0) is False
+        assert (
+            GetModelCostMap.validate_model_cost_map(
+                fetched_map="not a dict", backup_model_count=0
+            )
+            is False
+        )
 
     def test_should_reject_empty_map(self):
         """Empty dict should fail at check 1."""
-        assert GetModelCostMap.validate_model_cost_map(fetched_map={}, backup_model_count=0) is False
+        assert (
+            GetModelCostMap.validate_model_cost_map(
+                fetched_map={}, backup_model_count=0
+            )
+            is False
+        )
 
     def test_should_reject_significant_shrinkage(self):
         """Should fail at check 2 (shrinkage)."""
@@ -201,9 +209,7 @@ class TestGetModelCostMapFallback:
         """LITELLM_LOCAL_MODEL_COST_MAP=True should skip remote fetch entirely."""
         with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP": "True"}):
             with patch("httpx.get") as mock_get:
-                result = get_model_cost_map(
-                    "https://fake-url.com/model_prices.json"
-                )
+                result = get_model_cost_map("https://fake-url.com/model_prices.json")
                 mock_get.assert_not_called()
 
         assert isinstance(result, dict)
@@ -222,9 +228,9 @@ class TestBackupModelCostMapExists:
     def test_should_have_minimum_models_in_backup(self):
         """The backup must contain a reasonable number of models."""
         backup = GetModelCostMap.load_local_model_cost_map()
-        assert len(backup) > 100, (
-            f"Backup has only {len(backup)} models, expected > 100"
-        )
+        assert (
+            len(backup) > 100
+        ), f"Backup has only {len(backup)} models, expected > 100"
 
 
 class TestBadHostedModelCostMap:

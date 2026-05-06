@@ -10,6 +10,10 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._experimental.mcp_server.oauth_utils import (
+    TOKEN_NO_CACHE_HEADERS,
+    validate_loopback_redirect_uri,
+)
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -29,10 +33,12 @@ def get_request_base_url(request: Request) -> str:
     """
     Get the base URL for the request, considering X-Forwarded-* headers.
 
-    When behind a proxy (like nginx), the proxy may set:
-    - X-Forwarded-Proto: The original protocol (http/https)
-    - X-Forwarded-Host: The original host (may include port)
-    - X-Forwarded-Port: The original port (if not in Host header)
+    X-Forwarded-Proto / X-Forwarded-Host / X-Forwarded-Port are only honoured
+    when the request comes from a configured trusted proxy
+    (``use_x_forwarded_for`` enabled AND caller in ``mcp_trusted_proxy_ranges``).
+    Otherwise the request's literal ``base_url`` is returned, so an
+    untrusted caller cannot poison OAuth-discovery / redirect_uri values
+    by injecting headers.
 
     Args:
         request: FastAPI Request object
@@ -43,34 +49,28 @@ def get_request_base_url(request: Request) -> str:
     base_url = str(request.base_url).rstrip("/")
     parsed = urlparse(base_url)
 
-    # Get forwarded headers
+    if not IPAddressUtils.is_request_from_trusted_proxy(request):
+        return base_url
+
     x_forwarded_proto = request.headers.get("X-Forwarded-Proto")
     x_forwarded_host = request.headers.get("X-Forwarded-Host")
     x_forwarded_port = request.headers.get("X-Forwarded-Port")
 
-    # Start with the original scheme
     scheme = x_forwarded_proto if x_forwarded_proto else parsed.scheme
 
-    # Handle host and port
     if x_forwarded_host:
         # X-Forwarded-Host may already include port (e.g., "example.com:8080")
         if ":" in x_forwarded_host and not x_forwarded_host.startswith("["):
-            # Host includes port
             netloc = x_forwarded_host
         elif x_forwarded_port:
-            # Port is separate
             netloc = f"{x_forwarded_host}:{x_forwarded_port}"
         else:
-            # Just host, no explicit port
             netloc = x_forwarded_host
     else:
-        # No X-Forwarded-Host, use original netloc
         netloc = parsed.netloc
         if x_forwarded_port and ":" not in netloc:
-            # Add forwarded port if not already in netloc
             netloc = f"{netloc}:{x_forwarded_port}"
 
-    # Reconstruct the URL
     return urlunparse((scheme, netloc, parsed.path, "", "", ""))
 
 
@@ -125,6 +125,22 @@ def decode_state_hash(encrypted_state: str) -> dict:
 
     state_data = json.loads(decrypted_json)
     return state_data
+
+
+def _get_validated_client_redirect_uri(state_data: Dict[str, Any]) -> str:
+    """Return a loopback client redirect URI from OAuth state."""
+    redirect_uri = state_data.get("client_redirect_uri") or state_data.get("base_url")
+    if not redirect_uri or not isinstance(redirect_uri, str):
+        raise HTTPException(status_code=400, detail="Invalid redirect URI")
+    validate_loopback_redirect_uri(redirect_uri)
+    return redirect_uri
+
+
+def _append_query_params(url: str, params: Dict[str, str]) -> str:
+    parsed = urlparse(url)
+    query_params = parse_qsl(parsed.query, keep_blank_values=True)
+    query_params.extend(params.items())
+    return urlunparse(parsed._replace(query=urlencode(query_params)))
 
 
 def _resolve_oauth2_server_for_root_endpoints(
@@ -251,7 +267,9 @@ async def _store_per_user_token_server_side(
 
     raw_expires = token_response.get("expires_in")
     try:
-        expires_in: Optional[int] = int(raw_expires) if raw_expires is not None else None
+        expires_in: Optional[int] = (
+            int(raw_expires) if raw_expires is not None else None
+        )
     except (TypeError, ValueError):
         expires_in = None
 
@@ -320,6 +338,12 @@ async def authorize_with_server(
             status_code=400, detail="MCP server authorization url is not set"
         )
 
+    # Loopback-only redirect_uri. The URI is encrypted into the OAuth
+    # state and decoded on /callback to redirect the user back; a non-
+    # loopback URI would be an open-redirect + code-theft primitive
+    # (VERIA-57 root cause B). MCP clients are native apps — loopback is
+    # the spec-compliant callback pattern.
+    validate_loopback_redirect_uri(redirect_uri)
     parsed = urlparse(redirect_uri)
     base_url = urlunparse(parsed._replace(query=""))
     request_base_url = get_request_base_url(request)
@@ -470,7 +494,8 @@ async def exchange_token_with_server(
     if "scope" in token_response and token_response["scope"]:
         result["scope"] = token_response["scope"]
 
-    return JSONResponse(result)
+    # RFC 6749 §5.1: token responses must not be cached.
+    return JSONResponse(result, headers=TOKEN_NO_CACHE_HEADERS)
 
 
 async def register_client_with_server(
@@ -555,7 +580,7 @@ async def authorize(
         else None
     )
     if mcp_server is None and mcp_server_name is None:
-        mcp_server = _resolve_oauth2_server_for_root_endpoints()
+        mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     # Use server's stored client_id when caller doesn't supply one.
@@ -617,7 +642,7 @@ async def token_endpoint(
         lookup_name, client_ip=client_ip
     )
     if mcp_server is None and mcp_server_name is None:
-        mcp_server = _resolve_oauth2_server_for_root_endpoints()
+        mcp_server = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
     return await exchange_token_with_server(
@@ -637,20 +662,25 @@ async def token_endpoint(
 @router.get("/callback")
 async def callback(code: str, state: str):
     try:
-        # Decode the state hash to get base_url, original state, and PKCE params
         state_data = decode_state_hash(state)
-        base_url = state_data["base_url"]
         original_state = state_data["original_state"]
 
-        # Forward code and original state back to client
-        params = {"code": code, "state": original_state}
+        # Re-validate loopback at the sink. /authorize rejects non-loopback
+        # redirect_uri before encoding into state, but encrypted states
+        # minted before that check was added have no expiry and remain
+        # valid indefinitely. Validating here blocks the open-redirect +
+        # code-theft primitive even for pre-fix states.
+        redirect_uri = _get_validated_client_redirect_uri(state_data)
 
-        # Forward to client's callback endpoint
-        complete_returned_url = f"{base_url}?{urlencode(params)}"
+        params = {"code": code, "state": original_state}
+        complete_returned_url = _append_query_params(redirect_uri, params)
         return RedirectResponse(url=complete_returned_url, status_code=302)
 
+    except HTTPException:
+        # Re-raise so a non-loopback base_url surfaces as 400 instead of
+        # a generic "authentication incomplete" redirect.
+        raise
     except Exception:
-        # fallback if state hash not found
         return HTMLResponse(
             "<html><body>Authentication incomplete. You can close this window.</body></html>"
         )
@@ -700,16 +730,16 @@ def _build_oauth_protected_resource_response(
     )
 
     request_base_url = get_request_base_url(request)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
     # When no server name provided, try to resolve the single OAuth2 server
     if mcp_server_name is None:
-        resolved = _resolve_oauth2_server_for_root_endpoints()
+        resolved = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
             mcp_server_name = resolved.server_name or resolved.name
 
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        client_ip = IPAddressUtils.get_mcp_client_ip(request)
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
         )
@@ -734,9 +764,9 @@ def _build_oauth_protected_resource_response(
             )
         ],
         "resource": resource_url,
-        "scopes_supported": mcp_server.scopes
-        if mcp_server and mcp_server.scopes
-        else [],
+        "scopes_supported": (
+            mcp_server.scopes if mcp_server and mcp_server.scopes else []
+        ),
     }
 
 
@@ -816,10 +846,11 @@ def _build_oauth_authorization_server_response(
     )
 
     request_base_url = get_request_base_url(request)
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
     # When no server name provided, try to resolve the single OAuth2 server
     if mcp_server_name is None:
-        resolved = _resolve_oauth2_server_for_root_endpoints()
+        resolved = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
             mcp_server_name = resolved.server_name or resolved.name
 
@@ -836,7 +867,6 @@ def _build_oauth_authorization_server_response(
 
     mcp_server: Optional[MCPServer] = None
     if mcp_server_name:
-        client_ip = IPAddressUtils.get_mcp_client_ip(request)
         mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
             mcp_server_name, client_ip=client_ip
         )
@@ -846,16 +876,18 @@ def _build_oauth_authorization_server_response(
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
-        "scopes_supported": mcp_server.scopes
-        if mcp_server and mcp_server.scopes
-        else [],
+        "scopes_supported": (
+            mcp_server.scopes if mcp_server and mcp_server.scopes else []
+        ),
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
         # Claude expects a registration endpoint, even if we just fake it
-        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register"
-        if mcp_server_name
-        else f"{request_base_url}/register",
+        "registration_endpoint": (
+            f"{request_base_url}/{mcp_server_name}/register"
+            if mcp_server_name
+            else f"{request_base_url}/register"
+        ),
     }
 
 
@@ -986,8 +1018,9 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
         "client_secret": "dummy",
         "redirect_uris": [f"{request_base_url}/callback"],
     }
+    client_ip = IPAddressUtils.get_mcp_client_ip(request)
     if not mcp_server_name:
-        resolved = _resolve_oauth2_server_for_root_endpoints()
+        resolved = _resolve_oauth2_server_for_root_endpoints(client_ip=client_ip)
         if resolved:
             return await register_client_with_server(
                 request=request,
@@ -1000,7 +1033,6 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
             )
         return dummy_return
 
-    client_ip = IPAddressUtils.get_mcp_client_ip(request)
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(
         mcp_server_name, client_ip=client_ip
     )

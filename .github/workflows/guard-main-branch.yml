@@ -1,0 +1,42 @@
+name: Guard main branch
+
+on:
+  pull_request:
+    branches:
+      - main
+  merge_group:
+
+permissions: {}
+
+# DO NOT RENAME the job's `name:` — it is referenced by GitHub branch
+# protection as a required status check on `main`. Renaming silently
+# breaks the gate.
+jobs:
+  guard:
+    name: Verify PR source branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Reject merge_group events
+        if: github.event_name == 'merge_group'
+        run: |
+          echo "::error::Merge queue is not supported for main. Disable merge queue or update this guard."
+          exit 1
+      - name: Check head branch name
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          echo "PR head repo: $HEAD_REPO"
+          echo "PR head branch: $HEAD_REF"
+          if [ "$HEAD_REPO" != "$BASE_REPO" ]; then
+            echo "::error::PRs to main must originate from the canonical repository ($BASE_REPO), not a fork ($HEAD_REPO). External contributors should open PRs against the 'litellm_oss_branch' branch instead."
+            exit 1
+          fi
+          if [ "$HEAD_REF" = "litellm_internal_staging" ] || [[ "$HEAD_REF" == litellm_hotfix_?* ]]; then
+            echo "Allowed source branch."
+            exit 0
+          fi
+          echo "::error::PRs to main must originate from 'litellm_internal_staging' or a 'litellm_hotfix_*' branch. Got: '$HEAD_REF'. If this is a contribution, retarget the PR against 'litellm_oss_branch' instead."
+          exit 1

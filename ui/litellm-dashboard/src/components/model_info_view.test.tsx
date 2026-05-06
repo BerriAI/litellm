@@ -579,6 +579,34 @@ describe("ModelInfoView", () => {
     expect(updatePayload.litellm_params).not.toHaveProperty("vector_store_ids");
   });
 
+  it("should not include input_cost_per_token or output_cost_per_token in update payload when user does not touch cost fields", async () => {
+    // Regression: editing a model without touching cost fields used to inject
+    // input_cost_per_token: 0 and output_cost_per_token: 0 into litellm_params,
+    // overriding the built-in pricing table from model_prices_and_context_window.json.
+    const user = userEvent.setup();
+    render(<ModelInfoView {...DEFAULT_ADMIN_PROPS} />, { wrapper });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /edit settings/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => {
+      expect(mockModelPatchUpdateCall).toHaveBeenCalled();
+    });
+
+    const updatePayload = mockModelPatchUpdateCall.mock.calls[0][1];
+    expect(updatePayload.litellm_params).not.toHaveProperty("input_cost_per_token");
+    expect(updatePayload.litellm_params).not.toHaveProperty("output_cost_per_token");
+  });
+
   it("should display health check model field for wildcard models", async () => {
     const wildcardModelData = {
       ...defaultModelData,

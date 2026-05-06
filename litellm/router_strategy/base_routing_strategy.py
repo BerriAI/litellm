@@ -25,9 +25,9 @@ class BaseRoutingStrategy(ABC):
         if should_batch_redis_writes:
             self.setup_sync_task(default_sync_interval)
 
-        self.in_memory_keys_to_update: set[
-            str
-        ] = set()  # Set with max size of 1000 keys
+        self.in_memory_keys_to_update: set[str] = (
+            set()
+        )  # Set with max size of 1000 keys
 
     def setup_sync_task(self, default_sync_interval: Optional[Union[int, float]]):
         """Setup the sync task in a way that's compatible with FastAPI"""

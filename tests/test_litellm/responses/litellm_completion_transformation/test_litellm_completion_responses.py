@@ -369,6 +369,7 @@ class TestLiteLLMCompletionResponsesConfig:
         ]
         assert len(message_items) == 1, "Should have exactly one message item"
         assert message_items[0].content[0].text == "Just a regular answer."
+        assert responses_api_response.object == "response"
 
     def test_transform_chat_completion_response_multiple_choices_with_reasoning(self):
         """Test that only reasoning from first choice is included when multiple choices exist"""
@@ -503,6 +504,35 @@ class TestLiteLLMCompletionResponsesConfig:
                 "incomplete",
             ]
             assert item.status != "stop"
+
+    def test_transform_chat_completion_response_status_with_refusal(self):
+        """
+        `finish_reason=refusal` should map to `status=incomplete` in Responses API.
+        """
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4-5",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="refusal",
+                    index=0,
+                    message=Message(
+                        content="",
+                        role="assistant",
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="this is a test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.status == "incomplete"
 
     def test_transform_chat_completion_response_preserves_hidden_params(self):
         """Test that _hidden_params from chat completion response are preserved in responses API response"""
@@ -976,10 +1006,11 @@ class TestToolTransformation:
         tools = [vertex_tool]
 
         # Execute
-        result_tools, web_search_options = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -999,10 +1030,11 @@ class TestToolTransformation:
         tools = [mcp_tool]
 
         # Execute
-        result_tools, web_search_options = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1022,10 +1054,11 @@ class TestToolTransformation:
         tools = [computer_use_tool]
 
         # Execute
-        result_tools, web_search_options = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1045,10 +1078,11 @@ class TestToolTransformation:
         tools = [web_search_tool]
 
         # Execute
-        result_tools, web_search_options = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1077,10 +1111,11 @@ class TestToolTransformation:
         tools = [function_tool]
 
         # Execute
-        result_tools, web_search_options = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1108,10 +1143,11 @@ class TestToolTransformation:
         tools = [function_tool]
 
         # Execute
-        result_tools, _ = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1135,10 +1171,11 @@ class TestToolTransformation:
         tools = [function_tool]
 
         # Execute
-        result_tools, _ = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1162,10 +1199,11 @@ class TestToolTransformation:
         tools = [code_execution_tool]
 
         # Execute
-        result_tools, _ = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1187,10 +1225,11 @@ class TestToolTransformation:
         tools = [tool_search_regex, tool_search_bm25]
 
         # Execute
-        result_tools, _ = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1220,10 +1259,11 @@ class TestToolTransformation:
         ]
 
         # Execute
-        result_tools, web_search_options = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1256,10 +1296,11 @@ class TestToolTransformation:
         tools = [function_tool]
 
         # Execute
-        result_tools, _ = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1280,10 +1321,11 @@ class TestToolTransformation:
         tools = [function_tool]
 
         # Execute
-        result_tools, _ = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1302,10 +1344,11 @@ class TestToolTransformation:
         tools = [function_tool]
 
         # Execute
-        result_tools, _ = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -1325,10 +1368,11 @@ class TestToolTransformation:
         tools = [function_tool]
 
         # Execute
-        result_tools, _ = (
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=tools
-            )
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
         )
 
         # Assert
@@ -2054,6 +2098,53 @@ class TestEnsureOutputItemContentPartAdded:
         assert events[1].type == ResponsesAPIStreamEvents.CONTENT_PART_ADDED
         assert events[1].part.type == "output_text"
         assert iterator.sent_content_part_added_event is True
+
+    def test_emit_response_completed_uses_stream_finish_reason(self):
+        """
+        When the assembled model response carries finish_reason="content_filter"
+        (snapshotted from the underlying stream before any pending events fire),
+        _emit_response_completed_event must produce status="incomplete".
+        """
+        from unittest.mock import Mock
+
+        import litellm
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+
+        mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
+        mock_stream_wrapper.logging_obj = Mock()
+
+        iterator = LiteLLMCompletionStreamingIterator(
+            model="anthropic/claude-sonnet-4-6",
+            litellm_custom_stream_wrapper=mock_stream_wrapper,
+            request_input="test",
+            responses_api_request={},
+            custom_llm_provider="anthropic",
+        )
+
+        litellm_model_response = ModelResponse(
+            id="chatcmpl-test",
+            created=1234567890,
+            model="anthropic/claude-sonnet-4-6",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="content_filter",
+                    index=0,
+                    message=Message(content="", role="assistant"),
+                )
+            ],
+            usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+        )
+
+        completed_event = iterator._emit_response_completed_event(
+            litellm_model_response
+        )
+
+        assert completed_event is not None
+        assert completed_event.response.status == "incomplete"
+        assert completed_event.response.output[0].status == "incomplete"
 
     def test_reasoning_item_does_not_emit_content_part_added(self):
         """Reasoning items should not get a content_part.added event."""

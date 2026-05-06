@@ -548,7 +548,6 @@ def test_prompt_main():
     pass
 
 
-
 @pytest.mark.asyncio
 async def test_dotprompt_with_prompt_version():
     """
@@ -559,31 +558,27 @@ async def test_dotprompt_with_prompt_version():
 
     prompt_dir = Path(__file__).parent
     prompt_manager = PromptManager(prompt_directory=str(prompt_dir))
-    
+
     # Test version 1
     v1_prompt = prompt_manager.get_prompt(prompt_id="chat_prompt", version=1)
     assert v1_prompt is not None
     assert v1_prompt.model == "gpt-3.5-turbo"
-    
+
     # Verify version 1 content
     v1_rendered = prompt_manager.render(
-        prompt_id="chat_prompt",
-        prompt_variables={"user_message": "Test v1"},
-        version=1
+        prompt_id="chat_prompt", prompt_variables={"user_message": "Test v1"}, version=1
     )
     assert "Version 1:" in v1_rendered
     assert "Test v1" in v1_rendered
-    
+
     # Test version 2
     v2_prompt = prompt_manager.get_prompt(prompt_id="chat_prompt", version=2)
     assert v2_prompt is not None
     assert v2_prompt.model == "gpt-4"
-    
+
     # Verify version 2 content
     v2_rendered = prompt_manager.render(
-        prompt_id="chat_prompt",
-        prompt_variables={"user_message": "Test v2"},
-        version=2
+        prompt_id="chat_prompt", prompt_variables={"user_message": "Test v2"}, version=2
     )
     assert "Version 2:" in v2_rendered
     assert "Test v2" in v2_rendered

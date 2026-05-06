@@ -89,4 +89,3 @@ def test_defaults_to_internal_user_viewer_when_no_role():
     # Default role would be internal_user_viewer
     default_role = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
     assert default_role.value == "internal_user_viewer"
-

@@ -3,6 +3,7 @@ import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
+  ApartmentOutlined,
   AppstoreOutlined,
   AuditOutlined,
   BankOutlined,
@@ -31,7 +32,14 @@ import {
 import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
-import { all_admin_roles, internalUserRoles, isAdminRole, isUserTeamAdminForAnyTeam, rolesWithWriteAccess } from "../utils/roles";
+import {
+  all_admin_roles,
+  internalUserRoles,
+  isAdminRole,
+  isUserTeamAdminForAnyTeam,
+  rolesAllowedToViewWriteScopedPages,
+  rolesWithWriteAccess,
+} from "../utils/roles";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
@@ -117,20 +125,51 @@ const menuGroups: MenuGroup[] = [
         page: "models",
         label: "Models + Endpoints",
         icon: <BlockOutlined />,
-        roles: rolesWithWriteAccess,
+        // Admin Viewer can view models read-only (write actions are
+        // hidden inside the page); Playground above stays write-only.
+        roles: rolesAllowedToViewWriteScopedPages,
       },
       {
-        key: "agents",
-        page: "agents",
-        label: "Agents",
+        key: "agentic",
+        page: "agentic",
+        label: "Agentic",
         icon: <RobotOutlined />,
-        roles: rolesWithWriteAccess,
+        children: [
+          {
+            key: "agents",
+            page: "agents",
+            label: "Agents",
+            icon: <RobotOutlined />,
+            // Admin Viewer can view agents read-only (write actions are
+            // hidden inside the page); Playground above stays write-only.
+            roles: rolesAllowedToViewWriteScopedPages,
+          },
+          {
+            key: "workflows",
+            page: "workflows",
+            label: "Workflow Runs",
+            icon: <ApartmentOutlined />,
+          },
+          {
+            key: "memory",
+            page: "memory",
+            label: "Memory",
+            icon: <BookOutlined />,
+          },
+        ],
       },
       {
         key: "mcp-servers",
         page: "mcp-servers",
         label: "MCP Servers",
         icon: <ToolOutlined />,
+      },
+      {
+        key: "skills",
+        page: "skills",
+        label: "Skills",
+        icon: <ApiOutlined />,
+        roles: all_admin_roles,
       },
       {
         key: "guardrails",
@@ -267,6 +306,7 @@ const menuGroups: MenuGroup[] = [
         label: "AI Hub",
         icon: <AppstoreOutlined />,
       },
+
       {
         key: "learning-resources",
         page: "learning-resources",
@@ -306,13 +346,6 @@ const menuGroups: MenuGroup[] = [
             page: "tag-management",
             label: "Tag Management",
             icon: <TagsOutlined />,
-            roles: all_admin_roles,
-          },
-          {
-            key: "claude-code-plugins",
-            page: "claude-code-plugins",
-            label: "Claude Code Plugins",
-            icon: <ToolOutlined />,
             roles: all_admin_roles,
           },
           {

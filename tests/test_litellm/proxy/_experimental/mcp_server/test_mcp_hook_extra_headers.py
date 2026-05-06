@@ -33,9 +33,7 @@ class TestConvertMcpHookResponseToKwargs:
 
     def test_returns_original_kwargs_when_response_is_none(self):
         original = {"arguments": {"key": "val"}, "name": "tool"}
-        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(
-            None, original
-        )
+        result = self.proxy_logging._convert_mcp_hook_response_to_kwargs(None, original)
         assert result == original
 
     def test_returns_original_kwargs_when_response_is_empty_dict(self):
@@ -348,7 +346,9 @@ class TestCallToolFlowsHookHeaders:
 
                         mock_call.assert_called_once()
                         call_kwargs = mock_call.call_args
-                        assert call_kwargs.kwargs.get("hook_extra_headers") == hook_headers
+                        assert (
+                            call_kwargs.kwargs.get("hook_extra_headers") == hook_headers
+                        )
 
     @pytest.mark.asyncio
     async def test_no_hook_headers_when_no_proxy_logging(self):
@@ -468,7 +468,10 @@ class TestCallToolFlowsHookHeaders:
                                 proxy_logging_obj=proxy_logging,
                             )
                             mock_logger.warning.assert_called_once()
-                            assert "header injection is not supported" in mock_logger.warning.call_args[0][0]
+                            assert (
+                                "header injection is not supported"
+                                in mock_logger.warning.call_args[0][0]
+                            )
 
     @pytest.mark.asyncio
     async def test_openapi_server_no_error_without_hook_headers(self):
@@ -581,9 +584,7 @@ class TestHookHeaderMergePriority:
     async def test_no_hook_headers_preserves_existing_behavior(self):
         """When hook_extra_headers is None, existing header logic is unchanged."""
         manager = MCPServerManager()
-        server = self._make_server(
-            static_headers={"X-Static": "static-value"}
-        )
+        server = self._make_server(static_headers={"X-Static": "static-value"})
 
         captured_extra_headers: Dict[str, Any] = {}
 
@@ -671,6 +672,106 @@ class TestHookHeaderMergePriority:
         assert headers["Authorization"] == "Bearer hook-jwt"
         assert headers["X-OAuth"] == "yes"
         assert headers["X-Trace-Id"] == "trace-123"
+
+    @pytest.mark.asyncio
+    async def test_m2m_oauth2_does_not_forward_litellm_caller_authorization(self):
+        """M2M must not put caller Bearer (LiteLLM API key) into extra_headers (#23652)."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-id",
+            name="Test Server",
+            server_name="test_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            token_url="https://auth.example.com/token",
+        )
+
+        captured_extra_headers: Dict[str, Any] = {}
+
+        async def fake_create_mcp_client(
+            server, mcp_auth_header=None, extra_headers=None, stdio_env=None
+        ):
+            captured_extra_headers["value"] = extra_headers
+            mock_client = MagicMock()
+            mock_client.call_tool = AsyncMock(return_value=MagicMock())
+            return mock_client
+
+        with patch.object(
+            manager, "_create_mcp_client", side_effect=fake_create_mcp_client
+        ):
+            with patch.object(manager, "_build_stdio_env", return_value=None):
+                try:
+                    await manager._call_regular_mcp_tool(
+                        mcp_server=server,
+                        original_tool_name="test_tool",
+                        arguments={"key": "val"},
+                        tasks=[],
+                        mcp_auth_header=None,
+                        mcp_server_auth_headers=None,
+                        oauth2_headers={"Authorization": "Bearer sk-1234"},
+                        raw_headers={"authorization": "Bearer sk-1234"},
+                        proxy_logging_obj=None,
+                        hook_extra_headers=None,
+                    )
+                except Exception:
+                    pass
+
+        assert captured_extra_headers.get("value") is None
+
+    @pytest.mark.asyncio
+    async def test_m2m_oauth2_skips_authorization_in_configured_extra_headers(self):
+        """M2M must not take Authorization from raw_headers even if extra_headers lists it."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-id",
+            name="Test Server",
+            server_name="test_server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            token_url="https://auth.example.com/token",
+            extra_headers=["Authorization", "X-Custom"],
+        )
+
+        captured_extra_headers: Dict[str, Any] = {}
+
+        async def fake_create_mcp_client(
+            server, mcp_auth_header=None, extra_headers=None, stdio_env=None
+        ):
+            captured_extra_headers["value"] = extra_headers
+            mock_client = MagicMock()
+            mock_client.call_tool = AsyncMock(return_value=MagicMock())
+            return mock_client
+
+        with patch.object(
+            manager, "_create_mcp_client", side_effect=fake_create_mcp_client
+        ):
+            with patch.object(manager, "_build_stdio_env", return_value=None):
+                try:
+                    await manager._call_regular_mcp_tool(
+                        mcp_server=server,
+                        original_tool_name="test_tool",
+                        arguments={"key": "val"},
+                        tasks=[],
+                        mcp_auth_header=None,
+                        mcp_server_auth_headers=None,
+                        oauth2_headers={"Authorization": "Bearer sk-1234"},
+                        raw_headers={
+                            "authorization": "Bearer sk-1234",
+                            "x-custom": "from-client",
+                        },
+                        proxy_logging_obj=None,
+                        hook_extra_headers=None,
+                    )
+                except Exception:
+                    pass
+
+        headers = captured_extra_headers.get("value") or {}
+        assert "Authorization" not in headers
+        assert headers.get("X-Custom") == "from-client"
 
 
 class TestUserAPIKeyAuthJwtClaims:

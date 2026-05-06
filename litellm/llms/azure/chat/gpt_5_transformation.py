@@ -40,9 +40,22 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         Accepts both explicit gpt-5 model names and the ``gpt5_series/`` prefix
         used for manual routing.
         """
-        # gpt-5-chat* is a chat model and shouldn't go through GPT-5 reasoning restrictions.
+        # The gpt-5-chat* family (gpt-5-chat, gpt-5-chat-latest, gpt-5-chat-2025-08-07,
+        # …) are regular chat models: they support temperature and tool_choice but NOT
+        # reasoning_effort.  They must NOT be routed through the GPT-5 reasoning path.
+        #
+        # Versioned chat models such as gpt-5.3-chat and gpt-5.1-chat ARE reasoning
+        # models and must stay on the GPT-5 path.  The distinguishing feature is that
+        # the gpt-5-chat family has a literal "-chat" immediately after "gpt-5"
+        # (i.e. "gpt-5-chat…"), while versioned chat models interpose a minor version
+        # number (i.e. "gpt-5.<digit>-chat").
+        #
+        # Using a startswith("gpt-5-chat") prefix check on the normalized name (rather
+        # than a substring check) makes this boundary explicit and avoids any ambiguity
+        # if future model names coincidentally contain "gpt-5-chat" as an interior run.
+        _normalized = model.split("/")[-1]  # strip provider prefix, e.g. "azure/"
         return (
-            "gpt-5" in model and "gpt-5-chat" not in model
+            "gpt-5" in model and not _normalized.startswith("gpt-5-chat")
         ) or "gpt5_series" in model
 
     def get_supported_openai_params(self, model: str) -> List[str]:

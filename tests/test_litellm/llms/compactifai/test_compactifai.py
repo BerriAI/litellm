@@ -28,16 +28,12 @@ def test_compactifai_completion_basic(respx_mock):
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "Hello! How can I help you today?"
+                    "content": "Hello! How can I help you today?",
                 },
-                "finish_reason": "stop"
+                "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": 9,
-            "completion_tokens": 12,
-            "total_tokens": 21
-        }
+        "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
     }
 
     respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
@@ -47,7 +43,7 @@ def test_compactifai_completion_basic(respx_mock):
     response = litellm.completion(
         model="compactifai/cai-llama-3-1-8b-slim",
         messages=[{"role": "user", "content": "Hello"}],
-        api_key="test-key"
+        api_key="test-key",
     )
 
     assert response.choices[0].message.content == "Hello! How can I help you today?"
@@ -61,46 +57,46 @@ def test_compactifai_completion_streaming(respx_mock):
     litellm.disable_aiohttp_transport = True
 
     mock_chunks = [
-        "data: " + json.dumps({
-            "id": "chatcmpl-123",
-            "object": "chat.completion.chunk",
-            "created": 1677652288,
-            "model": "cai-llama-3-1-8b-slim",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": "Hello"},
-                    "finish_reason": None
-                }
-            ]
-        }) + "\n\n",
-        "data: " + json.dumps({
-            "id": "chatcmpl-123",
-            "object": "chat.completion.chunk",
-            "created": 1677652288,
-            "model": "cai-llama-3-1-8b-slim",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": "!"},
-                    "finish_reason": "stop"
-                }
-            ]
-        }) + "\n\n",
-        "data: [DONE]\n\n"
+        "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl-123",
+                "object": "chat.completion.chunk",
+                "created": 1677652288,
+                "model": "cai-llama-3-1-8b-slim",
+                "choices": [
+                    {"index": 0, "delta": {"content": "Hello"}, "finish_reason": None}
+                ],
+            }
+        )
+        + "\n\n",
+        "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl-123",
+                "object": "chat.completion.chunk",
+                "created": 1677652288,
+                "model": "cai-llama-3-1-8b-slim",
+                "choices": [
+                    {"index": 0, "delta": {"content": "!"}, "finish_reason": "stop"}
+                ],
+            }
+        )
+        + "\n\n",
+        "data: [DONE]\n\n",
     ]
 
     respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
         status_code=200,
         headers={"content-type": "text/plain"},
-        content="".join(mock_chunks)
+        content="".join(mock_chunks),
     )
 
     response = litellm.completion(
         model="compactifai/cai-llama-3-1-8b-slim",
         messages=[{"role": "user", "content": "Hello"}],
         api_key="test-key",
-        stream=True
+        stream=True,
     )
 
     chunks = list(response)
@@ -120,15 +116,15 @@ def test_compactifai_models_endpoint(respx_mock):
                 "id": "cai-llama-3-1-8b-slim",
                 "object": "model",
                 "created": 1677610602,
-                "owned_by": "compactifai"
+                "owned_by": "compactifai",
             },
             {
                 "id": "mistral-7b-compressed",
                 "object": "model",
                 "created": 1677610602,
-                "owned_by": "compactifai"
-            }
-        ]
+                "owned_by": "compactifai",
+            },
+        ],
     }
 
     respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
@@ -137,21 +133,16 @@ def test_compactifai_models_endpoint(respx_mock):
             "object": "chat.completion",
             "created": 1677652288,
             "model": "cai-llama-3-1-8b-slim",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "Test response"
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 5,
-                "completion_tokens": 10,
-                "total_tokens": 15
-            }
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Test response"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
         },
-        status_code=200
+        status_code=200,
     )
 
     # This would be tested if litellm had a models() function
@@ -159,7 +150,7 @@ def test_compactifai_models_endpoint(respx_mock):
     response = litellm.completion(
         model="compactifai/cai-llama-3-1-8b-slim",
         messages=[{"role": "user", "content": "test"}],
-        api_key="test-key"
+        api_key="test-key",
     )
 
 
@@ -173,7 +164,7 @@ def test_compactifai_authentication_error(respx_mock):
             "message": "Invalid API key provided",
             "type": "invalid_request_error",
             "param": None,
-            "code": "invalid_api_key"
+            "code": "invalid_api_key",
         }
     }
 
@@ -185,7 +176,7 @@ def test_compactifai_authentication_error(respx_mock):
         litellm.completion(
             model="compactifai/cai-llama-3-1-8b-slim",
             messages=[{"role": "user", "content": "test"}],
-            api_key="invalid-key"
+            api_key="invalid-key",
         )
 
     # Verify the error contains the expected authentication error message
@@ -220,21 +211,17 @@ def test_compactifai_with_optional_params(respx_mock):
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "This is a test response with custom parameters."
+                    "content": "This is a test response with custom parameters.",
                 },
-                "finish_reason": "stop"
+                "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": 15,
-            "completion_tokens": 20,
-            "total_tokens": 35
-        }
+        "usage": {"prompt_tokens": 15, "completion_tokens": 20, "total_tokens": 35},
     }
 
-    request_mock = respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
-        json=mock_response, status_code=200
-    )
+    request_mock = respx_mock.post(
+        "https://api.compactif.ai/v1/chat/completions"
+    ).respond(json=mock_response, status_code=200)
 
     response = litellm.completion(
         model="compactifai/cai-llama-3-1-8b-slim",
@@ -242,10 +229,13 @@ def test_compactifai_with_optional_params(respx_mock):
         api_key="test-key",
         temperature=0.7,
         max_tokens=100,
-        top_p=0.9
+        top_p=0.9,
     )
 
-    assert response.choices[0].message.content == "This is a test response with custom parameters."
+    assert (
+        response.choices[0].message.content
+        == "This is a test response with custom parameters."
+    )
 
     # Verify the request was made with correct parameters
     assert request_mock.called
@@ -269,28 +259,21 @@ def test_compactifai_headers_authentication(respx_mock):
         "choices": [
             {
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "Test response"
-                },
-                "finish_reason": "stop"
+                "message": {"role": "assistant", "content": "Test response"},
+                "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": 5,
-            "completion_tokens": 10,
-            "total_tokens": 15
-        }
+        "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
     }
 
-    request_mock = respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
-        json=mock_response, status_code=200
-    )
+    request_mock = respx_mock.post(
+        "https://api.compactif.ai/v1/chat/completions"
+    ).respond(json=mock_response, status_code=200)
 
     response = litellm.completion(
         model="compactifai/cai-llama-3-1-8b-slim",
         messages=[{"role": "user", "content": "Test auth"}],
-        api_key="test-api-key-123"
+        api_key="test-api-key-123",
     )
 
     assert response.choices[0].message.content == "Test response"
@@ -318,16 +301,12 @@ async def test_compactifai_async_completion(respx_mock):
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "Async response from CompactifAI"
+                    "content": "Async response from CompactifAI",
                 },
-                "finish_reason": "stop"
+                "finish_reason": "stop",
             }
         ],
-        "usage": {
-            "prompt_tokens": 8,
-            "completion_tokens": 15,
-            "total_tokens": 23
-        }
+        "usage": {"prompt_tokens": 8, "completion_tokens": 15, "total_tokens": 23},
     }
 
     respx_mock.post("https://api.compactif.ai/v1/chat/completions").respond(
@@ -337,7 +316,7 @@ async def test_compactifai_async_completion(respx_mock):
     response = await litellm.acompletion(
         model="compactifai/cai-llama-3-1-8b-slim",
         messages=[{"role": "user", "content": "Async test"}],
-        api_key="test-key"
+        api_key="test-key",
     )
 
     assert response.choices[0].message.content == "Async response from CompactifAI"
