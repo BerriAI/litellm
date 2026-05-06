@@ -2,10 +2,11 @@
  * Mock data provider for the cloud-agents dashboard (Cursor SDK on LiteLLM).
  *
  * Wired via env var `NEXT_PUBLIC_USE_MOCK_AGENTS=true`. This is a temporary shim
- * until Epic A (LIT-2877) lands the real `/v1/agents`, `/v1/sessions`,
- * `/v1/sessions/{sid}/conversation` and `/v1/sessions/{sid}/runs/{rid}/events`
- * endpoints. Shapes here mirror the API spec in LIT-2877 so the swap is a
- * one-line client change inside `src/lib/cloud-agents-client.ts`.
+ * until Epic A (LIT-2877) lands the real `/v2/agents`, `/v2/sessions`,
+ * `/v2/sessions/{sid}/conversation` and `/v2/sessions/{sid}/runs/{rid}/events`
+ * endpoints. (`/v1/agents` is reserved for the existing A2A registry — the new
+ * VM-agent API moves under `/v2/`.) Shapes here mirror the API spec in LIT-2877
+ * so the swap is a one-line client change inside `src/lib/cloud-agents-client.ts`.
  *
  * Do not call external services from the UI. Mock data is generated in-process.
  */
@@ -229,9 +230,7 @@ export async function mockGetRun(runId: string): Promise<CloudAgentRun | null> {
   return MOCK_RUNS[runId] ?? null;
 }
 
-export async function mockGetConversation(
-  sessionId: string,
-): Promise<CloudAgentConversationMessage[]> {
+export async function mockGetConversation(sessionId: string): Promise<CloudAgentConversationMessage[]> {
   return MOCK_CONVERSATION[sessionId] ?? [];
 }
 
@@ -253,10 +252,7 @@ export async function mockCreateAgent(input: {
   return agent;
 }
 
-export async function mockCreateSession(input: {
-  agent_id: string;
-  repo_url: string;
-}): Promise<CloudAgentSession> {
+export async function mockCreateSession(input: { agent_id: string; repo_url: string }): Promise<CloudAgentSession> {
   const session: CloudAgentSession = {
     session_id: `ses_${Math.random().toString(36).slice(2, 8)}`,
     agent_id: input.agent_id,
@@ -275,10 +271,7 @@ export async function mockCreateSession(input: {
   return session;
 }
 
-export async function mockSendFollowup(
-  sessionId: string,
-  content: string,
-): Promise<CloudAgentConversationMessage> {
+export async function mockSendFollowup(sessionId: string, content: string): Promise<CloudAgentConversationMessage> {
   const msg: CloudAgentConversationMessage = {
     id: `msg_${Math.random().toString(36).slice(2, 8)}`,
     role: "user",
