@@ -73,6 +73,7 @@ from ..common_utils import (
     ModelResponseIterator,
     get_bedrock_tool_name,
 )
+
 bedrock_tool_name_mappings: InMemoryCache = InMemoryCache(
     max_size_in_memory=50, default_ttl=600
 )
@@ -1394,8 +1395,6 @@ class BedrockLLM(BaseAWSLLM):
         return None
 
 
-
-
 class AWSEventStreamDecoder:
     def __init__(self, model: str, json_mode: Optional[bool] = False) -> None:
         from botocore.parsers import EventStreamJSONParser
@@ -1830,7 +1829,9 @@ class AWSEventStreamDecoder:
 
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, BEDROCK_RESPONSE_STREAM_SHAPE)
+        parsed_response = self.parser.parse(
+            response_dict, BEDROCK_RESPONSE_STREAM_SHAPE
+        )
 
         if response_dict["status_code"] != 200:
             decoded_body = response_dict["body"].decode()

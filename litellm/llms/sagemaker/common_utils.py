@@ -9,13 +9,16 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import StreamingChatCompletionChunk
 
+
 def _load_sagemaker_response_stream_shape():
     from botocore.loaders import Loader
     from botocore.model import ServiceModel
 
     loader = Loader()
     service_dict = loader.load_service_model("sagemaker-runtime", "service-2")
-    return ServiceModel(service_dict).shape_for("InvokeEndpointWithResponseStreamOutput")
+    return ServiceModel(service_dict).shape_for(
+        "InvokeEndpointWithResponseStreamOutput"
+    )
 
 
 SAGEMAKER_RESPONSE_STREAM_SHAPE = _load_sagemaker_response_stream_shape()
@@ -197,7 +200,9 @@ class AWSEventStreamDecoder:
 
     def _parse_message_from_event(self, event) -> Optional[str]:
         response_dict = event.to_response_dict()
-        parsed_response = self.parser.parse(response_dict, SAGEMAKER_RESPONSE_STREAM_SHAPE)
+        parsed_response = self.parser.parse(
+            response_dict, SAGEMAKER_RESPONSE_STREAM_SHAPE
+        )
 
         if response_dict["status_code"] != 200:
             raise ValueError(f"Bad response code, expected 200: {response_dict}")
@@ -213,5 +218,3 @@ class AWSEventStreamDecoder:
                 return None
 
             return chunk.decode()  # type: ignore[no-any-return]
-
-
