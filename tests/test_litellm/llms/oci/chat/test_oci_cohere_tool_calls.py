@@ -766,14 +766,24 @@ class TestCohereStreamChunkEdgeCases:
 
     def test_stream_chunk_max_tokens_finish_reason(self):
         wrapper = self._wrapper()
-        chunk = {"apiFormat": "COHERE", "text": "truncated", "index": 0, "finishReason": "MAX_TOKENS"}
+        chunk = {
+            "apiFormat": "COHERE",
+            "text": "truncated",
+            "index": 0,
+            "finishReason": "MAX_TOKENS",
+        }
         result = wrapper.chunk_creator(f"data: {json.dumps(chunk)}")
         assert result.choices[0].finish_reason == "length"
 
     def test_stream_chunk_unknown_finish_reason_does_not_raise(self):
         from litellm.llms.oci.chat.cohere import handle_cohere_stream_chunk
 
-        chunk = {"apiFormat": "COHERE", "text": "", "index": 0, "finishReason": "FUTURE_REASON"}
+        chunk = {
+            "apiFormat": "COHERE",
+            "text": "",
+            "index": 0,
+            "finishReason": "FUTURE_REASON",
+        }
         # Should not raise — unknown reasons fall through the elif chain unchanged
         result = handle_cohere_stream_chunk(chunk)
         assert result.choices[0] is not None

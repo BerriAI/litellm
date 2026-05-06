@@ -96,7 +96,9 @@ def sha256_base64(data: bytes) -> str:
     # OCI HTTP signing specification (RSA-SHA256 request signing), not for password
     # or secret hashing.  This is the correct and mandated algorithm for this purpose.
     # See: https://docs.oracle.com/en-us/iaas/Content/API/Concepts/signingrequests.htm
-    digest = hashlib.sha256(data).digest()  # lgtm[py/weak-sensitive-data-hashing] # noqa: S324
+    digest = hashlib.sha256(
+        data
+    ).digest()  # lgtm[py/weak-sensitive-data-hashing] # noqa: S324
     return base64.b64encode(digest).decode()
 
 
