@@ -92,9 +92,17 @@ async def _sweep_dead_daemons(prisma_client) -> int:
     # Terminate via the shared helper. It cancels active runs (with
     # `run_cancelled` events), flips the session status, AND fires
     # ``provider.terminate`` — exactly what we want here.
+    #
+    # We track ONLY sessions that completed termination cleanly. Failed
+    # rows stay non-terminal so the next sweep pass can retry them —
+    # without that, a transient DB error would mark the row ``error``
+    # via the bulk update_many below and silently orphan its VM forever
+    # (Greptile P1).
+    terminated_ids: list = []
     for row in rows:
         try:
             await _terminate_session_internal(row.id, reason="daemon_dead")
+            terminated_ids.append(row.id)
         except Exception as exc:
             verbose_proxy_logger.exception(
                 "sweeper: failed to terminate dead-daemon session=%s: %s",
@@ -102,13 +110,17 @@ async def _sweep_dead_daemons(prisma_client) -> int:
                 exc,
             )
 
+    if not terminated_ids:
+        return 0
+
     # Daemon-dead sessions land in ``error`` (not ``terminated``); the
     # shared helper sets ``terminated`` so we explicitly downgrade to
     # ``error`` here. (Both are terminal — no further state transitions.)
+    # Scope the bulk update to ONLY successfully-terminated rows so a
+    # mid-flight failure doesn't get marked terminal-without-VM-teardown.
     now = _now()
-    ids = [r.id for r in rows]
     await prisma_client.db.litellm_agentsession.update_many(
-        where={"id": {"in": ids}},
+        where={"id": {"in": terminated_ids}},
         data={
             "status": SESSION_STATUS_ERROR,
             "updated_at": now,
@@ -116,9 +128,10 @@ async def _sweep_dead_daemons(prisma_client) -> int:
     )
 
     verbose_proxy_logger.info(
-        "sweeper: terminated %d sessions (dead daemon, via provider)", len(ids)
+        "sweeper: terminated %d sessions (dead daemon, via provider)",
+        len(terminated_ids),
     )
-    return len(ids)
+    return len(terminated_ids)
 
 
 async def _sweep_stuck_runs(prisma_client) -> int:
