@@ -1459,6 +1459,116 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
     assert len(result[0]) == 1
 
 
+def test_vertex_ai_process_candidates_image_only_response_sets_content():
+    """When Gemini returns an image-only response (no text part) under
+    `modalities=["image","text"]`, `message.content` must contain the image
+    as a `data:<mime>;base64,...` URI so OpenAI Chat-Completions clients
+    that read `message.content` receive the image. The image should also
+    remain in `message.images` for the Responses-API bridge consumer.
+
+    Before the fix, `message.content` stayed `None` and the image silently
+    disappeared, even though Gemini billed completion tokens.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Minimal but valid base64 PNG bytes (1x1 transparent pixel) — content
+    # doesn't need to decode for this test, only the wrapping shape matters.
+    fake_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4"
+        "2mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+
+    model_response = ModelResponse()
+    VertexGeminiConfig._process_candidates(
+        _candidates=[
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {
+                            "inlineData": {
+                                "mimeType": "image/png",
+                                "data": fake_b64,
+                            }
+                        }
+                    ],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        model_response=model_response,
+        standard_optional_params={},
+    )
+
+    # _process_candidates appends; the populated choice is the last one.
+    assert model_response.choices, "expected choices to be populated"
+    msg = model_response.choices[-1].message
+
+    # The fix: content is now the data URI rather than None.
+    assert isinstance(msg.content, str), (
+        f"expected message.content to be a data URI string; got "
+        f"{type(msg.content).__name__}: {msg.content!r}"
+    )
+    assert msg.content.startswith("data:image/png;base64,"), (
+        f"expected data:image/png;base64,... prefix; got: {msg.content[:60]!r}"
+    )
+    assert fake_b64 in msg.content
+
+    # Backward compat: images field still populated for the Responses bridge.
+    images = getattr(msg, "images", None)
+    assert images, "expected message.images to also be populated"
+    assert len(images) == 1
+    assert images[0].get("image_url", {}).get("url", "").startswith(
+        "data:image/png;base64,"
+    )
+
+
+def test_vertex_ai_process_candidates_text_and_image_response():
+    """When Gemini returns BOTH text and an image, `content` should be the
+    text (the existing/established behavior) and `images` should carry the
+    image. This guards against the image-only fix accidentally clobbering
+    text content."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    fake_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4"
+        "2mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+
+    model_response = ModelResponse()
+    VertexGeminiConfig._process_candidates(
+        _candidates=[
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"text": "Here is the image you requested."},
+                        {
+                            "inlineData": {
+                                "mimeType": "image/png",
+                                "data": fake_b64,
+                            }
+                        },
+                    ],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        model_response=model_response,
+        standard_optional_params={},
+    )
+
+    msg = model_response.choices[-1].message
+    # Text takes priority - content is the text, not the image data URI.
+    assert msg.content == "Here is the image you requested."
+    images = getattr(msg, "images", None)
+    assert images and len(images) == 1
+
+
 def test_vertex_ai_tool_call_id_format():
     """
     Test that tool call IDs have the correct format and length.

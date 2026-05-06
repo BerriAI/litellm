@@ -2266,10 +2266,28 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     ] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
                 if image_response is not None:
-                    # Handle image response - combine with text content into structured format
+                    # Existing: stash images for the Responses-API bridge
+                    # consumer (see
+                    # litellm.responses.litellm_completion_transformation
+                    # .transformation._extract_image_generation_output_items).
                     cast(Dict[str, Any], chat_completion_message)[
                         "images"
                     ] = image_response
+                    # When Gemini returns an image-only response (no text
+                    # part), `content` stays None and OpenAI Chat-Completions
+                    # clients reading `message.content` see nothing — even
+                    # though tokens were billed. Surface the first image as a
+                    # `data:image/...;base64,...` URI in `content` to match
+                    # litellm's documented `modalities=["image","text"]`
+                    # passthrough convention. Text takes priority if also
+                    # present (handled by the `content is not None` branch
+                    # below).
+                    if content is None and image_response:
+                        first_image_url = image_response[0].get(
+                            "image_url", {}
+                        ).get("url")
+                        if first_image_url:
+                            chat_completion_message["content"] = first_image_url
                 if content is not None:
                     chat_completion_message["content"] = content
 
