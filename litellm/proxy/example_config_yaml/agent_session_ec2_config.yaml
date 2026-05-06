@@ -22,7 +22,10 @@ agent_settings:
     # Defaults applied when a team's `LiteLLM_AgentVMConfig` row leaves the
     # field NULL. Captured from the B0 spike.
     default_region: us-west-2
-    default_ami_id: ami-CHANGEME  # baked by `infra/ami/litellm-agent-runtime.pkr.hcl`
+    # Baked by `infra/ami/litellm-agent-runtime.pkr.hcl`. The value below is
+    # the BYOC PoC account's AMI built from this PR; rebuild for your own
+    # account and replace.
+    default_ami_id: ami-074a518157fe137b4
     default_instance_type: t3.large
     use_spot: true
     max_session_minutes: 120
