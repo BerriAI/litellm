@@ -3357,6 +3357,8 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AZURE_SENTINEL_TENANT_ID",
             "AZURE_SENTINEL_CLIENT_ID",
             "AZURE_SENTINEL_CLIENT_SECRET",
+            "AZURE_SENTINEL_STREAM_NAME",
+            "AZURE_SENTINEL_AUDIT_STREAM_NAME",
         ],
     )
 

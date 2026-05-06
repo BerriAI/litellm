@@ -41,6 +41,7 @@ class AzureSentinelLogger(CustomBatchLogger):
         tenant_id: Optional[str] = None,
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
+        audit_stream_name: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -59,6 +60,8 @@ class AzureSentinelLogger(CustomBatchLogger):
                 If not provided, will use AZURE_SENTINEL_CLIENT_ID or AZURE_CLIENT_ID env var.
             client_secret (str, optional): Azure Client Secret for OAuth2 authentication.
                 If not provided, will use AZURE_SENTINEL_CLIENT_SECRET or AZURE_CLIENT_SECRET env var.
+            audit_stream_name (str, optional): Stream name from DCR for audit logs.
+                If not provided, will use AZURE_SENTINEL_AUDIT_STREAM_NAME env var or the standard stream name.
         """
         self.async_httpx_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.LoggingCallback
@@ -69,6 +72,11 @@ class AzureSentinelLogger(CustomBatchLogger):
         )
         self.stream_name = stream_name or os.getenv(
             "AZURE_SENTINEL_STREAM_NAME", "Custom-LiteLLM"
+        )
+        self.audit_stream_name = (
+            audit_stream_name
+            or os.getenv("AZURE_SENTINEL_AUDIT_STREAM_NAME")
+            or self.stream_name
         )
         self.endpoint = endpoint or os.getenv("AZURE_SENTINEL_ENDPOINT")
         self.tenant_id = (
@@ -109,7 +117,8 @@ class AzureSentinelLogger(CustomBatchLogger):
             )
 
         # Build API endpoint: {Endpoint}/dataCollectionRules/{DCR Immutable ID}/streams/{Stream Name}?api-version=2023-01-01
-        self.api_endpoint = f"{self.endpoint.rstrip('/')}/dataCollectionRules/{self.dcr_immutable_id}/streams/{self.stream_name}?api-version=2023-01-01"
+        self.api_endpoint = self._build_api_endpoint(self.stream_name)
+        self.audit_api_endpoint = self._build_api_endpoint(self.audit_stream_name)
 
         # OAuth2 scope for Azure Monitor
         self.oauth_scope = "https://monitor.azure.com/.default"
@@ -119,9 +128,11 @@ class AzureSentinelLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[Union[StandardLoggingPayload, StandardAuditLogPayload]] = (
-            []
-        )
+        self.log_queue: List[StandardLoggingPayload] = []
+        self.audit_log_queue: List[StandardAuditLogPayload] = []
+
+    def _build_api_endpoint(self, stream_name: str) -> str:
+        return f"{self.endpoint.rstrip('/')}/dataCollectionRules/{self.dcr_immutable_id}/streams/{stream_name}?api-version=2023-01-01"
 
     async def _get_oauth_token(self) -> str:
         """
@@ -250,8 +261,8 @@ class AzureSentinelLogger(CustomBatchLogger):
         """
         Async log LiteLLM audit log events to Azure Sentinel.
 
-        Audit logs use the same Azure Monitor Logs Ingestion stream configured for
-        the logger, allowing users to send proxy audit records directly to Sentinel.
+        Audit logs are queued separately from standard LLM logs so mixed callback
+        usage never sends schema-mismatched records in the same ingestion batch.
         """
         try:
             verbose_logger.debug(
@@ -261,10 +272,10 @@ class AzureSentinelLogger(CustomBatchLogger):
                 audit_log.get("table_name"),
             )
 
-            self.log_queue.append(audit_log)
+            self.audit_log_queue.append(audit_log)
 
-            if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+            if len(self.audit_log_queue) >= self.batch_size:
+                await self.async_send_audit_batch()
 
         except Exception as e:
             verbose_logger.exception(
@@ -279,12 +290,34 @@ class AzureSentinelLogger(CustomBatchLogger):
         Raises:
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
+        await self._async_send_batch_to_api(
+            log_queue=self.log_queue,
+            api_endpoint=self.api_endpoint,
+            log_type="logs",
+        )
+
+    async def async_send_audit_batch(self):
+        """
+        Sends the batch of audit logs to Azure Monitor Logs Ingestion API
+        """
+        await self._async_send_batch_to_api(
+            log_queue=self.audit_log_queue,
+            api_endpoint=self.audit_api_endpoint,
+            log_type="audit logs",
+        )
+
+    async def _async_send_batch_to_api(
+        self,
+        log_queue: List[Union[StandardLoggingPayload, StandardAuditLogPayload]],
+        api_endpoint: str,
+        log_type: str,
+    ) -> None:
         try:
-            if not self.log_queue:
+            if not log_queue:
                 return
 
             verbose_logger.debug(
-                "Azure Sentinel - about to flush %s events", len(self.log_queue)
+                "Azure Sentinel - about to flush %s %s", len(log_queue), log_type
             )
 
             # Get OAuth2 token
@@ -292,7 +325,7 @@ class AzureSentinelLogger(CustomBatchLogger):
 
             # Convert log queue to JSON array format expected by Logs Ingestion API
             # Each log entry should be a JSON object in the array
-            body = safe_dumps(self.log_queue)
+            body = safe_dumps(log_queue)
 
             # Set headers for Logs Ingestion API
             headers = {
@@ -302,7 +335,7 @@ class AzureSentinelLogger(CustomBatchLogger):
 
             # Send the request
             response = await self.async_httpx_client.post(
-                url=self.api_endpoint, data=body.encode("utf-8"), headers=headers
+                url=api_endpoint, data=body.encode("utf-8"), headers=headers
             )
 
             if response.status_code not in [200, 204]:
@@ -325,4 +358,15 @@ class AzureSentinelLogger(CustomBatchLogger):
                 f"Azure Sentinel Error sending batch API - {str(e)}\n{traceback.format_exc()}"
             )
         finally:
-            self.log_queue.clear()
+            log_queue.clear()
+
+    async def flush_queue(self):
+        if self.flush_lock is None:
+            return
+
+        async with self.flush_lock:
+            if self.log_queue:
+                await self.async_send_batch()
+            if self.audit_log_queue:
+                await self.async_send_audit_batch()
+            self.last_flush_time = time.time()
