@@ -646,6 +646,33 @@ async def test_internal_user_tag_daily_activity_without_any_scoped_keys_returns_
 
 
 @pytest.mark.asyncio
+async def test_get_tag_daily_activity_requires_database_connection():
+    """
+    Tag daily activity should fail with the same explicit DB error used by other
+    tag endpoints instead of raising an AttributeError during scope resolution.
+    """
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity,
+    )
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="internal-user-123",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_tag_daily_activity(
+                start_date="2025-01-01",
+                end_date="2025-01-31",
+                user_api_key_dict=mock_user_auth,
+            )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Database not connected"
+
+
+@pytest.mark.asyncio
 async def test_get_deployments_by_model_id():
     """
     Test get_deployments_by_model when model is found by model_id

@@ -640,6 +640,9 @@ async def get_tag_daily_activity(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
     # Convert comma-separated tags string to list if provided
     tag_list = tags.split(",") if tags else None
     scoped_api_key_filter = await _get_tag_daily_activity_api_key_filter(
