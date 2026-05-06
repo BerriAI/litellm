@@ -556,22 +556,7 @@ async def test_enterprise_custom_auth_runs_post_custom_auth_checks_when_opt_in()
         litellm.enable_post_custom_auth_checks = original_flag
 
 
-@pytest.mark.parametrize(
-    "custom_litellm_key_header, api_key, passed_in_key",
-    [
-        ("Bearer sk-12345678", "sk-12345678", "Bearer sk-12345678"),
-        ("Basic sk-12345678", "sk-12345678", "Basic sk-12345678"),
-        ("bearer sk-12345678", "sk-12345678", "bearer sk-12345678"),
-        ("sk-12345678", "sk-12345678", "sk-12345678"),
-        # AWS Signature V4 format (LangChain AWS SDK)
-        (
-            "AWS4-HMAC-SHA256 Credential=Bearer sk-12345678/20260210/us-east-1/bedrock/aws4_request, SignedHeaders=host, Signature=abc123",
-            "sk-12345678",
-            "AWS4-HMAC-SHA256 Credential=Bearer sk-12345678/20260210/us-east-1/bedrock/aws4_request, SignedHeaders=host, Signature=abc123",
-        ),
-    ],
-)
-def test_get_api_key_with_custom_litellm_key_header(
+def _assert_get_api_key_with_custom_litellm_key_header(
     custom_litellm_key_header, api_key, passed_in_key
 ):
     assert get_api_key(
@@ -585,6 +570,49 @@ def test_get_api_key_with_custom_litellm_key_header(
         route="",
         request=MagicMock(),
     ) == (api_key, passed_in_key)
+
+
+def test_get_api_key_with_custom_litellm_key_header_bearer_prefix():
+    token = "sk-" + "1" * 8
+    header = f"Bearer {token}"
+    _assert_get_api_key_with_custom_litellm_key_header(
+        custom_litellm_key_header=header, api_key=token, passed_in_key=header
+    )
+
+
+def test_get_api_key_with_custom_litellm_key_header_basic_prefix():
+    token = "sk-" + "1" * 8
+    header = f"Basic {token}"
+    _assert_get_api_key_with_custom_litellm_key_header(
+        custom_litellm_key_header=header, api_key=token, passed_in_key=header
+    )
+
+
+def test_get_api_key_with_custom_litellm_key_header_lowercase_bearer_prefix():
+    token = "sk-" + "1" * 8
+    header = f"bearer {token}"
+    _assert_get_api_key_with_custom_litellm_key_header(
+        custom_litellm_key_header=header, api_key=token, passed_in_key=header
+    )
+
+
+def test_get_api_key_with_custom_litellm_key_header_no_prefix():
+    token = "sk-" + "1" * 8
+    _assert_get_api_key_with_custom_litellm_key_header(
+        custom_litellm_key_header=token, api_key=token, passed_in_key=token
+    )
+
+
+def test_get_api_key_with_custom_litellm_key_header_aws_sigv4():
+    """AWS Signature V4 format (LangChain AWS SDK)."""
+    token = "sk-" + "1" * 8
+    header = (
+        f"AWS4-HMAC-SHA256 Credential=Bearer {token}/20260210/us-east-1/bedrock/"
+        "aws4_request, SignedHeaders=host, Signature=abc123"
+    )
+    _assert_get_api_key_with_custom_litellm_key_header(
+        custom_litellm_key_header=header, api_key=token, passed_in_key=header
+    )
 
 
 def test_team_metadata_with_tags_flows_through_jwt_auth():
