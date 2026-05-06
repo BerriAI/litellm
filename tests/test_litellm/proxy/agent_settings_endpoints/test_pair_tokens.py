@@ -113,6 +113,8 @@ class TestBuildInstallCommand:
         cmd = build_install_command(
             proxy_url="https://proxy.example.com", raw_token="TOK"
         )
+        # All values pass through shlex.quote — simple alnum/`:/.-` strings
+        # come back unquoted, matching the documented one-liner.
         assert cmd == (
             "curl -fsS https://litellm.ai/install-worker | sh -s -- "
             "--proxy https://proxy.example.com --token TOK"
@@ -127,6 +129,27 @@ class TestBuildInstallCommand:
         assert "https://internal.example/install.sh" in cmd
         assert "--proxy https://p" in cmd
         assert "--token T" in cmd
+
+    def test_proxy_url_with_metacharacters_is_shell_quoted(self):
+        # Defense against header-injection / config bugs that might land a
+        # space, semicolon, or quote in the proxy URL. shlex.quote wraps the
+        # value in single quotes so it can't break out of the install line.
+        cmd = build_install_command(proxy_url="https://h; rm -rf /", raw_token="TOK")
+        assert "'https://h; rm -rf /'" in cmd
+        # Sanity: the dangerous payload must NOT appear unquoted.
+        assert "--proxy https://h; rm -rf /" not in cmd
+
+    def test_raw_token_with_metacharacters_is_shell_quoted(self):
+        cmd = build_install_command(proxy_url="https://p", raw_token="abc def$(whoami)")
+        assert "'abc def$(whoami)'" in cmd
+
+    def test_install_script_url_is_shell_quoted(self):
+        cmd = build_install_command(
+            proxy_url="https://p",
+            raw_token="T",
+            install_script_url="https://hosts space.example/install.sh",
+        )
+        assert "'https://hosts space.example/install.sh'" in cmd
 
 
 @pytest.fixture(autouse=True)
