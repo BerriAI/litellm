@@ -62,7 +62,7 @@ set -e
 exec > /var/log/user-data.log 2>&1
 echo "$(date) starting user-data"
 apt-get update -y && apt-get install -y curl jq
-curl -fsS -X POST {CALLBACK_URL} \\
+curl -fsS -X POST "{CALLBACK_URL}" \\
   -H 'Content-Type: application/json' \\
   -d '{{"phase":"boot","spike_id":"{SPIKE_ID}","hostname":"'"$(hostname)"'","ts":"'"$(date -u +%FT%TZ)"'"}}'
 echo "$(date) callback sent"
@@ -168,6 +168,7 @@ def main() -> int:
         # poll until the instance is "Online" in SSM before measuring.
         print("Waiting for SSM agent to come online...")
         ssm_online_deadline = time.time() + 180
+        ssm_online = False
         while time.time() < ssm_online_deadline:
             try:
                 info = ssm.describe_instance_information(
@@ -175,12 +176,22 @@ def main() -> int:
                 )
                 items = info.get("InstanceInformationList", [])
                 if items and items[0].get("PingStatus") == "Online":
+                    ssm_online = True
                     break
             except Exception:
                 pass
             time.sleep(2)
-        else:
-            print("[!] SSM agent never registered as Online within 180s")
+
+        if not ssm_online:
+            # Skip warm-attach measurement explicitly so the SUMMARY line still
+            # prints with a null measurement, rather than crashing inside
+            # send_command with TargetNotConnected.
+            print(
+                "[!] SSM agent never registered as Online within 180s — "
+                "skipping warm-attach measurement"
+            )
+            measurements["warm_attach_ssm_ms"] = None
+            return 1
 
         print("Measuring warm-attach latency via SSM RunCommand...")
         attach_t0 = time.time()
@@ -191,7 +202,7 @@ def main() -> int:
                 "commands": [
                     f"export LITELLM_SESSION_ID={SPIKE_ID}",
                     f"export LITELLM_BASE_URL='{CALLBACK_URL}'",
-                    f"curl -fsS -X POST {CALLBACK_URL} -H 'Content-Type: application/json' "
+                    f"curl -fsS -X POST \"{CALLBACK_URL}\" -H 'Content-Type: application/json' "
                     f'-d \'{{"phase":"hydrate","spike_id":"{SPIKE_ID}"}}\'',
                 ]
             },
