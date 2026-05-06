@@ -152,8 +152,14 @@ if MCP_AVAILABLE:
         UserAPIKeyAuth,
         UserMCPManagementMode,
     )
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.auth.user_api_key_auth import (
+        _user_api_key_auth_builder,
+        user_api_key_auth,
+    )
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        _read_request_body,
+        populate_request_with_path_params,
+    )
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import MCPCredentials
@@ -1492,6 +1498,55 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
+        """
+        Auth dependency for MCP OAuth browser-navigation endpoints (/authorize, /token).
+
+        Tries the Authorization header first. Falls back to decoding the UI
+        'token' session cookie (set by SSO login) to extract the API key, which
+        allows browser-based OAuth redirects to work without an explicit
+        Authorization header.
+        """
+        import jwt as _jwt
+
+        from litellm.proxy.proxy_server import master_key
+
+        auth_header = request.headers.get("Authorization", "")
+        api_key = auth_header  # _get_bearer_token will strip "Bearer " prefix
+
+        if not api_key:
+            token_cookie = request.cookies.get("token")
+            if token_cookie and master_key:
+                try:
+                    decoded = _jwt.decode(
+                        token_cookie,
+                        master_key,
+                        algorithms=["HS256"],
+                        # UI session cookies may omit exp; don't require it.
+                        options={"verify_exp": False},
+                    )
+                    if decoded.get("login_method") in ("sso", "username_password"):
+                        cookie_key = decoded.get("key", "")
+                        if cookie_key:
+                            api_key = f"Bearer {cookie_key}"
+                except _jwt.InvalidTokenError:
+                    pass
+
+        request_data = await _read_request_body(request=request)
+        request_data = populate_request_with_path_params(
+            request_data=request_data, request=request
+        )
+
+        return await _user_api_key_auth_builder(
+            request=request,
+            api_key=api_key,
+            azure_api_key_header="",
+            anthropic_api_key_header=None,
+            google_ai_studio_api_key_header=None,
+            azure_apim_header=None,
+            request_data=request_data,
+        )
+
     async def _get_cached_temporary_mcp_server_or_404(
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1542,12 +1597,12 @@ if MCP_AVAILABLE:
     @router.get(
         "/server/oauth/{server_id}/authorize",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
+        dependencies=[Depends(_mcp_oauth_user_api_key_auth)],
     )
     async def mcp_authorize(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
         client_id: Optional[str] = None,
         redirect_uri: str = Query(...),
         state: str = "",
@@ -1587,12 +1642,12 @@ if MCP_AVAILABLE:
     @router.post(
         "/server/oauth/{server_id}/token",
         include_in_schema=False,
-        dependencies=[Depends(user_api_key_auth)],
+        dependencies=[Depends(_mcp_oauth_user_api_key_auth)],
     )
     async def mcp_token(
         request: Request,
         server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        user_api_key_dict: UserAPIKeyAuth = Depends(_mcp_oauth_user_api_key_auth),
         grant_type: str = Form(...),
         code: Optional[str] = Form(None),
         redirect_uri: Optional[str] = Form(None),
