@@ -36,7 +36,30 @@ def caller_api_key_hash(user_api_key_dict: UserAPIKeyAuth) -> str:
 
 
 def is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
-    """Proxy admins can access any agent / session / run regardless of owner."""
+    """True iff the caller is a full proxy admin (read AND write).
+
+    ``PROXY_ADMIN_VIEW_ONLY`` is intentionally NOT included here. For
+    write paths, this function being False means the view-only admin
+    falls back to the per-tenant ownership check, which they fail (no
+    matching ``user_api_key_hash``) and get a 404 — closing the
+    privilege escalation that previously let view-only admins create /
+    update / delete other tenants' agents, sessions, and runs.
+
+    For read paths, callers should use :func:`is_proxy_admin_read` so
+    view-only admins still get cross-tenant visibility.
+    """
+    role = user_api_key_dict.user_role
+    if role is None:
+        return False
+    return role == LitellmUserRoles.PROXY_ADMIN
+
+
+def is_proxy_admin_read(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """True iff the caller is any flavor of proxy admin (incl. view-only).
+
+    Used only on read paths where the view-only admin is allowed to see
+    other tenants' resources.
+    """
     role = user_api_key_dict.user_role
     if role is None:
         return False
@@ -44,6 +67,22 @@ def is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
         LitellmUserRoles.PROXY_ADMIN,
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     }
+
+
+def assert_caller_can_mutate(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Reject write access for view-only admins.
+
+    Every state-mutating endpoint (POST/PUT/PATCH/DELETE) must call this
+    before any DB write. View-only admins are granted read access to all
+    tenants via :func:`is_proxy_admin_read` but MUST NOT be allowed to
+    mutate state — they otherwise inherit master-admin write authority
+    over every tenant's agents, sessions, and runs.
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
+        raise HTTPException(
+            status_code=403,
+            detail="View-only admins cannot perform write operations",
+        )
 
 
 def assert_caller_owns_agent(
@@ -54,10 +93,14 @@ def assert_caller_owns_agent(
 
     404 (not 403) on purpose — leaking existence of another tenant's
     resource is a fingerprinting risk.
+
+    Both full and view-only admins pass this read-side check; write
+    endpoints must additionally call :func:`assert_caller_can_mutate` to
+    block view-only admins from mutating other tenants' rows.
     """
     if agent_row is None:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if is_proxy_admin(user_api_key_dict):
+    if is_proxy_admin_read(user_api_key_dict):
         return
     expected_hash = caller_api_key_hash(user_api_key_dict)
     if agent_row.user_api_key_hash != expected_hash:
@@ -71,10 +114,15 @@ def assert_caller_owns_session(
     """Raise 404 if the caller is not the session's owner (and not admin).
 
     Sessions carry their own ``user_api_key_hash`` so we don't need to load
-    the parent agent to check ownership."""
+    the parent agent to check ownership.
+
+    Both full and view-only admins pass this read-side check; write
+    endpoints must additionally call :func:`assert_caller_can_mutate` to
+    block view-only admins from mutating other tenants' rows.
+    """
     if session_row is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    if is_proxy_admin(user_api_key_dict):
+    if is_proxy_admin_read(user_api_key_dict):
         return
     expected_hash = caller_api_key_hash(user_api_key_dict)
     if session_row.user_api_key_hash != expected_hash:
@@ -88,8 +136,9 @@ def owner_filter_for_caller(
     caller's own rows.
 
     Returns ``None`` for proxy admins (no filter) so callers can spread it
-    into an existing where dict only when needed.
+    into an existing where dict only when needed. Both full and view-only
+    admins get the unfiltered read.
     """
-    if is_proxy_admin(user_api_key_dict):
+    if is_proxy_admin_read(user_api_key_dict):
         return None
     return {"user_api_key_hash": caller_api_key_hash(user_api_key_dict)}
