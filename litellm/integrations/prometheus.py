@@ -1416,11 +1416,17 @@ class PrometheusLogger(CustomLogger):
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
-        remaining_requests = (
-            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
+        remaining_requests = self._get_virtual_key_rate_limit_remaining_value(
+            metadata=metadata,
+            metadata_key=remaining_requests_variable_name,
+            kwargs=kwargs,
+            rate_limit_type="requests",
         )
-        remaining_tokens = (
-            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
+        remaining_tokens = self._get_virtual_key_rate_limit_remaining_value(
+            metadata=metadata,
+            metadata_key=remaining_tokens_variable_name,
+            kwargs=kwargs,
+            rate_limit_type="tokens",
         )
 
         self.litellm_remaining_api_key_requests_for_model.labels(
@@ -1436,6 +1442,37 @@ class PrometheusLogger(CustomLogger):
             _sanitize_prometheus_label_value(model_group),
             _sanitize_prometheus_label_value(model_id),
         ).set(remaining_tokens)
+
+    @staticmethod
+    def _get_virtual_key_rate_limit_remaining_value(
+        metadata: dict,
+        metadata_key: str,
+        kwargs: dict,
+        rate_limit_type: Literal["requests", "tokens"],
+    ) -> Any:
+        metadata_value = metadata.get(metadata_key)
+        if metadata_value is not None:
+            return metadata_value
+
+        standard_logging_payload = kwargs.get("standard_logging_object") or {}
+        hidden_params = (
+            standard_logging_payload.get("hidden_params", {})
+            if isinstance(standard_logging_payload, dict)
+            else {}
+        )
+        additional_headers = (
+            hidden_params.get("additional_headers", {})
+            if isinstance(hidden_params, dict)
+            else {}
+        )
+        if isinstance(additional_headers, dict):
+            header_value = additional_headers.get(
+                f"x-ratelimit-model_per_key-remaining-{rate_limit_type}"
+            )
+            if header_value is not None:
+                return header_value
+
+        return sys.maxsize
 
     def _set_latency_metrics(
         self,
