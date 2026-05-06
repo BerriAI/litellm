@@ -1355,6 +1355,57 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 ],
                 usage=usage,
             )
+        elif event_type == "response.incomplete":
+            # Response ended early (e.g. content_filter or max_output_tokens).
+            # Map incomplete_details.reason to a finish_reason so downstream
+            # callbacks and guardrails receive a terminal chunk instead of an
+            # empty unhandled-event chunk.
+            response_data = parsed_chunk.get("response", {})
+            incomplete_details = (
+                response_data.get("incomplete_details") if response_data else None
+            )
+            reason = (
+                incomplete_details.get("reason") if incomplete_details else None
+            )
+            # Map Responses API reason -> Chat Completions finish_reason
+            finish_reason: str
+            if reason == "max_output_tokens":
+                finish_reason = "length"
+            elif reason == "content_filter":
+                finish_reason = "content_filter"
+            else:
+                finish_reason = "stop"
+
+            # Surface content_filters and incomplete_details via provider_specific_fields
+            # so that custom loggers and guardrail hooks can inspect them.
+            provider_specific: Dict[str, Any] = {}
+            if incomplete_details:
+                provider_specific["incomplete_details"] = incomplete_details
+            content_filters = (
+                response_data.get("content_filters") if response_data else None
+            )
+            if content_filters:
+                provider_specific["content_filters"] = content_filters
+
+            usage = None
+            if response_data and response_data.get("usage"):
+                from litellm.responses.utils import ResponseAPILoggingUtils
+
+                usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                    response_data.get("usage")
+                )
+
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content=""),
+                        finish_reason=finish_reason,
+                    )
+                ],
+                usage=usage,
+                provider_specific_fields=provider_specific if provider_specific else None,
+            )
         else:
             pass
         # For any unhandled event types, create a minimal valid chunk or skip
