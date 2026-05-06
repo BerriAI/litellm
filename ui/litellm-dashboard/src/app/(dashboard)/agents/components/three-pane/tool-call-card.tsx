@@ -9,7 +9,6 @@
  */
 import { useState } from "react";
 import { Card, Tag, Typography, Button } from "antd";
-import { CaretRightOutlined, CaretDownOutlined } from "@ant-design/icons";
 
 const { Text, Paragraph } = Typography;
 
@@ -24,13 +23,9 @@ export default function ToolCallCard({ tool, input, result }: ToolCallCardProps)
   return (
     <Card size="small" className="!mb-3" data-testid="tool-call-card" bodyStyle={{ padding: 8 }}>
       <div className="flex items-center gap-2">
-        <Button
-          size="small"
-          type="text"
-          icon={expanded ? <CaretDownOutlined /> : <CaretRightOutlined />}
-          onClick={() => setExpanded((v) => !v)}
-          data-testid="tool-call-toggle"
-        />
+        <Button size="small" type="text" onClick={() => setExpanded((v) => !v)} data-testid="tool-call-toggle">
+          {expanded ? "▾" : "▸"}
+        </Button>
         <Tag color="cyan" className="!m-0">
           {tool}
         </Tag>
