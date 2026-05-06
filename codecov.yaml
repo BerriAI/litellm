@@ -1,3 +1,8 @@
+codecov:
+  require_ci_to_pass: false # post coverage status even if CI has unrelated failures
+  notify:
+    wait_for_ci: false # post as soon as expected uploads arrive, don't wait on CI
+
 component_management:
   individual_components:
     - component_id: "Router"
