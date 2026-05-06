@@ -19,14 +19,14 @@ def test_session_idempotency(client, noop_provider, fake_prisma_client):
 
     headers = {"Authorization": "Bearer k", "Idempotency-Key": "uuid-A"}
     a = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent_id}/sessions",
         headers=headers,
-        json={"agent_id": agent_id, "repos": []},
+        json={"repos": []},
     )
     b = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent_id}/sessions",
         headers=headers,
-        json={"agent_id": agent_id, "repos": []},
+        json={"repos": []},
     )
     assert a.status_code == 200 and b.status_code == 200
     assert a.json()["id"] == b.json()["id"]
@@ -37,9 +37,9 @@ def test_session_idempotency(client, noop_provider, fake_prisma_client):
 def test_run_idempotency(client, noop_provider, fake_prisma_client):
     agent_id = _create_agent(client)
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent_id}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": agent_id, "repos": []},
+        json={"repos": []},
     ).json()
     sid = sess["id"]
     daemon_token = sess["daemon_token"]

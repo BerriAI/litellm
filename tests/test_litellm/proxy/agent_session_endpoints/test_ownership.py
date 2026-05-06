@@ -15,9 +15,9 @@ def test_cross_tenant_isolation(client, other_tenant_client, noop_provider):
     ).json()
     aid = agent["id"]
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{aid}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": aid, "repos": []},
+        json={"repos": []},
     ).json()
     sid = sess["id"]
     run = client.post(
@@ -52,13 +52,13 @@ def test_cross_tenant_isolation(client, other_tenant_client, noop_provider):
     assert (
         other_tenant_client.get(
             "/v2/agents", headers={"Authorization": "Bearer other"}
-        ).json()["data"]
+        ).json()["items"]
         == []
     )
     assert (
         other_tenant_client.get(
             "/v2/sessions", headers={"Authorization": "Bearer other"}
-        ).json()["data"]
+        ).json()["items"]
         == []
     )
 

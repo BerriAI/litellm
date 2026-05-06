@@ -52,9 +52,9 @@ def _bootstrap(client, noop_provider):
         json={"name": "t", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": agent["id"], "repos": []},
+        json={"repos": []},
     ).json()
     return agent, sess
 

@@ -71,9 +71,9 @@ def test_session_starts_provisioning(client, noop_provider):
     agent_id = res.json()["id"]
 
     res = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent_id}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": agent_id, "repos": []},
+        json={"repos": []},
     )
     assert res.status_code == 200
     body = res.json()
@@ -90,9 +90,9 @@ def test_daemon_register_flips_to_ready(client, noop_provider, fake_prisma_clien
     agent_id = res.json()["id"]
 
     res = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent_id}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": agent_id, "repos": []},
+        json={"repos": []},
     )
     body = res.json()
     sid = body["id"]

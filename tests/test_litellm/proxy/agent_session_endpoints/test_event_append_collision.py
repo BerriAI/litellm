@@ -52,9 +52,9 @@ def test_event_append_real_collision_returns_409(
         json={"name": "t", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{a["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": a["id"], "repos": []},
+        json={"repos": []},
     ).json()
     sid = sess["id"]
 
@@ -109,9 +109,9 @@ def test_event_append_unrelated_error_does_not_become_409(
         json={"name": "t", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{a["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": a["id"], "repos": []},
+        json={"repos": []},
     ).json()
     sid = sess["id"]
     daemon_token = sess["daemon_token"]

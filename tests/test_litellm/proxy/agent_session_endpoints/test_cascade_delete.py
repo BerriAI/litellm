@@ -22,14 +22,14 @@ def test_delete_agent_terminates_sessions_and_calls_provider(
     aid = agent["id"]
 
     sess_a = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{aid}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": aid, "repos": []},
+        json={"repos": []},
     ).json()
     sess_b = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{aid}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": aid, "repos": []},
+        json={"repos": []},
     ).json()
 
     # Create a run on session A so cascade exercises run-cancel path too.
@@ -74,18 +74,18 @@ def test_delete_agent_skips_session_already_in_terminal_status(
 
     # An "active" session that should still get terminated by the cascade.
     sess_active = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{aid}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": aid, "repos": []},
+        json={"repos": []},
     ).json()
     # A session whose status was already flipped to ``error`` (terminal)
     # but with ``terminated_at`` deliberately left None — the legacy
     # filter would have re-terminated this row, but the status-based
     # filter should skip it.
     sess_already_terminal = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{aid}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": aid, "repos": []},
+        json={"repos": []},
     ).json()
     terminal_row = next(
         r
@@ -122,9 +122,9 @@ def test_delete_session_terminates_active_runs(
         json={"name": "t", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": agent["id"], "repos": []},
+        json={"repos": []},
     ).json()
     sid = sess["id"]
     run = client.post(

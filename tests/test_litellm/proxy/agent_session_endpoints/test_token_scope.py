@@ -45,14 +45,14 @@ def test_token_for_session_a_rejected_by_session_b(client, noop_provider):
         json={"name": "x", "model": "gpt-4"},
     ).json()
     sess_a = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{a["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": a["id"], "repos": []},
+        json={"repos": []},
     ).json()
     sess_b = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{a["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": a["id"], "repos": []},
+        json={"repos": []},
     ).json()
 
     # Use sess_a's daemon token to register sess_b.
@@ -71,9 +71,9 @@ def test_expired_jwt_rejected(client, noop_provider):
         json={"name": "t", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{a["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": a["id"], "repos": []},
+        json={"repos": []},
     ).json()
 
     # Mint a token that expired 1 minute ago.
@@ -100,9 +100,9 @@ def test_terminated_session_rejects_its_token(
         json={"name": "t", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{a["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": a["id"], "repos": []},
+        json={"repos": []},
     ).json()
     sid = sess["id"]
     daemon_token = sess["daemon_token"]

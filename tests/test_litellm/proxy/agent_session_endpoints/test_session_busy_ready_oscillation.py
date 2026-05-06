@@ -28,9 +28,9 @@ def _bootstrap(client):
         json={"name": "osc", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": agent["id"], "repos": []},
+        json={"repos": []},
     ).json()
     return sess["id"]
 

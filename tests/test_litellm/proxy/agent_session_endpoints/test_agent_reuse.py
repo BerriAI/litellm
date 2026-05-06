@@ -16,9 +16,9 @@ def _create_agent(client) -> str:
 
 def _create_session(client, agent_id: str) -> str:
     res = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent_id}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": agent_id, "repos": []},
+        json={"repos": []},
     )
     assert res.status_code == 200, res.text
     return res.json()["id"]
@@ -53,5 +53,5 @@ def test_sessions_under_agent_listed_by_filter(client, noop_provider):
         headers={"Authorization": "Bearer k"},
     )
     assert res.status_code == 200
-    listed_ids = {s["id"] for s in res.json()["data"]}
+    listed_ids = {s["id"] for s in res.json()["items"]}
     assert listed_ids == set(sids)

@@ -25,9 +25,9 @@ def _create_tenant_a_resources(client):
         json={"name": "tenant-a-agent", "model": "gpt-4"},
     ).json()
     session = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{agent["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": agent["id"], "repos": []},
+        json={"repos": []},
     ).json()
     run = client.post(
         f"/v2/sessions/{session['id']}/runs",
@@ -74,9 +74,9 @@ def test_view_only_admin_cannot_create_session(view_only_admin_client, noop_prov
     # Even minting a session with a non-existent agent must short-circuit
     # to 403 BEFORE any DB activity — the role check is the first guard.
     res = view_only_admin_client.post(
-        "/v2/sessions",
+        f"/v2/agents/{"agt_doesnotexist"}/sessions",
         headers={"Authorization": "Bearer view-only"},
-        json={"agent_id": "agt_doesnotexist", "repos": []},
+        json={"repos": []},
     )
     assert res.status_code == 403
 
@@ -159,4 +159,4 @@ def test_view_only_admin_can_still_read_other_tenant_resources(
         "/v2/agents", headers={"Authorization": "Bearer view-only"}
     )
     assert res.status_code == 200
-    assert any(a["id"] == agent_id for a in res.json()["data"])
+    assert any(a["id"] == agent_id for a in res.json()["items"])

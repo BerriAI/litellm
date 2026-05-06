@@ -32,9 +32,9 @@ async def test_sweeper_terminates_expired_sessions(
         json={"name": "t", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{a["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": a["id"], "repos": []},
+        json={"repos": []},
     ).json()
     sid = sess["id"]
 
@@ -61,9 +61,9 @@ async def test_sweeper_marks_dead_daemon_sessions_error(
         json={"name": "t", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{a["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": a["id"], "repos": []},
+        json={"repos": []},
     ).json()
     sid = sess["id"]
 
@@ -95,9 +95,9 @@ async def test_sweeper_marks_stuck_runs_error(
         json={"name": "t", "model": "gpt-4"},
     ).json()
     sess = client.post(
-        "/v2/sessions",
+        f"/v2/agents/{a["id"]}/sessions",
         headers={"Authorization": "Bearer k"},
-        json={"agent_id": a["id"], "repos": []},
+        json={"repos": []},
     ).json()
     sid = sess["id"]
     client.post(
