@@ -36,6 +36,9 @@ from litellm.proxy.agent_session_endpoints.ownership import (
 )
 from litellm.proxy.agent_session_endpoints.schemas import RunCreate, RunResponse
 from litellm.proxy.agent_session_endpoints.serialization import run_row_to_response
+from litellm.proxy.agent_session_endpoints.session_status import (
+    refresh_session_status_from_runs,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
@@ -177,6 +180,10 @@ async def create_run(
         raise
 
     verbose_proxy_logger.info("run.create id=%s session_id=%s", row.id, session_id)
+    # Run was just created in ``queued``. Drive the session
+    # ``ready`` -> ``busy`` flip so SDK consumers polling
+    # GET /v2/sessions/{id} see the right status.
+    await refresh_session_status_from_runs(prisma_client, session_id)
     return run_row_to_response(row)
 
 
@@ -282,6 +289,9 @@ async def cancel_run(
             next_seq,
             exc,
         )
+    # Run just transitioned to ``cancelled`` (terminal). If it was the
+    # only active run, flip the session ``busy`` -> ``ready``.
+    await refresh_session_status_from_runs(prisma_client, session_id)
     return run_row_to_response(updated)
 
 
