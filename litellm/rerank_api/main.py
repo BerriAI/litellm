@@ -5,10 +5,12 @@ from typing import Any, Coroutine, Dict, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.bedrock.rerank.handler import BedrockRerankHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.custom_llm import CustomLLM
 from litellm.llms.together_ai.rerank.handler import TogetherAIRerank
 from litellm.llms.watsonx.common_utils import IBMWatsonXMixin
 from litellm.rerank_api.rerank_utils import get_optional_rerank_params
@@ -133,6 +135,37 @@ def rerank(  # noqa: PLR0915
             api_base=optional_params.api_base,
             api_key=optional_params.api_key,
         )
+
+        # Handle custom providers registered via custom_provider_map before
+        # attempting to cast the provider string to the LlmProviders enum.
+        if _custom_llm_provider in litellm._custom_providers:
+            custom_handler: Optional[CustomLLM] = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == _custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise LiteLLMUnknownProvider(
+                    model=model, custom_llm_provider=_custom_llm_provider
+                )
+
+            handler_fn = custom_handler.arerank if _is_async else custom_handler.rerank
+
+            return handler_fn(
+                model=model,
+                query=query,
+                documents=documents,
+                top_n=top_n,
+                rank_fields=rank_fields,
+                return_documents=return_documents,
+                max_chunks_per_doc=max_chunks_per_doc,
+                logging_obj=litellm_logging_obj,
+                optional_params=optional_params.model_dump(exclude_unset=True),
+                api_key=dynamic_api_key or optional_params.api_key,
+                api_base=dynamic_api_base or optional_params.api_base,
+                timeout=optional_params.timeout,
+                litellm_params=optional_params.model_dump(exclude_unset=True),
+            )
 
         rerank_provider_config: BaseRerankConfig = (
             ProviderConfigManager.get_provider_rerank_config(

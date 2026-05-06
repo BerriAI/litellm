@@ -197,6 +197,42 @@ class CustomLLM(BaseLLM):
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
+    def rerank(
+        self,
+        model: str,
+        query: str,
+        documents: list,
+        top_n: Optional[int],
+        rank_fields: Optional[list],
+        return_documents: Optional[bool],
+        max_chunks_per_doc: Optional[int],
+        logging_obj: Any,
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        litellm_params=None,
+    ) -> Any:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    async def arerank(
+        self,
+        model: str,
+        query: str,
+        documents: list,
+        top_n: Optional[int],
+        rank_fields: Optional[list],
+        return_documents: Optional[bool],
+        max_chunks_per_doc: Optional[int],
+        logging_obj: Any,
+        optional_params: dict,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        litellm_params=None,
+    ) -> Any:
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
     def image_edit(
         self,
         model: str,
