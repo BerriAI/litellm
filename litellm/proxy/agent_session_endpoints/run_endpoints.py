@@ -31,6 +31,7 @@ from litellm.proxy.agent_session_endpoints.constants import (
 )
 from litellm.proxy.agent_session_endpoints.ids import new_run_id
 from litellm.proxy.agent_session_endpoints.ownership import (
+    assert_caller_can_mutate,
     assert_caller_owns_session,
 )
 from litellm.proxy.agent_session_endpoints.schemas import RunCreate, RunResponse
@@ -112,6 +113,7 @@ async def create_run(
       * 409 ``session_not_accepting_runs`` if session is not ready/busy.
       * Idempotency-Key returns the existing run on retry (same row).
     """
+    assert_caller_can_mutate(user_api_key_dict)
     prisma_client = await _get_prisma_client_or_503()
     session = await _load_session_or_404(prisma_client, session_id)
     assert_caller_owns_session(user_api_key_dict, session)
@@ -242,6 +244,7 @@ async def cancel_run(
     Idempotent: cancelling an already-terminal run returns the row
     unchanged (200, no extra event emitted).
     """
+    assert_caller_can_mutate(user_api_key_dict)
     prisma_client = await _get_prisma_client_or_503()
     session = await _load_session_or_404(prisma_client, session_id)
     assert_caller_owns_session(user_api_key_dict, session)
@@ -327,7 +330,9 @@ async def _stream_run_events(
         return
 
     last_seen = max(starting_seq - 1, 0)
-    last_keepalive = asyncio.get_event_loop().time()
+    # ``get_running_loop`` (not ``get_event_loop``) is the correct API
+    # inside a running coroutine — see PEP 654 / Python 3.10 deprecation.
+    last_keepalive = asyncio.get_running_loop().time()
     terminal_first_seen_at: Optional[float] = None
 
     while True:
@@ -341,7 +346,7 @@ async def _stream_run_events(
             # Run vanished (cascade delete). Close.
             return
 
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         if run.status in RUN_TERMINAL_STATUSES:
             if terminal_first_seen_at is None:
                 terminal_first_seen_at = now
