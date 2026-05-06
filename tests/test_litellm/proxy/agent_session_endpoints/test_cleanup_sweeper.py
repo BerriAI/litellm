@@ -65,6 +65,7 @@ async def test_sweeper_marks_dead_daemon_sessions_error(
         headers={"Authorization": "Bearer k"},
         json={"agent_id": a["id"], "repos": []},
     ).json()
+    sid = sess["id"]
 
     row = fake_prisma_client.db.litellm_agentsession.rows[0]
     row.status = SESSION_STATUS_READY
@@ -75,6 +76,13 @@ async def test_sweeper_marks_dead_daemon_sessions_error(
     summary = await run_cleanup_pass(fake_prisma_client)
     assert summary["dead_daemon_sessions"] == 1
     assert row.status == SESSION_STATUS_ERROR
+    # Greptile P1: dead-daemon sweep MUST go through
+    # ``_terminate_session_internal`` so the VM provider is notified.
+    # Otherwise EC2 instances orphan once a real provider replaces
+    # ``NoopVMProvider``.
+    assert any(
+        c["session_id"] == sid for c in noop_provider.terminate_calls
+    ), "provider.terminate was never called for the dead-daemon session"
 
 
 @pytest.mark.asyncio
