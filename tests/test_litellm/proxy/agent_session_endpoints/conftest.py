@@ -61,6 +61,15 @@ def _matches(row: _Row, where: Optional[Dict[str, Any]]) -> bool:
     if not where:
         return True
     for key, expected in where.items():
+        # Compound boolean operators used by cursor pagination.
+        if key == "AND":
+            if not all(_matches(row, sub) for sub in expected):
+                return False
+            continue
+        if key == "OR":
+            if not any(_matches(row, sub) for sub in expected):
+                return False
+            continue
         actual = getattr(row, key, None)
         if isinstance(expected, dict):
             if "in" in expected:
