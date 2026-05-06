@@ -880,7 +880,7 @@ async def get_users(
     try:
         prisma_client = await _get_prisma_client_or_raise_exception()
         # Parse filter if provided (basic support)
-        where_conditions = {}
+        where_conditions: Dict[str, Any] = {}
         if filter:
             # Okta locates users by userName before deprovisioning. LiteLLM
             # exposes SCIM userName from user_email, while older SCIM-created

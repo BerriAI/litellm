@@ -323,6 +323,62 @@ async def test_get_users_filters_username_by_exposed_scim_username_for_okta(mock
 
 
 @pytest.mark.asyncio
+async def test_get_users_filters_email_value_by_user_email(mocker):
+    """
+    SCIM clients can locate users with `emails.value eq "<email>"`; keep that
+    filter as a direct user_email lookup alongside the userName fallback query.
+    """
+    user = LiteLLM_UserTable(
+        user_id="internal-user-id",
+        user_email="scim.user@example.com",
+        user_alias="SCIM User",
+        teams=[],
+        metadata={},
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[user])
+    mock_prisma_client.db.litellm_usertable.count = AsyncMock(return_value=1)
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(
+            return_value=SCIMUser(
+                schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+                id="internal-user-id",
+                userName="scim.user@example.com",
+                emails=[SCIMUserEmail(value="scim.user@example.com")],
+            )
+        ),
+    )
+
+    response = await get_users(
+        startIndex=1,
+        count=10,
+        filter='emails.value eq "scim.user@example.com"',
+    )
+
+    expected_where = {"user_email": "scim.user@example.com"}
+    mock_prisma_client.db.litellm_usertable.find_many.assert_awaited_once_with(
+        where=expected_where,
+        skip=0,
+        take=10,
+        order={"created_at": "desc"},
+    )
+    mock_prisma_client.db.litellm_usertable.count.assert_awaited_once_with(
+        where=expected_where
+    )
+    assert response.totalResults == 1
+    assert response.Resources[0].id == "internal-user-id"
+
+
+@pytest.mark.asyncio
 async def test_handle_existing_user_by_email_no_email(mocker):
     """Should return None when new_user_request has no email"""
     mock_prisma_client = mocker.MagicMock()
