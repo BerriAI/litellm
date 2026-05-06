@@ -20,6 +20,7 @@ from tests.claude_code.cli_driver import (
     DriverResult,
     failure_diagnostic,
     run_claude,
+    run_claude_models_parallel,
 )
 
 
@@ -343,6 +344,241 @@ def test_failure_diagnostic_ignores_non_int_api_error_status():
     diag = failure_diagnostic(result)
     assert "api_status" not in diag
     assert "text=oops" in diag
+
+
+# ---------------------------------------------------------------------------
+# run_claude_models_parallel
+#
+# The matrix runs three Claude tiers per cell, so the parallel helper has to
+# (a) invoke `run_claude` once per model, (b) preserve each model's outcome
+# separately, and (c) return errors as values rather than raising — callers
+# need both the failed and the succeeded model results to report per-cell
+# rows accurately.
+# ---------------------------------------------------------------------------
+
+
+def test_run_claude_models_parallel_returns_one_result_per_model():
+    """Each model gets its own DriverResult keyed under the helper's dict."""
+    seen_models: List[str] = []
+
+    def runner(cmd, env, capture_output, text, timeout, check):
+        # The model id is two slots after `--model` in the assembled command.
+        idx = cmd.index("--model")
+        model = cmd[idx + 1]
+        seen_models.append(model)
+        return _Completed(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": f"reply-{model}"}]
+                    },
+                }
+            )
+            + "\n",
+        )
+
+    outcomes = run_claude_models_parallel(
+        models=["a", "b", "c"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+    )
+
+    assert set(outcomes.keys()) == {"a", "b", "c"}
+    for model in ("a", "b", "c"):
+        result = outcomes[model]
+        assert isinstance(result, DriverResult)
+        assert result.text == f"reply-{model}"
+        assert result.exit_code == 0
+    assert sorted(seen_models) == ["a", "b", "c"]
+
+
+def test_run_claude_models_parallel_returns_errors_as_values():
+    """A model whose CLI is missing surfaces as a ClaudeCLIError, not a raise."""
+
+    def runner(cmd, env, capture_output, text, timeout, check):
+        idx = cmd.index("--model")
+        model = cmd[idx + 1]
+        if model == "boom":
+            raise FileNotFoundError(2, "no such file", "claude")
+        return _Completed(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "ok"}]},
+                }
+            )
+            + "\n",
+        )
+
+    outcomes = run_claude_models_parallel(
+        models=["ok-model", "boom"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+    )
+
+    assert isinstance(outcomes["ok-model"], DriverResult)
+    assert outcomes["ok-model"].text == "ok"
+    assert isinstance(outcomes["boom"], ClaudeCLIError)
+    assert "claude CLI not found" in str(outcomes["boom"])
+
+
+def test_run_claude_models_parallel_preserves_nonzero_exit_codes():
+    """Mixed success/failure on exit code should not collapse into one verdict."""
+
+    def runner(cmd, env, capture_output, text, timeout, check):
+        idx = cmd.index("--model")
+        model = cmd[idx + 1]
+        if model == "fail":
+            return _Completed(returncode=2, stdout="", stderr="auth failed")
+        return _Completed(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "ok"}]},
+                }
+            )
+            + "\n",
+        )
+
+    outcomes = run_claude_models_parallel(
+        models=["ok-model", "fail"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+    )
+
+    assert outcomes["ok-model"].exit_code == 0
+    assert outcomes["fail"].exit_code == 2
+    assert outcomes["fail"].stderr == "auth failed"
+
+
+def test_run_claude_models_parallel_rejects_empty_models():
+    with pytest.raises(ValueError, match="non-empty"):
+        run_claude_models_parallel(
+            models=[],
+            prompt="hi",
+            base_url="http://x",
+            api_key="k",
+        )
+
+
+def test_run_claude_models_parallel_stamps_duration_on_each_result():
+    """Each DriverResult carries the per-model wall time so callers can
+    attribute slow cells without re-timing the work themselves.
+
+    The fake runner sleeps for very different durations per model so
+    we can prove each result is timing its own work (not the batch
+    wall time). We use generous absolute bounds because thread-pool
+    scheduling on a loaded CI box adds noise on the order of tens of
+    milliseconds.
+    """
+    import time
+
+    def runner(cmd, env, capture_output, text, timeout, check):
+        idx = cmd.index("--model")
+        model = cmd[idx + 1]
+        time.sleep(0.05 if model == "fast" else 0.40)
+        return _Completed(returncode=0, stdout="")
+
+    outcomes = run_claude_models_parallel(
+        models=["fast", "slow"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+    )
+
+    fast_ms = outcomes["fast"].duration_ms
+    slow_ms = outcomes["slow"].duration_ms
+    assert fast_ms is not None and slow_ms is not None
+    # 50ms sleep ⇒ ~50–250ms after scheduling overhead; 400ms sleep ⇒
+    # 400–700ms. We just need the two distributions to be non-overlapping
+    # so we know each row's duration is its own work, not the batch's.
+    assert fast_ms < 300, fast_ms
+    assert slow_ms >= 350, slow_ms
+    assert slow_ms > fast_ms
+
+
+def test_run_claude_models_parallel_breakdown_logs_to_stderr(capsys):
+    """The breakdown helper must emit a per-model timing block so users
+    can answer "why didn't parallel help?" without re-instrumenting."""
+
+    def runner(cmd, env, capture_output, text, timeout, check):
+        return _Completed(returncode=0, stdout="")
+
+    run_claude_models_parallel(
+        models=["model-x", "model-y"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+    )
+
+    captured = capsys.readouterr()
+    assert "[parallel] per-model wall time:" in captured.err
+    assert "model-x" in captured.err
+    assert "model-y" in captured.err
+    assert "speedup=" in captured.err
+    assert "slowest=" in captured.err
+
+
+def test_run_claude_models_parallel_breakdown_marks_cli_errors(capsys):
+    """When a model raises ClaudeCLIError, the breakdown should still
+    show its row tagged as `cli-error` rather than crashing or omitting it."""
+
+    def runner(cmd, env, capture_output, text, timeout, check):
+        idx = cmd.index("--model")
+        if cmd[idx + 1] == "boom":
+            raise FileNotFoundError(2, "no such file", "claude")
+        return _Completed(returncode=0, stdout="")
+
+    run_claude_models_parallel(
+        models=["ok-model", "boom"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        runner=runner,
+    )
+
+    captured = capsys.readouterr()
+    assert "ok-model" in captured.err
+    assert "boom" in captured.err
+    assert "cli-error" in captured.err
+
+
+def test_run_claude_models_parallel_forwards_extra_args_and_env():
+    """Shared kwargs must reach every per-model invocation unchanged."""
+    captured_envs: List[dict] = []
+    captured_cmds: List[List[str]] = []
+
+    def runner(cmd, env, capture_output, text, timeout, check):
+        captured_envs.append(env)
+        captured_cmds.append(cmd)
+        return _Completed(returncode=0, stdout="")
+
+    run_claude_models_parallel(
+        models=["a", "b"],
+        prompt="hi",
+        base_url="http://x",
+        api_key="k",
+        extra_env={"MAX_THINKING_TOKENS": "4096"},
+        extra_args=["--allowed-tools", "Bash"],
+        runner=runner,
+    )
+
+    assert all(env["MAX_THINKING_TOKENS"] == "4096" for env in captured_envs)
+    for cmd in captured_cmds:
+        assert "--allowed-tools" in cmd
+        assert "Bash" in cmd
 
 
 def test_failure_diagnostic_uses_last_result_event_status():

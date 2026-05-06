@@ -20,7 +20,11 @@ from typing import Any, Mapping, Optional
 
 import pytest
 
-from tests.claude_code.cli_driver import ClaudeCLIError, failure_diagnostic, run_claude
+from tests.claude_code.cli_driver import (
+    ClaudeCLIError,
+    failure_diagnostic,
+    run_claude_models_parallel,
+)
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -43,8 +47,7 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
         return 0
 
 
-@pytest.mark.parametrize("model", BEDROCK_CONVERSE_MODELS)
-def test_prompt_caching_5m_bedrock_converse(compat_result, model):
+def test_prompt_caching_5m_bedrock_converse(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     upstream usage block surfaces a non-zero cache token count."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
@@ -63,42 +66,39 @@ def test_prompt_caching_5m_bedrock_converse(compat_result, model):
             f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured", pytrace=False
         )
 
-    try:
-        result = run_claude(
-            prompt="Reply with the single word 'pong' and nothing else.",
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-        )
-    except ClaudeCLIError as exc:
-        compat_result.set({"status": "fail", "error": f"[{model}] {exc}"})
-        pytest.fail(str(exc), pytrace=False)
-        return
+    outcomes = run_claude_models_parallel(
+        models=BEDROCK_CONVERSE_MODELS,
+        prompt="Reply with the single word 'pong' and nothing else.",
+        base_url=base_url,
+        api_key=api_key,
+    )
 
-    if result.exit_code != 0:
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": f"[{model}] claude CLI failed: {failure_diagnostic(result)}",
-            }
-        )
-        pytest.fail(
-            f"[{model}] claude CLI failed: {failure_diagnostic(result)}", pytrace=False
-        )
-        return
+    failures = []
+    for model in BEDROCK_CONVERSE_MODELS:
+        outcome = outcomes[model]
+        if isinstance(outcome, ClaudeCLIError):
+            error = f"[{model}] {outcome}"
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
 
-    if _cache_tokens(result.usage) <= 0:
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": (
-                    f"[{model}] usage block reported zero cache tokens; "
-                    "expected cache_control on the system prompt to produce a non-zero "
-                    "cache_creation_input_tokens or cache_read_input_tokens"
-                ),
-            }
-        )
-        pytest.fail(f"no cache tokens for {model}", pytrace=False)
-        return
+        if outcome.exit_code != 0:
+            error = f"[{model}] claude CLI failed: {failure_diagnostic(outcome)}"
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
 
-    compat_result.set({"status": "pass"})
+        if _cache_tokens(outcome.usage) <= 0:
+            error = (
+                f"[{model}] usage block reported zero cache tokens; "
+                "expected cache_control on the system prompt to produce a non-zero "
+                "cache_creation_input_tokens or cache_read_input_tokens"
+            )
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
+
+        compat_result.add({"status": "pass"})
+
+    if failures:
+        pytest.fail("; ".join(failures), pytrace=False)

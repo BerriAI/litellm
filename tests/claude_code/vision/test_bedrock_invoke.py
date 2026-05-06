@@ -20,7 +20,11 @@ import os
 
 import pytest
 
-from tests.claude_code.cli_driver import ClaudeCLIError, failure_diagnostic, run_claude
+from tests.claude_code.cli_driver import (
+    ClaudeCLIError,
+    failure_diagnostic,
+    run_claude_models_parallel,
+)
 
 PROXY_BASE_URL_ENV = "LITELLM_PROXY_BASE_URL"
 PROXY_API_KEY_ENV = "LITELLM_PROXY_API_KEY"
@@ -34,8 +38,7 @@ BEDROCK_INVOKE_MODELS = [
 RED_PIXEL_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 
-@pytest.mark.parametrize("model", BEDROCK_INVOKE_MODELS)
-def test_vision_bedrock_invoke(compat_result, model, tmp_path):
+def test_vision_bedrock_invoke(compat_result, tmp_path):
     """Drive the `claude` CLI against the LiteLLM proxy with an image
     attached and assert a non-empty reply."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
@@ -57,39 +60,36 @@ def test_vision_bedrock_invoke(compat_result, model, tmp_path):
     image_path = tmp_path / "red_pixel.png"
     image_path.write_bytes(base64.b64decode(RED_PIXEL_PNG_B64))
 
-    try:
-        result = run_claude(
-            prompt="What single color do you see in the attached image? Answer in one word.",
-            model=model,
-            base_url=base_url,
-            api_key=api_key,
-            extra_args=["--image", str(image_path)],
-        )
-    except ClaudeCLIError as exc:
-        compat_result.set({"status": "fail", "error": f"[{model}] {exc}"})
-        pytest.fail(str(exc), pytrace=False)
-        return
+    outcomes = run_claude_models_parallel(
+        models=BEDROCK_INVOKE_MODELS,
+        prompt="What single color do you see in the attached image? Answer in one word.",
+        base_url=base_url,
+        api_key=api_key,
+        extra_args=["--image", str(image_path)],
+    )
 
-    if result.exit_code != 0:
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": f"[{model}] claude CLI failed: {failure_diagnostic(result)}",
-            }
-        )
-        pytest.fail(
-            f"[{model}] claude CLI failed: {failure_diagnostic(result)}", pytrace=False
-        )
-        return
+    failures = []
+    for model in BEDROCK_INVOKE_MODELS:
+        outcome = outcomes[model]
+        if isinstance(outcome, ClaudeCLIError):
+            error = f"[{model}] {outcome}"
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
 
-    if not result.text.strip():
-        compat_result.set(
-            {
-                "status": "fail",
-                "error": f"[{model}] claude returned empty assistant text on a vision prompt",
-            }
-        )
-        pytest.fail(f"empty reply for {model}", pytrace=False)
-        return
+        if outcome.exit_code != 0:
+            error = f"[{model}] claude CLI failed: {failure_diagnostic(outcome)}"
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
 
-    compat_result.set({"status": "pass"})
+        if not outcome.text.strip():
+            error = f"[{model}] claude returned empty assistant text on a vision prompt"
+            compat_result.add({"status": "fail", "error": error})
+            failures.append(error)
+            continue
+
+        compat_result.add({"status": "pass"})
+
+    if failures:
+        pytest.fail("; ".join(failures), pytrace=False)

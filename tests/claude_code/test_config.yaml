@@ -62,18 +62,18 @@ model_list:
   - model_name: claude-haiku-4-5-vertex
     litellm_params:
       model: vertex_ai/claude-haiku-4-5
-      vertex_ai_project: pathrise-convert-1606954137718
-      vertex_ai_location: us-east5
+      vertex_ai_project: os.environ/VERTEXAI_PROJECT
+      vertex_ai_location: os.environ/VERTEXAI_LOCATION
   - model_name: claude-sonnet-4-6-vertex
     litellm_params:
       model: vertex_ai/claude-sonnet-4-6
-      vertex_ai_project: pathrise-convert-1606954137718
-      vertex_ai_location: us-east5
+      vertex_ai_project: os.environ/VERTEXAI_PROJECT
+      vertex_ai_location: os.environ/VERTEXAI_LOCATION
   - model_name: claude-opus-4-7-vertex
     litellm_params:
       model: vertex_ai/claude-opus-4-7
-      vertex_ai_project: pathrise-convert-1606954137718
-      vertex_ai_location: us-east5
+      vertex_ai_project: os.environ/VERTEXAI_PROJECT
+      vertex_ai_location: os.environ/VERTEXAI_LOCATION
 
   # ---- Microsoft Foundry (Anthropic deployments on Azure) ----
   - model_name: claude-haiku-4-5-azure
