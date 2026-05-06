@@ -1063,6 +1063,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self, streaming_response, sync_stream: bool, json_mode: Optional[bool] = False
     ):
         super().__init__(streaming_response, sync_stream, json_mode)
+        # Track which tool-call output indices have received streaming delta events.
+        # Used by chunk_parser to decide whether .done carries novel arguments.
+        self._tool_call_has_deltas: set = set()
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1383,6 +1386,52 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
         """
+        from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
+        from litellm.types.utils import (
+            ChatCompletionToolCallChunk,
+            Delta,
+            ModelResponseStream,
+            StreamingChoices,
+        )
+
+        event_type = chunk.get("type", "") if isinstance(chunk, dict) else ""
+        output_index = chunk.get("output_index", 0) if isinstance(chunk, dict) else 0
+
+        if event_type == "response.function_call_arguments.delta":
+            # Record that this output index has received incremental delta events.
+            self._tool_call_has_deltas.add(output_index)
+        elif event_type == "response.function_call_arguments.done":
+            if output_index not in self._tool_call_has_deltas:
+                # No delta events were emitted for this index: the model delivered
+                # the complete arguments only in the .done event (e.g. ChatGPT Spark).
+                # Emit a chunk now so the arguments are not silently dropped.
+                full_args = chunk.get("arguments", "") if isinstance(chunk, dict) else ""
+                if full_args:
+                    return ModelResponseStream(
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(
+                                    tool_calls=[
+                                        ChatCompletionToolCallChunk(
+                                            id=None,
+                                            index=output_index,
+                                            type="function",
+                                            function=ChatCompletionToolCallFunctionChunk(
+                                                name=None,
+                                                arguments=full_args,
+                                            ),
+                                        )
+                                    ]
+                                ),
+                                finish_reason=None,
+                            )
+                        ]
+                    )
+            # If deltas WERE received, fall through: the static method treats .done
+            # as an unhandled event and returns an empty pass-through chunk, which
+            # is correct (args are already in the stream).
+
         verbose_logger.debug(
             f"Chat provider: transform_streaming_response called with chunk: {chunk}"
         )
