@@ -2,10 +2,17 @@ import asyncio
 import os
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.datadog.datadog_handler import (
+    get_datadog_env,
+    get_datadog_hostname,
+    get_datadog_pod_name,
+    get_datadog_service,
+)
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -68,9 +75,12 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         if not self.log_queue:
             return
 
+        batch_to_send = self.log_queue[:]
+        self.log_queue = []
+
         try:
             # Aggregate costs from the batch
-            aggregated_entries = self._aggregate_costs(self.log_queue)
+            aggregated_entries = self._aggregate_costs(batch_to_send)
 
             if not aggregated_entries:
                 return
@@ -78,10 +88,8 @@ class DatadogCostManagementLogger(CustomBatchLogger):
             # Send to Datadog
             await self._upload_to_datadog(aggregated_entries)
 
-            # Clear queue only on success (or if we decide to drop on failure)
-            # CustomBatchLogger clears queue in flush_queue, so we just process here
-
         except Exception as e:
+            self.log_queue = batch_to_send + self.log_queue
             verbose_logger.exception(
                 f"Datadog Cost Management: Error in async_send_batch: {str(e)}"
             )
@@ -151,13 +159,6 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         return list(aggregator.values())
 
     def _extract_tags(self, log: StandardLoggingPayload) -> Dict[str, str]:
-        from litellm.integrations.datadog.datadog_handler import (
-            get_datadog_env,
-            get_datadog_hostname,
-            get_datadog_pod_name,
-            get_datadog_service,
-        )
-
         tags = {
             "env": get_datadog_env(),
             "service": get_datadog_service(),
@@ -165,11 +166,21 @@ class DatadogCostManagementLogger(CustomBatchLogger):
             "pod_name": get_datadog_pod_name(),
         }
 
+        self._add_tag_if_present(
+            tags=tags, key="provider", value=log.get("custom_llm_provider")
+        )
+        self._add_tag_if_present(tags=tags, key="model", value=log.get("model"))
+        self._add_tag_if_present(
+            tags=tags, key="model_group", value=log.get("model_group")
+        )
+        self._add_tag_if_present(tags=tags, key="model_id", value=log.get("model_id"))
+        self._add_request_tags(
+            tags=tags, request_tags=log.get("request_tags", []) or []
+        )
+
         # Add metadata as tags
         metadata = log.get("metadata", {})
         if metadata:
-            # Add user info
-            # Add user info
             if metadata.get("user_api_key_alias"):
                 tags["user"] = str(metadata["user_api_key_alias"])
 
@@ -183,12 +194,63 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
             if team_tag:
                 tags["team"] = str(team_tag)
-            # model_group is not in StandardLoggingMetadata TypedDict, so we need to access it via dict.get()
             model_group = metadata.get("model_group")  # type: ignore[misc]
             if model_group:
                 tags["model_group"] = str(model_group)
 
+            self._add_metadata_tags(tags=tags, metadata=metadata)
+
         return tags
+
+    @staticmethod
+    def _add_tag_if_present(tags: Dict[str, str], key: str, value: Any) -> None:
+        if key and isinstance(value, (str, int, float, bool)) and str(value):
+            tags[key] = str(value)
+
+    def _add_request_tags(self, tags: Dict[str, str], request_tags: List[Any]) -> None:
+        for tag in request_tags:
+            if not isinstance(tag, str) or not tag:
+                continue
+
+            if ":" in tag:
+                key, value = tag.split(":", 1)
+                self._add_tag_if_present(tags=tags, key=key, value=value)
+            else:
+                self._add_tag_if_present(tags=tags, key="request_tag", value=tag)
+
+    def _add_metadata_tags(
+        self, tags: Dict[str, str], metadata: Dict[str, Any]
+    ) -> None:
+        excluded_metadata_keys = {
+            "user_api_key_alias",
+            "user_api_key_team_alias",
+            "team_alias",
+            "user_api_key_team_id",
+            "team_id",
+            "model_group",
+            "prompt_management_metadata",
+            "mcp_tool_call_metadata",
+            "vector_store_request_metadata",
+            "usage_object",
+            "cold_storage_object_key",
+            "requester_custom_headers",
+        }
+        nested_tag_metadata_keys = {"spend_logs_metadata", "requester_metadata"}
+
+        for key, value in metadata.items():
+            if key in excluded_metadata_keys:
+                continue
+
+            if key in nested_tag_metadata_keys and isinstance(value, dict):
+                for nested_key, nested_value in value.items():
+                    self._add_tag_if_present(
+                        tags=tags,
+                        key=str(nested_key),
+                        value=nested_value,
+                    )
+                continue
+
+            self._add_tag_if_present(tags=tags, key=key, value=value)
 
     async def _upload_to_datadog(self, payload: List[Dict]):
         if not self.dd_api_key or not self.dd_app_key:
@@ -201,8 +263,6 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         }
 
         # The API endpoint expects a list of objects directly in the body (file content behavior)
-        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
         data_json = safe_dumps(payload)
 
         response = await self.async_client.put(
