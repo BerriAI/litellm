@@ -1160,6 +1160,7 @@ class PrometheusLogger(CustomLogger):
             kwargs=kwargs,
             metadata=_metadata,
             model_id=enum_values.model_id,
+            standard_logging_payload=standard_logging_payload,
         )
 
         # set latency metrics
@@ -1391,24 +1392,54 @@ class PrometheusLogger(CustomLogger):
         kwargs: dict,
         metadata: dict,
         model_id: Optional[str] = None,
+        standard_logging_payload: Optional[StandardLoggingPayload] = None,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
         )
 
         # Set remaining rpm/tpm for API Key + model
-        # see parallel_request_limiter.py - variables are set there
+        # The legacy parallel_request_limiter writes the per-key remaining
+        # counters into request metadata under
+        #   "litellm-key-remaining-{requests,tokens}-{model_group}".
+        # parallel_request_limiter_v3 instead publishes them on the response
+        # under hidden_params.additional_headers as
+        #   "x-ratelimit-model_per_key-remaining-{requests,tokens}".
+        # Read both, preferring metadata, so the gauges work with either
+        # limiter implementation. Without this fallback the v3 path always
+        # falls through to sys.maxsize (~9.22e18) and DataDog/Prometheus
+        # show that placeholder instead of the real remaining value.
         model_group = get_model_group_from_litellm_kwargs(kwargs)
         remaining_requests_variable_name = (
             f"litellm-key-remaining-requests-{model_group}"
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
+        additional_headers: dict = {}
+        if standard_logging_payload is not None:
+            hidden_params = (
+                standard_logging_payload.get("hidden_params") or {}
+                if isinstance(standard_logging_payload, dict)
+                else {}
+            )
+            additional_headers = hidden_params.get("additional_headers") or {}
+
+        fallback_remaining_requests = additional_headers.get(
+            "x-ratelimit-model_per_key-remaining-requests"
+        )
+        fallback_remaining_tokens = additional_headers.get(
+            "x-ratelimit-model_per_key-remaining-tokens"
+        )
+
         remaining_requests = (
-            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
+            metadata.get(remaining_requests_variable_name)
+            or fallback_remaining_requests
+            or sys.maxsize
         )
         remaining_tokens = (
-            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
+            metadata.get(remaining_tokens_variable_name)
+            or fallback_remaining_tokens
+            or sys.maxsize
         )
 
         enum_values = UserAPIKeyLabelValues(
