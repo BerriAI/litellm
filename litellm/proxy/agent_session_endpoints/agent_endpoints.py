@@ -20,6 +20,7 @@ from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_session_endpoints.constants import SESSION_TERMINAL_STATUSES
 from litellm.proxy.agent_session_endpoints.ids import new_agent_id
 from litellm.proxy.agent_session_endpoints.ownership import (
     assert_caller_can_mutate,
@@ -196,12 +197,16 @@ async def delete_agent(
     existing = await prisma_client.db.litellm_agent.find_unique(where={"id": agent_id})
     assert_caller_owns_agent(user_api_key_dict, existing)
 
-    # Cascade: terminate every active session under this agent first. We
-    # gather them in parallel because each call hits the VM provider.
+    # Cascade: terminate every non-terminal session under this agent
+    # first. We gather them in parallel because each call hits the VM
+    # provider. ``status not in SESSION_TERMINAL_STATUSES`` matches the
+    # rest of the module — ``terminated_at is None`` was a near-equivalent
+    # but broke if a session had its status flipped without
+    # ``terminated_at`` being set (Greptile P3).
     sessions = await prisma_client.db.litellm_agentsession.find_many(
         where={"agent_id": agent_id}
     )
-    active = [s for s in sessions if s.terminated_at is None]
+    active = [s for s in sessions if s.status not in SESSION_TERMINAL_STATUSES]
     if active:
         await asyncio.gather(
             *[
