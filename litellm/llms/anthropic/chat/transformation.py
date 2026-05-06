@@ -2156,8 +2156,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         speed: Optional[str] = None,
     ) -> Usage:
         # NOTE: Sometimes the usage object has None set explicitly for token counts, meaning .get() & key access returns None, and we need to account for this
-        prompt_tokens = usage_object.get("input_tokens", 0) or 0
-        completion_tokens = usage_object.get("output_tokens", 0) or 0
+        raw_prompt_tokens = usage_object.get("input_tokens", 0) or 0
+        prompt_tokens: int = (
+            int(raw_prompt_tokens) if isinstance(raw_prompt_tokens, (int, float)) else 0
+        )
+        raw_completion_tokens = usage_object.get("output_tokens", 0) or 0
+        completion_tokens: int = (
+            int(raw_completion_tokens)
+            if isinstance(raw_completion_tokens, (int, float))
+            else 0
+        )
         _usage = usage_object
         cache_creation_input_tokens: int = 0
         cache_read_input_tokens: int = 0

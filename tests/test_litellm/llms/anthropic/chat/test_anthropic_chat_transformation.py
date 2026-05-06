@@ -111,6 +111,20 @@ def test_calculate_usage_clamps_text_tokens_when_reasoning_estimate_exceeds_outp
     assert usage.completion_tokens_details.text_tokens == 0
 
 
+def test_calculate_usage_handles_mocked_output_tokens_with_reasoning_content():
+    config = AnthropicConfig()
+
+    usage = config.calculate_usage(
+        usage_object={"input_tokens": 10, "output_tokens": MagicMock()},
+        reasoning_content="mocked response reasoning",
+    )
+
+    assert usage.completion_tokens == 0
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 0
+    assert usage.completion_tokens_details.text_tokens == 0
+
+
 @pytest.mark.parametrize(
     "usage_object,expected_usage",
     [
