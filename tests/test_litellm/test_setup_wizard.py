@@ -110,6 +110,22 @@ def test_build_config_env_vars_written_escaped():
     assert 'OPENAI_API_KEY: "sk-ab\\"cd"' in config
 
 
+def test_build_config_environment_variables_sorted_for_stable_output():
+    """Environment variables should be deterministic regardless of insertion order."""
+    config = SetupWizard._build_config(
+        [_OPENAI],
+        {
+            "OPENAI_API_KEY": "sk-openai",
+            "Z_PROVIDER_KEY": "z-key",
+            "A_PROVIDER_KEY": "a-key",
+        },
+        "sk-master",
+    )
+
+    assert config.index("  A_PROVIDER_KEY:") < config.index("  OPENAI_API_KEY:")
+    assert config.index("  OPENAI_API_KEY:") < config.index("  Z_PROVIDER_KEY:")
+
+
 def test_build_config_master_key_quoted():
     """master_key must be quoted in YAML to handle special characters."""
     config = SetupWizard._build_config(
@@ -186,3 +202,21 @@ def test_build_config_internal_sentinel_keys_excluded():
     }
     config = SetupWizard._build_config([_OPENAI], env_vars, "sk-master")
     assert "_LITELLM_" not in config
+
+
+def test_build_config_environment_variables_are_deterministic():
+    """Equivalent env vars should produce byte-identical config output."""
+    env_vars_one = {
+        "OPENAI_API_KEY": "sk-real",
+        "AWS_REGION_NAME": "us-east-1",
+        "AWS_SECRET_ACCESS_KEY": "secret",
+    }
+    env_vars_two = {
+        "AWS_SECRET_ACCESS_KEY": "secret",
+        "OPENAI_API_KEY": "sk-real",
+        "AWS_REGION_NAME": "us-east-1",
+    }
+
+    assert SetupWizard._build_config(
+        [_OPENAI], env_vars_one, "sk-master"
+    ) == SetupWizard._build_config([_OPENAI], env_vars_two, "sk-master")

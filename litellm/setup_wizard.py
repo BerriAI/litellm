@@ -528,7 +528,7 @@ class SetupWizard:
         env_vars: Dict[str, str],
         master_key: str,
     ) -> str:
-        env_copy = dict(env_vars)  # work on a copy — do not mutate caller's dict
+        env_copy = {**env_vars}  # work on a copy — do not mutate caller's dict
         lines = ["model_list:"]
         for p in providers:
             # Only emit models for providers that actually have credentials
@@ -580,7 +580,7 @@ class SetupWizard:
         real_vars = {k: v for k, v in env_copy.items() if not k.startswith("_LITELLM_")}
         if real_vars:
             lines.append("environment_variables:")
-            for k, v in real_vars.items():
+            for k, v in sorted(real_vars.items()):
                 lines.append(f'  {k}: "{_yaml_escape(v)}"')
             lines.append("")
 
