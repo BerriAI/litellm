@@ -80,6 +80,29 @@ model LiteLLM_AgentsTable {
   updated_by String
 }
 
+// BYOC AWS config for the agent-session VM provider.
+// One row per team. `aws_creds_enc` is a JSON blob with each field
+// individually encrypted via `encrypt_value_helper` (see
+// litellm/proxy/agent_session_endpoints/vm_providers/team_config.py).
+// Owned by Epic G's Settings UI; consumed by Epic B's EC2 provider.
+model LiteLLM_AgentVMConfig {
+  team_id              String   @id
+  aws_creds_enc        String?
+  region               String?
+  subnet_id            String?
+  security_group_id    String?
+  iam_instance_profile String?
+  ami_id               String?
+  instance_type        String?
+  use_spot             Boolean  @default(true)
+  warm_pool_size       Int      @default(0)
+  network_access       Json?
+  created_at           DateTime @default(now()) @map("created_at")
+  created_by           String
+  updated_at           DateTime @default(now()) @updatedAt @map("updated_at")
+  updated_by           String
+}
+
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
     organization_alias  String
