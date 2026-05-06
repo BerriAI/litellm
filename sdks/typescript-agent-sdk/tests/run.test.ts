@@ -34,7 +34,7 @@ describe("Run", () => {
 
     const result = await run.wait();
     expect(result.id).toBe(run.id);
-    expect(result.status).toBe("completed");
+    expect(result.status).toBe("finished");
     expect(result.result).toBe("ok");
   });
 
@@ -83,7 +83,9 @@ describe("Run", () => {
     await expect(run.cancel()).resolves.toBeUndefined();
   });
 
-  it("conversation() returns the turn list scoped to this run", async () => {
+  it("session.conversation() returns the turn list including the run's user message", async () => {
+    // `Run.conversation()` was removed — there is no per-run backend endpoint.
+    // Conversation history is session-scoped; callers use SessionHandle instead.
     const agent = await Agent.create({
       apiKey: "test-key",
       baseUrl,
@@ -91,11 +93,11 @@ describe("Run", () => {
       model: { id: "m" },
     });
     const session = await agent.createSession();
-    const run = await session.send("hello run");
-    const turns = await run.conversation();
-    expect(turns.some((t) => t.content === "hello run" && t.role === "user")).toBe(
-      true
-    );
+    await session.send("hello run");
+    const turns = await session.conversation();
+    expect(
+      turns.some((t) => t.content === "hello run" && t.role === "user"),
+    ).toBe(true);
   });
 
   it("stream() respects an AbortSignal", async () => {
