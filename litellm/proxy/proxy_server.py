@@ -14910,23 +14910,41 @@ app.include_router(google_router)
 # /v2/agents, /v2/sessions — Cursor SDK agent runtime (Epic A).
 # Mounted under /v2/ to avoid collision with the existing /v1/agents
 # (A2A registry in litellm/proxy/agent_endpoints/).
-from litellm.proxy.agent_session_endpoints import (
-    agent_router as agent_session_agent_router,
-)
-from litellm.proxy.agent_session_endpoints import (
-    internal_router as agent_session_internal_router,
-)
-from litellm.proxy.agent_session_endpoints import (
-    run_router as agent_session_run_router,
-)
-from litellm.proxy.agent_session_endpoints import (
-    session_router as agent_session_session_router,
+#
+# SECURITY: the daemon JWT secret is a separate credential from the proxy
+# master key. If ``LITELLM_AGENT_JWT_SECRET`` is not set, refuse to mount
+# these routers — silently signing daemon tokens with the master key (or
+# any default) would conflate two distinct auth surfaces and let a
+# captured daemon JWT mint master-key-authority API keys.
+from litellm.proxy.agent_session_endpoints.auth import (
+    is_agent_jwt_secret_configured,
 )
 
-app.include_router(agent_session_agent_router)
-app.include_router(agent_session_session_router)
-app.include_router(agent_session_run_router)
-app.include_router(agent_session_internal_router)
+if is_agent_jwt_secret_configured():
+    from litellm.proxy.agent_session_endpoints import (
+        agent_router as agent_session_agent_router,
+    )
+    from litellm.proxy.agent_session_endpoints import (
+        internal_router as agent_session_internal_router,
+    )
+    from litellm.proxy.agent_session_endpoints import (
+        run_router as agent_session_run_router,
+    )
+    from litellm.proxy.agent_session_endpoints import (
+        session_router as agent_session_session_router,
+    )
+
+    app.include_router(agent_session_agent_router)
+    app.include_router(agent_session_session_router)
+    app.include_router(agent_session_run_router)
+    app.include_router(agent_session_internal_router)
+else:
+    verbose_proxy_logger.error(
+        "agent_session_endpoints (/v2/agents, /v2/sessions) NOT mounted: "
+        "LITELLM_AGENT_JWT_SECRET is not set. Set this env var to a "
+        "dedicated random secret (distinct from LITELLM_MASTER_KEY) to "
+        "enable the Cursor SDK agent runtime."
+    )
 
 attach_lazy_features(app)
 app.add_middleware(
