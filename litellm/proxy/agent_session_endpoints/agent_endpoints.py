@@ -23,6 +23,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.agent_session_endpoints.ids import new_agent_id
 from litellm.proxy.agent_session_endpoints.ownership import (
+    assert_caller_can_mutate,
     assert_caller_owns_agent,
     caller_api_key_hash,
     owner_filter_for_caller,
@@ -106,6 +107,7 @@ async def create_agent(
     body: AgentCreate,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    assert_caller_can_mutate(user_api_key_dict)
     prisma_client = await _get_prisma_client_or_503()
     payload = _agent_create_payload(body, user_api_key_dict)
     row = await prisma_client.db.litellm_agent.create(data=payload)
@@ -144,6 +146,7 @@ async def update_agent(
     body: AgentUpdate,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    assert_caller_can_mutate(user_api_key_dict)
     prisma_client = await _get_prisma_client_or_503()
     existing = await prisma_client.db.litellm_agent.find_unique(where={"id": agent_id})
     assert_caller_owns_agent(user_api_key_dict, existing)
@@ -189,6 +192,7 @@ async def delete_agent(
     agent_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
+    assert_caller_can_mutate(user_api_key_dict)
     prisma_client = await _get_prisma_client_or_503()
     existing = await prisma_client.db.litellm_agent.find_unique(where={"id": agent_id})
     assert_caller_owns_agent(user_api_key_dict, existing)
