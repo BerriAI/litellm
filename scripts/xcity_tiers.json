@@ -1,0 +1,55 @@
+{
+    "free": {
+        "models": [
+            "tencent_cloud/deepseek-v3.2",
+            "tencent_cloud/deepseek-v4-flash",
+            "tencent_cloud/glm-5"
+        ],
+        "max_budget": 0.20,
+        "budget_duration": "1d",
+        "rpm_limit": 5
+    },
+    "pro_monthly": {
+        "models": [
+            "tencent_cloud/deepseek-v3.2",
+            "tencent_cloud/deepseek-v4-flash",
+            "tencent_cloud/glm-5",
+            "tencent_cloud/deepseek-v3-0324",
+            "tencent_cloud/deepseek-v3.1-terminus",
+            "tencent_cloud/hunyuan-2.0-instruct-20251111",
+            "tencent_cloud/hunyuan-role-latest",
+            "tencent_cloud/hy3-preview",
+            "tencent_cloud/minimax-m2.5",
+            "tencent_cloud/minimax-m2.7",
+            "tencent_cloud/kimi-k2.5"
+        ],
+        "max_budget": 25,
+        "budget_duration": "30d",
+        "rpm_limit": 30
+    },
+    "team_monthly": {
+        "models": [
+            "tencent_cloud/deepseek-v3.2",
+            "tencent_cloud/deepseek-v4-flash",
+            "tencent_cloud/glm-5",
+            "tencent_cloud/deepseek-v3-0324",
+            "tencent_cloud/deepseek-v3.1-terminus",
+            "tencent_cloud/hunyuan-2.0-instruct-20251111",
+            "tencent_cloud/hunyuan-role-latest",
+            "tencent_cloud/hy3-preview",
+            "tencent_cloud/minimax-m2.5",
+            "tencent_cloud/minimax-m2.7",
+            "tencent_cloud/kimi-k2.5",
+            "tencent_cloud/deepseek-v4-pro",
+            "tencent_cloud/deepseek-r1-0528",
+            "tencent_cloud/hunyuan-2.0-thinking-20251109",
+            "tencent_cloud/glm-5v-turbo",
+            "tencent_cloud/glm-5-turbo",
+            "tencent_cloud/glm-5.1",
+            "tencent_cloud/kimi-k2.6"
+        ],
+        "max_budget": 90,
+        "budget_duration": "30d",
+        "rpm_limit": null
+    }
+}
