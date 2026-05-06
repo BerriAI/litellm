@@ -1,4 +1,5 @@
 import os
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
@@ -36,6 +37,10 @@ else:
 
 ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://otlp.arize.com/v1/traces"
 
+# Maximum number of per-project TracerProviders to keep in the LRU cache.
+# Evicted providers are NOT shut down — in-flight spans must not be interrupted.
+_MAX_PROJECT_PROVIDERS = 64
+
 
 class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
     """
@@ -44,6 +49,12 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
     Creates its own dedicated TracerProvider so it can coexist with the
     generic ``otel`` callback (or any other OTEL-based integration) without
     fighting over the global ``opentelemetry.trace`` TracerProvider singleton.
+
+    Per-project routing: each unique project name gets its own TracerProvider
+    whose Resource carries ``openinference.project.name``, ``model_id``, and
+    ``service.name`` set to that project. This is the only reliable way to
+    route to different Phoenix / Arize projects because OTEL has no per-span
+    resource override — the resource is bound at provider construction time.
     """
 
     def _init_tracing(self, tracer_provider):
@@ -61,22 +72,32 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.trace import SpanKind
 
+        # LRU cache of project_name -> TracerProvider, bounded to _MAX_PROJECT_PROVIDERS.
+        self._project_providers: OrderedDict = OrderedDict()
+
         if tracer_provider is not None:
             # Explicitly supplied (e.g. in tests) — honour it.
             self.tracer = tracer_provider.get_tracer("litellm")
             self.span_kind = SpanKind
             return
 
-        # Always create a dedicated provider — never touch the global one.
-        provider = TracerProvider(resource=self._get_litellm_resource(self.config))
-        provider.add_span_processor(self._get_span_processor())
-        self.tracer = provider.get_tracer("litellm")
+        # Resolve the default project name at init time so the first
+        # request to the default project hits the cache.
+        default_project = (
+            getattr(self.config, "project_name", None)
+            or os.environ.get("PHOENIX_PROJECT_NAME")
+            or "default"
+        )
+        default_provider = self._build_project_provider(default_project)
+        self._project_providers[default_project] = default_provider
+        self.tracer = default_provider.get_tracer("litellm")
         self.span_kind = SpanKind
         verbose_logger.debug(
             "ArizePhoenixLogger: Created dedicated TracerProvider "
-            "(endpoint=%s, exporter=%s)",
+            "(endpoint=%s, exporter=%s, default_project=%s)",
             self.config.endpoint,
             self.config.exporter,
+            default_project,
         )
 
     def _init_otel_logger_on_litellm_proxy(self):
@@ -87,39 +108,143 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         """
         pass
 
+    # ------------------------------------------------------------------
+    # Per-project TracerProvider registry
+    # ------------------------------------------------------------------
+
+    def _build_project_provider(self, project_name: str):
+        """
+        Build a fresh TracerProvider whose Resource carries the given
+        project name. The project attributes overlay (win over) the base
+        resource so that ``openinference.project.name``, ``model_id``, and
+        ``service.name`` always reflect the target project.
+        """
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+
+        base_resource = self._get_litellm_resource(self.config)
+        project_resource = Resource.create(
+            {
+                "openinference.project.name": project_name,
+                "model_id": project_name,
+                "service.name": project_name,
+            }
+        )
+        # merge(other) — other wins; project_resource overrides base_resource
+        merged_resource = base_resource.merge(project_resource)
+        provider = TracerProvider(resource=merged_resource)
+        provider.add_span_processor(self._get_span_processor())
+        return provider
+
+    def _get_tracer_for(self, project_name: str):
+        """Return a Tracer for *project_name*, building and caching a provider on first use."""
+        if project_name not in self._project_providers:
+            if len(self._project_providers) >= _MAX_PROJECT_PROVIDERS:
+                # Evict the least-recently-used entry.
+                # Do NOT call shutdown() — in-flight spans must not be interrupted.
+                self._project_providers.popitem(last=False)
+            self._project_providers[project_name] = self._build_project_provider(
+                project_name
+            )
+            verbose_logger.debug(
+                "ArizePhoenixLogger: Built new TracerProvider for project=%s "
+                "(cache size=%d)",
+                project_name,
+                len(self._project_providers),
+            )
+        else:
+            self._project_providers.move_to_end(project_name)
+        return self._project_providers[project_name].get_tracer("litellm")
+
+    @staticmethod
+    def _resolve_project_name(kwargs) -> str:
+        """
+        Resolve the target Phoenix/Arize project for this request.
+
+        Priority:
+        1. metadata.arize_project_name_override  (Arize-specific per-request override)
+        2. metadata.phoenix_project_name         (existing Phoenix per-request param)
+        3. PHOENIX_PROJECT_NAME env var   (this is where default traces would go)
+        5. "default"
+        """
+
+        def _from_metadata(key: str) -> Optional[str]:
+            # Team metadata is stored nested under "user_api_key_team_metadata"
+            # inside the request metadata dict, not at the top level.
+            def _check_dict(d: dict) -> Optional[str]:
+                val = d.get(key)
+                if val:
+                    return str(val)
+                for sub_key in ("user_api_key_metadata", "user_api_key_team_metadata"):
+                    sub = d.get(sub_key) or {}
+                    if isinstance(sub, dict):
+                        val = sub.get(key)
+                        if val:
+                            return str(val)
+                return None
+
+            standard_logging_payload = kwargs.get("standard_logging_object")
+            if isinstance(standard_logging_payload, dict):
+                metadata = standard_logging_payload.get("metadata")
+                if isinstance(metadata, dict):
+                    result = _check_dict(metadata)
+                    if result:
+                        return result
+
+            litellm_params = kwargs.get("litellm_params")
+            metadata = (
+                litellm_params.get("metadata") or {}
+                if isinstance(litellm_params, dict)
+                else {}
+            )
+            if isinstance(metadata, dict):
+                result = _check_dict(metadata)
+                if result:
+                    return result
+
+            return None
+
+        return (
+            _from_metadata("arize_project_name_override")
+            or _from_metadata("phoenix_project_name")
+            or os.environ.get("PHOENIX_PROJECT_NAME")
+            or os.environ.get("ARIZE_PROJECT_NAME")
+            or "default"
+        )
+
+    def get_tracer_to_use_for_request(self, kwargs: dict):
+        """
+        Override base implementation to route spans to the per-project provider.
+
+        ArizePhoenixLogger does not use the dynamic-headers mechanism — project
+        routing is purely resource-based (openinference.project.name in the
+        provider Resource). Dynamic OTEL headers are an Arize AX / Langfuse
+        concept and are intentionally skipped here.
+        """
+        project_name = self._resolve_project_name(kwargs)
+        return self._get_tracer_for(project_name)
+
+    # ------------------------------------------------------------------
+    # Attribute setting
+    # ------------------------------------------------------------------
+
     def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
         ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj)
         return
 
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
-        from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import (
-            safe_set_attribute,
-        )
-
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
-
-        # Dynamic project name: check metadata first, then fall back to env var config
-        dynamic_project_name = ArizePhoenixLogger._get_dynamic_project_name(kwargs)
-        if dynamic_project_name:
-            safe_set_attribute(span, "openinference.project.name", dynamic_project_name)
-        else:
-            # Fall back to static config from env var
-            config = ArizePhoenixLogger.get_arize_phoenix_config()
-            if config.project_name:
-                safe_set_attribute(
-                    span, "openinference.project.name", config.project_name
-                )
-
-        return
+        # openinference.project.name is now carried on the provider Resource,
+        # not on individual spans. Setting it as a span attribute was redundant
+        # for Phoenix OSS and misleading for Arize (which routes by resource).
 
     @staticmethod
     def _get_dynamic_project_name(kwargs) -> Optional[str]:
         """
         Retrieve dynamic Phoenix project name from request metadata.
 
-        Users can set `metadata.phoenix_project_name` in their request to route
-        traces to different Phoenix projects dynamically.
+        Kept for backward compatibility. New code should call _resolve_project_name.
         """
         standard_logging_payload = kwargs.get("standard_logging_object")
         if isinstance(standard_logging_payload, dict):
@@ -142,7 +267,11 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         return None
 
-    def _get_phoenix_context(self, kwargs):
+    # ------------------------------------------------------------------
+    # Context + span creation
+    # ------------------------------------------------------------------
+
+    def _get_phoenix_context(self, kwargs, tracer=None):
         """
         Build a trace context for Phoenix's dedicated TracerProvider.
 
@@ -156,8 +285,13 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         2. In proxy mode, create our *own* parent span on Phoenix's tracer
            so the hierarchy is visible end-to-end inside Phoenix.
         3. In SDK (non-proxy) mode, just return (None, None) for a root span.
+
+        The optional *tracer* argument allows callers to supply a per-project
+        tracer so parent + child spans land on the same provider.
         """
         from opentelemetry import trace
+
+        _tracer = tracer or self.tracer
 
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request", {}) or {}
@@ -176,7 +310,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             # Create a parent span on Phoenix's own tracer so both parent
             # and child are exported to Phoenix.
             start_time_val = kwargs.get("start_time", kwargs.get("api_call_start_time"))
-            parent_span = self.tracer.start_span(
+            parent_span = _tracer.start_span(
                 name="litellm_proxy_request",
                 start_time=(
                     self._to_ns(start_time_val) if start_time_val is not None else None
@@ -192,12 +326,11 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
     def _handle_success(self, kwargs, response_obj, start_time, end_time):
         """
-        Override to always create spans on ArizePhoenixLogger's dedicated TracerProvider.
+        Override to always create spans on the correct per-project TracerProvider.
 
-        The base class's ``_get_span_context`` would find the parent span created by
-        the ``otel`` callback on the *global* TracerProvider.  That span is invisible
-        in Phoenix (different exporter pipeline), so we ignore it and build our own
-        hierarchy via ``_get_phoenix_context``.
+        Resolves the target project once per request so that parent, child,
+        raw-request sub-span, and guardrail span all share the same provider
+        and are visible within the same project in Phoenix / Arize.
         """
         from opentelemetry.trace import Status, StatusCode
 
@@ -207,10 +340,12 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             self.config,
         )
 
-        ctx, parent_span = self._get_phoenix_context(kwargs)
+        project_name = self._resolve_project_name(kwargs)
+        tracer = self._get_tracer_for(project_name)
+        ctx, parent_span = self._get_phoenix_context(kwargs, tracer)
 
         # Create litellm_request span (child of our parent when in proxy mode)
-        span = self.tracer.start_span(
+        span = tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=ctx,
@@ -220,10 +355,12 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         # Raw-request sub-span (if enabled) — must be created before
         # ending the parent span so the hierarchy is valid.
+        # get_tracer_to_use_for_request resolves the same project via kwargs,
+        # so _maybe_log_raw_request uses the same tracer.
         self._maybe_log_raw_request(kwargs, response_obj, start_time, end_time, span)
         span.end(end_time=self._to_ns(end_time))
 
-        # Guardrail span
+        # Guardrail span — get_tracer_to_use_for_request keeps it on the same provider.
         self._create_guardrail_span(kwargs=kwargs, context=ctx)
 
         # Annotate and close our proxy parent span
@@ -241,7 +378,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         """
-        Override to always create failure spans on ArizePhoenixLogger's dedicated
+        Override to always create failure spans on the correct per-project
         TracerProvider.  Mirrors ``_handle_success`` but sets ERROR status.
         """
         from opentelemetry.trace import Status, StatusCode
@@ -252,10 +389,12 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             self.config,
         )
 
-        ctx, parent_span = self._get_phoenix_context(kwargs)
+        project_name = self._resolve_project_name(kwargs)
+        tracer = self._get_tracer_for(project_name)
+        ctx, parent_span = self._get_phoenix_context(kwargs, tracer)
 
         # Create litellm_request span (child of our parent when in proxy mode)
-        span = self.tracer.start_span(
+        span = tracer.start_span(
             name=self._get_span_name(kwargs),
             start_time=self._to_ns(start_time),
             context=ctx,
