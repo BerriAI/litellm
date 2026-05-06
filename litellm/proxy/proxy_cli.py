@@ -170,6 +170,28 @@ class ProxyInitializationHelpers:
         return uvicorn_args
 
     @staticmethod
+    def _get_reload_options(config_path: Optional[str]) -> dict:
+        """
+        Build uvicorn reload kwargs so --reload also reloads when the YAML
+        config file (passed via --config) changes.
+
+        Uvicorn defaults to watching only `*.py` files in CWD; we extend the
+        watch set to include the config file's directory and filename.
+        """
+        options: dict = {"reload": True}
+        if not config_path:
+            return options
+        config_abs = os.path.abspath(config_path)
+        config_dir = os.path.dirname(config_abs)
+        cwd = os.path.abspath(os.getcwd())
+        reload_dirs = [cwd]
+        if config_dir and config_dir != cwd:
+            reload_dirs.append(config_dir)
+        options["reload_dirs"] = reload_dirs
+        options["reload_includes"] = ["*.py", os.path.basename(config_abs)]
+        return options
+
+    @staticmethod
     def _init_hypercorn_server(
         app: FastAPI,
         host: str,
@@ -619,7 +641,7 @@ class ProxyInitializationHelpers:
     "--reload",
     is_flag=True,
     default=False,
-    help="Enable uvicorn hot reload (dev only). Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
+    help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
 def run_server(  # noqa: PLR0915
     host,
@@ -1028,7 +1050,9 @@ def run_server(  # noqa: PLR0915
                 uvicorn_args["loop"] = loop_type
 
             if reload:
-                uvicorn_args["reload"] = True
+                uvicorn_args.update(
+                    ProxyInitializationHelpers._get_reload_options(config)
+                )
 
             uvicorn.run(
                 **uvicorn_args,

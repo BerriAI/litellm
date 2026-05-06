@@ -133,6 +133,36 @@ class TestProxyInitializationHelpers:
             )
             assert args["timeout_worker_healthcheck"] == 15
 
+    def test_get_reload_options_no_config(self):
+        opts = ProxyInitializationHelpers._get_reload_options(None)
+        assert opts == {"reload": True}
+
+    def test_get_reload_options_with_config_in_cwd(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("model_list: []\n")
+        monkeypatch.chdir(tmp_path)
+
+        opts = ProxyInitializationHelpers._get_reload_options("config.yaml")
+
+        assert opts["reload"] is True
+        assert opts["reload_dirs"] == [str(tmp_path)]
+        assert opts["reload_includes"] == ["*.py", "config.yaml"]
+
+    def test_get_reload_options_with_config_outside_cwd(self, tmp_path, monkeypatch):
+        cwd_dir = tmp_path / "work"
+        cwd_dir.mkdir()
+        elsewhere = tmp_path / "configs"
+        elsewhere.mkdir()
+        config_file = elsewhere / "proxy.yaml"
+        config_file.write_text("model_list: []\n")
+        monkeypatch.chdir(cwd_dir)
+
+        opts = ProxyInitializationHelpers._get_reload_options(str(config_file))
+
+        assert opts["reload"] is True
+        assert opts["reload_dirs"] == [str(cwd_dir), str(elsewhere)]
+        assert opts["reload_includes"] == ["*.py", "proxy.yaml"]
+
     @patch("asyncio.run")
     @patch("builtins.print")
     def test_init_hypercorn_server(self, mock_print, mock_asyncio_run):
