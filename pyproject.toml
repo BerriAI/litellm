@@ -86,6 +86,14 @@ grpc = [
     # Newest non-yanked release older than the 30-day cutoff.
     "grpcio==1.78.0",
 ]
+stt-nvidia-riva = [
+    # NVIDIA Riva STT provider (gRPC). These are imported lazily inside the
+    # provider handler so litellm core remains usable without them.
+    "nvidia-riva-client>=2.15.0",
+    "soundfile>=0.12.1",
+    "audioread>=3.0.1",
+    "numpy>=1.26.0",
+]
 google = ["google-cloud-aiplatform==1.133.0"]
 proxy-runtime = [
     # Historically bundled in the proxy Docker images via requirements.txt.

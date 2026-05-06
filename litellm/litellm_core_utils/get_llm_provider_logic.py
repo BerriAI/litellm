@@ -621,6 +621,18 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://integrate.api.nvidia.com/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NVIDIA_NIM_API_KEY")
+    elif custom_llm_provider == "nvidia_riva":
+        # NVIDIA Riva is gRPC-based; api_base must be a host:port like
+        # `grpc.nvcf.nvidia.com:443` or `localhost:50051`. There is no
+        # public-default endpoint, so we do not fill one in here.
+        api_base = api_base or get_secret_str("NVIDIA_RIVA_API_BASE")  # type: ignore
+        # Fall back to NVIDIA_NIM_API_KEY because users running both NVCF
+        # services typically reuse the same nvapi-* key.
+        dynamic_api_key = (
+            api_key
+            or get_secret_str("NVIDIA_RIVA_API_KEY")
+            or get_secret_str("NVIDIA_NIM_API_KEY")
+        )
     elif custom_llm_provider == "cerebras":
         api_base = (
             api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"

@@ -211,6 +211,12 @@ from .llms.oobabooga.chat import oobabooga
 from .llms.openai.completion.handler import OpenAITextCompletion
 from .llms.openai.image_variations.handler import OpenAIImageVariationsHandler
 from .llms.openai.openai import OpenAIChatCompletion
+from .llms.nvidia_riva.audio_transcription.handler import (
+    NvidiaRivaAudioTranscription,
+)
+from .llms.nvidia_riva.audio_transcription.transformation import (
+    NvidiaRivaAudioTranscriptionConfig,
+)
 from .llms.openai.transcriptions.handler import OpenAIAudioTranscription
 from .llms.openai_like.chat.handler import OpenAILikeChatHandler
 from .llms.openai_like.embedding.handler import OpenAILikeEmbeddingHandler
@@ -266,6 +272,7 @@ from .types.utils import (
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
 openai_audio_transcriptions = OpenAIAudioTranscription()
+nvidia_riva_audio_transcriptions = NvidiaRivaAudioTranscription()
 openai_image_variations = OpenAIImageVariationsHandler()
 groq_chat_completions = GroqChatCompletion()
 sap_gen_ai_hub_chat_completions = GenAIHubOrchestration()
@@ -6604,6 +6611,26 @@ def transcription(
             provider_config=provider_config,
             litellm_params=litellm_params_dict,
             shared_session=shared_session,
+        )
+    elif custom_llm_provider == "nvidia_riva":
+        # NVIDIA Riva is gRPC-based, not HTTP. It has its own dedicated handler
+        # rather than going through base_llm_http_handler.
+        response = nvidia_riva_audio_transcriptions.audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            model_response=model_response,
+            atranscription=atranscription,
+            timeout=timeout,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            provider_config=(
+                provider_config
+                if isinstance(provider_config, NvidiaRivaAudioTranscriptionConfig)
+                else None
+            ),
         )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(

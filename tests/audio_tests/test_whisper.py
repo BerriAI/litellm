@@ -39,24 +39,7 @@ import litellm
 from litellm import Router
 
 
-@pytest.mark.parametrize(
-    "model, api_key, api_base",
-    [
-        ("whisper-1", None, None),
-        (
-            "azure/whisper",
-            os.getenv("AZURE_WHISPER_API_KEY"),
-            os.getenv("AZURE_WHISPER_API_BASE"),
-        ),
-    ],
-)
-@pytest.mark.parametrize(
-    "response_format, timestamp_granularities",
-    [("json", None), ("vtt", None), ("verbose_json", ["word"])],
-)
-@pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_transcription(
+async def _run_transcription(
     model, api_key, api_base, response_format, timestamp_granularities
 ):
     transcript = await litellm.atranscription(
@@ -72,6 +55,38 @@ async def test_transcription(
     print(f"transcript hidden params: {transcript._hidden_params}")
 
     assert transcript.text is not None
+
+
+@pytest.mark.parametrize(
+    "response_format, timestamp_granularities",
+    [("json", None), ("vtt", None), ("verbose_json", ["word"])],
+)
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_transcription_openai_whisper(response_format, timestamp_granularities):
+    await _run_transcription(
+        model="whisper-1",
+        api_key=None,
+        api_base=None,
+        response_format=response_format,
+        timestamp_granularities=timestamp_granularities,
+    )
+
+
+@pytest.mark.parametrize(
+    "response_format, timestamp_granularities",
+    [("json", None), ("vtt", None), ("verbose_json", ["word"])],
+)
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_transcription_azure_whisper(response_format, timestamp_granularities):
+    await _run_transcription(
+        model="azure/whisper",
+        api_key=os.getenv("AZURE_WHISPER_API_KEY"),
+        api_base=os.getenv("AZURE_WHISPER_API_BASE"),
+        response_format=response_format,
+        timestamp_granularities=timestamp_granularities,
+    )
 
 
 @pytest.mark.asyncio()
