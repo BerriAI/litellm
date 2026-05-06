@@ -393,7 +393,7 @@ class TestSnowFlakeCompletion:
         # account id was used
         assert "AAAA-BBBB" in post_kwargs["url"]
         # is completion
-        assert post_kwargs["url"].endswith("cortex/inference:complete")
+        assert post_kwargs["url"].endswith("cortex/v1/chat/completions")
 
     @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
     def test_snowflake_pat_key_account_id(self, mock_post):
