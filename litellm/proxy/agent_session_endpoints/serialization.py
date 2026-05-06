@@ -98,10 +98,14 @@ def run_row_to_response(row: Any) -> RunResponse:
 
 
 def event_row_to_message(row: Any) -> ConversationMessage:
+    # NOTE: the DB column is ``event_type``/``payload`` but the wire
+    # shape we surface to SDK consumers is ``type``/``data`` (matches
+    # Cursor's API + the SSE event frame in run_endpoints._sse_event_data).
+    # Rename here so /conversation and the SSE stream agree.
     return ConversationMessage(
         run_id=row.run_id,
         seq=row.seq,
-        event_type=row.event_type,
-        payload=_as_dict(row.payload) or {},
+        type=row.event_type,
+        data=_as_dict(row.payload) or {},
         created_at=_iso(row.created_at),
     )
