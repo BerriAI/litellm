@@ -266,6 +266,7 @@ if MCP_AVAILABLE:
     # auth headers / mcp_servers / oauth state while in-flight callbacks are
     # still reading the shared object.
     _stateful_session_locks: Dict[str, asyncio.Lock] = {}
+    _stateful_session_active_request_counts: Dict[str, int] = {}
 
     # Keep this alias so existing references to session_manager still work
     session_manager = session_manager_stateless
@@ -290,18 +291,22 @@ if MCP_AVAILABLE:
         """Terminate expired stateful sessions and drop their auth contexts."""
         now = now or time.monotonic()
         server_instances = getattr(session_manager_stateful, "_server_instances", {})
-        expired_session_ids = [
-            session_id
-            for session_id, last_seen in _stateful_session_auth_context_last_seen.items()
-            if now - last_seen >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
-            or session_id not in server_instances
-        ]
+        expired_session_ids = []
+        for session_id, last_seen in _stateful_session_auth_context_last_seen.items():
+            if _stateful_session_active_request_counts.get(session_id, 0) > 0:
+                continue
+            if (
+                now - last_seen >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
+                or session_id not in server_instances
+            ):
+                expired_session_ids.append(session_id)
 
         for session_id in expired_session_ids:
             _stateful_session_auth_contexts.pop(session_id, None)
             _stateful_session_auth_context_last_seen.pop(session_id, None)
             _stateful_session_owners.pop(session_id, None)
             _stateful_session_locks.pop(session_id, None)
+            _stateful_session_active_request_counts.pop(session_id, None)
             transport = server_instances.pop(session_id, None)
             if transport is not None:
                 await transport.terminate()
@@ -311,6 +316,7 @@ if MCP_AVAILABLE:
                 _stateful_session_auth_context_last_seen.pop(session_id, None)
                 _stateful_session_owners.pop(session_id, None)
                 _stateful_session_locks.pop(session_id, None)
+                _stateful_session_active_request_counts.pop(session_id, None)
 
     async def _cleanup_expired_stateful_session_auth_contexts() -> None:
         while True:
@@ -3068,6 +3074,12 @@ if MCP_AVAILABLE:
                     session_id, asyncio.Lock()
                 )
 
+            track_active_stateful_request = bool(use_stateful and session_id)
+            if track_active_stateful_request and session_id:
+                _stateful_session_active_request_counts[session_id] = (
+                    _stateful_session_active_request_counts.get(session_id, 0) + 1
+                )
+
             async def _dispatch() -> None:
                 auth_user = _set_or_update_auth_context(
                     user_api_key_auth=user_api_key_auth,
@@ -3108,12 +3120,35 @@ if MCP_AVAILABLE:
                             )
                             _stateful_session_owners.pop(session_id, None)
                             _stateful_session_locks.pop(session_id, None)
+                            _stateful_session_active_request_counts.pop(
+                                session_id, None
+                            )
 
-            if session_lock is not None:
-                async with session_lock:
+            try:
+                if session_lock is not None:
+                    async with session_lock:
+                        await _dispatch()
+                else:
                     await _dispatch()
-            else:
-                await _dispatch()
+            finally:
+                if track_active_stateful_request and session_id:
+                    active_request_count = (
+                        _stateful_session_active_request_counts.get(session_id, 0) - 1
+                    )
+                    if active_request_count > 0:
+                        _stateful_session_active_request_counts[session_id] = (
+                            active_request_count
+                        )
+                    else:
+                        _stateful_session_active_request_counts.pop(session_id, None)
+
+                    if (
+                        scope.get("method") != "DELETE"
+                        and session_id in _stateful_session_auth_contexts
+                    ):
+                        _stateful_session_auth_context_last_seen[session_id] = (
+                            time.monotonic()
+                        )
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise

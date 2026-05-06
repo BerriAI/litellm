@@ -1427,6 +1427,43 @@ async def test_stateful_mcp_auth_contexts_expire_with_idle_sessions():
 
 
 @pytest.mark.asyncio
+async def test_stateful_mcp_auth_contexts_do_not_expire_active_sessions():
+    """Active stateful sessions should not be terminated by idle cleanup."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "active-stateful-session"
+    auth_user = UserAPIKeyAuth(api_key="active-key", user_id="active-user")
+    transport = MagicMock()
+    transport.terminate = AsyncMock()
+    now = 1000.0
+
+    mcp_server._stateful_session_auth_contexts[session_id] = auth_user
+    mcp_server._stateful_session_auth_context_last_seen[session_id] = (
+        now - mcp_server._STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
+    )
+    mcp_server._stateful_session_active_request_counts[session_id] = 1
+
+    try:
+        with patch.object(
+            mcp_server.session_manager_stateful,
+            "_server_instances",
+            {session_id: transport},
+        ):
+            await mcp_server._purge_expired_stateful_session_auth_contexts(now=now)
+
+        assert session_id in mcp_server._stateful_session_auth_contexts
+        assert session_id in mcp_server._stateful_session_auth_context_last_seen
+        transport.terminate.assert_not_awaited()
+    finally:
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_auth_context_last_seen.pop(session_id, None)
+        mcp_server._stateful_session_active_request_counts.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_owner_fingerprint_distinguishes_oauth_callers():
     """
     OAuth2 passthrough callers all share `UserAPIKeyAuth()` with no api_key
