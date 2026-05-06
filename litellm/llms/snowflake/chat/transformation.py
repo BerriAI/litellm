@@ -147,12 +147,12 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: Optional[bool] = None,
     ) -> str:
         """
-        If api_base is not provided, use the default DeepSeek /chat/completions endpoint.
+        If api_base is not provided, uses the default Snowflake Cortex /chat/completions endpoint.
         """
 
         api_base = self._get_api_base(api_base, optional_params)
 
-        return f"{api_base}/cortex/inference:complete"
+        return f"{api_base}/cortex/v1/chat/completions"
 
     def _transform_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
