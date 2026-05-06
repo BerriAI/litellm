@@ -307,8 +307,8 @@ async def test_team_member_budget_check_no_team_membership():
 
 
 @pytest.mark.asyncio
-async def test_team_member_budget_check_uses_token_user_when_user_object_missing():
-    """Team-member budget must be enforced from the key's user_id across regenerated keys."""
+async def test_team_member_budget_check_blocks_regenerated_key_after_old_key_exhausts_budget():
+    """Deleting an exhausted key and creating a new key must not reset a user's team budget."""
     request_body = {
         "model": "gpt-3.5-turbo",
         "messages": [{"role": "user", "content": "test"}],
@@ -320,7 +320,10 @@ async def test_team_member_budget_check_uses_token_user_when_user_object_missing
         spend=0.0,
         max_budget=None,
     )
-    valid_token = UserAPIKeyAuth(
+    # The spend below represents usage accumulated by an earlier key that was
+    # later deleted. The new key must still be checked against the same
+    # user/team membership spend instead of receiving a fresh per-key budget.
+    regenerated_token = UserAPIKeyAuth(
         token="new-regenerated-token",
         user_id="test-user-1",
         team_id="test-team-1",
@@ -360,7 +363,7 @@ async def test_team_member_budget_check_uses_token_user_when_user_object_missing
                 route="/chat/completions",
                 llm_router=None,
                 proxy_logging_obj=mock_proxy_logging_obj,
-                valid_token=valid_token,
+                valid_token=regenerated_token,
                 request=mock_request,
             )
 
