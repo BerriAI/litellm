@@ -17,8 +17,7 @@ const DEFAULT_FILTERS = {
   "Organization ID": "",
   "Key Alias": "",
   "User ID": "",
-  "Sort By": "created_at",
-  "Sort Order": "desc",
+  "Key Hash": "",
 };
 
 describe("useFilterLogic – filter state management", () => {
@@ -40,6 +39,16 @@ describe("useFilterLogic – filter state management", () => {
     });
 
     expect(result.current.filters["Key Alias"]).toBe("my-alias");
+  });
+
+  it("records the Key Hash filter when handleFilterChange is called", () => {
+    const { result } = renderHook(() => useFilterLogic(defaultProps));
+
+    act(() => {
+      result.current.handleFilterChange({ "Key Hash": "abc123" });
+    });
+
+    expect(result.current.filters["Key Hash"]).toBe("abc123");
   });
 
   it("preserves filter state across re-renders (regression: bug where results reset on remount)", () => {

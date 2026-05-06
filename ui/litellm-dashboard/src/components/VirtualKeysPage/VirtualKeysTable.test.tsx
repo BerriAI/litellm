@@ -203,8 +203,7 @@ beforeEach(() => {
       "User ID": "user-1",
       "User Email": "user@example.com",
       "User Role": "user",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -322,8 +321,7 @@ it("should show 'No keys found' message when filteredKeys is empty", () => {
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -370,8 +368,7 @@ it("should handle models with more than 3 entries to trigger expansion UI", () =
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -518,8 +515,7 @@ it("should display 'Default Proxy Admin' for user_id when value is 'default_user
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -568,8 +564,7 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -626,8 +621,7 @@ it("should display created_by_user email in 'Created By' column when available",
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -681,8 +675,7 @@ it("should display created_by_user alias over email when both available", async 
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -731,8 +724,7 @@ it("should render table without crashing when models is null", async () => {
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -782,8 +774,7 @@ it("should render table without crashing when models is undefined", async () => 
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -868,8 +859,7 @@ it("should display 'Unknown' for last_active when value is null", async () => {
       "Organization ID": "",
       "Key Alias": "",
       "User ID": "",
-      "Sort By": "created_at",
-      "Sort Order": "desc",
+      "Key Hash": "",
     },
     allTeams: [mockTeam],
     allOrganizations: [mockOrganization],
@@ -916,7 +906,7 @@ describe("pagination display – total count and page count", () => {
     } as any);
 
     mockUseFilterLogic.mockReturnValue({
-      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "", "User ID": "", "Key Hash": "" },
       allTeams: [mockTeam],
       allOrganizations: [mockOrganization],
       handleFilterChange: vi.fn(),
@@ -947,7 +937,7 @@ describe("pagination display – total count and page count", () => {
     } as any);
 
     mockUseFilterLogic.mockReturnValue({
-      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Key Hash": "" },
       allTeams: [mockTeam],
       allOrganizations: [mockOrganization],
       handleFilterChange: vi.fn(),
@@ -964,7 +954,7 @@ describe("pagination display – total count and page count", () => {
 
   it("should pass current filter values into useKeys so remount/refetch keeps the filter applied", async () => {
     mockUseFilterLogic.mockReturnValue({
-      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Key Hash": "" },
       allTeams: [mockTeam],
       allOrganizations: [mockOrganization],
       handleFilterChange: vi.fn(),
@@ -980,6 +970,26 @@ describe("pagination display – total count and page count", () => {
         expect.any(Number),
         expect.any(Number),
         expect.objectContaining({ selectedKeyAlias: "aaaaa" }),
+      );
+    });
+  });
+
+  it("should forward the Key Hash filter into useKeys", async () => {
+    mockUseFilterLogic.mockReturnValue({
+      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "", "User ID": "", "Key Hash": "hash-xyz" },
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenCalledWith(
+        expect.any(Number),
+        expect.any(Number),
+        expect.objectContaining({ keyHash: "hash-xyz" }),
       );
     });
   });

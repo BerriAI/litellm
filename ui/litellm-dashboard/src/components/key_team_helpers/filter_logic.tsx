@@ -10,8 +10,7 @@ export interface FilterState {
   "Key Alias": string;
   [key: string]: string;
   "User ID": string;
-  "Sort By": string;
-  "Sort Order": string;
+  "Key Hash": string;
 }
 
 const DEFAULT_FILTERS: FilterState = {
@@ -19,8 +18,7 @@ const DEFAULT_FILTERS: FilterState = {
   "Organization ID": "",
   "Key Alias": "",
   "User ID": "",
-  "Sort By": "created_at",
-  "Sort Order": "desc",
+  "Key Hash": "",
 };
 
 export function useFilterLogic({
@@ -71,8 +69,7 @@ export function useFilterLogic({
       "Organization ID": newFilters["Organization ID"] || "",
       "Key Alias": newFilters["Key Alias"] || "",
       "User ID": newFilters["User ID"] || "",
-      "Sort By": newFilters["Sort By"] || "created_at",
-      "Sort Order": newFilters["Sort Order"] || "desc",
+      "Key Hash": newFilters["Key Hash"] || "",
     });
   };
 

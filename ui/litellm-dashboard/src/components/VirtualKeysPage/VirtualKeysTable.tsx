@@ -105,6 +105,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     debouncedFilters["Organization ID"],
     debouncedFilters["Key Alias"],
     debouncedFilters["User ID"],
+    debouncedFilters["Key Hash"],
   ]);
 
   const {
@@ -121,6 +122,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     organizationID: debouncedFilters["Organization ID"] || undefined,
     selectedKeyAlias: debouncedFilters["Key Alias"] || undefined,
     userID: debouncedFilters["User ID"] || undefined,
+    keyHash: debouncedFilters["Key Hash"] || undefined,
   });
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
@@ -700,7 +702,11 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
               options={filterOptions}
               onApplyFilters={handleFilterChange}
               initialValues={filters}
-              onResetFilters={handleFilterReset}
+              onResetFilters={() => {
+                handleFilterReset();
+                setSorting([{ id: "created_at", desc: true }]);
+                onSortChange?.("created_at", "desc");
+              }}
             />
           </div>
 
