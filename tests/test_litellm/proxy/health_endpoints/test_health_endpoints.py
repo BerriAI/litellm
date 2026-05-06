@@ -659,7 +659,7 @@ def test_diagnose_requires_admin_view():
     assert response.status_code == 403, response.text
 
 
-def test_diagnose_generates_redacted_llm_report(monkeypatch):
+def test_diagnose_asks_llm_generated_questions(monkeypatch):
     """
     /diagnose should prompt a configured LLM with redacted proxy state and
     return the generated Markdown reproduction report.
@@ -689,7 +689,11 @@ def test_diagnose_generates_redacted_llm_report(monkeypatch):
                 choices=[
                     SimpleNamespace(
                         message=SimpleNamespace(
-                            content="# Reproduction report\n\nUse this report."
+                            content=(
+                                "1. What issue are you seeing?\n"
+                                "2. Which Vertex model and route fail?\n"
+                                "3. What status code or error appears?"
+                            )
                         )
                     )
                 ]
@@ -739,7 +743,19 @@ def test_diagnose_generates_redacted_llm_report(monkeypatch):
         "[REDACTED]"
     )
     assert "master_key: '[REDACTED]'" in response_data["redacted_config_yaml"]
-    assert response_data["diagnostic_report"].startswith("# Reproduction report")
+    assert "diagnostic_questions" not in response_data
+    assert response_data["next_question"] == "What issue are you seeing?"
+    assert response_data["next_question_index"] == 1
+    assert response_data["next_request_body"]["diagnostic_answers"] == [
+        "<answer question 1 here>"
+    ]
+    assert "diagnostic_questions" not in response_data["next_request_body"]
+    assert response_data["next_request_body"]["diagnostic_session_id"]
+    assert (
+        "curl -X POST http://<your-litellm-proxy>/diagnose"
+        in response_data["next_curl"]
+    )
+    assert response_data["diagnostic_report"].startswith("# LiteLLM Diagnostic Intake")
     assert captured_call["model"] == "gpt-4o"
 
     prompt_text = captured_call["messages"][0]["content"]
@@ -747,6 +763,287 @@ def test_diagnose_generates_redacted_llm_report(monkeypatch):
     assert "sk-secret-value-that-must-not-leak" not in prompt_text
     assert "sk-master-secret" not in prompt_text
     assert "REDACTED" in prompt_text
+
+
+def test_diagnose_generates_report_from_answers(monkeypatch):
+    """
+    Once the admin provides answers to the three LLM-generated questions,
+    /diagnose should ask the LLM for the final support report.
+    """
+    captured_calls = []
+
+    class FakeRouter:
+        def get_model_list(self, model_name=None):
+            deployments = [
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                    "model_info": {"id": "deployment-1"},
+                }
+            ]
+            if model_name is None:
+                return deployments
+            return [d for d in deployments if d["model_name"] == model_name]
+
+        async def acompletion(self, **kwargs):
+            captured_calls.append(kwargs)
+            content = (
+                "1. What issue are you seeing?\n"
+                "2. Which Vertex model and route fail?\n"
+                "3. What status code or error appears?"
+                if len(captured_calls) == 1
+                else "# Reproduction report\n\nCloud Core fails with Vertex."
+            )
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+            )
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", FakeRouter())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_config",
+        SimpleNamespace(
+            get_config_state=lambda: {
+                "model_list": [{"model_name": "gpt-4o"}],
+            }
+        ),
+    )
+
+    response = client.post(
+        "/diagnose",
+        json={
+            "issue_description": "Cloud Core doesn't work with Vertex.",
+            "diagnostic_answers": [
+                "Cloud Core requests through LiteLLM fail for Vertex.",
+                "The failing route is /chat/completions with vertex_ai/gemini-1.5-pro.",
+                "The proxy returns a 400 saying project/location are missing.",
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["diagnostic_report"].startswith("# Reproduction report")
+    assert "Cloud Core fails with Vertex" in response_data["diagnostic_report"]
+    assert response_data["next_question"] is None
+    assert response_data["next_request_body"] is None
+    assert response_data["next_curl"] is None
+    assert len(captured_calls) == 2
+    report_prompt = captured_calls[1]["messages"][0]["content"]
+    assert "Cloud Core doesn't work with Vertex." in report_prompt
+    assert "project/location are missing" in report_prompt
+
+
+def test_diagnose_walks_questions_one_at_a_time(monkeypatch):
+    """
+    /diagnose should guide admins through one question per request and show the
+    next request body they can copy back into curl.
+    """
+
+    class FakeRouter:
+        def get_model_list(self, model_name=None):
+            deployments = [
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                    "model_info": {"id": "deployment-1"},
+                }
+            ]
+            if model_name is None:
+                return deployments
+            return [d for d in deployments if d["model_name"] == model_name]
+
+        async def acompletion(self, **kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=(
+                                "1. What issue are you seeing?\n"
+                                "2. Which Vertex model and route fail?\n"
+                                "3. What status code or error appears?"
+                            )
+                        )
+                    )
+                ]
+            )
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", FakeRouter())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_config",
+        SimpleNamespace(
+            get_config_state=lambda: {"model_list": [{"model_name": "gpt-4o"}]}
+        ),
+    )
+
+    response = client.post(
+        "/diagnose",
+        json={
+            "issue_description": "Cloud Core doesn't work with Vertex.",
+            "diagnostic_answers": ["Cloud Core fails on Vertex requests."],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["next_question"] == "Which Vertex model and route fail?"
+    assert response_data["next_question_index"] == 2
+    assert response_data["diagnostic_answers_received"] == 1
+    assert response_data["next_request_body"]["diagnostic_answers"] == [
+        "Cloud Core fails on Vertex requests.",
+        "<answer question 2 here>",
+    ]
+    assert "Cloud Core fails on Vertex requests." in response_data["next_curl"]
+
+
+def test_diagnose_report_falls_back_when_llm_errors(monkeypatch):
+    """
+    Provider failures during report generation should return a clean fallback
+    instead of propagating a raw 500 during an incident.
+    """
+    captured_calls = []
+
+    class FakeRouter:
+        def get_model_list(self, model_name=None):
+            deployments = [
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "openai/gpt-4o"},
+                    "model_info": {"id": "deployment-1"},
+                }
+            ]
+            if model_name is None:
+                return deployments
+            return [d for d in deployments if d["model_name"] == model_name]
+
+        async def acompletion(self, **kwargs):
+            captured_calls.append(kwargs)
+            if len(captured_calls) == 1:
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=(
+                                    "1. What issue are you seeing?\n"
+                                    "2. Which Vertex model and route fail?\n"
+                                    "3. What status code or error appears?"
+                                )
+                            )
+                        )
+                    ]
+                )
+            raise RuntimeError("provider unavailable")
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", FakeRouter())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_config",
+        SimpleNamespace(
+            get_config_state=lambda: {"model_list": [{"model_name": "gpt-4o"}]}
+        ),
+    )
+
+    response = client.post(
+        "/diagnose",
+        json={
+            "issue_description": "Cloud Core doesn't work with Vertex.",
+            "diagnostic_answers": [
+                "Cloud Core requests through LiteLLM fail for Vertex.",
+                "The failing route is /chat/completions.",
+                "The proxy returns a 400.",
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["used_llm"] is False
+    assert response_data["diagnostic_report"].startswith("# LiteLLM Diagnostic Report")
+    assert "provider unavailable" not in response_data["diagnostic_report"]
+    assert len(captured_calls) == 2
+
+
+def test_diagnose_advances_to_next_question(monkeypatch):
+    """
+    Each intake call should ask only the next unanswered question and return a
+    concrete request body the admin can paste back into curl.
+    """
+
+    class FakeRouter:
+        def get_model_list(self, model_name=None):
+            deployments = [
+                {"model_name": "gpt-4o", "litellm_params": {"model": "openai/gpt-4o"}}
+            ]
+            if model_name is None:
+                return deployments
+            return [d for d in deployments if d["model_name"] == model_name]
+
+        async def acompletion(self, **kwargs):
+            return SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        message=SimpleNamespace(
+                            content=(
+                                "1. What issue are you seeing?\n"
+                                "2. Which Vertex model and route fail?\n"
+                                "3. What status code or error appears?"
+                            )
+                        )
+                    )
+                ]
+            )
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    client = TestClient(app)
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", FakeRouter())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_config",
+        SimpleNamespace(
+            get_config_state=lambda: {"model_list": [{"model_name": "gpt-4o"}]}
+        ),
+    )
+
+    response = client.post(
+        "/diagnose",
+        json={
+            "issue_description": "Cloud Core doesn't work with Vertex.",
+            "diagnostic_answers": ["Cloud Core fails when routed to Vertex."],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert response_data["next_question"] == "Which Vertex model and route fail?"
+    assert response_data["next_question_index"] == 2
+    assert response_data["next_request_body"]["diagnostic_answers"] == [
+        "Cloud Core fails when routed to Vertex.",
+        "<answer question 2 here>",
+    ]
+    assert response_data["diagnostic_answers_received"] == 1
 
 
 def test_diagnose_prompts_for_model_when_no_llm_is_configured(monkeypatch):
@@ -780,7 +1077,11 @@ def test_diagnose_prompts_for_model_when_no_llm_is_configured(monkeypatch):
     assert response_data["litellm_version"]
     assert response_data["installation"]["install_source"]
     assert "master_key: '[REDACTED]'" in response_data["redacted_config_yaml"]
-    assert "configured `model`" in response_data["diagnostic_report"]
+    assert response_data["next_question"]
+    assert response_data["next_request_body"]["diagnostic_answers"] == [
+        "<answer question 1 here>"
+    ]
+    assert "No proxy model is configured" in response_data["diagnostic_report"]
     assert "sk-master-secret" not in response_data["diagnostic_report"]
 
 

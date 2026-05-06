@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import importlib.metadata
 import json
@@ -13,7 +14,6 @@ from typing import Any, Dict, Iterable, Literal, Optional, Union, cast
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
@@ -41,6 +41,7 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.health_endpoints.diagnose_types import DiagnoseRequest
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
@@ -138,25 +139,8 @@ services = Union[
 ]
 
 _DIAGNOSE_REDACTED_VALUE = "[REDACTED]"
+_DIAGNOSE_LLM_TIMEOUT_SECONDS = 30
 _diagnose_sensitive_masker = SensitiveDataMasker()
-
-
-class DiagnoseRequest(BaseModel):
-    model: Optional[str] = Field(
-        default=None,
-        description=(
-            "Optional proxy model name to use for generating the diagnostic report. "
-            "When omitted, LiteLLM uses the first configured proxy deployment."
-        ),
-    )
-    issue_description: Optional[str] = Field(
-        default=None,
-        description="Short description of the issue the admin is trying to reproduce.",
-    )
-    reproduction_steps: Optional[str] = Field(
-        default=None,
-        description="Known reproduction steps or the behavior the admin has already tried.",
-    )
 
 
 def _redact_diagnose_payload(payload: Any, sensitive_parent: bool = False) -> Any:
@@ -223,17 +207,95 @@ def _build_diagnose_response(
     selected_model: Optional[str],
     diagnostic_report: str,
     diagnostic_context: dict,
+    next_question: Optional[str] = None,
+    next_question_index: Optional[int] = None,
+    next_request_body: Optional[dict] = None,
+    next_curl: Optional[str] = None,
 ) -> dict:
+    response_context = {
+        key: value
+        for key, value in diagnostic_context.items()
+        if key != "diagnostic_questions"
+    }
     return {
         "used_llm": used_llm,
         "selected_model": selected_model,
         "litellm_version": diagnostic_context["litellm_version"],
         "installation": diagnostic_context["installation"],
         "redacted_config_yaml": diagnostic_context["redacted_config_yaml"],
+        "next_question": next_question,
+        "next_question_index": next_question_index,
+        "diagnostic_answers_received": len(
+            diagnostic_context.get("diagnostic_answers", [])
+        ),
+        "next_request_body": next_request_body,
+        "next_curl": next_curl,
         "redacted_config": diagnostic_context["config"],
         "diagnostic_report": diagnostic_report,
-        "diagnostic_context": diagnostic_context,
+        "diagnostic_context": response_context,
     }
+
+
+def _encode_diagnose_questions(questions: list[str]) -> str:
+    serialized = json.dumps(questions, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(serialized).decode("ascii")
+
+
+def _decode_diagnose_questions(session_id: Optional[str]) -> Optional[list[str]]:
+    if not session_id:
+        return None
+    try:
+        decoded = base64.urlsafe_b64decode(session_id.encode("ascii"))
+        questions = json.loads(decoded.decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(questions, list) or not all(
+        isinstance(question, str) for question in questions
+    ):
+        return None
+    return questions[:3]
+
+
+def _build_diagnose_next_request(
+    *,
+    request_body: dict,
+    answers: list[str],
+    questions: list[str],
+    next_answer_placeholder: str,
+) -> dict:
+    request_body = {**request_body}
+    request_body["diagnostic_session_id"] = _encode_diagnose_questions(questions)
+    request_body["diagnostic_answers"] = [*answers, next_answer_placeholder]
+    return request_body
+
+
+def _build_diagnose_next_curl(
+    *,
+    next_request_body: dict,
+    next_answer_placeholder: str,
+) -> str:
+    return (
+        "curl -X POST http://<your-litellm-proxy>/diagnose \\\n"
+        "  -H 'Authorization: Bearer <admin-key>' \\\n"
+        "  -H 'Content-Type: application/json' \\\n"
+        f"  -d '{json.dumps(next_request_body)}'"
+    )
+
+
+def _diagnose_answer_count(diagnose_request: DiagnoseRequest) -> int:
+    return len(diagnose_request.diagnostic_answers or [])
+
+
+def _build_diagnose_question_report(
+    *, next_question_index: int, next_question: str, next_curl: str
+) -> str:
+    return (
+        "# LiteLLM Diagnostic Intake\n\n"
+        f"Question {next_question_index} of 3:\n\n"
+        f"{next_question}\n\n"
+        "Answer it by calling `/diagnose` again with this shape:\n\n"
+        f"```bash\n{next_curl}\n```"
+    )
 
 
 def _get_diagnose_model_list(llm_router: Optional[Any]) -> list:
@@ -273,11 +335,95 @@ def _build_diagnose_prompt(
         f"Model selected for this diagnostic LLM call: {selected_model}\n"
         f"Issue description from admin: {request.issue_description or 'Not provided'}\n"
         f"Known reproduction steps from admin: {request.reproduction_steps or 'Not provided'}\n\n"
+        "Diagnostic questions asked:\n"
+        f"{json.dumps(diagnostic_context['diagnostic_questions'], indent=2)}\n\n"
+        "Admin answers:\n"
+        f"{json.dumps(request.diagnostic_answers or [], indent=2)}\n\n"
         "Use only this redacted diagnostic context; never invent secrets:\n"
         f"```json\n{serialized_context}\n```\n\n"
         "Return Markdown with these headings: Summary, Environment, Config and Models, "
         "Reproduction Steps, Questions for Admin, Suspected Areas."
     )
+
+
+def _build_diagnose_questions_prompt(
+    *,
+    request: DiagnoseRequest,
+    selected_model: str,
+    diagnostic_context: dict,
+) -> str:
+    serialized_context = json.dumps(
+        diagnostic_context, indent=2, sort_keys=True, default=str
+    )
+    return (
+        "You are debugging a LiteLLM proxy issue. Generate exactly three concise "
+        "questions to ask the admin before writing a reproduction report. The first "
+        "question must ask what issue they are seeing. The next two questions should "
+        "be follow-ups based on the issue, configured models, LiteLLM version, "
+        "installation/runtime, and redacted config. Do not ask for secrets or API keys.\n\n"
+        f"Model selected for this diagnostic LLM call: {selected_model}\n"
+        f"Known issue description: {request.issue_description or 'Not provided'}\n"
+        f"Known reproduction steps: {request.reproduction_steps or 'Not provided'}\n\n"
+        "Redacted diagnostic context:\n"
+        f"```json\n{serialized_context}\n```\n\n"
+        "Return only a numbered list with exactly three questions."
+    )
+
+
+def _parse_diagnose_questions(raw: str) -> list[str]:
+    questions: list[str] = []
+    for line in raw.splitlines():
+        cleaned = line.strip().lstrip("-*").strip()
+        if "." in cleaned[:4]:
+            _, _, cleaned = cleaned.partition(".")
+            cleaned = cleaned.strip()
+        if cleaned:
+            questions.append(cleaned)
+        if len(questions) == 3:
+            break
+    return questions
+
+
+def _fallback_diagnose_questions(request: DiagnoseRequest) -> list[str]:
+    return [
+        "What issue are you seeing in LiteLLM, and what did you expect to happen instead?",
+        (
+            "Which model, provider, route, and request payload reproduces the issue?"
+            if not request.issue_description
+            else "Which model, provider, route, and request payload reproduces this issue?"
+        ),
+        "What errors, logs, status codes, or traces do you see when it fails?",
+    ]
+
+
+async def _generate_diagnose_questions(
+    *,
+    llm_router: Any,
+    selected_model: str,
+    request: DiagnoseRequest,
+    diagnostic_context: dict,
+) -> list[str]:
+    response = await run_with_timeout(
+        llm_router.acompletion(
+            model=selected_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": _build_diagnose_questions_prompt(
+                        request=request,
+                        selected_model=selected_model,
+                        diagnostic_context=diagnostic_context,
+                    ),
+                }
+            ],
+            temperature=0.0,
+        ),
+        _DIAGNOSE_LLM_TIMEOUT_SECONDS,
+    )
+    questions = _parse_diagnose_questions(_extract_diagnose_response_text(response))
+    if len(questions) < 3:
+        return _fallback_diagnose_questions(request=request)
+    return questions
 
 
 def _extract_diagnose_response_text(response: Any) -> str:
@@ -286,6 +432,19 @@ def _extract_diagnose_response_text(response: Any) -> str:
     except (AttributeError, IndexError, TypeError):
         return ""
     return content or ""
+
+
+def _build_diagnose_llm_error_report(
+    *, diagnostic_context: dict, error: Exception
+) -> str:
+    return (
+        "# LiteLLM Diagnostic Report\n\n"
+        "LiteLLM collected the redacted diagnostic context, but the selected "
+        "LLM failed while generating the final report. Use the context below "
+        "to reproduce the issue manually.\n\n"
+        f"LLM error: {str(error)}\n\n"
+        f"```json\n{json.dumps(diagnostic_context, indent=2, sort_keys=True, default=str)}\n```"
+    )
 
 
 @router.get(
@@ -1757,6 +1916,8 @@ async def diagnose_endpoint(
     redacted_config = _redact_diagnose_payload(proxy_config.get_config_state())
     redacted_models = _redact_diagnose_payload(configured_models)
     redacted_config_yaml = _dump_diagnose_config_yaml(redacted_config)
+    request_dict = diagnose_request.model_dump(exclude_none=True)
+    answers = list(diagnose_request.diagnostic_answers or [])
     diagnostic_context = {
         "litellm_version": _get_litellm_package_version(),
         "installation": _get_litellm_installation_info(),
@@ -1764,6 +1925,8 @@ async def diagnose_endpoint(
         "configured_models": redacted_models,
         "config": redacted_config,
         "redacted_config_yaml": redacted_config_yaml,
+        "diagnostic_questions": [],
+        "diagnostic_answers": answers,
         "admin_user": {
             "user_id": user_api_key_dict.user_id,
             "user_role": (
@@ -1775,18 +1938,91 @@ async def diagnose_endpoint(
     }
 
     if selected_model is None or llm_router is None:
+        diagnostic_context["diagnostic_questions"] = _fallback_diagnose_questions(
+            request=diagnose_request
+        )
+        next_question = diagnostic_context["diagnostic_questions"][0]
+        next_answer_placeholder = "<answer question 1 here>"
+        next_request_body = _build_diagnose_next_request(
+            request_body=request_dict,
+            answers=answers,
+            questions=diagnostic_context["diagnostic_questions"],
+            next_answer_placeholder=next_answer_placeholder,
+        )
+        next_curl = _build_diagnose_next_curl(
+            next_request_body=next_request_body,
+            next_answer_placeholder=next_answer_placeholder,
+        )
         return _build_diagnose_response(
             used_llm=False,
             selected_model=selected_model,
             diagnostic_report=(
-                "# LiteLLM Diagnostic Report\n\n"
-                "No proxy model is configured for the diagnostic LLM call. "
-                "Call `/diagnose` again with a configured `model`, or add a "
-                "model to the proxy config, so LiteLLM can generate the full "
-                "Markdown reproduction report.\n\n"
-                f"```json\n{json.dumps(diagnostic_context, indent=2, sort_keys=True, default=str)}\n```"
+                "# LiteLLM Diagnostic Intake\n\n"
+                "No proxy model is configured for the diagnostic LLM call, so "
+                "LiteLLM is using built-in fallback questions.\n\n"
+                + _build_diagnose_question_report(
+                    next_question_index=1,
+                    next_question=next_question,
+                    next_curl=next_curl,
+                )
             ),
             diagnostic_context=diagnostic_context,
+            next_question=next_question,
+            next_question_index=1,
+            next_request_body=next_request_body,
+            next_curl=next_curl,
+        )
+
+    diagnostic_questions = _decode_diagnose_questions(
+        diagnose_request.diagnostic_session_id
+    )
+    if diagnostic_questions is None:
+        try:
+            diagnostic_questions = await _generate_diagnose_questions(
+                llm_router=llm_router,
+                selected_model=selected_model,
+                request=diagnose_request,
+                diagnostic_context=diagnostic_context,
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to generate /diagnose questions with LLM: %s", e
+            )
+            diagnostic_questions = _fallback_diagnose_questions(
+                request=diagnose_request
+            )
+    diagnostic_context["diagnostic_questions"] = diagnostic_questions
+
+    diagnostic_answers_count = len(answers)
+    if diagnostic_answers_count < 3:
+        next_question_index = diagnostic_answers_count + 1
+        next_question = diagnostic_questions[diagnostic_answers_count]
+        next_answer_placeholder = f"<answer question {next_question_index} here>"
+        next_request_body = _build_diagnose_next_request(
+            request_body=request_dict,
+            answers=answers,
+            questions=diagnostic_questions,
+            next_answer_placeholder=next_answer_placeholder,
+        )
+        return _build_diagnose_response(
+            used_llm=True,
+            selected_model=selected_model,
+            diagnostic_report=_build_diagnose_question_report(
+                next_question_index=next_question_index,
+                next_question=next_question,
+                next_curl=_build_diagnose_next_curl(
+                    next_request_body=next_request_body,
+                    next_answer_placeholder=next_answer_placeholder,
+                ),
+            ),
+            diagnostic_context=diagnostic_context,
+            next_question=next_question,
+            next_question_index=next_question_index,
+            next_request_body=next_request_body,
+            next_curl=_build_diagnose_next_curl(
+                next_request_body=next_request_body,
+                next_answer_placeholder=next_answer_placeholder,
+            ),
         )
 
     prompt = _build_diagnose_prompt(
@@ -1794,11 +2030,31 @@ async def diagnose_endpoint(
         selected_model=selected_model,
         diagnostic_context=diagnostic_context,
     )
-    response = await llm_router.acompletion(
-        model=selected_model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
-    )
+    try:
+        response = await run_with_timeout(
+            llm_router.acompletion(
+                model=selected_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+            ),
+            _DIAGNOSE_LLM_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "Failed to generate /diagnose report with LLM: %s", e
+        )
+        return _build_diagnose_response(
+            used_llm=False,
+            selected_model=selected_model,
+            diagnostic_report=(
+                "# LiteLLM Diagnostic Report\n\n"
+                "The diagnostic LLM call failed while generating the final report, "
+                "so LiteLLM is returning the redacted diagnostic context and answers "
+                "for support to review.\n\n"
+                f"```json\n{json.dumps(diagnostic_context, indent=2, sort_keys=True, default=str)}\n```"
+            ),
+            diagnostic_context=diagnostic_context,
+        )
     return _build_diagnose_response(
         used_llm=True,
         selected_model=selected_model,
