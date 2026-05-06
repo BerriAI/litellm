@@ -3446,6 +3446,33 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         else:
             from litellm.types.llms.anthropic import AnthropicResponse
+            from litellm.types.llms.openai import (
+                ResponseCompletedEvent,
+                ResponseIncompleteEvent,
+            )
+
+            # When the experimental Anthropic pass-through adapter routes a request
+            # through the Responses API (e.g. to Azure/Foundry), the success handler
+            # may receive a ResponseIncompleteEvent or ResponseCompletedEvent rather
+            # than a plain dict or AnthropicResponse instance.
+            # AnthropicResponse.model_validate() rejects these types and raises a
+            # ValidationError in background logging (non-blocking but noisy).
+            # Guard against this before calling model_validate. (Fixes #27091)
+            if isinstance(result, (ResponseCompletedEvent, ResponseIncompleteEvent)):
+                verbose_logger.debug(
+                    "anthropic_messages logging: result is a Responses API event (%s), "
+                    "skipping AnthropicResponse transform",
+                    type(result).__name__,
+                )
+                return result  # type: ignore[return-value]
+
+            if not isinstance(result, (dict, AnthropicResponse)):
+                verbose_logger.debug(
+                    "anthropic_messages logging: unexpected result type %s, "
+                    "skipping AnthropicResponse transform",
+                    type(result).__name__,
+                )
+                return result  # type: ignore[return-value]
 
             pydantic_result = AnthropicResponse.model_validate(result)
             import httpx
