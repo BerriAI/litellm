@@ -381,6 +381,25 @@ def test_init_http_api_base_maps_to_ws():
     assert guard.ws_api_base == "ws://insecure.example.com"
 
 
+@pytest.mark.parametrize("api_base", [
+    "https://api.aisec.catonetworks.com/",
+    "https://api.aisec.catonetworks.com",
+])
+def test_base_url_trailing_slash(monkeypatch, api_base):
+    monkeypatch.setenv("CATO_API_KEY", "test-key")
+    guardrail = CatoNetworksGuardrail(api_base=api_base)
+    assert guardrail.api_base == "https://api.aisec.catonetworks.com"
+    assert guardrail.ws_api_base == "wss://api.aisec.catonetworks.com"
+
+
+def test_base_url_from_env(monkeypatch):
+    monkeypatch.setenv("CATO_API_KEY", "test-key")
+    monkeypatch.setenv("CATO_API_BASE", "https://api.aisec.catonetworks.com/")
+    guardrail = CatoNetworksGuardrail(api_base=None)
+    assert guardrail.api_base == "https://api.aisec.catonetworks.com"
+    assert guardrail.ws_api_base == "wss://api.aisec.catonetworks.com"
+
+
 # -----------------------------------------------------------------------------
 # _build_cato_headers direct coverage
 # -----------------------------------------------------------------------------

@@ -60,6 +60,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
             or os.environ.get("CATO_API_BASE")
             or "https://api.aisec.catonetworks.com"
         )
+        self.api_base = self.api_base.rstrip("/")
         self.ws_api_base = self.api_base.replace("http://", "ws://").replace(
             "https://", "wss://"
         )
