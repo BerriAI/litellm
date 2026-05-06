@@ -53,6 +53,43 @@ def test_non_admin_config_update_route_rejected():
     assert "Your role=internal_user" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize("route", ["/tag/list", "/tag/daily/activity"])
+def test_internal_users_can_access_tag_usage_read_routes(role, route):
+    """
+    Internal users should be able to load the UI's tag usage view.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="internal_user",
+        user_email="user@example.com",
+        user_role=role,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="internal_user",
+        user_role=role,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=role,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    except Exception as e:
+        pytest.fail(f"{role} should be able to access {route}. Got error: {str(e)}")
+
+
 def test_proxy_admin_viewer_config_update_route_rejected():
     """Test that proxy admin viewer users are rejected when trying to call /config/update"""
 

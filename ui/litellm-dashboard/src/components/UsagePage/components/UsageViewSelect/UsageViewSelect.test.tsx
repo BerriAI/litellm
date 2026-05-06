@@ -110,4 +110,16 @@ describe("UsageViewSelect", () => {
 
     expect(mockOnChange).toHaveBeenCalledWith("team");
   });
+
+  it("should show tag usage when tag usage access is allowed", () => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={false} canViewTagUsage={true} />);
+
+    expect(screen.getByRole("option", { name: "Tag Usage" })).toBeInTheDocument();
+  });
+
+  it("should hide tag usage for non-admins without tag usage access", () => {
+    render(<UsageViewSelect value="global" onChange={mockOnChange} isAdmin={false} />);
+
+    expect(screen.queryByRole("option", { name: "Tag Usage" })).not.toBeInTheDocument();
+  });
 });

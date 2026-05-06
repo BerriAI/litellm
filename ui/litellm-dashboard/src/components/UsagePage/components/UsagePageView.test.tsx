@@ -57,7 +57,7 @@ vi.mock("./EndpointUsage/EndpointUsage", () => ({
 
 vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
   const React = await import("react");
-  const UsageViewSelect = ({ value, onChange }: any) => {
+  const UsageViewSelect = ({ value, onChange, canViewTagUsage }: any) => {
     return React.createElement(
       "select",
       {
@@ -70,7 +70,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
       React.createElement("option", { value: "team" }, "Team Usage"),
       React.createElement("option", { value: "organization" }, "Organization Usage"),
       React.createElement("option", { value: "customer" }, "Customer Usage"),
-      React.createElement("option", { value: "tag" }, "Tag Usage"),
+      canViewTagUsage && React.createElement("option", { value: "tag" }, "Tag Usage"),
       React.createElement("option", { value: "agent" }, "Agent Usage"),
       React.createElement("option", { value: "user-agent-activity" }, "User Agent Activity"),
     );
@@ -808,6 +808,25 @@ describe("UsagePage", () => {
   });
 
   describe("non-admin user behavior", () => {
+    it("should render tag usage option for internal users", async () => {
+      mockUseAuthorized.mockReturnValue({
+        isLoading: false,
+        isAuthorized: true,
+        token: "mock-token",
+        accessToken: "test-token",
+        userId: "user-123",
+        userEmail: "test@example.com",
+        userRole: "Internal User",
+        premiumUser: false,
+        disabledPersonalKeyCreation: false,
+        showSSOBanner: false,
+      });
+
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      expect(screen.getByRole("option", { name: "Tag Usage" })).toBeInTheDocument();
+    });
+
     it("should not render user selector for non-admin users", async () => {
       mockUseAuthorized.mockReturnValue({
         isLoading: false,

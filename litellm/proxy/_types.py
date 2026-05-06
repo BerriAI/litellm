@@ -672,12 +672,17 @@ class LiteLLMRoutes(enum.Enum):
             "/v2/guardrails/list",
             "/project/list",
             "/project/info",
+            "/tag/daily/activity",
+            "/tag/list",
         ]
         + spend_tracking_routes
         + key_management_routes
     )
 
-    internal_user_view_only_routes = spend_tracking_routes
+    internal_user_view_only_routes = spend_tracking_routes + [
+        "/tag/daily/activity",
+        "/tag/list",
+    ]
 
     self_managed_routes = [
         "/team/member_add",
