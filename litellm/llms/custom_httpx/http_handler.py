@@ -135,6 +135,10 @@ _DEFAULT_TIMEOUT = httpx.Timeout(
     connect=HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
 )
 _STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS = 5.0
+_STREAMING_ERROR_BODY_READ_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=50,
+    thread_name_prefix="litellm-streaming-error-body-read",
+)
 
 
 def _prepare_request_data_and_content(
@@ -406,15 +410,12 @@ def _safe_read_response(
     """Safely read sync response body, falling back to empty bytes on errors."""
     try:
         if timeout is not None:
-            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = executor.submit(response.read)
+            future = _STREAMING_ERROR_BODY_READ_EXECUTOR.submit(response.read)
             try:
                 return future.result(timeout=timeout)
             except Exception:
                 response.close()
                 return b""
-            finally:
-                executor.shutdown(wait=False, cancel_futures=True)
         return response.read()
     except Exception:
         return b""
