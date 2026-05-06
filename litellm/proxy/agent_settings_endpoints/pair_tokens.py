@@ -19,6 +19,7 @@ matches the existing virtual-key hashed-token pattern.
 
 import hashlib
 import secrets
+import shlex
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -86,8 +87,18 @@ def build_install_command(
     Kept as a helper (not f-string at the callsite) so tests can lock the
     exact format and so we can swap the install host without touching
     endpoint code.
+
+    All operator-controlled values (`proxy_url`, `raw_token`, and the
+    install script URL) are run through `shlex.quote` before interpolation
+    so that spaces, quotes, or other shell metacharacters in any of them
+    can't break out of the install command. The proxy URL is otherwise
+    not validated here — the caller is responsible for verifying the
+    host (see `worker_endpoints._resolve_proxy_url`).
     """
+    quoted_url = shlex.quote(install_script_url)
+    quoted_proxy = shlex.quote(proxy_url)
+    quoted_token = shlex.quote(raw_token)
     return (
-        f"curl -fsS {install_script_url} | sh -s -- "
-        f"--proxy {proxy_url} --token {raw_token}"
+        f"curl -fsS {quoted_url} | sh -s -- "
+        f"--proxy {quoted_proxy} --token {quoted_token}"
     )
