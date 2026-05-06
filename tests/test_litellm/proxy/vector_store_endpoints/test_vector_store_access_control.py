@@ -105,6 +105,69 @@ async def test_check_vector_store_access_key_object_permission_wrong_store_denie
 
 
 @pytest.mark.asyncio
+async def test_check_vector_store_access_key_access_group_grants_access():
+    """A key access group can allow a shared vector store outside the key's team."""
+    vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "vs_shared",
+        "custom_llm_provider": "openai",
+        "team_id": "team_456",
+    }
+    user = UserAPIKeyAuth(
+        team_id="team_789",
+        access_group_ids=["ag-shared-vector-store"],
+    )
+
+    with patch(
+        "litellm.proxy.vector_store_endpoints.utils._get_vector_store_ids_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["vs_shared"],
+    ):
+        assert await _check_vector_store_access(vector_store, user) is True
+
+
+@pytest.mark.asyncio
+async def test_check_vector_store_access_team_access_group_grants_access():
+    """A team access group can allow a shared vector store outside team ownership."""
+    vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "vs_team_shared",
+        "custom_llm_provider": "openai",
+        "team_id": "team_456",
+    }
+    user = UserAPIKeyAuth(
+        team_id="team_789",
+        team_access_group_ids=["ag-team-vector-store"],
+    )
+
+    with patch(
+        "litellm.proxy.vector_store_endpoints.utils._get_vector_store_ids_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["vs_team_shared"],
+    ):
+        assert await _check_vector_store_access(vector_store, user) is True
+
+
+@pytest.mark.asyncio
+async def test_check_vector_store_access_access_group_wrong_store_denied():
+    """Access groups do not widen access unless the target vector store is listed."""
+    vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "vs_target",
+        "custom_llm_provider": "openai",
+        "team_id": "team_456",
+    }
+    user = UserAPIKeyAuth(
+        team_id="team_789",
+        access_group_ids=["ag-other-vector-store"],
+    )
+
+    with patch(
+        "litellm.proxy.vector_store_endpoints.utils._get_vector_store_ids_from_access_groups",
+        new_callable=AsyncMock,
+        return_value=["vs_other"],
+    ):
+        assert await _check_vector_store_access(vector_store, user) is False
+
+
+@pytest.mark.asyncio
 async def test_delete_vector_store_checks_access():
     """Test that delete endpoint enforces team access control"""
     from litellm.proxy.vector_store_endpoints.management_endpoints import (

@@ -10,6 +10,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import _get_vector_store_ids_from_access_groups
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
@@ -48,6 +49,29 @@ def _object_permission_allows_vector_store(
     if not allowed:
         return False
     return vector_store_id in allowed
+
+
+async def _access_groups_allow_vector_store(
+    user_api_key_dict: UserAPIKeyAuth,
+    vector_store_id: str,
+) -> bool:
+    """Returns True if key/team access groups explicitly list the vector store."""
+    access_group_ids = list(user_api_key_dict.access_group_ids or [])
+    access_group_ids.extend(user_api_key_dict.team_access_group_ids or [])
+    if not access_group_ids:
+        return False
+
+    allowed_vector_store_ids = set(
+        user_api_key_dict.access_group_vector_store_ids or []
+    )
+    if vector_store_id not in allowed_vector_store_ids:
+        allowed_vector_store_ids.update(
+            await _get_vector_store_ids_from_access_groups(
+                access_group_ids=list(set(access_group_ids)),
+            )
+        )
+        user_api_key_dict.access_group_vector_store_ids = list(allowed_vector_store_ids)
+    return vector_store_id in allowed_vector_store_ids
 
 
 async def _get_object_permission_for_id(
@@ -126,6 +150,9 @@ async def can_user_access_vector_store(
             user_api_key_dict.team_object_permission_id
         )
     if _object_permission_allows_vector_store(team_object_permission, vector_store_id):
+        return True
+
+    if await _access_groups_allow_vector_store(user_api_key_dict, vector_store_id):
         return True
 
     if (

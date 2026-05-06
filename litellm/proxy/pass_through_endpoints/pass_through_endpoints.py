@@ -49,6 +49,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.auth_checks import _get_pass_through_routes_from_access_groups
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -2557,17 +2558,31 @@ async def _filter_endpoints_by_team_allowed_routes(
             detail={"error": "Team not found"},
         )
 
+    allowed_passthrough_routes: List[str] = []
+
     # retrieve team metadata
     team_metadata = team.metadata
     if (
         team_metadata is not None
         and team_metadata.get("allowed_passthrough_routes") is not None
     ):
+        allowed_passthrough_routes.extend(
+            team_metadata.get("allowed_passthrough_routes") or []
+        )
+
+    if team.access_group_ids:
+        allowed_passthrough_routes.extend(
+            await _get_pass_through_routes_from_access_groups(
+                access_group_ids=team.access_group_ids,
+            )
+        )
+
+    if allowed_passthrough_routes:
         ## FILTER pass_through_endpoints by allowed_passthrough_routes
         pass_through_endpoints = [
             endpoint
             for endpoint in pass_through_endpoints
-            if endpoint.path in team_metadata.get("allowed_passthrough_routes")
+            if endpoint.path in allowed_passthrough_routes
         ]
 
     return pass_through_endpoints

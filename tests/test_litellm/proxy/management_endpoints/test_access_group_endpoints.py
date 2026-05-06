@@ -31,6 +31,8 @@ def _make_access_group_record(
     access_model_names: list | None = None,
     access_mcp_server_ids: list | None = None,
     access_agent_ids: list | None = None,
+    access_pass_through_routes: list | None = None,
+    access_vector_store_ids: list | None = None,
     assigned_team_ids: list | None = None,
     assigned_key_ids: list | None = None,
     created_by: str | None = "admin-user",
@@ -46,6 +48,8 @@ def _make_access_group_record(
         "access_model_names": access_model_names or [],
         "access_mcp_server_ids": access_mcp_server_ids or [],
         "access_agent_ids": access_agent_ids or [],
+        "access_pass_through_routes": access_pass_through_routes or [],
+        "access_vector_store_ids": access_vector_store_ids or [],
         "assigned_team_ids": assigned_team_ids or [],
         "assigned_key_ids": assigned_key_ids or [],
         "created_at": created_at_val,
@@ -75,6 +79,8 @@ def client_and_mocks(monkeypatch):
             access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
+            access_pass_through_routes=data.get("access_pass_through_routes", []),
+            access_vector_store_ids=data.get("access_vector_store_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             created_by=data.get("created_by"),
@@ -92,6 +98,8 @@ def client_and_mocks(monkeypatch):
             access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
+            access_pass_through_routes=data.get("access_pass_through_routes", []),
+            access_vector_store_ids=data.get("access_vector_store_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             updated_by=data.get("updated_by"),
@@ -182,6 +190,8 @@ ACCESS_GROUP_PATHS = ["/v1/access_group", "/v1/unified_access_group"]
             "description": "Group B description",
             "access_model_names": ["model-1"],
             "access_mcp_server_ids": ["mcp-1"],
+            "access_pass_through_routes": ["/shared-passthrough"],
+            "access_vector_store_ids": ["vs-shared"],
             "assigned_team_ids": ["team-1"],
         },
     ],
@@ -980,12 +990,16 @@ def test_record_to_access_group_table():
         access_group_name="unit-test-group",
         access_model_names=["gpt-4", "claude-3"],
         access_agent_ids=["agent-1"],
+        access_pass_through_routes=["/shared-passthrough"],
+        access_vector_store_ids=["vs-shared"],
     )
     result = _record_to_access_group_table(record)
     assert result.access_group_id == "ag-unit-test"
     assert result.access_group_name == "unit-test-group"
     assert result.access_model_names == ["gpt-4", "claude-3"]
     assert result.access_agent_ids == ["agent-1"]
+    assert result.access_pass_through_routes == ["/shared-passthrough"]
+    assert result.access_vector_store_ids == ["vs-shared"]
 
 
 # ---------------------------------------------------------------------------
