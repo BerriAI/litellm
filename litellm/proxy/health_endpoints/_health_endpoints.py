@@ -35,6 +35,9 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.health_check_utils.connection_status import (
+    connection_status_tracker,
+)
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
@@ -1595,10 +1598,24 @@ async def health_backlog():
     "/health/liveness",  # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
     tags=["health"],
 )
-async def health_liveliness():
+async def health_liveliness(response: Response):
     """
-    Unprotected endpoint for checking if worker is alive
+    Unprotected liveness probe.
+
+    Background — Linear LIT-2607: a long-running pod stayed alive while
+    its DB silently degraded, so the UI was empty even though this
+    endpoint returned 200. We now fail liveness (HTTP 503) only when DB
+    or Redis is observed *down*. ``up`` and ``unknown`` (no observation
+    yet, or dependency not configured for this deployment) keep the pod
+    alive — we must not flap newly-started pods or pods whose
+    dependencies aren't used.
     """
+    if connection_status_tracker.is_any_down():
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {
+            "status": "unhealthy",
+            "dependencies": connection_status_tracker.snapshot(),
+        }
     return "I'm alive!"
 
 

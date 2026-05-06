@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +22,44 @@ else:
     Span = Any
     OTELClass = Any
     UserAPIKeyAuth = Any
+
+
+_DEPENDENCY_COMPONENT_BY_SERVICE: Dict[ServiceTypes, Literal["db", "redis"]] = {
+    ServiceTypes.DB: "db",
+    ServiceTypes.BATCH_WRITE_TO_DB: "db",
+    ServiceTypes.REDIS: "redis",
+}
+
+
+def _record_dependency_status(
+    service: ServiceTypes,
+    is_error: bool,
+    error_message: Optional[str] = None,
+) -> None:
+    """
+    Mirror DB/Redis service-call outcomes into the proxy connection-status
+    tracker so the liveness probe can report a real "down" state without
+    running a separate poller. Lazy-imported to avoid pulling the proxy
+    package into _service_logger's import graph at module load.
+    """
+    component = _DEPENDENCY_COMPONENT_BY_SERVICE.get(service)
+    if component is None:
+        return
+    try:
+        from litellm.proxy.health_check_utils.connection_status import (
+            connection_status_tracker,
+        )
+    except Exception:
+        return
+
+    try:
+        if is_error:
+            connection_status_tracker.mark_down(component, error_message)
+        else:
+            connection_status_tracker.mark_up(component)
+    except Exception:
+        # Tracker writes must never break a real service call path.
+        pass
 
 
 class ServiceLogging(CustomLogger):
@@ -119,6 +157,8 @@ class ServiceLogging(CustomLogger):
         """
         if self.mock_testing:
             self.mock_testing_async_success_hook += 1
+
+        _record_dependency_status(service, is_error=False)
 
         payload = ServiceLoggerPayload(
             is_error=False,
@@ -228,6 +268,8 @@ class ServiceLogging(CustomLogger):
             error_message = str(error)
         elif isinstance(error, str):
             error_message = error
+
+        _record_dependency_status(service, is_error=True, error_message=error_message)
 
         payload = ServiceLoggerPayload(
             is_error=True,

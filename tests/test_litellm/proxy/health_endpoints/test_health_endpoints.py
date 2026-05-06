@@ -589,6 +589,97 @@ def test_health_liveness_endpoint(proxy_client):
     print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
 
 
+def test_liveness_returns_200_when_dependencies_up(proxy_client):
+    """LIT-2607: liveness stays healthy when DB/Redis are observed up."""
+    from litellm.proxy.health_check_utils.connection_status import (
+        connection_status_tracker,
+    )
+
+    connection_status_tracker.reset()
+    connection_status_tracker.mark_up("db")
+    connection_status_tracker.mark_up("redis")
+
+    response = proxy_client.get("/health/liveliness")
+    assert response.status_code == 200
+    assert response.json() == "I'm alive!"
+
+    connection_status_tracker.reset()
+
+
+def test_liveness_returns_200_when_dependencies_unknown(proxy_client):
+    """LIT-2607: liveness stays healthy when DB/Redis status is ``unknown``
+    (no observation yet, or dependency not configured)."""
+    from litellm.proxy.health_check_utils.connection_status import (
+        connection_status_tracker,
+    )
+
+    connection_status_tracker.reset()
+    # Both default to ``unknown`` after reset — don't mark anything.
+    assert connection_status_tracker.get("db").state == "unknown"
+    assert connection_status_tracker.get("redis").state == "unknown"
+
+    response = proxy_client.get("/health/liveliness")
+    assert response.status_code == 200
+    assert response.json() == "I'm alive!"
+
+    connection_status_tracker.reset()
+
+
+def test_liveness_returns_503_when_db_down(proxy_client):
+    """LIT-2607: liveness fails (503) when DB is observed down."""
+    from litellm.proxy.health_check_utils.connection_status import (
+        connection_status_tracker,
+    )
+
+    connection_status_tracker.reset()
+    connection_status_tracker.mark_down("db", error="connection refused")
+    connection_status_tracker.mark_up("redis")
+
+    response = proxy_client.get("/health/liveliness")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "unhealthy"
+    assert body["dependencies"]["db"]["status"] == "down"
+
+    connection_status_tracker.reset()
+
+
+def test_liveness_returns_503_when_redis_down(proxy_client):
+    """LIT-2607: liveness also fails when only Redis is down."""
+    from litellm.proxy.health_check_utils.connection_status import (
+        connection_status_tracker,
+    )
+
+    connection_status_tracker.reset()
+    connection_status_tracker.mark_up("db")
+    connection_status_tracker.mark_down("redis", error="redis timeout")
+
+    response = proxy_client.get("/health/liveliness")
+    assert response.status_code == 503
+    assert response.json()["dependencies"]["redis"]["status"] == "down"
+
+    connection_status_tracker.reset()
+
+
+def test_liveness_recovers_after_dependency_comes_back_up(proxy_client):
+    """LIT-2607: a transient outage that recovers should not keep the pod
+    failing — the next successful op flips state back to up."""
+    from litellm.proxy.health_check_utils.connection_status import (
+        connection_status_tracker,
+    )
+
+    connection_status_tracker.reset()
+    connection_status_tracker.mark_down("db", error="boom")
+    response = proxy_client.get("/health/liveliness")
+    assert response.status_code == 503
+
+    connection_status_tracker.mark_up("db")
+    response = proxy_client.get("/health/liveliness")
+    assert response.status_code == 200
+
+    connection_status_tracker.reset()
+
+
 def test_health_readiness(proxy_client):
     """
     Test /health/readiness endpoint.
