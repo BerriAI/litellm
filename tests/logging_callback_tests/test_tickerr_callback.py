@@ -296,3 +296,250 @@ async def test_async_log_failure_event_calls_report():
     with patch.object(logger, "_report") as mock_report:
         await logger.async_log_failure_event(kwargs, None, start, end)
         mock_report.assert_called_once_with(kwargs, start, end)
+
+
+# ── Additional tests added to hit 67 % patch coverage ────────────────────────
+
+
+# ── Sync log_failure_event hook ───────────────────────────────────────────────
+
+
+def test_log_failure_event_sync_calls_report():
+    """log_failure_event (sync) must delegate to _report."""
+    logger = TickerrLogger()
+    start = datetime(2024, 1, 1)
+    end = start + timedelta(milliseconds=300)
+    kwargs = {"model": "gpt-4o-mini", "exception": None}
+
+    with patch.object(logger, "_report") as mock_report:
+        logger.log_failure_event(kwargs, None, start, end)
+        mock_report.assert_called_once_with(kwargs, start, end)
+
+
+# ── _normalize_provider: extra provider map entries ───────────────────────────
+
+
+def test_normalize_provider_vertex_ai_maps_to_google():
+    kwargs = {"custom_llm_provider": "vertex_ai"}
+    assert _normalize_provider("gemini-2.5-pro", kwargs) == "google"
+
+
+def test_normalize_provider_vertex_ai_anthropic_maps_to_anthropic():
+    kwargs = {"custom_llm_provider": "vertex_ai_anthropic"}
+    assert _normalize_provider("claude-3-5-sonnet", kwargs) == "anthropic"
+
+
+def test_normalize_provider_azure_maps_to_azure():
+    kwargs = {"litellm_params": {"custom_llm_provider": "azure"}}
+    assert _normalize_provider("gpt-4o", kwargs) == "azure"
+
+
+def test_normalize_provider_bedrock_maps_to_aws():
+    kwargs = {"custom_llm_provider": "bedrock"}
+    assert _normalize_provider("claude-3-haiku", kwargs) == "aws"
+
+
+def test_normalize_provider_bedrock_converse_maps_to_aws():
+    kwargs = {"custom_llm_provider": "bedrock_converse"}
+    assert _normalize_provider("claude-3-haiku", kwargs) == "aws"
+
+
+def test_normalize_provider_command_model_pattern():
+    """command-* model names should map to cohere via regex."""
+    assert _normalize_provider("command-r-plus", {}) == "cohere"
+    assert _normalize_provider("command-r", {}) == "cohere"
+
+
+def test_normalize_provider_mixtral_model_pattern():
+    """mixtral-* model names should map to mistral via regex."""
+    assert _normalize_provider("mixtral-8x7b-instruct", {}) == "mistral"
+
+
+def test_normalize_provider_deepseek_from_param():
+    kwargs = {"custom_llm_provider": "deepseek"}
+    assert _normalize_provider("deepseek-v3", kwargs) == "deepseek"
+
+
+def test_normalize_provider_openrouter_from_param():
+    kwargs = {"litellm_params": {"custom_llm_provider": "openrouter"}}
+    assert _normalize_provider("meta-llama/llama-3.3-70b-instruct", kwargs) == "openrouter"
+
+
+def test_normalize_provider_fireworks_ai_from_param():
+    kwargs = {"custom_llm_provider": "fireworks_ai"}
+    assert _normalize_provider("llama-v3-70b-instruct", kwargs) == "fireworks"
+
+
+def test_normalize_provider_cerebras_from_param():
+    kwargs = {"custom_llm_provider": "cerebras"}
+    assert _normalize_provider("llama3.1-8b", kwargs) == "cerebras"
+
+
+def test_normalize_provider_xai_from_param():
+    kwargs = {"custom_llm_provider": "xai"}
+    assert _normalize_provider("grok-3-mini", kwargs) == "xai"
+
+
+# ── _report: edge cases ───────────────────────────────────────────────────────
+
+
+def test_report_no_exception_omits_error_fields():
+    """When exception is None, payload must not include error_code or error_type."""
+    logger = TickerrLogger()
+    captured = {}
+
+    def fake_fire(payload):
+        captured.update(payload)
+
+    start = datetime(2024, 1, 1)
+    end = start + timedelta(milliseconds=200)
+    kwargs = {"model": "gemini-2.5-flash", "exception": None}
+
+    with patch("litellm.integrations.tickerr._fire_and_forget", side_effect=fake_fire):
+        logger._report(kwargs, start, end)
+
+    assert "error_code" not in captured
+    assert "error_type" not in captured
+    assert captured["provider"] == "google"
+
+
+def test_report_includes_client_tier_and_region_in_payload():
+    """client_tier and region must appear in the payload when set via env."""
+    with patch.dict(os.environ, {"TICKERR_CLIENT_TIER": "enterprise", "TICKERR_REGION": "eu-west-1"}):
+        logger = TickerrLogger()
+
+    captured = {}
+
+    def fake_fire(payload):
+        captured.update(payload)
+
+    start = datetime(2024, 1, 1)
+    end = start + timedelta(milliseconds=100)
+    kwargs = {"model": "gpt-4o", "exception": None}
+
+    with patch("litellm.integrations.tickerr._fire_and_forget", side_effect=fake_fire):
+        logger._report(kwargs, start, end)
+
+    assert captured["client_tier"] == "enterprise"
+    assert captured["region"] == "eu-west-1"
+
+
+def test_report_empty_model_sets_model_none():
+    """An empty model string must result in model=None in the payload."""
+    logger = TickerrLogger()
+    captured = {}
+
+    def fake_fire(payload):
+        captured.update(payload)
+
+    start = datetime(2024, 1, 1)
+    end = start + timedelta(milliseconds=50)
+    kwargs = {"model": "", "exception": None}
+
+    with patch("litellm.integrations.tickerr._fire_and_forget", side_effect=fake_fire):
+        logger._report(kwargs, start, end)
+
+    assert captured["model"] is None
+
+
+def test_report_timeout_error_type():
+    """408 and 524 both map to error_type='timeout'."""
+    logger = TickerrLogger()
+
+    for code in (408, 524):
+        captured = {}
+
+        def fake_fire(payload, _c=code):
+            captured.update(payload)
+
+        exc = MagicMock()
+        exc.status_code = code
+        start = datetime(2024, 1, 1)
+        end = start + timedelta(milliseconds=5000)
+        kwargs = {"model": "claude-haiku-4-5", "exception": exc}
+
+        with patch("litellm.integrations.tickerr._fire_and_forget", side_effect=fake_fire):
+            logger._report(kwargs, start, end)
+
+        assert captured["error_type"] == "timeout", f"Expected timeout for {code}"
+        assert captured["error_code"] == code
+
+
+def test_report_auth_error_type():
+    """401 and 403 both map to error_type='auth'."""
+    logger = TickerrLogger()
+
+    for code in (401, 403):
+        captured = {}
+
+        def fake_fire(payload):
+            captured.update(payload)
+
+        exc = MagicMock()
+        exc.status_code = code
+        start = datetime(2024, 1, 1)
+        end = start + timedelta(milliseconds=200)
+        kwargs = {"model": "gpt-4o", "exception": exc}
+
+        with patch("litellm.integrations.tickerr._fire_and_forget", side_effect=fake_fire):
+            logger._report(kwargs, start, end)
+
+        assert captured["error_type"] == "auth", f"Expected auth for {code}"
+
+
+# ── _fire_and_forget: normal success path ─────────────────────────────────────
+
+
+def test_fire_and_forget_success_path_releases_semaphore():
+    """On a successful HTTP call, the semaphore slot must be released."""
+    mock_response = MagicMock()
+    mock_response.__enter__ = MagicMock(return_value=mock_response)
+    mock_response.__exit__ = MagicMock(return_value=False)
+
+    with patch("threading.Thread") as mock_thread_cls:
+        mock_thread = MagicMock()
+        mock_thread_cls.return_value = mock_thread
+
+        def run_target_inline(*args, **kwargs):
+            # Extract and call the real target so _send runs synchronously
+            target = mock_thread_cls.call_args[1].get("target") or mock_thread_cls.call_args[0][0]
+            target()
+
+        mock_thread.start.side_effect = run_target_inline
+
+        with patch("urllib.request.urlopen", return_value=mock_response):
+            _fire_and_forget({"provider": "openai", "model": "gpt-4o-mini"})
+
+    # Semaphore must be acquirable — proves the finally block released the slot
+    acquired = _inflight.acquire(blocking=False)
+    assert acquired, "semaphore slot was not released after successful send"
+    _inflight.release()
+
+
+# ── _latency_ms edge cases ────────────────────────────────────────────────────
+
+
+def test_latency_ms_zero():
+    assert _latency_ms(1000.0, 1000.0) == 0
+
+
+def test_latency_ms_large_value():
+    start = datetime(2024, 1, 1, 0, 0, 0)
+    end = start + timedelta(seconds=30)
+    assert _latency_ms(start, end) == 30_000
+
+
+# ── _extract_status_code edge cases ──────────────────────────────────────────
+
+
+def test_extract_status_code_non_digit_string():
+    """A non-numeric string status_code must return None."""
+    exc = MagicMock()
+    exc.status_code = "N/A"
+    assert _extract_status_code(exc) is None
+
+
+def test_extract_status_code_529():
+    exc = MagicMock()
+    exc.status_code = 529
+    assert _extract_status_code(exc) == 529
