@@ -95,28 +95,51 @@ done
 
 # Newest v*-stable release on BerriAI/litellm. The `select(...)` filter
 # drops drafts/non-stable, the version_key sort handles 1.10 > 1.9.
+#
+# Paginate through the releases endpoint instead of grabbing only page 1
+# (default page_size=30). LiteLLM ships multiple non-stable releases per
+# day, so it's common to need to walk past 30+ entries before hitting
+# the most recent v*-stable. We cap at 5 pages (500 releases) which is
+# conservatively beyond the worst observed gap.
 GH_AUTH_HEADER=()
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
   GH_AUTH_HEADER=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
 fi
-LITELLM_VERSION="$(
+RELEASES_JSON="${WORKDIR}/releases.json"
+echo "[]" >"${RELEASES_JSON}"
+for page in 1 2 3 4 5; do
+  PAGE_JSON="${WORKDIR}/releases.page${page}.json"
   curl -fsS \
     -H 'Accept: application/vnd.github+json' \
     -H 'User-Agent: litellm-compat-matrix' \
     "${GH_AUTH_HEADER[@]}" \
-    https://api.github.com/repos/BerriAI/litellm/releases \
-    | jq -r '
-        [ .[] | .tag_name // empty
-          | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-stable$"))
-        ]
-        | sort_by(
-            capture("^v(?<a>[0-9]+)\\.(?<b>[0-9]+)\\.(?<c>[0-9]+)-stable$")
-            | [(.a|tonumber), (.b|tonumber), (.c|tonumber)]
-          )
-        | last // empty
-      '
+    "https://api.github.com/repos/BerriAI/litellm/releases?per_page=100&page=${page}" \
+    >"${PAGE_JSON}"
+  jq -s '.[0] + .[1]' "${RELEASES_JSON}" "${PAGE_JSON}" >"${RELEASES_JSON}.merged"
+  mv "${RELEASES_JSON}.merged" "${RELEASES_JSON}"
+  # Stop early once we've seen at least one v*-stable tag — no point
+  # paging further for a daily script that only needs the newest.
+  if jq -e '[.[] | .tag_name // "" | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-stable$"))] | length > 0' "${PAGE_JSON}" >/dev/null; then
+    break
+  fi
+  # No more pages? GitHub returns an empty array past the last page.
+  if [[ "$(jq 'length' "${PAGE_JSON}")" == "0" ]]; then
+    break
+  fi
+done
+LITELLM_VERSION="$(
+  jq -r '
+    [ .[] | .tag_name // empty
+      | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+-stable$"))
+    ]
+    | sort_by(
+        capture("^v(?<a>[0-9]+)\\.(?<b>[0-9]+)\\.(?<c>[0-9]+)-stable$")
+        | [(.a|tonumber), (.b|tonumber), (.c|tonumber)]
+      )
+    | last // empty
+  ' "${RELEASES_JSON}"
 )"
-[[ -n "${LITELLM_VERSION}" ]] || die "could not resolve latest v*-stable tag"
+[[ -n "${LITELLM_VERSION}" ]] || die "could not resolve latest v*-stable tag in 5 pages of releases"
 log "resolved litellm: ${LITELLM_VERSION}"
 
 CLAUDE_CODE_VERSION="$(claude --version 2>/dev/null | awk '{print $1}')"
