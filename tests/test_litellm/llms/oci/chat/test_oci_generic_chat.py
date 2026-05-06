@@ -19,7 +19,6 @@ from litellm.llms.oci.chat.generic import (
 from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIStreamWrapper
 from litellm.llms.oci.common_utils import OCIError
 
-
 # ---------------------------------------------------------------------------
 # adapt_messages_to_generic_oci_standard_content_message — error paths
 # ---------------------------------------------------------------------------
@@ -65,7 +64,12 @@ class TestGenericContentMessageErrors:
     def test_image_url_as_dict(self):
         msg = adapt_messages_to_generic_oci_standard_content_message(
             "user",
-            [{"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}],
+            [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/img.png"},
+                }
+            ],
         )
         assert msg.content[0].imageUrl.url == "https://example.com/img.png"
 
@@ -88,14 +92,26 @@ class TestGenericToolCallErrors:
         with pytest.raises(OCIError, match="only supports function tool calls"):
             adapt_messages_to_generic_oci_standard_tool_call(
                 "assistant",
-                [{"type": "database", "id": "x", "function": {"name": "f", "arguments": "{}"}}],
+                [
+                    {
+                        "type": "database",
+                        "id": "x",
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
             )
 
     def test_non_string_id_raises(self):
         with pytest.raises(OCIError, match="id.*must be a string"):
             adapt_messages_to_generic_oci_standard_tool_call(
                 "assistant",
-                [{"type": "function", "id": 123, "function": {"name": "f", "arguments": "{}"}}],
+                [
+                    {
+                        "type": "function",
+                        "id": 123,
+                        "function": {"name": "f", "arguments": "{}"},
+                    }
+                ],
             )
 
     def test_non_dict_function_raises(self):
@@ -109,7 +125,13 @@ class TestGenericToolCallErrors:
         with pytest.raises(OCIError, match="function.name.*must be a string"):
             adapt_messages_to_generic_oci_standard_tool_call(
                 "assistant",
-                [{"type": "function", "id": "c1", "function": {"name": 5, "arguments": "{}"}}],
+                [
+                    {
+                        "type": "function",
+                        "id": "c1",
+                        "function": {"name": 5, "arguments": "{}"},
+                    }
+                ],
             )
 
     def test_non_string_arguments_raises(self):
@@ -144,9 +166,7 @@ class TestGenericMessageAdaptation:
             adapt_messages_to_generic_oci_standard(messages)
 
     def test_tool_result_non_string_tool_call_id_raises(self):
-        messages = [
-            {"role": "tool", "content": "result", "tool_call_id": 999}
-        ]
+        messages = [{"role": "tool", "content": "result", "tool_call_id": 999}]
         with pytest.raises(OCIError, match="string `tool_call_id`"):
             adapt_messages_to_generic_oci_standard(messages)
 
@@ -179,7 +199,9 @@ class TestHandleGenericResponse:
             "chatResponse": {
                 "apiFormat": "GENERIC",
                 "timeCreated": "2024-01-01T00:00:00Z",
-                "choices": [{"message": message, "finishReason": "COMPLETE", "index": 0}],
+                "choices": [
+                    {"message": message, "finishReason": "COMPLETE", "index": 0}
+                ],
                 "usage": {"promptTokens": 5, "completionTokens": 5, "totalTokens": 10},
             },
         }
@@ -256,7 +278,12 @@ class TestHandleGenericStreamChunk:
             "index": 0,
             "message": {
                 "role": "ASSISTANT",
-                "content": [{"type": "IMAGE", "imageUrl": {"url": "https://example.com/img.png"}}],
+                "content": [
+                    {
+                        "type": "IMAGE",
+                        "imageUrl": {"url": "https://example.com/img.png"},
+                    }
+                ],
             },
         }
         with pytest.raises(OCIError, match="image content"):
@@ -300,3 +327,73 @@ class TestOCIStreamWrapperChunkCreator:
         w = self._wrapper()
         with pytest.raises(ValueError, match="not a string"):
             w.chunk_creator({"already": "parsed"})
+
+
+# ---------------------------------------------------------------------------
+# GPT-5 family: maxCompletionTokens routing
+#
+# Regression guard: OCI rejects "maxTokens" for openai.gpt-5* models with HTTP
+# 400 ("Use 'maxCompletionTokens' instead.") — verified against live OCI.
+# ---------------------------------------------------------------------------
+
+
+class TestGpt5MaxCompletionTokens:
+    def test_helper_detects_gpt5_family(self):
+        from litellm.llms.oci.chat.transformation import (
+            _model_uses_max_completion_tokens,
+        )
+
+        assert _model_uses_max_completion_tokens("openai.gpt-5") is True
+        assert _model_uses_max_completion_tokens("openai.gpt-5-mini") is True
+        assert _model_uses_max_completion_tokens("openai.gpt-5-nano") is True
+        assert _model_uses_max_completion_tokens("openai.gpt-5.5") is True
+        assert _model_uses_max_completion_tokens("oci/openai.gpt-5") is True
+
+        assert _model_uses_max_completion_tokens("openai.gpt-4o") is False
+        assert _model_uses_max_completion_tokens("openai.gpt-4.1") is False
+        assert _model_uses_max_completion_tokens("meta.llama-3.3-70b-instruct") is False
+        assert _model_uses_max_completion_tokens("cohere.command-latest") is False
+        assert _model_uses_max_completion_tokens("") is False
+
+    def test_gpt5_routes_max_tokens_to_max_completion_tokens(self):
+        from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIVendors
+
+        cfg = OCIChatConfig()
+        # Both shapes optional_params can take after upstream map_openai_params:
+        # 1. openai-side key still present
+        out_a = cfg._get_optional_params(
+            OCIVendors.GENERIC, {"max_tokens": 64}, model="openai.gpt-5"
+        )
+        assert out_a.get("maxCompletionTokens") == 64
+        assert "maxTokens" not in out_a
+
+        # 2. already pre-translated to OCI alias
+        out_b = cfg._get_optional_params(
+            OCIVendors.GENERIC, {"maxTokens": 64}, model="openai.gpt-5.5"
+        )
+        assert out_b.get("maxCompletionTokens") == 64
+        assert "maxTokens" not in out_b
+
+    def test_non_gpt5_keeps_max_tokens(self):
+        from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIVendors
+
+        cfg = OCIChatConfig()
+        out = cfg._get_optional_params(
+            OCIVendors.GENERIC,
+            {"max_tokens": 64},
+            model="meta.llama-3.3-70b-instruct",
+        )
+        assert out.get("maxTokens") == 64
+        assert "maxCompletionTokens" not in out
+
+    def test_payload_serializes_max_completion_tokens(self):
+        from litellm.types.llms.oci import OCIChatRequestPayload
+
+        payload = OCIChatRequestPayload(
+            apiFormat="GENERIC",
+            messages=[],
+            maxCompletionTokens=64,
+        )
+        dumped = payload.model_dump(exclude_none=True)
+        assert dumped["maxCompletionTokens"] == 64
+        assert "maxTokens" not in dumped
