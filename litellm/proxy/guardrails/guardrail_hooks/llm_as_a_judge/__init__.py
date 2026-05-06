@@ -13,6 +13,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs, GuardrailStatus
 
 if TYPE_CHECKING:
+    from litellm import Router
     from litellm.types.guardrails import Guardrail, LitellmParams
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.utils import StandardLoggingEvalInformation
@@ -93,6 +94,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         criteria: List[Dict[str, Any]],
         overall_threshold: float = 80.0,
         on_failure: Literal["block", "log"] = "block",
+        llm_router: Optional["Router"] = None,
         event_hook: Optional[
             Union[GuardrailEventHooks, List[GuardrailEventHooks]]
         ] = None,
@@ -126,6 +128,9 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         self.criteria = criteria
         self.overall_threshold = overall_threshold
         self.on_failure = on_failure
+        self.llm_router = llm_router
+        # The judge needs the complete response before deciding whether to block.
+        self.buffer_streaming_response = True
 
     async def _run_judge(
         self,
@@ -139,7 +144,12 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
                 "content": _build_judge_prompt(self.criteria, messages, response_text),
             },
         ]
-        response = await litellm.acompletion(
+        completion_fn = (
+            self.llm_router.acompletion
+            if self.llm_router is not None
+            else litellm.acompletion
+        )
+        response = await completion_fn(
             model=self.judge_model,
             messages=judge_messages,
             response_format={"type": "json_object"},
@@ -244,6 +254,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
 def initialize_guardrail(
     litellm_params: "LitellmParams",
     guardrail: "Guardrail",
+    llm_router: Optional["Router"] = None,
 ) -> LLMAsAJudgeGuardrail:
     guardrail_name = guardrail.get("guardrail_name")
     if not guardrail_name:
@@ -286,6 +297,7 @@ def initialize_guardrail(
         criteria=criteria,
         overall_threshold=overall_threshold,
         on_failure=on_failure,
+        llm_router=llm_router,
         event_hook=event_hook,
         default_on=bool(
             _get_litellm_param(litellm_params, guardrail, "default_on", False)

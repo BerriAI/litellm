@@ -312,6 +312,7 @@ class UnifiedLLMGuardrails(CustomLogger):
         # Get streaming configuration from guardrail or optional_params
         sampling_rate = 5
         end_of_stream_only = False  # If True, only apply guardrail at end of stream
+        buffer_streaming_response = False
 
         if guardrail_to_apply is not None:
             # Check direct attributes on guardrail first
@@ -320,6 +321,11 @@ class UnifiedLLMGuardrails(CustomLogger):
             )
             end_of_stream_only = getattr(
                 guardrail_to_apply, "streaming_end_of_stream_only", end_of_stream_only
+            )
+            buffer_streaming_response = getattr(
+                guardrail_to_apply,
+                "buffer_streaming_response",
+                buffer_streaming_response,
             )
 
             # Also check guardrail_config dict if present
@@ -331,6 +337,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                 end_of_stream_only = guardrail_config.get(
                     "streaming_end_of_stream_only", end_of_stream_only
                 )
+                buffer_streaming_response = guardrail_config.get(
+                    "buffer_streaming_response", buffer_streaming_response
+                )
 
         # Also check optional_params as fallback
         sampling_rate = self.optional_params.get(
@@ -338,6 +347,9 @@ class UnifiedLLMGuardrails(CustomLogger):
         )
         end_of_stream_only = self.optional_params.get(
             "streaming_end_of_stream_only", end_of_stream_only
+        )
+        buffer_streaming_response = self.optional_params.get(
+            "buffer_streaming_response", buffer_streaming_response
         )
 
         if guardrail_to_apply is None:
@@ -393,6 +405,11 @@ class UnifiedLLMGuardrails(CustomLogger):
                 async for remaining_item in response:
                     yield remaining_item
                 return
+
+            # If this guardrail must make a final decision before any response is
+            # emitted, buffer chunks until the final post-call check completes.
+            if buffer_streaming_response:
+                continue
 
             # If end_of_stream_only mode, yield chunks without processing
             if end_of_stream_only:
@@ -520,3 +537,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     yield error_chunk
                 else:
                     raise
+
+            if buffer_streaming_response:
+                for processed_item in responses_so_far:
+                    yield processed_item
