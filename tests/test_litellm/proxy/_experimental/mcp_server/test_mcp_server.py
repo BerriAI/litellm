@@ -2354,6 +2354,13 @@ class TestMCPServerManagerReload:
         timestamp = datetime.utcnow()
         healthy_row = _make_db_mcp_server("healthy-server", timestamp)
         bad_openapi_row = _make_db_mcp_server("bad-openapi-server", timestamp)
+        existing_server = MCPServer(
+            server_id="existing-server",
+            name="existing",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        manager.registry = {existing_server.server_id: existing_server}
 
         healthy_server = MCPServer(
             server_id="healthy-server",
@@ -2374,7 +2381,11 @@ class TestMCPServerManagerReload:
                 return healthy_server
             return bad_openapi_server
 
-        async def register_openapi_tools(server):
+        observed_registries = []
+
+        async def register_openapi_tools(server, **kwargs):
+            observed_registries.append(set(manager.registry))
+            assert kwargs == {"initialize_mapping": False}
             if server.server_id == "bad-openapi-server":
                 raise RuntimeError("blocked address")
 
@@ -2403,6 +2414,10 @@ class TestMCPServerManagerReload:
 
         assert set(manager.registry) == {"healthy-server"}
         assert manager.registry["healthy-server"] is healthy_server
+        assert observed_registries == [
+            {"existing-server"},
+            {"existing-server"},
+        ]
         assert "Skipping MCP server bad-openapi-server" in caplog.text
 
 
