@@ -4,7 +4,7 @@
 from ipaddress import ip_address
 from urllib.parse import urlparse
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 # RFC 6749 §5.1 / OAuth 2.1 draft-15 §4.1.3: token-endpoint responses
 # must not be cached — both success and error bodies may reveal secrets.
@@ -44,5 +44,62 @@ def validate_loopback_redirect_uri(redirect_uri: str) -> None:
     except ValueError:
         # Unparseable host (malformed IPv6, etc.) — treat as invalid,
         # don't let it bubble up as a 500.
+        pass
+    raise HTTPException(status_code=400, detail="invalid_request")
+
+
+def validate_trusted_redirect_uri(request: Request, redirect_uri: str) -> None:
+    """Accept same-origin (proxy's own origin) OR loopback ``redirect_uri``.
+
+    Same-origin is required for the LiteLLM UI's OAuth flow: the UI
+    redirects to ``<proxy>/ui/mcp/oauth/callback`` which is not loopback
+    but is on the proxy's own trusted HTTPS origin. An attacker cannot
+    host content on the proxy's own origin without already owning the
+    proxy, so the open-redirect / code-theft primitive that motivated
+    :func:`validate_loopback_redirect_uri` does not apply here.
+
+    Loopback continues to be accepted for native MCP clients (per
+    OAuth 2.1 §4.1.2.1 + RFC 8252 §7.3).
+
+    Use this in the discoverable OAuth proxy endpoints that serve both
+    native clients and the proxy's own UI. BYOK endpoints that only
+    support native clients should keep
+    :func:`validate_loopback_redirect_uri`.
+    """
+    # Lazy import to avoid circular dependency with discoverable_endpoints.
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        get_request_base_url,
+    )
+
+    try:
+        parsed = urlparse(redirect_uri)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid_request")
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="invalid_request")
+    if parsed.fragment:
+        raise HTTPException(status_code=400, detail="invalid_request")
+
+    # Same-origin: scheme + netloc (host[:port]) must match the proxy's
+    # own base URL at this request (honouring trusted X-Forwarded-*).
+    try:
+        proxy_base = urlparse(get_request_base_url(request))
+        if (
+            parsed.netloc
+            and parsed.scheme == proxy_base.scheme
+            and parsed.netloc.lower() == proxy_base.netloc.lower()
+        ):
+            return
+    except Exception:
+        # If we can't determine the proxy's origin, fall through to loopback.
+        pass
+
+    host = (parsed.hostname or "").lower()
+    if host == "localhost":
+        return
+    try:
+        if ip_address(host).is_loopback:
+            return
+    except ValueError:
         pass
     raise HTTPException(status_code=400, detail="invalid_request")
