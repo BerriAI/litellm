@@ -46,6 +46,9 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
 # Copy full source tree
 COPY . .
 
+# Generate the model-cost backup artefact inside the package before the wheel build (mirrors publish_to_pypi.yml).
+RUN cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+
 # Build Admin UI before final sync
 RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 

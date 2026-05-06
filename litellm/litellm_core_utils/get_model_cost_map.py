@@ -11,6 +11,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 import json
 import os
 from importlib.resources import files
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import httpx
@@ -35,13 +36,35 @@ class GetModelCostMap:
 
     @staticmethod
     def load_local_model_cost_map() -> dict:
-        """Load the local backup model cost map bundled with the package."""
-        content = json.loads(
-            files("litellm")
-            .joinpath("model_prices_and_context_window_backup.json")
-            .read_text(encoding="utf-8")
+        """Load the local model cost map: repo-root JSON in a source checkout, bundled package copy in an installed wheel."""
+        candidate_root = Path(__file__).resolve().parents[2]
+        repo_root_json = candidate_root / "model_prices_and_context_window.json"
+        # Require pyproject.toml as a witness so we don't misidentify an arbitrary
+        # parent directory as the repo root if this file is ever moved.
+        if repo_root_json.is_file() and (candidate_root / "pyproject.toml").is_file():
+            verbose_logger.debug(
+                "LiteLLM: loading local model cost map from repo root %s",
+                repo_root_json,
+            )
+            return json.loads(repo_root_json.read_text(encoding="utf-8"))
+
+        verbose_logger.debug(
+            "LiteLLM: loading local model cost map from bundled package resource"
         )
-        return content
+        try:
+            return json.loads(
+                files("litellm")
+                .joinpath("model_prices_and_context_window_backup.json")
+                .read_text(encoding="utf-8")
+            )
+        except FileNotFoundError as e:
+            raise FileNotFoundError(
+                "litellm/model_prices_and_context_window_backup.json is missing from the installed package. "
+                "This file is a build-time artefact — the `cp` step in .github/workflows/publish_to_pypi.yml "
+                "and the source-build Dockerfiles materialize it before the wheel is built. If you ran "
+                "`uv build` manually, first run: "
+                "cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json"
+            ) from e
 
     @classmethod
     def _get_backup_model_count(cls) -> int:

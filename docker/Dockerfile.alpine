@@ -38,6 +38,9 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
 # Copy full source tree
 COPY . .
 
+# Generate the model-cost backup artefact inside the package before the wheel build (mirrors publish_to_pypi.yml).
+RUN cp model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+
 # Install project and workspace packages (fast - deps already cached)
 RUN uv sync --frozen --no-default-groups --no-editable \
     --extra proxy \
