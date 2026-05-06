@@ -127,7 +127,16 @@ async def _sweep_stuck_runs(prisma_client) -> int:
     Sweeper-driven only — clients may legitimately have long-running runs
     so the threshold is generous (``RUN_IDLE_TIMEOUT_SECONDS``, 30 min by
     default).
+
+    After flipping each run to ``error``, drive the parent session
+    ``busy`` -> ``ready`` via :func:`refresh_session_status_from_runs`.
+    Without this hook, sessions whose only active run was reaped here
+    would report ``busy`` indefinitely — Greptile P1.
     """
+    from litellm.proxy.agent_session_endpoints.session_status import (
+        refresh_session_status_from_runs,
+    )
+
     threshold = _now() - timedelta(seconds=RUN_IDLE_TIMEOUT_SECONDS)
     rows = await prisma_client.db.litellm_agentrun.find_many(
         where={
@@ -169,6 +178,10 @@ async def _sweep_stuck_runs(prisma_client) -> int:
                 next_seq,
                 exc,
             )
+        # Run just transitioned ``running`` -> ``error`` (terminal). If
+        # the parent session has no other active runs, flip
+        # ``busy`` -> ``ready`` so SDK consumers see the right status.
+        await refresh_session_status_from_runs(prisma_client, run.session_id)
     return len(rows)
 
 
