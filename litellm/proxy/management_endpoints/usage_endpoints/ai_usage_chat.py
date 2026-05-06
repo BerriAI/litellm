@@ -426,6 +426,22 @@ def _sse(event: SSEEvent) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+async def _acompletion(**kwargs: Any) -> Any:
+    """Run completion through the proxy router so model aliases and credentials
+    configured in the proxy's ``model_list`` are honored. Falls back to
+    ``litellm.acompletion`` directly when no router is initialized — primarily
+    for unit tests that don't bootstrap a full proxy. Without this, the AI
+    chat endpoint dispatches straight to OpenAI using ``OPENAI_API_KEY`` from
+    the env, breaking every deployment whose credentials live in the proxy
+    config (Bedrock, Azure, Anthropic-only setups, etc.).
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is not None:
+        return await llm_router.acompletion(**kwargs)
+    return await litellm.acompletion(**kwargs)
+
+
 def _resolve_fetch_kwargs(
     fn_name: str,
     fn_args: Dict[str, str],
@@ -524,7 +540,7 @@ async def _stream_final_response(
     """Stream the final LLM response after tool results are appended."""
     yield _sse({"type": "status", "message": "Analyzing results..."})
 
-    response = await litellm.acompletion(
+    response = await _acompletion(
         model=model,
         messages=chat_messages,
         stream=True,
@@ -555,7 +571,7 @@ async def stream_usage_ai_chat(
     try:
         yield _sse({"type": "status", "message": "Thinking..."})
         tools = get_tools_for_role(is_admin)
-        response = await litellm.acompletion(
+        response = await _acompletion(
             model=resolved_model,
             messages=chat_messages,
             tools=tools,
