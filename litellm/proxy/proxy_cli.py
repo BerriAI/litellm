@@ -188,7 +188,14 @@ class ProxyInitializationHelpers:
         if config_dir and config_dir != cwd:
             reload_dirs.append(config_dir)
         options["reload_dirs"] = reload_dirs
-        options["reload_includes"] = ["*.py", os.path.basename(config_abs)]
+        # Qualify the config-file pattern with its directory so only the
+        # specific config file (not any same-named file in cwd) triggers a
+        # reload when config_dir != cwd.
+        if config_dir and config_dir != cwd:
+            config_include = config_abs
+        else:
+            config_include = os.path.basename(config_abs)
+        options["reload_includes"] = ["*.py", config_include]
         return options
 
     @staticmethod

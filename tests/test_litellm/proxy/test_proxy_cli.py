@@ -161,7 +161,10 @@ class TestProxyInitializationHelpers:
 
         assert opts["reload"] is True
         assert opts["reload_dirs"] == [str(cwd_dir), str(elsewhere)]
-        assert opts["reload_includes"] == ["*.py", "proxy.yaml"]
+        # When config lives outside cwd, the reload_includes entry must be the
+        # absolute path so that a same-named file in cwd does not trigger an
+        # unintended reload.
+        assert opts["reload_includes"] == ["*.py", str(config_file)]
 
     @patch("asyncio.run")
     @patch("builtins.print")
