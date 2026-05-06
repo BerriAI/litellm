@@ -38,6 +38,32 @@ DEFAULT_TIMEOUT_SECONDS = float(
     os.environ.get("LITELLM_COMPAT_CLI_TIMEOUT_SECONDS") or 120
 )
 
+# Env vars the `claude` Node CLI legitimately needs to function:
+# locating its own binary + node, finding HOME for ~/.claude config,
+# basic locale/terminal plumbing. Deliberately excludes every
+# credential-bearing var that the surrounding CI job sets for the
+# proxy (ANTHROPIC_API_KEY, AWS_*, AZURE_*, VERTEXAI_CREDENTIALS,
+# GITHUB_TOKEN, OPENAI_API_KEY, DATABASE_URL, ...). The CLI talks to
+# the proxy via the explicit ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN
+# we set below — it has no business reading the proxy's upstream
+# credentials, and a compromised CLI release shouldn't be able to
+# exfiltrate them out of the CI environment.
+_CLI_ENV_ALLOWLIST: tuple = (
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "NODE_PATH",
+    "NVM_DIR",
+    "NVM_BIN",
+)
+
 
 class ClaudeCLIError(RuntimeError):
     """Raised when the `claude` CLI cannot be invoked or returns a fatal error."""
@@ -119,9 +145,17 @@ def run_claude(
         cmd.extend(extra_args)
     cmd.append(prompt)
 
-    env = {**os.environ, **(extra_env or {})}
+    # Build a minimal env for the CLI subprocess: only the allowlisted
+    # process-runtime vars from os.environ, plus the explicit proxy
+    # creds, plus any caller-supplied overrides. See _CLI_ENV_ALLOWLIST
+    # above for the security rationale.
+    env: Dict[str, str] = {
+        key: os.environ[key] for key in _CLI_ENV_ALLOWLIST if key in os.environ
+    }
     env["ANTHROPIC_BASE_URL"] = base_url
     env["ANTHROPIC_AUTH_TOKEN"] = api_key
+    if extra_env:
+        env.update(extra_env)
 
     # Throttle by provider *before* launching the CLI. Doing this here
     # (rather than per-test) means every code path that lands on
