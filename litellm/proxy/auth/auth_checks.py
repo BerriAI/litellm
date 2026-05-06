@@ -3618,6 +3618,7 @@ async def _check_team_member_model_access(
             llm_router=llm_router,
             models=member_allowed_models,
             object_type="team",
+            team_id=team_object.team_id,
         )
     except ProxyException:
         raise ProxyException(
