@@ -4,9 +4,10 @@
  * Lifecycle: queued → running → completed | failed | cancelled.
  */
 
-import { resolveClient, requestJson, type ResolvedClient } from "./client/http.js";
+import { requestJson, type ResolvedClient } from "./client/http.js";
 import { streamRunEvents } from "./client/sse.js";
 import {
+  LiteLLMAgentError,
   type ConversationTurn,
   type RunEvent,
   type RunInfo,
@@ -15,6 +16,7 @@ import {
 } from "./types.js";
 
 const TERMINAL_STATES: RunStatus[] = ["completed", "failed", "cancelled"];
+const DEFAULT_WAIT_POLL_MS = 500;
 
 export class Run {
   readonly id: string;
@@ -47,22 +49,50 @@ export class Run {
   }
 
   /** Open an SSE stream of events for this run. */
-  stream(opts: { startingSeq?: number; signal?: AbortSignal } = {}): AsyncIterable<RunEvent> {
+  stream(
+    opts: { startingSeq?: number; signal?: AbortSignal } = {},
+  ): AsyncIterable<RunEvent> {
     return streamRunEvents(this._client, this.sessionId, this.id, opts);
   }
 
-  /** Block until the run reaches a terminal status. */
-  async wait(): Promise<RunResult> {
+  /**
+   * Block until the run reaches a terminal status.
+   *
+   * @param opts.signal    Optional `AbortSignal` to bail out early. Throws
+   *                       `LiteLLMAgentError({ code: "wait_aborted" })`.
+   * @param opts.timeoutMs Optional ceiling on total wait time. Throws
+   *                       `LiteLLMAgentError({ code: "wait_timeout" })`.
+   * @param opts.pollMs    Override the poll interval (default 500ms).
+   */
+  async wait(
+    opts: { signal?: AbortSignal; timeoutMs?: number; pollMs?: number } = {},
+  ): Promise<RunResult> {
+    const pollMs = opts.pollMs ?? DEFAULT_WAIT_POLL_MS;
+    const deadline =
+      opts.timeoutMs !== undefined && opts.timeoutMs > 0
+        ? Date.now() + opts.timeoutMs
+        : undefined;
+
     while (!TERMINAL_STATES.includes(this._status)) {
+      if (opts.signal?.aborted) {
+        throw new LiteLLMAgentError("wait() aborted", { code: "wait_aborted" });
+      }
+      if (deadline !== undefined && Date.now() >= deadline) {
+        throw new LiteLLMAgentError(
+          `wait() timed out after ${opts.timeoutMs}ms`,
+          { code: "wait_timeout" },
+        );
+      }
       const info = await requestJson<RunInfo>(this._client, {
         method: "GET",
         path: `/v2/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}`,
+        signal: opts.signal,
       });
       this._status = info.status;
       this._result = info.result;
       this._git = info.git;
       if (TERMINAL_STATES.includes(this._status)) break;
-      await sleep(500);
+      await sleep(pollMs, opts.signal);
     }
     return {
       id: this.id,
@@ -74,10 +104,13 @@ export class Run {
 
   /** Snapshot of the conversation up through this run. */
   async conversation(): Promise<ConversationTurn[]> {
-    const data = await requestJson<{ turns: ConversationTurn[] }>(this._client, {
-      method: "GET",
-      path: `/v2/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}/conversation`,
-    });
+    const data = await requestJson<{ turns: ConversationTurn[] }>(
+      this._client,
+      {
+        method: "GET",
+        path: `/v2/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}/conversation`,
+      },
+    );
     return data.turns ?? [];
   }
 
@@ -92,11 +125,20 @@ export class Run {
   }
 }
 
-/** Internal helper used by SessionHandle / Agent to build a Run from a wire response. */
-export function runFromInfo(info: RunInfo, options: { apiKey?: string; baseUrl?: string }): Run {
-  return new Run(info, resolveClient(options));
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new LiteLLMAgentError("wait() aborted", { code: "wait_aborted" }));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new LiteLLMAgentError("wait() aborted", { code: "wait_aborted" }));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
