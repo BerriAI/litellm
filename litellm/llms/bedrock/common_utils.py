@@ -937,7 +937,7 @@ def _load_bedrock_response_stream_shape():
     except Exception as e:
         verbose_logger.warning(
             "litellm: could not pre-load bedrock-runtime response stream shape "
-            "— botocore shape parsing will fall back to per-call loading. Error: %s",
+            "— Bedrock event-stream decoding will be unavailable. Error: %s",
             e,
         )
         return None
@@ -958,6 +958,14 @@ class BedrockEventStreamDecoderBase:
         self.parser = EventStreamJSONParser()
 
     def _parse_message_from_event(self, event) -> Optional[str]:
+        if BEDROCK_RESPONSE_STREAM_SHAPE is None:
+            raise BedrockError(
+                status_code=500,
+                message=(
+                    "Bedrock event-stream shape could not be loaded from botocore. "
+                    "Ensure botocore is correctly installed."
+                ),
+            )
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(
             response_dict, BEDROCK_RESPONSE_STREAM_SHAPE

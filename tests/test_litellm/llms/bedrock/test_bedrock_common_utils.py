@@ -93,6 +93,30 @@ def test_bedrock_event_stream_decoder_base_uses_module_shape():
     assert "_response_stream_shape_cache" not in decoder_b.__dict__
 
 
+def test_bedrock_parse_message_from_event_raises_on_none_shape():
+    """
+    When BEDROCK_RESPONSE_STREAM_SHAPE is None (botocore unavailable),
+    _parse_message_from_event must raise BedrockError before touching the
+    botocore parser — not an opaque AttributeError from inside botocore.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import litellm.llms.bedrock.common_utils as mod
+    from litellm.llms.bedrock.common_utils import BedrockError, BedrockEventStreamDecoderBase
+
+    decoder = BedrockEventStreamDecoderBase()
+    mock_event = MagicMock()
+
+    with patch.object(mod, "BEDROCK_RESPONSE_STREAM_SHAPE", None):
+        with pytest.raises(BedrockError) as exc_info:
+            decoder._parse_message_from_event(mock_event)
+
+    assert exc_info.value.status_code == 500
+    assert "botocore" in str(exc_info.value.message).lower()
+    # The botocore parser must never have been called
+    mock_event.to_response_dict.assert_not_called()
+
+
 def test_deepseek_cris():
     """
     Test that DeepSeek models with cross-region inference prefix use converse route

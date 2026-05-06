@@ -83,6 +83,28 @@ def test_sagemaker_response_stream_shape_not_reloaded_on_new_decoder():
     assert SAGEMAKER_RESPONSE_STREAM_SHAPE is shape_after
 
 
+def test_sagemaker_parse_message_from_event_raises_on_none_shape():
+    """
+    When SAGEMAKER_RESPONSE_STREAM_SHAPE is None (botocore unavailable),
+    _parse_message_from_event must raise ValueError before touching the
+    botocore parser — not an opaque AttributeError from inside botocore.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import litellm.llms.sagemaker.common_utils as mod
+
+    decoder = AWSEventStreamDecoder(model="test-model")
+    mock_event = MagicMock()
+
+    with patch.object(mod, "SAGEMAKER_RESPONSE_STREAM_SHAPE", None):
+        with pytest.raises(ValueError) as exc_info:
+            decoder._parse_message_from_event(mock_event)
+
+    assert "botocore" in str(exc_info.value).lower()
+    # The botocore parser must never have been called
+    mock_event.to_response_dict.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_aiter_bytes_unicode_decode_error():
     """

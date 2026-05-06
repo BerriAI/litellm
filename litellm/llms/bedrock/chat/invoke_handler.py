@@ -1828,6 +1828,14 @@ class AWSEventStreamDecoder:
                     yield self._chunk_parser(chunk_data=_data)
 
     def _parse_message_from_event(self, event) -> Optional[str]:
+        if BEDROCK_RESPONSE_STREAM_SHAPE is None:
+            raise BedrockError(
+                status_code=500,
+                message=(
+                    "Bedrock event-stream shape could not be loaded from botocore. "
+                    "Ensure botocore is correctly installed."
+                ),
+            )
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(
             response_dict, BEDROCK_RESPONSE_STREAM_SHAPE

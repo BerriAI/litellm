@@ -23,7 +23,7 @@ def _load_sagemaker_response_stream_shape():
     except Exception as e:
         verbose_logger.warning(
             "litellm: could not pre-load sagemaker-runtime response stream shape "
-            "— botocore shape parsing will fall back to per-call loading. Error: %s",
+            "— SageMaker event-stream decoding will be unavailable. Error: %s",
             e,
         )
         return None
@@ -207,6 +207,11 @@ class AWSEventStreamDecoder:
                 verbose_logger.error(f"Final error parsing accumulated JSON: {e}")
 
     def _parse_message_from_event(self, event) -> Optional[str]:
+        if SAGEMAKER_RESPONSE_STREAM_SHAPE is None:
+            raise ValueError(
+                "SageMaker event-stream shape could not be loaded from botocore. "
+                "Ensure botocore is correctly installed."
+            )
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(
             response_dict, SAGEMAKER_RESPONSE_STREAM_SHAPE
