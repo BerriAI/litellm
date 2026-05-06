@@ -403,6 +403,9 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.request_size_limit_middleware import (
+    RequestSizeLimitMiddleware,
+)
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -14881,6 +14884,11 @@ app.include_router(ui_discovery_endpoints_router)
 app.include_router(google_router)
 
 attach_lazy_features(app)
+app.add_middleware(
+    RequestSizeLimitMiddleware,
+    get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
+    is_request_size_limit_enabled=lambda: premium_user is True,
+)
 
 
 async def _stream_mcp_asgi_response(
