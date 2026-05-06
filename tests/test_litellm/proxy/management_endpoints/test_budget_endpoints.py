@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import app
 from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, CommonProxyErrors
+from litellm.proxy.management_endpoints.budget_management_endpoints import list_budget
 
 
 sys.path.insert(
@@ -166,6 +167,90 @@ async def test_update_budget_allows_null_max_budget(client_and_mocks):
     assert captured_data["max_budget"] is None, "max_budget should be None"
 
     mock_table.update.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_budget_includes_linked_entities(monkeypatch):
+    budget_id = "budget-shared"
+    budget_row = MagicMock()
+    budget_row.model_dump.return_value = {
+        "budget_id": budget_id,
+        "max_budget": 100.0,
+        "updated_at": "2024-01-01T00:00:00Z",
+    }
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_budgettable.find_many = AsyncMock(return_value=[budget_row])
+    mock_prisma.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(
+                budget_id=budget_id,
+                organization_id="org-1",
+                organization_alias="Support Org",
+            )
+        ]
+    )
+    mock_prisma.db.litellm_projecttable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_endusertable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
+        return_value=[
+            MagicMock(
+                user_id="user-1",
+                team_id="team-1",
+                budget_id=budget_id,
+            )
+        ]
+    )
+    mock_prisma.db.litellm_organizationmembership.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(
+                team_id="team-1",
+                team_alias="Support Team",
+                metadata={"team_member_budget_id": budget_id},
+            )
+        ]
+    )
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(
+                user_id="user-1",
+                user_alias="Support User",
+                user_email="user@example.test",
+            )
+        ]
+    )
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    response = await list_budget(
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+    )
+
+    assert response[0]["budget_id"] == budget_id
+    assert response[0]["linked_entities"] == [
+        {
+            "entity_type": "organization",
+            "entity_id": "org-1",
+            "entity_name": "Support Org",
+        },
+        {
+            "entity_type": "team_member",
+            "entity_id": "user-1",
+            "entity_name": "Support User",
+            "parent_entity_id": "team-1",
+            "parent_entity_name": "Support Team",
+        },
+        {
+            "entity_type": "team_member_default",
+            "entity_id": "team-1",
+            "entity_name": "Support Team",
+        },
+    ]
 
 
 @pytest.mark.asyncio
