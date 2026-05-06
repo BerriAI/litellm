@@ -1298,6 +1298,71 @@ async def test_oauth2_headers_passed_to_mcp_client():
 
 
 @pytest.mark.asyncio
+@pytest.mark.no_parallel
+async def test_obo_subject_token_passed_to_list_tools_fetch():
+    """OBO list_tools should exchange the caller token instead of routing with no auth."""
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            _get_tools_from_mcp_servers,
+            set_auth_context,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+        from mcp.types import Tool as MCPTool
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    global_mcp_server_manager.registry.clear()
+    obo_server = MCPServer(
+        server_id="obo-server-id",
+        name="obo_server",
+        alias="obo_server",
+        transport=MCPTransport.http,
+        url="https://mcp.example.com/mcp",
+        auth_type=MCPAuth.oauth2_token_exchange,
+        client_id="client-id",
+        client_secret="client-secret",
+        token_exchange_endpoint="https://idp.example.com/token",
+    )
+    global_mcp_server_manager.registry[obo_server.server_id] = obo_server
+
+    user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
+    oauth2_headers = {"Authorization": "Bearer caller-jwt"}
+    set_auth_context(user_api_key_auth=user_api_key_auth, oauth2_headers=oauth2_headers)
+
+    tool = MCPTool(name="obo_server-whoami", description="", inputSchema={})
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            AsyncMock(return_value=[obo_server]),
+        ),
+        patch.object(
+            global_mcp_server_manager,
+            "_get_tools_from_server",
+            new=AsyncMock(return_value=[tool]),
+        ) as mock_get_tools,
+    ):
+        tools = await _get_tools_from_mcp_servers(
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            oauth2_headers=oauth2_headers,
+        )
+
+    mock_get_tools.assert_awaited_once()
+    call_kwargs = mock_get_tools.await_args.kwargs
+    assert call_kwargs["subject_token"] == "caller-jwt"
+    assert call_kwargs["mcp_auth_header"] is None
+    assert call_kwargs["extra_headers"] is None
+    assert tools == [tool]
+
+
+@pytest.mark.asyncio
 async def test_list_tools_single_server_unprefixed_names():
     """When only one MCP server is allowed, list tools should return prefixed names (server prefix is always added)."""
     try:

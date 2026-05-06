@@ -1361,13 +1361,26 @@ if MCP_AVAILABLE:
                         prefetched_creds=_prefetched_oauth_creds,
                     )
 
-                try:
-                    tools = await global_mcp_server_manager._get_tools_from_server(
-                        server=server,
-                        mcp_auth_header=server_auth_header,
-                        extra_headers=extra_headers,
-                        add_prefix=True,  # Always add server prefix
+                subject_token = None
+                if server.has_token_exchange_config:
+                    subject_token = MCPServerManager._extract_bearer_token(
+                        oauth2_headers=oauth2_headers,
                         raw_headers=raw_headers,
+                    )
+
+                try:
+                    get_tools_kwargs = {
+                        "server": server,
+                        "mcp_auth_header": server_auth_header,
+                        "extra_headers": extra_headers,
+                        "add_prefix": True,  # Always add server prefix
+                        "raw_headers": raw_headers,
+                    }
+                    if subject_token is not None:
+                        get_tools_kwargs["subject_token"] = subject_token
+
+                    tools = await global_mcp_server_manager._get_tools_from_server(
+                        **get_tools_kwargs
                     )
                     filtered_tools = filter_tools_by_allowed_tools(tools, server)
 

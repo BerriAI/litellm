@@ -1409,6 +1409,7 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[Dict[str, str]] = None,
+        subject_token: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -1437,12 +1438,15 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
-            client = await self._create_mcp_client(
-                server=server,
-                mcp_auth_header=mcp_auth_header,
-                extra_headers=extra_headers,
-                stdio_env=stdio_env,
-            )
+            create_client_kwargs = {
+                "server": server,
+                "mcp_auth_header": mcp_auth_header,
+                "extra_headers": extra_headers,
+                "stdio_env": stdio_env,
+            }
+            if subject_token is not None:
+                create_client_kwargs["subject_token"] = subject_token
+            client = await self._create_mcp_client(**create_client_kwargs)
 
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:
@@ -2973,8 +2977,8 @@ class MCPServerManager:
         Note: This now handles prefixed tool names
         """
         for server in self.get_registry().values():
-            if server.needs_user_oauth_token:
-                # Skip OAuth2 servers that rely on user-provided tokens
+            if server.needs_user_oauth_token or server.has_token_exchange_config:
+                # Skip servers that rely on request-time user tokens.
                 continue
             tools = await self._get_tools_from_server(server)
             for tool in tools:
@@ -3026,10 +3030,7 @@ class MCPServerManager:
             ) = split_server_prefix_from_name(tool_name)
             normalised_prefix = normalize_server_name(server_name_from_prefix)
             matched_server = prefix_to_server.get(normalised_prefix)
-            if matched_server is not None and (
-                original_tool_name in self.tool_name_to_mcp_server_name_mapping
-                or tool_name in self.tool_name_to_mcp_server_name_mapping
-            ):
+            if matched_server is not None:
                 return matched_server
 
         return None
