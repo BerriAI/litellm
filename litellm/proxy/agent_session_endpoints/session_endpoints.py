@@ -58,6 +58,9 @@ from litellm.proxy.agent_session_endpoints.serialization import (
     event_row_to_message,
     session_row_to_response,
 )
+from litellm.proxy.agent_session_endpoints.session_status import (
+    refresh_session_status_from_runs,
+)
 from litellm.proxy.agent_session_endpoints.vm_providers.registry import (
     get_vm_provider,
 )
@@ -562,6 +565,10 @@ async def followup(
                 detail="run_busy: another run is queued/running for this session",
             ) from exc
         raise
+    # Run was just queued — flip session ``ready`` -> ``busy`` so SDK
+    # consumers see the right status without waiting for the daemon to
+    # claim the run.
+    await refresh_session_status_from_runs(prisma_client, session_id)
     return FollowupResponse(run_id=new_run.id, action="new_run")
 
 
