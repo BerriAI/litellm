@@ -13,6 +13,9 @@ import { ClientOptions, LiteLLMAgentError } from "../types.js";
 const DEFAULT_BASE_URL = "https://api.litellm.ai";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_RETRIES = 3;
+/** Upper bound for honoring `Retry-After` headers, to defend against a
+ * misbehaving or adversarial server returning extreme values. */
+const MAX_RETRY_AFTER_MS = 60_000;
 
 export interface ResolvedClient {
   apiKey: string;
@@ -30,7 +33,7 @@ export function resolveClient(options: ClientOptions = {}): ResolvedClient {
   if (!apiKey) {
     throw new LiteLLMAgentError(
       "Missing apiKey. Pass `apiKey` explicitly or set LITELLM_API_KEY in the environment.",
-      { code: "missing_api_key" }
+      { code: "missing_api_key" },
     );
   }
 
@@ -58,7 +61,7 @@ export interface RequestOpts {
 
 export async function request(
   client: ResolvedClient,
-  opts: RequestOpts
+  opts: RequestOpts,
 ): Promise<Response> {
   const url = buildUrl(client.baseUrl, opts.path, opts.query);
   const headers: Record<string, string> = {
@@ -107,7 +110,7 @@ export async function request(
 
 export async function requestJson<T>(
   client: ResolvedClient,
-  opts: RequestOpts
+  opts: RequestOpts,
 ): Promise<T> {
   const res = await request(client, opts);
   if (res.status === 204) return undefined as unknown as T;
@@ -117,12 +120,9 @@ export async function requestJson<T>(
 function buildUrl(
   baseUrl: string,
   path: string,
-  query?: Record<string, string | number | undefined>
+  query?: Record<string, string | number | undefined>,
 ): string {
-  const url = new URL(
-    path.startsWith("/") ? path : `/${path}`,
-    baseUrl + "/"
-  );
+  const url = new URL(path.startsWith("/") ? path : `/${path}`, baseUrl + "/");
   if (query) {
     for (const [k, v] of Object.entries(query)) {
       if (v === undefined) continue;
@@ -139,7 +139,10 @@ async function toAgentError(res: Response): Promise<LiteLLMAgentError> {
   try {
     const ct = res.headers.get("content-type") ?? "";
     if (ct.includes("application/json")) {
-      const body = (await res.json()) as { error?: { code?: string; message?: string }; detail?: unknown };
+      const body = (await res.json()) as {
+        error?: { code?: string; message?: string };
+        detail?: unknown;
+      };
       if (body?.error?.code) code = body.error.code;
       if (body?.error?.message) message = body.error.message;
       else if (typeof body?.detail === "string") message = body.detail;
@@ -159,7 +162,9 @@ function backoffMs(attempt: number, res?: Response): number {
     const ra = res.headers.get("retry-after");
     if (ra) {
       const n = Number(ra);
-      if (!Number.isNaN(n)) return Math.max(0, n * 1000);
+      if (!Number.isNaN(n)) {
+        return Math.min(MAX_RETRY_AFTER_MS, Math.max(0, n * 1000));
+      }
     }
   }
   // 250ms, 500ms, 1s, 2s, ...
@@ -180,9 +185,9 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
           new LiteLLMAgentError(`Request timed out after ${ms}ms`, {
             code: "timeout",
             retryable: true,
-          })
+          }),
         ),
-      ms
+      ms,
     );
   });
   try {
