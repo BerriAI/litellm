@@ -1439,6 +1439,7 @@ model LiteLLM_AgentWorker {
   created_at    DateTime @default(now())
 
   @@index([team_id, status])
+  @@index([worker_jwt_hash])
 }
 
 // Single-use 15-minute pairing tokens that workers exchange for a long-lived
