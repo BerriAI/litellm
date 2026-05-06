@@ -144,6 +144,30 @@ MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS = int(
     os.getenv("MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS", "60")
 )
 
+# Cloud Agents (Epic G / LIT-2891) — settings UI defaults.
+# Pair tokens are single-use and short-lived: the operator copies the install
+# command, runs it on the worker box, and the worker exchanges the token for a
+# long-lived JWT. 15 min is enough for a human-in-the-loop install but tight
+# enough to limit the blast radius of a leaked token.
+CLOUD_AGENT_PAIR_TOKEN_TTL_MINUTES = int(
+    os.getenv("CLOUD_AGENT_PAIR_TOKEN_TTL_MINUTES", "15")
+)
+# Hourly costs ($/hr) used by the Warm Pool screen's idle-cost widget. v1
+# hardcodes a small list — a follow-up ticket will pull live AWS pricing via
+# the Pricing API. Values are us-east-1 list prices, on-demand.
+CLOUD_AGENT_INSTANCE_HOURLY_COST_USD = {
+    "t3.medium": 0.0416,
+    "t3.large": 0.0832,
+    "t3.xlarge": 0.1664,
+    "t3.2xlarge": 0.3328,
+    "m5.large": 0.096,
+    "m5.xlarge": 0.192,
+    "m5.2xlarge": 0.384,
+}
+# 730 = average hours per month (24 * 365.25 / 12). Mirrors the AWS billing
+# convention so our estimate matches what the customer sees on their bill.
+CLOUD_AGENT_HOURS_PER_MONTH = 730
+
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
 MCP_TOOL_LISTING_TIMEOUT = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
