@@ -206,3 +206,73 @@ async def test_terminate_idempotent_real():
             except Exception:
                 pass
         watchdog.cancel()
+
+
+@_skip_no_creds
+@pytest.mark.asyncio
+async def test_cold_boot_p50_under_30s():
+    """Validation #14 — cold-boot P50 (RunInstances → daemon-ready) must be ≤ 30s.
+
+    The Packer-baked AMI eliminates the apt-get update step that dominated the B0
+    spike's 31.8s user-data phase. With pre-installed node/python/git/gh/uv/bun,
+    cold-boot should land in the 18-25s range. P50 ≤ 30s gives ~5s headroom for
+    AWS variability.
+
+    Daemon-ready is approximated by polling `provider.status()` for `VMState.RUNNING`
+    — once Epic C (LIT-2879) ships the real daemon callback, swap this for the
+    session-row `status == 'ready'` check.
+    """
+    import statistics  # noqa: PLC0415
+
+    handles: List[VMHandle] = []
+    provider = EC2Provider({"default_ami_id": os.environ["LITELLM_TEST_AMI_ID"]})
+    watchdog = _install_watchdog(provider, handles)
+
+    latencies: List[float] = []
+    try:
+        for i in range(5):
+            ctx = ProvisionContext(
+                session_id=f"sess-coldboot-{i}-{int(time.time())}",
+                team_id="team-coldboot",
+                agent_id="agent-coldboot",
+                repos=[Repo(url="https://github.com/octocat/Hello-World")],
+                env_vars={"FOO": "bar"},
+                aws_creds=_aws_creds_from_env(),
+                ec2_config=_ec2_config_from_env(),
+                daemon_jwt="not-a-real-jwt-test-only",
+                daemon_base_url="https://example.invalid/",
+                mode="session",
+            )
+
+            handle: Optional[VMHandle] = None
+            try:
+                t0 = time.perf_counter()
+                handle = await provider.provision(ctx)
+                handles.append(handle)
+
+                # Poll for daemon-ready (approximated via VMState.RUNNING).
+                # 60s timeout gives 2x headroom over the 30s P50 gate.
+                deadline = time.time() + 60
+                last: Optional[VMState] = None
+                while time.time() < deadline:
+                    status = await provider.status(handle, aws_creds=ctx.aws_creds)
+                    last = status.state
+                    if status.state == VMState.RUNNING:
+                        break
+                    time.sleep(1)
+                assert (
+                    last == VMState.RUNNING
+                ), f"iteration {i}: never reached running, last={last}"
+                latencies.append(time.perf_counter() - t0)
+            finally:
+                if handle is not None:
+                    await provider.terminate(handle, aws_creds=ctx.aws_creds)
+
+        p50 = statistics.median(latencies)
+        # P95 with n=5 → use the max sample as an approximation.
+        p95 = sorted(latencies)[int(len(latencies) * 0.95)]
+        print(f"Cold-boot latencies (s): {latencies}")
+        print(f"P50 = {p50:.1f}s, P95 = {p95:.1f}s")
+        assert p50 <= 30.0, f"Cold-boot P50 {p50:.1f}s exceeds 30s gate"
+    finally:
+        watchdog.cancel()
