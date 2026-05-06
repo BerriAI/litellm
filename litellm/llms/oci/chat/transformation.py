@@ -83,6 +83,20 @@ else:
 STREAMING_TIMEOUT = 60 * 5
 
 
+def _model_uses_max_completion_tokens(model: str) -> bool:
+    """Return True for OCI-hosted models that require ``maxCompletionTokens``.
+
+    GPT-5 family (and related reasoning-mode models) on OCI reject ``maxTokens``
+    with HTTP 400 and require ``maxCompletionTokens`` per OpenAI's reasoning-API
+    convention. The model id we receive is the OCI model id, e.g.
+    ``openai.gpt-5``, ``openai.gpt-5-mini``, ``openai.gpt-5.5``.
+    """
+    name = (model or "").lower()
+    if name.startswith("oci/"):
+        name = name[4:]
+    return name.startswith("openai.gpt-5") or name == "openai.gpt-5"
+
+
 def get_vendor_from_model(model: str) -> OCIVendors:
     """Return the OCI vendor enum for a model name.
 
@@ -259,7 +273,9 @@ class OCIChatConfig(BaseConfig):
         base = get_oci_base_url(optional_params, api_base or litellm.api_base)
         return f"{base}/{OCI_API_VERSION}/actions/chat"
 
-    def _get_optional_params(self, vendor: OCIVendors, optional_params: dict) -> Dict:
+    def _get_optional_params(
+        self, vendor: OCIVendors, optional_params: dict, model: str = ""
+    ) -> Dict:
         param_map = (
             self.openai_to_oci_cohere_param_map
             if vendor == OCIVendors.COHERE
@@ -267,11 +283,33 @@ class OCIChatConfig(BaseConfig):
         )
         selected_params: Dict = {}
 
+        # OpenAI GPT-5+ family on OCI rejects "maxTokens" and requires
+        # "maxCompletionTokens" instead. Route to the correct field per OCI's
+        # /20231130/Chat schema for these models. Verified against live OCI:
+        # error reads `Invalid 'maxTokens': Unsupported parameter ... Use
+        # 'maxCompletionTokens' instead.` on openai.gpt-5*, gpt-5.5, etc.
+        max_tokens_key = (
+            "maxCompletionTokens"
+            if model and _model_uses_max_completion_tokens(model)
+            else "maxTokens"
+        )
+
         for openai_key, oci_key in param_map.items():
             if oci_key and openai_key in optional_params:
-                selected_params[oci_key] = optional_params[openai_key]  # type: ignore[index]
+                target = max_tokens_key if oci_key == "maxTokens" else oci_key
+                selected_params[target] = optional_params[openai_key]  # type: ignore[index]
 
         for oci_value in param_map.values():
+            if oci_value == "maxTokens":
+                # Handled below via max_tokens_key — covers the case where
+                # map_openai_params already pre-translated "max_tokens" to the
+                # alias "maxTokens" in optional_params.
+                if (
+                    "maxTokens" in optional_params
+                    and max_tokens_key not in selected_params
+                ):
+                    selected_params[max_tokens_key] = optional_params["maxTokens"]
+                continue
             if (
                 oci_value
                 and oci_value in optional_params
@@ -384,7 +422,7 @@ class OCIChatConfig(BaseConfig):
                 message=_extract_text_content(user_messages[-1]["content"]),
                 chatHistory=adapt_messages_to_cohere_standard(messages),
                 preambleOverride=preamble_override,
-                **self._get_optional_params(OCIVendors.COHERE, optional_params),
+                **self._get_optional_params(OCIVendors.COHERE, optional_params, model),
             )
             data = OCICompletionPayload(
                 compartmentId=oci_compartment_id,
@@ -398,7 +436,7 @@ class OCIChatConfig(BaseConfig):
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
                     messages=adapt_messages_to_generic_oci_standard(messages),
-                    **self._get_optional_params(vendor, optional_params),
+                    **self._get_optional_params(vendor, optional_params, model),
                 ),
             )
 
