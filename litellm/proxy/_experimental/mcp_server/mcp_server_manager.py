@@ -1438,15 +1438,21 @@ class MCPServerManager:
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
-            create_client_kwargs = {
-                "server": server,
-                "mcp_auth_header": mcp_auth_header,
-                "extra_headers": extra_headers,
-                "stdio_env": stdio_env,
-            }
             if subject_token is not None:
-                create_client_kwargs["subject_token"] = subject_token
-            client = await self._create_mcp_client(**create_client_kwargs)
+                client = await self._create_mcp_client(
+                    server=server,
+                    mcp_auth_header=mcp_auth_header,
+                    extra_headers=extra_headers,
+                    stdio_env=stdio_env,
+                    subject_token=subject_token,
+                )
+            else:
+                client = await self._create_mcp_client(
+                    server=server,
+                    mcp_auth_header=mcp_auth_header,
+                    extra_headers=extra_headers,
+                    stdio_env=stdio_env,
+                )
 
             ## HANDLE OPENAPI TOOLS
             if server.spec_path:
@@ -3030,7 +3036,11 @@ class MCPServerManager:
             ) = split_server_prefix_from_name(tool_name)
             normalised_prefix = normalize_server_name(server_name_from_prefix)
             matched_server = prefix_to_server.get(normalised_prefix)
-            if matched_server is not None:
+            if matched_server is not None and (
+                matched_server.has_token_exchange_config
+                or original_tool_name in self.tool_name_to_mcp_server_name_mapping
+                or tool_name in self.tool_name_to_mcp_server_name_mapping
+            ):
                 return matched_server
 
         return None
