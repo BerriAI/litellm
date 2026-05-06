@@ -50,6 +50,26 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _is_seq_collision(exc: BaseException) -> bool:
+    """True iff ``exc`` is a (run_id, seq) unique-constraint violation.
+
+    We can't simply ``except prisma.errors.UniqueViolationError`` because
+    the unit-test stand-in raises a plain ``RuntimeError("event_seq_collision")``,
+    and we don't want the test path and prod path to diverge. Match
+    either the Prisma class (when available) or our marker string.
+    """
+    try:
+        from prisma.errors import UniqueViolationError
+
+        if isinstance(exc, UniqueViolationError):
+            return True
+    except Exception:
+        # Prisma unavailable in some test environments; fall through to
+        # string-based detection.
+        pass
+    return "event_seq_collision" in str(exc)
+
+
 async def _get_prisma_client_or_503():
     from litellm.proxy.proxy_server import prisma_client
 
@@ -250,9 +270,14 @@ async def daemon_append_event(
             }
         )
     except Exception as exc:
-        # Most likely a (run_id, seq) unique-constraint collision. Reread
-        # MAX(seq) and try once more — that's the defensive retry the
-        # ticket calls out.
+        # Treat only ``(run_id, seq)`` unique-constraint collisions as
+        # retryable here; let any other error bubble up unchanged so
+        # callers don't see a misleading 409 ``event_seq_collision``
+        # for a transient DB outage. We detect collisions either via
+        # the dedicated Prisma error class or — for unit tests using
+        # an in-memory fake — a string match on the marker.
+        if not _is_seq_collision(exc):
+            raise
         last_evt = await prisma_client.db.litellm_agentrunevent.find_first(
             where={"run_id": run_id},
             order={"seq": "desc"},
@@ -268,6 +293,8 @@ async def daemon_append_event(
                 }
             )
         except Exception as exc2:
+            if not _is_seq_collision(exc2):
+                raise
             verbose_proxy_logger.exception(
                 "events:append double-collision run_id=%s: %s", run_id, exc2
             )
