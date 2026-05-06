@@ -450,7 +450,7 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -1860,7 +1860,6 @@ class TestMCPServerManager:
 
         # Unprefixed resolution
         resolved_server_unpref = manager._get_mcp_server_from_tool_name("create_zap")
-        print(resolved_server_unpref)
         assert resolved_server_unpref is not None
         assert resolved_server_unpref.server_id == server.server_id
 

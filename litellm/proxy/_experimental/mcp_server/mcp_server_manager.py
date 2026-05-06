@@ -411,6 +411,15 @@ class MCPServerManager:
                 aws_role_name=server_config.get("aws_role_name", None),
                 aws_session_name=server_config.get("aws_session_name", None),
                 instructions=server_config.get("instructions", None),
+                # Token Exchange (OBO) fields
+                token_exchange_endpoint=server_config.get(
+                    "token_exchange_endpoint", None
+                ),
+                audience=server_config.get("audience", None),
+                subject_token_type=server_config.get(
+                    "subject_token_type",
+                    "urn:ietf:params:oauth:token-type:access_token",
+                ),
             )
             self._assign_unique_short_prefix(new_server)
             self.config_mcp_servers[server_id] = new_server
@@ -765,6 +774,17 @@ class MCPServerManager:
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
             instructions=mcp_server.instructions,
+            # Token Exchange (OBO) fields — read from credentials JSON blob
+            token_exchange_endpoint=(
+                credentials_dict.get("token_exchange_endpoint")
+                if credentials_dict
+                else None
+            ),
+            audience=(credentials_dict.get("audience") if credentials_dict else None),
+            subject_token_type=(
+                credentials_dict.get("subject_token_type") if credentials_dict else None
+            )
+            or "urn:ietf:params:oauth:token-type:access_token",
         )
         return new_server
 
@@ -1136,6 +1156,29 @@ class MCPServerManager:
     #########################################################
     # Methods that call the upstream MCP servers
     #########################################################
+    @staticmethod
+    def _extract_bearer_token(
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+    ) -> Optional[str]:
+        """Extract the bare Bearer token from oauth2_headers or raw_headers.
+
+        Returns the token string without the ``Bearer `` prefix, or ``None``
+        if no Authorization header is found.
+        """
+        auth_value: Optional[str] = None
+        if oauth2_headers and "Authorization" in oauth2_headers:
+            auth_value = oauth2_headers["Authorization"]
+        elif raw_headers:
+            # raw_headers may have lowercase keys depending on the ASGI server
+            normalized = {k.lower(): v for k, v in raw_headers.items()}
+            auth_value = normalized.get("authorization")
+        if auth_value:
+            if auth_value.startswith("Bearer "):
+                return auth_value[len("Bearer ") :]
+            return auth_value
+        return None
+
     def _build_stdio_env(
         self,
         server: MCPServer,
@@ -1169,25 +1212,30 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         stdio_env: Optional[Dict[str, str]] = None,
+        subject_token: Optional[str] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
 
         Auth resolution (single place for all auth logic):
         1. ``mcp_auth_header`` — per-request/per-user override
-        2. OAuth2 client_credentials token — auto-fetched and cached
-        3. ``server.authentication_token`` — static token from config/DB
+        2. OAuth2 Token Exchange (OBO) — exchange user token for scoped token
+        3. OAuth2 client_credentials token — auto-fetched and cached
+        4. ``server.authentication_token`` — static token from config/DB
 
         Args:
             server: The server configuration.
             mcp_auth_header: Optional per-request auth override.
             extra_headers: Additional headers to forward.
             stdio_env: Environment variables for stdio transport.
+            subject_token: Optional user JWT for token exchange (OBO) flow.
 
         Returns:
             Configured MCP client instance.
         """
-        auth_value = await resolve_mcp_auth(server, mcp_auth_header)
+        auth_value = await resolve_mcp_auth(
+            server, mcp_auth_header, subject_token=subject_token
+        )
 
         transport = server.transport or MCPTransport.sse
 
@@ -2534,9 +2582,12 @@ class MCPServerManager:
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
 
-        # oauth2 headers
+        # Extract subject token for OAuth2 Token Exchange (OBO) flow
+        subject_token: Optional[str] = None
         extra_headers: Optional[Dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2:
+        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+        elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
                 # For M2M OAuth servers, Authorization must come from token fetch.
                 extra_headers = None
@@ -2604,6 +2655,7 @@ class MCPServerManager:
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
             stdio_env=stdio_env,
+            subject_token=subject_token,
         )
 
         call_tool_params = MCPCallToolRequestParams(
