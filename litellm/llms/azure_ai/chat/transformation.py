@@ -46,6 +46,30 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         return supported_params
 
+    def map_openai_params(
+        self,
+        non_default_params: dict,
+        optional_params: dict,
+        model: str,
+        drop_params: bool,
+    ) -> dict:
+        # Azure AI Foundry's Model Inference endpoint (/models/chat/completions)
+        # only accepts `max_tokens`; `max_completion_tokens` is not in its request
+        # body schema and causes a 422. Apply the parent mapping first (which may
+        # internally rename max_tokens → max_completion_tokens for o-series /
+        # gpt-5 model families), then normalize back to max_tokens so Foundry-
+        # hosted deployments (e.g. mistral-large-3, cohere, Llama) always receive
+        # the supported parameter name. Fixes #26322.
+        optional_params = super().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+        )
+        if "max_completion_tokens" in optional_params:
+            optional_params["max_tokens"] = optional_params.pop("max_completion_tokens")
+        return optional_params
+
     def _supports_stop_reason(self, model: str) -> bool:
         """
         Check if the model supports stop tokens.
