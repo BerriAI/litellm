@@ -179,7 +179,9 @@ async def daemon_next_run(
     the same row.
     """
     prisma_client = await _get_prisma_client_or_503()
-    deadline = asyncio.get_event_loop().time() + NEXT_RUN_LONG_POLL_TIMEOUT_SECONDS
+    # ``get_running_loop`` (not ``get_event_loop``) is the correct API
+    # inside a running coroutine — see Python 3.10 deprecation.
+    deadline = asyncio.get_running_loop().time() + NEXT_RUN_LONG_POLL_TIMEOUT_SECONDS
 
     while True:
         claimed = await _claim_next_queued_run(prisma_client, session_id)
@@ -188,7 +190,7 @@ async def daemon_next_run(
                 run_id=claimed.id,
                 prompt=claimed.prompt or {},
             )
-        if asyncio.get_event_loop().time() >= deadline:
+        if asyncio.get_running_loop().time() >= deadline:
             return Response(status_code=204)
         await asyncio.sleep(NEXT_RUN_POLL_INTERVAL_SECONDS)
 
