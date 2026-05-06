@@ -520,6 +520,19 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
                 # is also True, but raw config dicts skip that path —
                 # so this runtime check has to default to True too.
                 if endpoint.get("auth", True) is not True:
+                    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+                        InitPassThroughEndpointHelpers,
+                    )
+
+                    registered_route = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                        route=route, method=request.method
+                    )
+                    if registered_route is None:
+                        verbose_proxy_logger.warning(
+                            "Ignoring auth=false for pass-through endpoint %s because it is not registered as a pass-through route",
+                            route,
+                        )
+                        continue
                     return UserAPIKeyAuth()
                 ## IF AUTH ENABLED
                 ### IF CUSTOM PARSER REQUIRED
