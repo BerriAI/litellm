@@ -2515,6 +2515,9 @@ jobs:
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME="us-east-1" \
+              -e VERTEXAI_CREDENTIALS=$VERTEXAI_CREDENTIALS \
+              -e AZURE_FOUNDRY_API_KEY=$AZURE_FOUNDRY_API_KEY \
+              -e AZURE_FOUNDRY_API_BASE=$AZURE_FOUNDRY_API_BASE \
               -e LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS="True" \
               --add-host host.docker.internal:host-gateway \
               --name compat-proxy \

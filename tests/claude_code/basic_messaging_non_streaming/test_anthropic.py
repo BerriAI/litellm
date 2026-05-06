@@ -63,9 +63,6 @@ def test_basic_messaging_non_streaming_anthropic(compat_result, model):
             f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured", pytrace=False
         )
 
-    print(f"base_url: {base_url}")
-    print(f"api_key: {api_key}")
-
     try:
         result = run_claude(
             prompt="Reply with the single word 'pong' and nothing else.",
