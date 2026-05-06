@@ -1047,21 +1047,9 @@ class PrometheusLogger(CustomLogger):
         output_tokens = standard_logging_payload["completion_tokens"]
         tokens_used = standard_logging_payload["total_tokens"]
         response_cost = standard_logging_payload["response_cost"]
-        _requester_metadata: Optional[dict] = standard_logging_payload["metadata"].get(
-            "requester_metadata"
+        combined_metadata = _get_combined_custom_metadata_from_standard_logging_payload(
+            standard_logging_payload=standard_logging_payload
         )
-        user_api_key_auth_metadata: Optional[dict] = standard_logging_payload[
-            "metadata"
-        ].get("user_api_key_auth_metadata")
-        spend_logs_metadata: Optional[dict] = standard_logging_payload["metadata"].get(
-            "spend_logs_metadata"
-        )
-
-        combined_metadata: Dict[str, Any] = {
-            **(_requester_metadata if _requester_metadata else {}),
-            **(user_api_key_auth_metadata if user_api_key_auth_metadata else {}),
-            **(spend_logs_metadata if spend_logs_metadata else {}),
-        }
         if standard_logging_payload is not None and isinstance(
             standard_logging_payload, dict
         ):
@@ -1423,19 +1411,39 @@ class PrometheusLogger(CustomLogger):
             metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
         )
 
-        self.litellm_remaining_api_key_requests_for_model.labels(
-            _sanitize_prometheus_label_value(user_api_key),
-            _sanitize_prometheus_label_value(user_api_key_alias),
-            _sanitize_prometheus_label_value(model_group),
-            _sanitize_prometheus_label_value(model_id),
-        ).set(remaining_requests)
+        enum_values = UserAPIKeyLabelValues(
+            hashed_api_key=user_api_key,
+            api_key_alias=user_api_key_alias,
+            model=model_group,
+            model_id=model_id,
+            custom_metadata_labels=get_custom_labels_from_metadata(
+                metadata=_get_combined_custom_metadata_from_standard_logging_payload(
+                    standard_logging_payload=kwargs.get("standard_logging_object")
+                )
+            ),
+        )
+        label_context = PrometheusLabelFactoryContext(enum_values)
+        requests_labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                "litellm_remaining_api_key_requests_for_model"
+            ),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        self.litellm_remaining_api_key_requests_for_model.labels(**requests_labels).set(
+            remaining_requests
+        )
 
-        self.litellm_remaining_api_key_tokens_for_model.labels(
-            _sanitize_prometheus_label_value(user_api_key),
-            _sanitize_prometheus_label_value(user_api_key_alias),
-            _sanitize_prometheus_label_value(model_group),
-            _sanitize_prometheus_label_value(model_id),
-        ).set(remaining_tokens)
+        tokens_labels = prometheus_label_factory(
+            supported_enum_labels=self.get_labels_for_metric(
+                "litellm_remaining_api_key_tokens_for_model"
+            ),
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+        self.litellm_remaining_api_key_tokens_for_model.labels(**tokens_labels).set(
+            remaining_tokens
+        )
 
     def _set_latency_metrics(
         self,
@@ -1561,18 +1569,27 @@ class PrometheusLogger(CustomLogger):
         )
 
         try:
-            self.litellm_llm_api_failed_requests_metric.labels(
-                _sanitize_prometheus_label_value(end_user_id),
-                _sanitize_prometheus_label_value(user_api_key),
-                _sanitize_prometheus_label_value(user_api_key_alias),
-                _sanitize_prometheus_label_value(model),
-                _sanitize_prometheus_label_value(user_api_team),
-                _sanitize_prometheus_label_value(user_api_team_alias),
-                _sanitize_prometheus_label_value(user_id),
-                _sanitize_prometheus_label_value(
-                    standard_logging_payload.get("model_id", "")
+            enum_values = UserAPIKeyLabelValues(
+                end_user=end_user_id,
+                hashed_api_key=user_api_key,
+                api_key_alias=user_api_key_alias,
+                model=model,
+                team=user_api_team,
+                team_alias=user_api_team_alias,
+                user=user_id,
+                model_id=standard_logging_payload.get("model_id", ""),
+                custom_metadata_labels=get_custom_labels_from_metadata(
+                    metadata=_get_combined_custom_metadata_from_standard_logging_payload(
+                        standard_logging_payload=standard_logging_payload
+                    )
                 ),
-            ).inc()
+            )
+            PrometheusLogger._inc_labeled_counter(
+                self,
+                self.litellm_llm_api_failed_requests_metric,
+                "litellm_llm_api_failed_requests_metric",
+                enum_values,
+            )
             self.set_llm_deployment_failure_metrics(kwargs)
             await self._set_org_budget_metrics_after_api_request(
                 org_id=user_api_key_org_id,
@@ -3620,6 +3637,36 @@ def get_custom_labels_from_metadata(metadata: dict) -> Dict[str, str]:
             result[original_key.replace(".", "_")] = value
 
     return result
+
+
+def _get_combined_custom_metadata_from_standard_logging_payload(
+    standard_logging_payload: Optional[dict],
+) -> Dict[str, Any]:
+    """
+    Combine the metadata sources that can supply custom Prometheus labels.
+    """
+    if not isinstance(standard_logging_payload, dict):
+        return {}
+
+    standard_logging_metadata = standard_logging_payload.get("metadata") or {}
+    if not isinstance(standard_logging_metadata, dict):
+        return {}
+
+    requester_metadata = standard_logging_metadata.get("requester_metadata")
+    user_api_key_auth_metadata = standard_logging_metadata.get(
+        "user_api_key_auth_metadata"
+    )
+    spend_logs_metadata = standard_logging_metadata.get("spend_logs_metadata")
+
+    return {
+        **(requester_metadata if isinstance(requester_metadata, dict) else {}),
+        **(
+            user_api_key_auth_metadata
+            if isinstance(user_api_key_auth_metadata, dict)
+            else {}
+        ),
+        **(spend_logs_metadata if isinstance(spend_logs_metadata, dict) else {}),
+    }
 
 
 def _tag_matches_wildcard_configured_pattern(
