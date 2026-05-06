@@ -2243,10 +2243,50 @@ def encode(model="", text="", custom_tokenizer: Optional[dict] = None):
     return enc
 
 
-def decode(model="", tokens: List[int] = [], custom_tokenizer: Optional[dict] = None):
+def decode(
+    model="",
+    tokens: List[int] = [],
+    custom_tokenizer: Optional[dict] = None,
+    skip_special_tokens: bool = True,
+):
+    """
+    Decodes token ids using the selected tokenizer.
+
+    Args:
+        skip_special_tokens: For HuggingFace tokenizers, keep the historical
+            LiteLLM round-trip behavior by omitting special tokens by default.
+            Set to False to inspect decoded BOS/EOS tokens.
+    """
     tokenizer_json = custom_tokenizer or _select_tokenizer(model=model)
+    if tokenizer_json["type"] == "huggingface_tokenizer":
+        if skip_special_tokens:
+            tokens = _strip_huggingface_special_token_ids(
+                tokenizer_json["tokenizer"], tokens
+            )
+        dec = tokenizer_json["tokenizer"].decode(
+            tokens, skip_special_tokens=skip_special_tokens
+        )
+        return dec
     dec = tokenizer_json["tokenizer"].decode(tokens)
     return dec
+
+
+def _strip_huggingface_special_token_ids(
+    tokenizer: Tokenizer, tokens: List[int]
+) -> List[int]:
+    try:
+        added_tokens_decoder = tokenizer.get_added_tokens_decoder()
+    except Exception:
+        return tokens
+
+    special_token_ids = {
+        token_id
+        for token_id, added_token in added_tokens_decoder.items()
+        if getattr(added_token, "special", False)
+    }
+    if not special_token_ids:
+        return tokens
+    return [token for token in tokens if token not in special_token_ids]
 
 
 def create_pretrained_tokenizer(
@@ -5896,6 +5936,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_minimal_reasoning_effort=_model_info.get(
                     "supports_minimal_reasoning_effort", None
                 ),
+                supports_low_reasoning_effort=_model_info.get(
+                    "supports_low_reasoning_effort", None
+                ),
                 supports_xhigh_reasoning_effort=_model_info.get(
                     "supports_xhigh_reasoning_effort", None
                 ),
@@ -8502,6 +8545,12 @@ class ProviderConfigManager:
             )
 
             return MistralAudioTranscriptionConfig()
+        elif litellm.LlmProviders.NVIDIA_RIVA == provider:
+            from litellm.llms.nvidia_riva.audio_transcription.transformation import (
+                NvidiaRivaAudioTranscriptionConfig,
+            )
+
+            return NvidiaRivaAudioTranscriptionConfig()
         return None
 
     @staticmethod

@@ -440,6 +440,15 @@ def _resolve_fetch_kwargs(
     kwargs: Dict[str, Any] = {"start_date": start_date, "end_date": end_date}
     if fn_name == "get_usage_data":
         if not is_admin:
+            if user_id is None:
+                # Defense-in-depth: the endpoint guard in usage_endpoints/endpoints.py
+                # should have already rejected this. If we ever reach here it means
+                # a future caller invoked the helper without scoping — fail loudly
+                # rather than issuing an unfiltered global query.
+                raise ValueError(
+                    "Non-admin caller has user_id=None; refusing to issue an "
+                    "unscoped query. Endpoint-level guard missing."
+                )
             kwargs["user_id"] = user_id
         elif fn_args.get("user_id"):
             kwargs["user_id"] = fn_args["user_id"]

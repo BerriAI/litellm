@@ -94,20 +94,20 @@ service:
 separateHealthApp: false
 separateHealthPort: 8081
 
-# Probe tuning for proxy container
+# Probes for LiteLLM gateway container
 livenessProbe:
   path: /health/liveliness
   initialDelaySeconds: 0
-  periodSeconds: 10
-  timeoutSeconds: 1
+  periodSeconds: 15
+  timeoutSeconds: 5
   successThreshold: 1
-  failureThreshold: 3
+  failureThreshold: 5
 
 readinessProbe:
   path: /health/readiness
   initialDelaySeconds: 0
   periodSeconds: 10
-  timeoutSeconds: 1
+  timeoutSeconds: 5
   successThreshold: 1
   failureThreshold: 3
 
@@ -115,7 +115,7 @@ startupProbe:
   path: /health/readiness
   initialDelaySeconds: 0
   periodSeconds: 10
-  timeoutSeconds: 1
+  timeoutSeconds: 5
   successThreshold: 1
   failureThreshold: 30
 
@@ -328,6 +328,17 @@ migrationJob:
       enabled: true
     helm:
       enabled: false
+
+# Log level for the litellm proxy (sets LITELLM_LOG in the deployment env).
+# Rendered as a direct `env:` entry, which in Kubernetes takes precedence over
+# any `envFrom:` source. If you currently source LITELLM_LOG from an
+# environmentSecret or environmentConfigMap, set `logLevel: ""` here to
+# disable injection — otherwise this value silently overrides your secret /
+# configmap entry.
+#
+# Setting LITELLM_LOG inside `envVars:` below also wins: the template skips
+# this injection entirely when envVars already defines LITELLM_LOG.
+logLevel: INFO
 
 # Additional environment variables to be added to the deployment as a map of key-value pairs
 envVars: {}
