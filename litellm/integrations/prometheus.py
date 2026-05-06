@@ -1404,11 +1404,43 @@ class PrometheusLogger(CustomLogger):
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
+        remaining_requests = metadata.get(remaining_requests_variable_name)
+        remaining_tokens = metadata.get(remaining_tokens_variable_name)
+
+        # Fallback: parallel_request_limiter_v3 does not write the
+        # `litellm-key-remaining-{tokens,requests}-{model_group}` keys into
+        # metadata. Instead it surfaces the same values on the response under
+        # `hidden_params.additional_headers` as
+        # `x-ratelimit-model_per_key-remaining-{tokens,requests}` (see
+        # litellm/proxy/hooks/parallel_request_limiter_v3.py
+        # async_post_call_success_hook). Read from there so the
+        # `litellm_remaining_api_key_{requests,tokens}_for_model` gauges report
+        # real values instead of `sys.maxsize` (~9.22e18) on v3.
+        if remaining_requests is None or remaining_tokens is None:
+            try:
+                additional_headers = (
+                    (kwargs.get("standard_logging_object") or {})
+                    .get("hidden_params", {})
+                    .get("additional_headers")
+                ) or {}
+            except AttributeError:
+                additional_headers = {}
+            if remaining_requests is None:
+                remaining_requests = additional_headers.get(
+                    "x-ratelimit-model_per_key-remaining-requests"
+                )
+            if remaining_tokens is None:
+                remaining_tokens = additional_headers.get(
+                    "x-ratelimit-model_per_key-remaining-tokens"
+                )
+
+        # Final fallback: report sys.maxsize when no rate limit info available,
+        # preserving prior behavior for keys without per-model TPM/RPM limits.
         remaining_requests = (
-            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
+            sys.maxsize if remaining_requests is None else remaining_requests
         )
         remaining_tokens = (
-            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
+            sys.maxsize if remaining_tokens is None else remaining_tokens
         )
 
         enum_values = UserAPIKeyLabelValues(
