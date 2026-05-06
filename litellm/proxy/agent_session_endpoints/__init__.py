@@ -10,7 +10,7 @@ Exports the FastAPI routers consumed by ``proxy_server.py``:
 
   * ``agent_router``    — /v2/agents CRUD
   * ``session_router``  — /v2/sessions CRUD + followup + conversation
-  * ``run_router``      — /v2/sessions/{sid}/runs (+ events SSE, cancel)
+  * ``run_router``      — /v2/sessions/{sid}/runs (+ /stream SSE, cancel)
   * ``internal_router`` — /v2/sessions/{sid}/internal/* (daemon callbacks)
 """
 
