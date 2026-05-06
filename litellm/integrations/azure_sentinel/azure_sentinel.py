@@ -14,16 +14,18 @@ For batching specific details see CustomBatchLogger class
 
 import asyncio
 import os
+import time
 import traceback
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import StandardAuditLogPayload, StandardLoggingPayload
 
 
 class AzureSentinelLogger(CustomBatchLogger):
@@ -117,7 +119,9 @@ class AzureSentinelLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[StandardLoggingPayload] = []
+        self.log_queue: List[Union[StandardLoggingPayload, StandardAuditLogPayload]] = (
+            []
+        )
 
     async def _get_oauth_token(self) -> str:
         """
@@ -126,9 +130,6 @@ class AzureSentinelLogger(CustomBatchLogger):
         Returns:
             Bearer token string
         """
-        # Check if we have a valid cached token
-        import time
-
         if (
             self.oauth_token
             and self.oauth_token_expires_at
@@ -169,9 +170,6 @@ class AzureSentinelLogger(CustomBatchLogger):
 
         if not self.oauth_token:
             raise Exception("OAuth2 token response did not contain access_token")
-
-        # Cache token expiry time
-        import time
 
         self.oauth_token_expires_at = time.time() + expires_in
 
@@ -246,6 +244,34 @@ class AzureSentinelLogger(CustomBatchLogger):
             )
             pass
 
+    async def async_log_audit_log_event(
+        self, audit_log: StandardAuditLogPayload
+    ) -> None:
+        """
+        Async log LiteLLM audit log events to Azure Sentinel.
+
+        Audit logs use the same Azure Monitor Logs Ingestion stream configured for
+        the logger, allowing users to send proxy audit records directly to Sentinel.
+        """
+        try:
+            verbose_logger.debug(
+                "Azure Sentinel: Logging audit event id=%s action=%s table=%s",
+                audit_log.get("id"),
+                audit_log.get("action"),
+                audit_log.get("table_name"),
+            )
+
+            self.log_queue.append(audit_log)
+
+            if len(self.log_queue) >= self.batch_size:
+                await self.async_send_batch()
+
+        except Exception as e:
+            verbose_logger.exception(
+                f"Azure Sentinel Audit Log Layer Error - {str(e)}\n{traceback.format_exc()}"
+            )
+            pass
+
     async def async_send_batch(self):
         """
         Sends the batch of logs to Azure Monitor Logs Ingestion API
@@ -260,8 +286,6 @@ class AzureSentinelLogger(CustomBatchLogger):
             verbose_logger.debug(
                 "Azure Sentinel - about to flush %s events", len(self.log_queue)
             )
-
-            from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
             # Get OAuth2 token
             bearer_token = await self._get_oauth_token()

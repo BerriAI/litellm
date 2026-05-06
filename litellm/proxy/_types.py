@@ -3348,6 +3348,18 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    azure_sentinel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="azure_sentinel",
+        ui_callback_name="Azure Sentinel",
+        litellm_callback_params=[
+            "AZURE_SENTINEL_DCR_IMMUTABLE_ID",
+            "AZURE_SENTINEL_ENDPOINT",
+            "AZURE_SENTINEL_TENANT_ID",
+            "AZURE_SENTINEL_CLIENT_ID",
+            "AZURE_SENTINEL_CLIENT_SECRET",
+        ],
+    )
+
     openmeter: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="openmeter",
         ui_callback_name="OpenMeter",
