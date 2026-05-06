@@ -730,6 +730,15 @@ def test_diagnose_generates_redacted_llm_report(monkeypatch):
     response_data = response.json()
     assert response_data["selected_model"] == "gpt-4o"
     assert response_data["used_llm"] is True
+    assert response_data["litellm_version"]
+    assert response_data["installation"]["runtime"] in (
+        "docker_or_container",
+        "bare_python",
+    )
+    assert response_data["redacted_config"]["general_settings"]["master_key"] == (
+        "[REDACTED]"
+    )
+    assert "master_key: '[REDACTED]'" in response_data["redacted_config_yaml"]
     assert response_data["diagnostic_report"].startswith("# Reproduction report")
     assert captured_call["model"] == "gpt-4o"
 
@@ -768,6 +777,9 @@ def test_diagnose_prompts_for_model_when_no_llm_is_configured(monkeypatch):
     response_data = response.json()
     assert response_data["used_llm"] is False
     assert response_data["selected_model"] is None
+    assert response_data["litellm_version"]
+    assert response_data["installation"]["install_source"]
+    assert "master_key: '[REDACTED]'" in response_data["redacted_config_yaml"]
     assert "configured `model`" in response_data["diagnostic_report"]
     assert "sk-master-secret" not in response_data["diagnostic_report"]
 

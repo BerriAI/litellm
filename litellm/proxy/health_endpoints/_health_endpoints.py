@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, Literal, Optional, Union, cast
 
 import fastapi
+import yaml
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
@@ -184,6 +185,57 @@ def _get_litellm_package_version() -> str:
         return "unknown"
 
 
+def _get_litellm_installation_info() -> dict:
+    try:
+        distribution = importlib.metadata.distribution("litellm")
+    except importlib.metadata.PackageNotFoundError:
+        distribution = None
+
+    installer = distribution.read_text("INSTALLER") if distribution else None
+    is_container_runtime = os.path.exists("/.dockerenv") or bool(
+        os.getenv("KUBERNETES_SERVICE_HOST")
+    )
+    package_manager = (installer or "unknown").strip() or "unknown"
+
+    return {
+        "runtime": "docker_or_container" if is_container_runtime else "bare_python",
+        "is_docker_or_container": is_container_runtime,
+        "install_source": (
+            "docker_or_container" if is_container_runtime else package_manager
+        ),
+        "package_manager": package_manager,
+        "package_location": str(distribution.locate_file("")) if distribution else None,
+        "has_direct_url_metadata": (
+            distribution.read_text("direct_url.json") is not None
+            if distribution
+            else False
+        ),
+    }
+
+
+def _dump_diagnose_config_yaml(redacted_config: Any) -> str:
+    return yaml.safe_dump(redacted_config, sort_keys=False)
+
+
+def _build_diagnose_response(
+    *,
+    used_llm: bool,
+    selected_model: Optional[str],
+    diagnostic_report: str,
+    diagnostic_context: dict,
+) -> dict:
+    return {
+        "used_llm": used_llm,
+        "selected_model": selected_model,
+        "litellm_version": diagnostic_context["litellm_version"],
+        "installation": diagnostic_context["installation"],
+        "redacted_config_yaml": diagnostic_context["redacted_config_yaml"],
+        "redacted_config": diagnostic_context["config"],
+        "diagnostic_report": diagnostic_report,
+        "diagnostic_context": diagnostic_context,
+    }
+
+
 def _get_diagnose_model_list(llm_router: Optional[Any]) -> list:
     if llm_router is None:
         return []
@@ -215,8 +267,9 @@ def _build_diagnose_prompt(
         "You are helping the LiteLLM team reproduce a proxy issue. "
         "Act like a concise support engineer doing a mini diagnostic grill: "
         "identify the exact LiteLLM version, summarize the configured proxy models, "
-        "highlight relevant YAML/config settings, list missing details to ask the "
-        "admin, and produce clean Markdown reproduction steps.\n\n"
+        "state whether the deployment appears to be Docker/container or pip-installed, "
+        "highlight relevant YAML/config settings, list missing details to ask the admin, "
+        "and produce clean Markdown reproduction steps.\n\n"
         f"Model selected for this diagnostic LLM call: {selected_model}\n"
         f"Issue description from admin: {request.issue_description or 'Not provided'}\n"
         f"Known reproduction steps from admin: {request.reproduction_steps or 'Not provided'}\n\n"
@@ -1703,11 +1756,14 @@ async def diagnose_endpoint(
     )
     redacted_config = _redact_diagnose_payload(proxy_config.get_config_state())
     redacted_models = _redact_diagnose_payload(configured_models)
+    redacted_config_yaml = _dump_diagnose_config_yaml(redacted_config)
     diagnostic_context = {
         "litellm_version": _get_litellm_package_version(),
+        "installation": _get_litellm_installation_info(),
         "python_version": sys.version,
         "configured_models": redacted_models,
         "config": redacted_config,
+        "redacted_config_yaml": redacted_config_yaml,
         "admin_user": {
             "user_id": user_api_key_dict.user_id,
             "user_role": (
@@ -1719,10 +1775,10 @@ async def diagnose_endpoint(
     }
 
     if selected_model is None or llm_router is None:
-        return {
-            "used_llm": False,
-            "selected_model": selected_model,
-            "diagnostic_report": (
+        return _build_diagnose_response(
+            used_llm=False,
+            selected_model=selected_model,
+            diagnostic_report=(
                 "# LiteLLM Diagnostic Report\n\n"
                 "No proxy model is configured for the diagnostic LLM call. "
                 "Call `/diagnose` again with a configured `model`, or add a "
@@ -1730,8 +1786,8 @@ async def diagnose_endpoint(
                 "Markdown reproduction report.\n\n"
                 f"```json\n{json.dumps(diagnostic_context, indent=2, sort_keys=True, default=str)}\n```"
             ),
-            "diagnostic_context": diagnostic_context,
-        }
+            diagnostic_context=diagnostic_context,
+        )
 
     prompt = _build_diagnose_prompt(
         request=diagnose_request,
@@ -1743,12 +1799,12 @@ async def diagnose_endpoint(
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
     )
-    return {
-        "used_llm": True,
-        "selected_model": selected_model,
-        "diagnostic_report": _extract_diagnose_response_text(response),
-        "diagnostic_context": diagnostic_context,
-    }
+    return _build_diagnose_response(
+        used_llm=True,
+        selected_model=selected_model,
+        diagnostic_report=_extract_diagnose_response_text(response),
+        diagnostic_context=diagnostic_context,
+    )
 
 
 @router.get(
