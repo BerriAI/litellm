@@ -79,9 +79,11 @@ class _ProviderAdapter:
             return
         from litellm.proxy.agent_session_endpoints.vm_providers.base import VMHandle
 
-        handle = VMHandle(
-            vm_id=vm_id, provider=self.name, metadata=dict(metadata or {})
-        )
+        # Carry session_id in metadata so test/recording noops can correlate
+        # the terminate call to the originating session without changing the
+        # ABC's terminate(handle) signature.
+        handle_metadata = {**(metadata or {}), "session_id": session_id}
+        handle = VMHandle(vm_id=vm_id, provider=self.name, metadata=handle_metadata)
         try:
             await self._inner.terminate(handle)
         except TypeError:
