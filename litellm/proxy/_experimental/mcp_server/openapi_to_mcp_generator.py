@@ -6,9 +6,33 @@ import asyncio
 import contextvars
 import json
 import os
+import re
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
+
+# Tool names emitted from OpenAPI specs must work across all major LLM providers.
+# OpenAI/Anthropic/Bedrock all enforce a character class roughly equivalent to
+# ^[a-zA-Z0-9_-]+$ on tool names. Many specs (notably GitHub's REST API) use
+# tag-namespaced operationIds like "actions/download-job-logs-for-workflow-run"
+# which include '/'. Sanitize here so the same regex passes everywhere downstream.
+_OPENAPI_TOOL_NAME_INVALID_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
+_OPENAPI_TOOL_NAME_MAX_LEN = 128
+
+
+def sanitize_openapi_tool_name(raw_name: str) -> str:
+    """Map an OpenAPI operationId / fallback to a provider-safe tool name.
+
+    Replaces any character outside ``[a-zA-Z0-9_-]`` with ``_`` and caps the
+    result at 128 chars (the most restrictive of the major providers).
+    Lowercased to match the existing convention in
+    ``register_tools_from_openapi``.
+    """
+    if not raw_name:
+        return raw_name
+    sanitized = _OPENAPI_TOOL_NAME_INVALID_CHARS.sub("_", raw_name).lower()
+    return sanitized[:_OPENAPI_TOOL_NAME_MAX_LEN]
+
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -399,17 +423,36 @@ def create_tool_function(
 def register_tools_from_openapi(spec: Dict[str, Any], base_url: str):
     """Register MCP tools from OpenAPI specification."""
     paths = spec.get("paths", {})
+    used_names: set = set()
 
     for path, path_item in paths.items():
         for method in ["get", "post", "put", "delete", "patch"]:
             if method in path_item:
                 operation = path_item[method]
 
-                # Generate tool name
-                operation_id = operation.get(
-                    "operationId", f"{method}_{path.replace('/', '_')}"
-                )
-                tool_name = operation_id.replace(" ", "_").lower()
+                # Generate tool name. Sanitize to ^[a-zA-Z0-9_-]+$ (lowercase)
+                # so the resulting name is valid across OpenAI/Anthropic/Bedrock.
+                # Many specs (e.g. GitHub REST) use tag-namespaced operationIds
+                # like "actions/download-job-logs-for-workflow-run" which
+                # contain '/' and would 400 at the LLM provider boundary.
+                operation_id = operation.get("operationId", f"{method}_{path}")
+                tool_name = sanitize_openapi_tool_name(operation_id)
+
+                # Disambiguate collisions: two operationIds that differ only
+                # by sanitized characters (e.g. "foo/list" and "foo.list")
+                # would both become "foo_list". Append _2, _3, … to keep
+                # every tool reachable, mirroring the Anthropic-side logic
+                # in _build_anthropic_tool_name_maps.
+                unique = tool_name
+                n = 1
+                while unique in used_names:
+                    n += 1
+                    suffix = f"_{n}"
+                    unique = (
+                        tool_name[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
+                    )
+                tool_name = unique
+                used_names.add(tool_name)
 
                 # Get description
                 description = operation.get(
