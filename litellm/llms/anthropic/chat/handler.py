@@ -585,6 +585,14 @@ class ModelResponseIterator:
         self._current_server_tool_id: Optional[str] = None
         self._container_id: Optional[str] = None
 
+        # Accumulate streamed reasoning ("thinking") text so we can estimate
+        # reasoning_tokens in the final usage object. Anthropic's streaming
+        # message_delta only reports total output_tokens, so without this
+        # accumulator completion_tokens_details.reasoning_tokens is always 0
+        # for streaming responses even when extended thinking is enabled.
+        # See: https://github.com/BerriAI/litellm/issues/<TBD>
+        self.accumulated_reasoning_content: str = ""
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
@@ -609,9 +617,13 @@ class ModelResponseIterator:
         return False
 
     def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
+        # Pass the accumulated thinking text (if any) so calculate_usage can
+        # estimate reasoning_tokens for streaming responses. Falsy when no
+        # thinking deltas were observed, which preserves the previous behavior
+        # for non-thinking streams.
         return AnthropicConfig().calculate_usage(
             usage_object=cast(dict, anthropic_usage_chunk),
-            reasoning_content=None,
+            reasoning_content=self.accumulated_reasoning_content or None,
             speed=self.speed,
         )
 
@@ -658,14 +670,21 @@ class ModelResponseIterator:
             "thinking" in content_block["delta"]
             or "signature" in content_block["delta"]
         ):
+            thinking_text = content_block["delta"].get("thinking") or ""
             thinking_blocks = [
                 ChatCompletionThinkingBlock(
                     type="thinking",
-                    thinking=content_block["delta"].get("thinking") or "",
+                    thinking=thinking_text,
                     signature=str(content_block["delta"].get("signature") or ""),
                 )
             ]
             provider_specific_fields["thinking_blocks"] = thinking_blocks
+            # Accumulate so the final usage chunk can report reasoning_tokens.
+            # Anthropic's streaming message_delta only carries total
+            # output_tokens; without this accumulator, _handle_usage() would
+            # always pass reasoning_content=None and yield reasoning_tokens=0.
+            if thinking_text:
+                self.accumulated_reasoning_content += thinking_text
         elif (
             "content" in content_block["delta"]
             and content_block["delta"].get("type") == "compaction_delta"

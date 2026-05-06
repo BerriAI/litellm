@@ -1614,3 +1614,148 @@ def test_non_bash_tool_result_skipped():
     assert (
         len(code_results) == 0
     ), f"Expected 0 code_interpreter_results for text_editor result, got {len(code_results)}"
+
+
+def test_streaming_accumulates_reasoning_tokens_in_usage():
+    """Reasoning tokens should be reported in the final usage chunk for streaming
+    responses with extended thinking.
+
+    Regression test for the bug where streaming Anthropic responses always
+    returned reasoning_tokens=0 because thinking deltas were forwarded but never
+    accumulated, so the message_delta -> calculate_usage path passed
+    reasoning_content=None.
+    """
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "thinking_delta",
+                "thinking": "Let me think carefully about this problem. ",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+                "type": "thinking_delta",
+                "thinking": "I need to consider every possibility before answering.",
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "signature_delta", "signature": "sig_abc"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "text_delta", "text": "The answer is 42."},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    final_usage = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed.usage is not None:
+            final_usage = parsed.usage
+
+    expected_thinking = (
+        "Let me think carefully about this problem. "
+        "I need to consider every possibility before answering."
+    )
+    assert iterator.accumulated_reasoning_content == expected_thinking
+
+    assert final_usage is not None
+    assert final_usage.completion_tokens == 50
+
+    completion_details = final_usage.completion_tokens_details
+    assert completion_details is not None
+    assert completion_details.reasoning_tokens > 0, (
+        "Expected reasoning_tokens > 0 in streaming usage when thinking deltas "
+        f"were observed; got {completion_details.reasoning_tokens}. This is the "
+        "Anthropic streaming reasoning_tokens=0 regression."
+    )
+    # text_tokens is the remainder; it should not absorb the reasoning tokens.
+    assert completion_details.text_tokens == (50 - completion_details.reasoning_tokens)
+
+
+def test_streaming_no_thinking_leaves_reasoning_tokens_zero():
+    """Streams without any thinking deltas should still report
+    reasoning_tokens=0 (no false positives from the new accumulator)."""
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_456",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 5, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello world"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+            "usage": {"output_tokens": 12},
+        },
+    ]
+
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    final_usage = None
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed.usage is not None:
+            final_usage = parsed.usage
+
+    assert iterator.accumulated_reasoning_content == ""
+    assert final_usage is not None
+    completion_details = final_usage.completion_tokens_details
+    assert completion_details is not None
+    assert completion_details.reasoning_tokens == 0
+    assert completion_details.text_tokens == 12
