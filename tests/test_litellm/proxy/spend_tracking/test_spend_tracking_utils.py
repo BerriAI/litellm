@@ -1523,3 +1523,67 @@ class TestIsMasterKey:
         master = "sk-master-key-123"
         hashed = hash_token(master)
         assert _is_master_key(api_key=hashed, _master_key=master) is False
+
+
+def test_sanitize_request_body_strips_secret_fields():
+    """
+    secret_fields contains raw HTTP headers (including Authorization Bearer
+    tokens). _sanitize_request_body_for_spend_logs_payload must strip it so
+    that sensitive credentials are never persisted in the spend-logs DB.
+    """
+    request_body = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "hi"}],
+        "secret_fields": {
+            "raw_headers": {
+                "authorization": "Bearer sk-GjX--WwRQmiX2cvASbKf5Q",
+                "content-type": "application/json",
+                "host": "litellm.example.com",
+            }
+        },
+    }
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    assert (
+        "secret_fields" not in sanitized
+    ), "secret_fields must be stripped from the sanitized request body"
+    assert sanitized["model"] == "gpt-4"
+    assert sanitized["messages"] == [{"role": "user", "content": "hi"}]
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
+    """
+    End-to-end test: when the proxy_server_request body contains
+    secret_fields (as it did before the body-snapshot fix), the spend-log
+    serialization must still strip them via the sanitizer fallback.
+    """
+    mock_should_store.return_value = True
+
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "hello"}],
+                "secret_fields": {
+                    "raw_headers": {
+                        "authorization": "Bearer sk-super-secret-token",
+                        "host": "litellm.example.com",
+                    }
+                },
+            }
+        }
+    }
+
+    result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=litellm_params, kwargs={}
+    )
+    parsed = json.loads(result)
+
+    assert (
+        "secret_fields" not in parsed
+    ), "secret_fields must never appear in the spend-log proxy_server_request column"
+    assert parsed["model"] == "gpt-4"
+    assert parsed["messages"] == [{"role": "user", "content": "hello"}]

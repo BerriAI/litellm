@@ -8,6 +8,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
+import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
@@ -1631,8 +1632,9 @@ def test_effort_validation():
         )
         assert result["output_config"]["effort"] == effort
 
-    # Invalid value should raise error
-    with pytest.raises(ValueError, match="Invalid effort value"):
+    with pytest.raises(
+        litellm.exceptions.BadRequestError, match="Invalid effort value"
+    ):
         optional_params = {"output_config": {"effort": "invalid"}}
         config.transform_request(
             model="claude-opus-4-5-20251101",
@@ -1688,7 +1690,8 @@ def test_max_effort_rejected_for_opus_45():
     messages = [{"role": "user", "content": "Test"}]
 
     with pytest.raises(
-        ValueError, match="effort='max' is not supported by this model"
+        litellm.exceptions.BadRequestError,
+        match="effort='max' is not supported by this model",
     ):
         optional_params = {"output_config": {"effort": "max"}}
         config.transform_request(
@@ -1739,6 +1742,97 @@ def test_effort_with_other_features():
     assert "tools" in result
     assert len(result["tools"]) > 0
     assert "thinking" in result
+
+
+def test_anthropic_drop_params_strips_output_config_for_pre_4_5_models():
+    """``drop_params=True`` strips unsupported ``output_config`` for pre-4.5 models."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-3-haiku-20240307",
+            messages=messages,
+            optional_params={"output_config": {"effort": "low"}},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert "output_config" not in result
+
+
+def test_anthropic_drop_params_keeps_output_config_for_supporting_models():
+    """``drop_params=True`` must not strip on models that support effort."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = True
+    try:
+        result = config.transform_request(
+            model="claude-opus-4-7",
+            messages=messages,
+            optional_params={"output_config": {"effort": "high"}},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("output_config") == {"effort": "high"}
+
+
+def test_anthropic_drop_params_false_forwards_to_unsupported_model():
+    """Default ``drop_params=False`` forwards ``output_config`` and lets the provider 400."""
+    config = AnthropicConfig()
+    messages = [{"role": "user", "content": "Hello"}]
+
+    original = litellm.drop_params
+    litellm.drop_params = False
+    try:
+        result = config.transform_request(
+            model="claude-3-haiku-20240307",
+            messages=messages,
+            optional_params={"output_config": {"effort": "low"}},
+            litellm_params={},
+            headers={},
+        )
+    finally:
+        litellm.drop_params = original
+
+    assert result.get("output_config") == {"effort": "low"}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
+        "anthropic.claude-mythos-preview",
+        "bedrock/anthropic.claude-mythos-preview",
+    ],
+)
+def test_anthropic_model_supports_effort_param_recognizes_supporting_models(model):
+    assert AnthropicConfig._model_supports_effort_param(model) is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-3-haiku-20240307",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-opus-20240229",
+        "claude-sonnet-4-20250514",
+    ],
+)
+def test_anthropic_model_supports_effort_param_rejects_non_supporting_models(model):
+    assert AnthropicConfig._model_supports_effort_param(model) is False
 
 
 def test_translate_system_message_skips_empty_string_content():
@@ -1952,6 +2046,67 @@ def test_get_config_without_model_uses_fallback():
     assert config["max_tokens"] == 4096
 
 
+def test_get_config_does_not_leak_module_constants():
+    """``get_config`` must not leak the reasoning-effort lookup table onto the wire."""
+    cfg = AnthropicConfig.get_config(model="claude-opus-4-7")
+    for forbidden in (
+        "REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT",
+        "_REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT",
+    ):
+        assert forbidden not in cfg
+
+
+@pytest.mark.parametrize(
+    "model,level,expected",
+    [
+        ("claude-opus-4-7", "max", True),
+        ("claude-opus-4-7", "xhigh", True),
+        ("claude-opus-4-6", "max", True),
+        ("claude-opus-4-6", "xhigh", False),
+        ("claude-sonnet-4-6", "max", True),
+        ("claude-sonnet-4-6", "xhigh", False),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-7", "max", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-7", "xhigh", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "max", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-6-v1", "xhigh", False),
+        ("bedrock/invoke/us.anthropic.claude-sonnet-4-6", "max", True),
+        ("vertex_ai/claude-opus-4-7", "xhigh", True),
+        ("azure_ai/claude-opus-4-7", "xhigh", True),
+    ],
+)
+def test_supports_effort_level_handles_provider_prefixes(model, level, expected):
+    """``_supports_effort_level`` resolves bedrock/vertex/azure-prefixed model ids."""
+    assert AnthropicConfig._supports_effort_level(model, level) is expected
+
+
+@pytest.mark.parametrize(
+    "model,effort,expect_error",
+    [
+        ("claude-opus-4-6", "max", False),
+        ("claude-sonnet-4-6", "max", False),
+        ("claude-opus-4-7", "max", False),
+        ("claude-opus-4-5-20251101", "max", True),
+        ("claude-sonnet-4-5", "max", True),
+        ("claude-opus-4-7", "xhigh", False),
+        ("claude-opus-4-6", "xhigh", True),
+        ("claude-sonnet-4-6", "xhigh", True),
+        ("claude-opus-4-5-20251101", "high", False),
+        ("claude-haiku-4-5", "low", False),
+        ("claude-opus-4-5-20251101", None, False),
+    ],
+)
+def test_validate_effort_for_model_centralises_per_model_gating(
+    model, effort, expect_error
+):
+    err = AnthropicConfig._validate_effort_for_model(model, effort)
+    if expect_error:
+        assert err is not None
+        assert effort in err
+        assert model in err
+    else:
+        assert err is None
+
+
 def test_transform_request_uses_dynamic_max_tokens():
     """
     Test that transform_request uses dynamic max_tokens based on model
@@ -2155,12 +2310,12 @@ def test_reasoning_effort_maps_to_budget_thinking_for_non_opus_4_6():
     """
     config = AnthropicConfig()
 
-    # Test with Claude Sonnet 4.5 (non-Opus 4.6 model)
+    # ``minimal`` floors at ANTHROPIC_MIN_THINKING_BUDGET_TOKENS (1024).
     test_cases = [
-        ("low", 1024),  # DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
-        ("medium", 2048),  # DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET
-        ("high", 4096),  # DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET
-        ("minimal", 128),  # DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET
+        ("low", 1024),
+        ("medium", 2048),
+        ("high", 4096),
+        ("minimal", 1024),
     ]
 
     for effort, expected_budget in test_cases:
@@ -2246,21 +2401,31 @@ def test_reasoning_effort_does_not_set_output_config_for_older_models():
         ), f"output_config should not be set for {model}"
 
 
-def test_max_effort_rejected_for_sonnet_46():
-    """Test that effort='max' is rejected for Sonnet 4.6 (Opus-only effort level)."""
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6-20260219",
+        "us.anthropic.claude-sonnet-4-6",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+        "vertex_ai/claude-sonnet-4-6",
+        "openrouter/anthropic/claude-sonnet-4.6",
+    ],
+)
+def test_max_effort_accepted_for_sonnet_46_variants(model):
+    """``effort='max'`` is supported on Claude 4.6 (Opus + Sonnet) and 4.7."""
     config = AnthropicConfig()
     messages = [{"role": "user", "content": "Test"}]
 
-    with pytest.raises(
-        ValueError, match="effort='max' is not supported by this model"
-    ):
-        config.transform_request(
-            model="claude-sonnet-4-6-20260219",
-            messages=messages,
-            optional_params={"output_config": {"effort": "max"}},
-            litellm_params={},
-            headers={},
-        )
+    result = config.transform_request(
+        model=model,
+        messages=messages,
+        optional_params={"output_config": {"effort": "max"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
 
 
 def test_max_effort_accepted_for_opus_46():
@@ -2313,6 +2478,98 @@ def test_effort_beta_header_not_injected_for_46_models():
             model=model,
         )
         assert result is False, f"is_effort_used should return False for {model}"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-6-20250514",
+        "claude-sonnet-4-6-20260219",
+        "claude-opus-4-7",
+    ],
+)
+def test_reasoning_effort_none_omits_thinking_and_output_config(model):
+    """reasoning_effort="none" must omit thinking and output_config from the request."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "thinking" not in result
+    assert "output_config" not in result
+
+
+@pytest.mark.parametrize(
+    "effort",
+    ["disabled", "invalid", ""],
+)
+def test_reasoning_effort_garbage_raises_bad_request(effort):
+    """Unmapped reasoning_effort raises BadRequestError (clean 400, not a 500)."""
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model="claude-sonnet-4-5-20250929",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "effort,expected_budget",
+    [("xhigh", 8192), ("max", 16384)],
+)
+def test_reasoning_effort_xhigh_max_maps_to_budget_on_budget_model(
+    effort, expected_budget
+):
+    """``xhigh`` / ``max`` extend the budget_tokens progression on budget-mode models."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort},
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] == expected_budget
+    assert "output_config" not in result
+
+
+def test_output_config_effort_empty_string_raises_bad_request():
+    """``output_config={"effort": ""}`` is rejected with a 400."""
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.exceptions.BadRequestError, match="Invalid effort"):
+        config.transform_request(
+            model="claude-opus-4-7",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"output_config": {"effort": ""}, "max_tokens": 32},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_reasoning_effort_minimal_floors_at_anthropic_provider_minimum():
+    """``minimal`` floors at the Anthropic provider minimum (1024)."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"reasoning_effort": "minimal"},
+        optional_params={},
+        model="claude-sonnet-4-5-20250929",
+        drop_params=False,
+    )
+
+    assert result["thinking"]["type"] == "enabled"
+    assert result["thinking"]["budget_tokens"] >= 1024
 
 
 def test_effort_beta_header_still_injected_for_older_models():

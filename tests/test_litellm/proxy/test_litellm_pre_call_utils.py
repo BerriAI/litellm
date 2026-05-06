@@ -450,6 +450,71 @@ async def test_add_litellm_data_to_request_proxy_server_request_body_is_post_str
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_body_snapshot_excludes_secret_fields():
+    """Security: proxy_server_request['body'] must never contain secret_fields
+    because that dict holds raw HTTP headers including Authorization Bearer
+    tokens. The body snapshot is persisted in spend logs and other audit trails,
+    so leaking secret_fields there exposes user credentials.
+
+    secret_fields must still be available on the live ``data`` dict for
+    downstream consumers (MCP, Responses API) that legitimately need raw headers.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer sk-super-secret-token",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="test-user",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    # secret_fields must exist on the live data dict
+    assert (
+        "secret_fields" in updated
+    ), "secret_fields must still be present on the live data dict"
+    assert "raw_headers" in updated["secret_fields"]
+
+    # But the body snapshot must NOT contain secret_fields
+    snapshot_body = updated["proxy_server_request"]["body"]
+    assert "secret_fields" not in snapshot_body, (
+        "secret_fields must be excluded from proxy_server_request['body'] "
+        "to prevent Authorization tokens from leaking into spend logs"
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection():
     """Regression: metadata arriving as a JSON string (multipart/form-data or
     extra_body) must not bypass the admin-injection strip. The parse happens
@@ -594,6 +659,59 @@ async def test_add_litellm_data_to_request_strips_user_control_fields():
     assert "mock_response" not in snapshot_body
     assert "mock_tool_calls" not in snapshot_body
     assert "pillar_response_headers" not in snapshot_body["metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "control_field",
+    ["callbacks", "service_callback", "logger_fn", "litellm_disabled_callbacks"],
+)
+async def test_add_litellm_data_to_request_strips_callback_control_fields(
+    control_field,
+):
+    """``callbacks`` / ``service_callback`` / ``logger_fn`` get appended to
+    the worker-wide ``litellm.{input,success,failure,_async_*,service}_callback``
+    lists and ``litellm.user_logger_fn`` from inside ``function_setup`` —
+    one request poisons every subsequent caller in that worker.
+    ``litellm_disabled_callbacks`` is the inverse: a request-body value
+    silently disables admin-configured audit/observability for the call.
+    None has a documented per-request use, so all four are stripped at
+    the proxy boundary alongside the existing internal-only fields."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    sample_value = (
+        ["langfuse"]
+        if control_field
+        in ("callbacks", "service_callback", "litellm_disabled_callbacks")
+        else "module.func"
+    )
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hi"}],
+            control_field: sample_value,
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    assert control_field not in updated
+    # The post-strip body snapshot used by audit/spend logging must also
+    # not retain the attacker-injected control field.
+    snapshot_body = updated["proxy_server_request"]["body"]
+    assert control_field not in snapshot_body
 
 
 @pytest.mark.asyncio
@@ -2844,6 +2962,61 @@ async def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_po
     assert "messages" in data
     assert data["messages"] == [{"role": "user", "content": "Hello"}]
     assert "metadata" in data
+
+
+@pytest.mark.asyncio
+async def test_api_created_global_policy_applies_to_new_key_without_restart():
+    """
+    Regression: policies created at runtime via policy builder must apply
+    immediately when attached globally, even if the server started with no
+    initialized policy config.
+    """
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyAttachment,
+        PolicyGuardrails,
+    )
+
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
+
+    policy_registry = get_policy_registry()
+    attachment_registry = get_attachment_registry()
+    policy_registry._policies = {}
+    policy_registry._policies_by_id = {}
+    policy_registry._initialized = False
+    attachment_registry._attachments = []
+    attachment_registry._initialized = False
+
+    try:
+        policy_registry.add_policy(
+            "runtime-global-policy",
+            Policy(guardrails=PolicyGuardrails(add=["runtime-guardrail"])),
+        )
+        attachment_registry.add_attachment(
+            PolicyAttachment(policy="runtime-global-policy", scope="*")
+        )
+
+        await add_guardrails_from_policy_engine(
+            data=data,
+            metadata_variable_name="metadata",
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert "runtime-guardrail" in data["metadata"]["guardrails"]
+        assert "runtime-global-policy" in data["metadata"]["applied_policies"]
+    finally:
+        policy_registry._policies = {}
+        policy_registry._policies_by_id = {}
+        policy_registry._initialized = False
+        attachment_registry._attachments = []
+        attachment_registry._initialized = False
 
 
 @pytest.mark.asyncio

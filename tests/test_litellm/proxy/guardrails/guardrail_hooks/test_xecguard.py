@@ -6,7 +6,6 @@ branch coverage. Network calls are always mocked; the companion live
 suite lives in ``test_xecguard_live.py``.
 """
 
-import asyncio
 import os
 from unittest.mock import MagicMock, patch
 
@@ -1194,6 +1193,26 @@ class TestXecGuardMessageAssembly:
                 {"choices": [{"message": {"content": 42}}]}
             )
             is None
+        )
+
+    def test_extract_assistant_text_combines_all_choices(self, xecguard_guardrail):
+        assert (
+            xecguard_guardrail._extract_assistant_text_from_response(
+                {
+                    "choices": [
+                        {"message": {"content": "first response"}},
+                        {
+                            "message": {
+                                "content": [
+                                    {"type": "text", "text": "second"},
+                                    {"type": "text", "text": "response"},
+                                ]
+                            }
+                        },
+                    ]
+                }
+            )
+            == "first response\nsecond\nresponse"
         )
 
     def test_synthesize_user_inputs_not_dict(self, xecguard_guardrail):

@@ -2324,14 +2324,10 @@ async def _register_pass_through_endpoint(
     dependencies = None
 
     if auth is not None and str(auth).lower() == "true":
-        # Authentication on a pass-through endpoint used to be enterprise-
-        # only — which left the OSS tier with no safe configuration: the
-        # default was ``auth=False`` (unauthenticated forwarder) and the
-        # safe ``auth=True`` raised at startup unless the operator had a
-        # license. The default is now ``True`` (safe-by-default), and
-        # turning it on no longer requires a license: an unauthenticated
-        # forwarder is a deployment choice the operator should be allowed
-        # to make explicitly, but the safe option must always be free.
+        # Authentication on a pass-through endpoint used to be enterprise-only.
+        # That left OSS with no safe configuration: auth=True raised at startup
+        # unless the operator had a license. The safe option must always be free,
+        # and unauthenticated forwarding should require explicit opt-in.
         dependencies = [Depends(user_api_key_auth)]
         if path not in LiteLLMRoutes.openai_routes.value:
             LiteLLMRoutes.openai_routes.value.append(path)

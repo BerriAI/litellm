@@ -39,9 +39,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 import litellm
+from litellm.caching.dual_cache import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.caching import DualCache
 from litellm.constants import (
     CLI_SSO_SESSION_CACHE_KEY_PREFIX,
     CLI_SSO_SESSION_TTL_SECONDS,
@@ -75,7 +75,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
-from litellm.proxy.auth.auth_utils import _get_request_ip_address, _has_user_setup_sso
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.auth.auth_utils import (
+    _get_request_ip_address,
+    _has_user_setup_sso,
+)
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
@@ -674,6 +678,7 @@ async def google_login(
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
             state=cli_state,
+            request=request,
         )
         if return_to is not None and sso_redirect is not None:
             if SSOAuthenticationHandler._validate_return_to(return_to):
@@ -1155,6 +1160,30 @@ async def get_generic_sso_response(
         authorization_code = request.query_params.get("code")
 
         if code_verifier:
+            # State-to-session-cookie binding.  The non-PKCE branch below
+            # delegates to fastapi-sso's ``verify_and_process``, which
+            # performs its own session-cookie check.  The PKCE branch
+            # bypasses that helper, so we validate the URL ``state``
+            # against the ``litellm_oauth_state`` cookie set on the
+            # redirect response — without this an attacker can pre-mint
+            # a state + cached PKCE verifier and hijack a victim's auth
+            # code (Login-CSRF / token theft).
+            url_state = request.query_params.get("state")
+            cookie_state = request.cookies.get("litellm_oauth_state")
+            if (
+                not url_state
+                or not cookie_state
+                or not secrets.compare_digest(url_state, cookie_state)
+            ):
+                raise ProxyException(
+                    message=(
+                        "Invalid OAuth state parameter — does not match "
+                        "the browser-bound state cookie."
+                    ),
+                    type=ProxyErrorTypes.auth_error,
+                    param="state",
+                    code=status.HTTP_400_BAD_REQUEST,
+                )
             if not authorization_code:
                 raise ProxyException(
                     message="Missing authorization code in callback",
@@ -1301,7 +1330,7 @@ async def get_existing_user_info_from_db(
     user_id: Optional[str],
     user_email: Optional[str],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[LiteLLM_UserTable]:
     try:
@@ -1325,7 +1354,7 @@ async def get_existing_user_info_from_db(
 async def get_user_info_from_db(
     result: Union[CustomOpenID, OpenID, dict],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     user_email: Optional[str],
     user_defined_values: Optional[SSOUserDefinedValues],
@@ -1445,7 +1474,7 @@ async def _sync_user_role_from_jwt_role_map(
     received_response: Optional[dict],
     user_info: Optional[Union[LiteLLM_UserTable, NewUserResponse]],
     prisma_client: PrismaClient,
-    user_api_key_cache: DualCache,
+    user_api_key_cache: UserApiKeyCache,
     user_defined_values: Optional[SSOUserDefinedValues],
 ) -> None:
     """
@@ -1484,11 +1513,8 @@ async def _sync_user_role_from_jwt_role_map(
         user_info.user_role = mapped_role.value
         await user_api_key_cache.async_set_cache(
             key=user_info.user_id,
-            value=(
-                user_info.model_dump()
-                if hasattr(user_info, "model_dump")
-                else dict(user_info)
-            ),
+            value=user_info,
+            model_type=LiteLLM_UserTable,
         )
 
 
@@ -2146,6 +2172,7 @@ class SSOAuthenticationHandler:
         microsoft_client_id: Optional[str] = None,
         generic_client_id: Optional[str] = None,
         state: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Step 1. Call Get Login Redirect for the SSO provider. Send the redirect response to `redirect_url`
@@ -2155,6 +2182,8 @@ class SSOAuthenticationHandler:
             google_client_id (Optional[str], optional): The Google Client ID. Defaults to None.
             microsoft_client_id (Optional[str], optional): The Microsoft Client ID. Defaults to None.
             generic_client_id (Optional[str], optional): The Generic Client ID. Defaults to None.
+            request: Optional FastAPI request, used to drive the ``Secure``
+                attribute on the ``litellm_oauth_state`` CSRF cookie.
 
         Returns:
             RedirectResponse: The redirect response from the SSO provider.
@@ -2265,6 +2294,7 @@ class SSOAuthenticationHandler:
                 generic_sso=generic_sso,
                 state=state,
                 generic_authorization_endpoint=generic_authorization_endpoint,
+                request=request,
             )
         raise ValueError(
             "Unknown SSO provider. Please setup SSO with client IDs https://docs.litellm.ai/docs/proxy/admin_ui_sso"
@@ -2275,6 +2305,7 @@ class SSOAuthenticationHandler:
         generic_sso: Any,
         state: Optional[str] = None,
         generic_authorization_endpoint: Optional[str] = None,
+        request: Optional[Request] = None,
     ) -> Optional[RedirectResponse]:
         """
         Get the redirect response for Generic SSO
@@ -2284,10 +2315,13 @@ class SSOAuthenticationHandler:
         from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
 
         with generic_sso:
-            # TODO: state should be a random string and added to the user session with cookie
-            # or a cryptographicly signed state that we can verify stateless
-            # For simplification we are using a static state, this is not perfect but some
-            # SSO providers do not allow stateless verification
+            # State is bound to the caller's browser via a ``litellm_oauth_state``
+            # HttpOnly cookie set on the redirect response below; the SSO
+            # callback validates the URL ``state`` against that cookie before
+            # completing the PKCE token exchange.  Without this binding, an
+            # attacker who pre-mints a state + a cached PKCE verifier can hand
+            # the link to a victim and capture the resulting access token
+            # (Login CSRF / token theft).
             (
                 redirect_params,
                 code_verifier,
@@ -2354,6 +2388,31 @@ class SSOAuthenticationHandler:
 
                     # Update the redirect response
                     redirect_response.headers["location"] = new_url
+
+                # Bind state to the user's browser session.  The /callback
+                # handler validates the URL ``state`` against this cookie via
+                # ``secrets.compare_digest`` before exchanging the PKCE
+                # code_verifier.  Only set the cookie when PKCE is in use
+                # (i.e. inside this ``code_verifier`` branch) so two
+                # concurrent SSO sessions — one PKCE, one plain — cannot
+                # overwrite each other's state cookie.
+                state_value = redirect_params.get("state")
+                if state_value and redirect_response is not None:
+                    # Production-safe default: require HTTPS for the
+                    # CSRF-protection cookie unless we can prove the
+                    # incoming request is HTTP (local dev).  Without
+                    # ``Secure`` the cookie is sent over plain HTTP,
+                    # letting a network observer read and replay the
+                    # state value and bypass this protection.
+                    secure_flag = request is None or request.url.scheme == "https"
+                    redirect_response.set_cookie(
+                        key="litellm_oauth_state",
+                        value=state_value,
+                        max_age=600,
+                        httponly=True,
+                        samesite="lax",
+                        secure=secure_flag,
+                    )
             return redirect_response
 
     @staticmethod
@@ -3971,6 +4030,7 @@ async def debug_sso_login(request: Request):
             microsoft_client_id=microsoft_client_id,
             google_client_id=google_client_id,
             generic_client_id=generic_client_id,
+            request=request,
         )
 
 

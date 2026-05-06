@@ -87,6 +87,18 @@ class CachingHandlerResponse(BaseModel):
 in_memory_cache_obj = InMemoryCache()
 
 
+def _should_defer_streaming_cache_hit_callbacks(*, kwargs: Dict[str, Any]) -> bool:
+    """
+    When stream=True, do not run success callbacks at cache-hit time.
+
+    Cached chat/text completion replay uses CustomStreamWrapper; cached Responses
+    replay uses CachedResponsesAPIStreamingIterator. Both invoke logging success
+    handlers when the stream finishes; firing them here too would double-count
+    spend and callback records.
+    """
+    return kwargs.get("stream", False) is True
+
+
 class LLMCachingHandler:
     def __init__(
         self,
@@ -99,6 +111,7 @@ class LLMCachingHandler:
         self.async_streaming_chunks: List[ModelResponse] = []
         self.sync_streaming_chunks: List[ModelResponse] = []
         self.request_kwargs = request_kwargs
+        self.preset_cache_key: Optional[str] = None
         self.original_function = original_function
         self.start_time = start_time
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
@@ -206,7 +219,7 @@ class LLMCachingHandler:
                         custom_llm_provider=kwargs.get("custom_llm_provider", None),
                         args=args,
                     )
-                    if kwargs.get("stream", False) is False:
+                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
                         # LOG SUCCESS
                         self._async_log_cache_hit_on_callbacks(
                             logging_obj=logging_obj,
@@ -215,11 +228,12 @@ class LLMCachingHandler:
                             end_time=end_time,
                             cache_hit=cache_hit,
                         )
-                    cache_key = litellm.cache.get_cache_key(**kwargs)
-                    if (
-                        isinstance(cached_result, BaseModel)
-                        or isinstance(cached_result, CustomStreamWrapper)
-                    ) and hasattr(cached_result, "_hidden_params"):
+                    cache_key = (
+                        self.preset_cache_key
+                        or self.request_kwargs.get("cache_key")
+                        or litellm.cache.get_cache_key(**self.request_kwargs)
+                    )
+                    if hasattr(cached_result, "_hidden_params"):
                         cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
                     return CachingHandlerResponse(cached_result=cached_result)
                 elif (
@@ -265,8 +279,6 @@ class LLMCachingHandler:
         kwargs: Dict[str, Any],
         args: Optional[Tuple[Any, ...]] = None,
     ) -> CachingHandlerResponse:
-        from litellm.utils import CustomStreamWrapper
-
         cached_result: Optional[Any] = None
 
         # Check if caching should be performed BEFORE doing expensive kwargs copy
@@ -282,6 +294,11 @@ class LLMCachingHandler:
                     args,
                 )
             )
+            if new_kwargs.get("metadata") is None:
+                new_kwargs.pop("metadata", None)
+            if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
+                new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
+            self.request_kwargs = new_kwargs
             print_verbose("Checking Sync Cache")
             cached_result = litellm.cache.get_cache(**new_kwargs)
             if cached_result is not None:
@@ -322,17 +339,19 @@ class LLMCachingHandler:
                         is_async=False,
                     )
 
-                    logging_obj.handle_sync_success_callbacks_for_async_calls(
-                        result=cached_result,
-                        start_time=start_time,
-                        end_time=end_time,
-                        cache_hit=cache_hit,
+                    if not _should_defer_streaming_cache_hit_callbacks(kwargs=kwargs):
+                        logging_obj.handle_sync_success_callbacks_for_async_calls(
+                            result=cached_result,
+                            start_time=start_time,
+                            end_time=end_time,
+                            cache_hit=cache_hit,
+                        )
+                    cache_key = (
+                        self.preset_cache_key
+                        or self.request_kwargs.get("cache_key")
+                        or litellm.cache.get_cache_key(**self.request_kwargs)
                     )
-                    cache_key = litellm.cache.get_cache_key(**kwargs)
-                    if (
-                        isinstance(cached_result, BaseModel)
-                        or isinstance(cached_result, CustomStreamWrapper)
-                    ) and hasattr(cached_result, "_hidden_params"):
+                    if hasattr(cached_result, "_hidden_params"):
                         cached_result._hidden_params["cache_key"] = cache_key  # type: ignore
                     return CachingHandlerResponse(cached_result=cached_result)
         return CachingHandlerResponse(cached_result=cached_result)
@@ -686,6 +705,11 @@ class LLMCachingHandler:
                 args,
             )
         )
+        if new_kwargs.get("metadata") is None:
+            new_kwargs.pop("metadata", None)
+        if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
+            new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
+        self.request_kwargs = new_kwargs
         cached_result: Optional[Any] = None
         if call_type == CallTypes.aembedding.value:
             if isinstance(new_kwargs["input"], str):
@@ -710,14 +734,26 @@ class LLMCachingHandler:
                 if all(result is None for result in cached_result):
                     cached_result = None
         else:
+            request_kwargs = new_kwargs.copy()
+            request_cache_key = request_kwargs.pop("cache_key", None)
             if litellm.cache._supports_async() is True:
                 ## check if dual cache is supported ##
+                self.preset_cache_key = (
+                    request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
+                )
                 cached_result = await litellm.cache.async_get_cache(
-                    dynamic_cache_object=self.dual_cache, **new_kwargs
+                    dynamic_cache_object=self.dual_cache,
+                    cache_key=self.preset_cache_key,
+                    **request_kwargs,
                 )
             else:  # fallback for caches that don't support async
+                self.preset_cache_key = (
+                    request_cache_key or litellm.cache.get_cache_key(**request_kwargs)
+                )
                 cached_result = litellm.cache.get_cache(
-                    dynamic_cache_object=self.dual_cache, **new_kwargs
+                    dynamic_cache_object=self.dual_cache,
+                    cache_key=self.preset_cache_key,
+                    **request_kwargs,
                 )
         return cached_result
 
@@ -825,8 +861,27 @@ class LLMCachingHandler:
         elif (call_type == "aresponses" or call_type == "responses") and isinstance(
             cached_result, dict
         ):
-            # Convert cached dict back to ResponsesAPIResponse object
-            cached_result = ResponsesAPIResponse(**cached_result)
+            from litellm.responses.streaming_iterator import (
+                CachedResponsesAPIStreamingIterator,
+            )
+
+            response_obj = ResponsesAPIResponse(**cached_result)
+            if (
+                hasattr(response_obj, "_hidden_params")
+                and response_obj._hidden_params is not None
+                and isinstance(response_obj._hidden_params, dict)
+            ):
+                response_obj._hidden_params["cache_hit"] = True
+
+            if kwargs.get("stream", False) is True:
+                cached_result = CachedResponsesAPIStreamingIterator(
+                    response=response_obj,
+                    logging_obj=logging_obj,
+                    request_data=kwargs,
+                    call_type=call_type,
+                )
+            else:
+                cached_result = response_obj
 
         if (
             hasattr(cached_result, "_hidden_params")
