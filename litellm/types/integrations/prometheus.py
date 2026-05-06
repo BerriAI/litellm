@@ -197,6 +197,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_deployment_latency_per_output_token",
     "litellm_requests_metric",
     "litellm_spend_metric",
+    "litellm_web_search_requests_metric",
     "litellm_total_tokens_metric",
     "litellm_input_tokens_metric",
     "litellm_output_tokens_metric",
@@ -410,6 +411,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
+
+    litellm_web_search_requests_metric = litellm_spend_metric
 
     litellm_input_tokens_metric = [
         UserAPIKeyLabelNames.END_USER.value,
@@ -658,6 +661,7 @@ class PrometheusMetricLabels:
             "litellm_deployment_latency_per_output_token",
             "litellm_requests_metric",
             "litellm_spend_metric",
+            "litellm_web_search_requests_metric",
             "litellm_input_tokens_metric",
             "litellm_total_tokens_metric",
             "litellm_output_tokens_metric",

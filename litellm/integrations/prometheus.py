@@ -162,6 +162,14 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_output_tokens_metric"),
             )
 
+            self.litellm_web_search_requests_metric = self._counter_factory(
+                "litellm_web_search_requests_metric",
+                "Total number of web search requests made by built-in tools",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_web_search_requests_metric"
+                ),
+            )
+
             # Remaining Budget for Team
             self.litellm_remaining_team_budget_metric = self._gauge_factory(
                 "litellm_remaining_team_budget_metric",
@@ -1153,6 +1161,12 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
         )
 
+        self._increment_web_search_request_metrics(
+            standard_logging_payload=standard_logging_payload,  # type: ignore
+            enum_values=enum_values,
+            label_context=label_context,
+        )
+
         # remaining budget metrics
         await self._increment_remaining_budget_metrics(
             user_api_team=user_api_team,
@@ -1262,6 +1276,56 @@ class PrometheusLogger(CustomLogger):
             label_context=label_context,
             amount=float(standard_logging_payload["completion_tokens"]),
         )
+
+    def _increment_web_search_request_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+        label_context: Optional[PrometheusLabelFactoryContext] = None,
+    ) -> None:
+        web_search_requests = self._get_web_search_requests_from_standard_payload(
+            standard_logging_payload
+        )
+        if web_search_requests is None or web_search_requests <= 0:
+            return
+
+        PrometheusLogger._inc_labeled_counter(
+            self,
+            self.litellm_web_search_requests_metric,
+            "litellm_web_search_requests_metric",
+            enum_values,
+            label_context=label_context,
+            amount=float(web_search_requests),
+        )
+
+    @staticmethod
+    def _get_web_search_requests_from_standard_payload(
+        standard_logging_payload: StandardLoggingPayload,
+    ) -> Optional[int]:
+        usage_object = standard_logging_payload.get("metadata", {}).get(
+            "usage_object"
+        ) or standard_logging_payload.get("hidden_params", {}).get("usage_object")
+        if not isinstance(usage_object, dict):
+            return None
+
+        web_search_requests = usage_object.get("web_search_requests")
+        if web_search_requests is None:
+            server_tool_use = usage_object.get("server_tool_use")
+            if isinstance(server_tool_use, dict):
+                web_search_requests = server_tool_use.get("web_search_requests")
+
+        if web_search_requests is None:
+            prompt_tokens_details = usage_object.get("prompt_tokens_details")
+            if isinstance(prompt_tokens_details, dict):
+                web_search_requests = prompt_tokens_details.get("web_search_requests")
+
+        if web_search_requests is None:
+            return None
+
+        try:
+            return int(web_search_requests)
+        except (TypeError, ValueError):
+            return None
 
     def _increment_cache_metrics(
         self,
