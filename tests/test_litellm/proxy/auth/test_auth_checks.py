@@ -3016,3 +3016,216 @@ async def test_team_member_budget_check_zero_per_member_row_still_blocks():
                 proxy_logging_obj=proxy_logging_obj,
             )
     assert exc_info.value.max_budget == 0.0
+
+
+# --- resolve_and_validate_end_user_id ---------------------------------------
+
+
+def _make_validation_mocks(
+    end_user_row=None,
+    user_row_by_id=None,
+    user_row_by_email=None,
+):
+    """Build a prisma + cache pair wired for resolve_and_validate_end_user_id."""
+    prisma_client = MagicMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_endusertable = MagicMock()
+    prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
+        return_value=end_user_row
+    )
+    prisma_client.db.litellm_usertable = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=user_row_by_id
+    )
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        return_value=user_row_by_email
+    )
+
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+    return prisma_client, cache
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_returns_none_for_none_input():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    prisma_client, cache = _make_validation_mocks()
+    assert (
+        await resolve_and_validate_end_user_id(
+            raw_end_user_id=None,
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+        )
+        is None
+    )
+    prisma_client.db.litellm_endusertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_passes_through_when_no_prisma_client():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="alice@example.com",
+        prisma_client=None,
+        user_api_key_cache=cache,
+    )
+    assert result == "alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_matches_end_user_table():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    prisma_client, cache = _make_validation_mocks(end_user_row=MagicMock())
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="customer-123",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    assert result == "customer-123"
+    prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
+    cache.async_set_cache.assert_awaited_once()
+    kwargs = cache.async_set_cache.await_args.kwargs
+    assert kwargs["key"] == "end_user_validation:customer-123"
+    assert kwargs["value"] == "valid"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_matches_user_table_by_user_id():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    prisma_client, cache = _make_validation_mocks(user_row_by_id=MagicMock())
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="user-xyz",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    assert result == "user-xyz"
+    # email lookup should not run for a non-email input
+    prisma_client.db.litellm_usertable.find_first.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_matches_user_table_by_email():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    prisma_client, cache = _make_validation_mocks(user_row_by_email=MagicMock())
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="Alice@Example.com",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    assert result == "Alice@Example.com"
+    prisma_client.db.litellm_usertable.find_first.assert_awaited_once()
+    find_first_kwargs = prisma_client.db.litellm_usertable.find_first.await_args.kwargs
+    # case-insensitive match
+    assert find_first_kwargs["where"]["user_email"]["mode"] == "insensitive"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_drops_codex_opaque_identifier():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    prisma_client, cache = _make_validation_mocks()  # all lookups return None
+    codex_id = (
+        "user_8a4a360c36621665b341e06fb76041d9b6def732bb183eea148d4abc9d97c1de"
+        "_account__session_a2bce4a5-8887-44ef-b491-fbf0a55c6569"
+    )
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id=codex_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    assert result is None
+    # Negative result must be cached so subsequent garbage hits don't re-query.
+    cache.async_set_cache.assert_awaited_once()
+    kwargs = cache.async_set_cache.await_args.kwargs
+    assert kwargs["value"] == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_drops_unknown_email():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    prisma_client, cache = _make_validation_mocks()
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="stranger@example.com",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_uses_cached_valid_result():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    prisma_client, cache = _make_validation_mocks()
+    cache.async_get_cache = AsyncMock(return_value="valid")
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="alice@example.com",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    assert result == "alice@example.com"
+    prisma_client.db.litellm_endusertable.find_unique.assert_not_awaited()
+    prisma_client.db.litellm_usertable.find_unique.assert_not_awaited()
+    prisma_client.db.litellm_usertable.find_first.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_uses_cached_invalid_result():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    prisma_client, cache = _make_validation_mocks(end_user_row=MagicMock())
+    cache.async_get_cache = AsyncMock(return_value="invalid")
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="bogus",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    assert result is None
+    # Despite a matching row configured, we never hit the DB because the
+    # cached negative short-circuits.
+    prisma_client.db.litellm_endusertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolve_end_user_swallows_db_errors_and_returns_none():
+    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+
+    prisma_client = MagicMock()
+    prisma_client.db = MagicMock()
+    prisma_client.db.litellm_endusertable = MagicMock()
+    prisma_client.db.litellm_endusertable.find_unique = AsyncMock(
+        side_effect=Exception("db down")
+    )
+    prisma_client.db.litellm_usertable = MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+        side_effect=Exception("db down")
+    )
+    prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        side_effect=Exception("db down")
+    )
+
+    cache = MagicMock()
+    cache.async_get_cache = AsyncMock(return_value=None)
+    cache.async_set_cache = AsyncMock()
+
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="alice@example.com",
+        prisma_client=prisma_client,
+        user_api_key_cache=cache,
+    )
+    # DB errors should not raise through the auth path — we just can't confirm,
+    # so we treat the id as unknown and drop it.
+    assert result is None

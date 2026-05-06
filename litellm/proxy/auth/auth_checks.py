@@ -1187,6 +1187,90 @@ async def get_end_user_object(
         return None
 
 
+_END_USER_VALIDATION_NEGATIVE_TTL = 60
+_END_USER_VALIDATION_POSITIVE_TTL = 300
+
+
+async def resolve_and_validate_end_user_id(
+    raw_end_user_id: Optional[str],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Optional[Span] = None,
+) -> Optional[str]:
+    """Return raw_end_user_id only if it resolves to a known user in the DB.
+
+    We accept a value as a valid end-user id when it matches any of:
+      - LiteLLM_EndUserTable.user_id
+      - LiteLLM_UserTable.user_id
+      - LiteLLM_UserTable.user_email  (case-insensitive)
+
+    Anything else — including opaque client-generated identifiers like the
+    Codex `user_<hash>_account__session_<uuid>` format — returns None so
+    the request is still logged, just without polluting end-user attribution.
+
+    If prisma_client is None we skip validation and pass the value through;
+    setups without a DB don't have a user table to validate against.
+    """
+    if raw_end_user_id is None:
+        return None
+    if prisma_client is None:
+        return raw_end_user_id
+
+    cache_key = f"end_user_validation:{raw_end_user_id}"
+    cached = await user_api_key_cache.async_get_cache(key=cache_key)
+    if cached == "valid":
+        return raw_end_user_id
+    if cached == "invalid":
+        return None
+
+    is_valid = False
+    try:
+        end_user_row = await prisma_client.db.litellm_endusertable.find_unique(
+            where={"user_id": raw_end_user_id}
+        )
+        if end_user_row is not None:
+            is_valid = True
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            f"end_user validation: LiteLLM_EndUserTable lookup failed: {e}"
+        )
+
+    if not is_valid:
+        try:
+            user_row = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": raw_end_user_id}
+            )
+            if user_row is not None:
+                is_valid = True
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"end_user validation: LiteLLM_UserTable.user_id lookup failed: {e}"
+            )
+
+    if not is_valid and "@" in raw_end_user_id:
+        try:
+            email_row = await prisma_client.db.litellm_usertable.find_first(
+                where={"user_email": {"equals": raw_end_user_id, "mode": "insensitive"}}
+            )
+            if email_row is not None:
+                is_valid = True
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                f"end_user validation: LiteLLM_UserTable.user_email lookup failed: {e}"
+            )
+
+    await user_api_key_cache.async_set_cache(
+        key=cache_key,
+        value="valid" if is_valid else "invalid",
+        ttl=(
+            _END_USER_VALIDATION_POSITIVE_TTL
+            if is_valid
+            else _END_USER_VALIDATION_NEGATIVE_TTL
+        ),
+    )
+    return raw_end_user_id if is_valid else None
+
+
 @log_db_metrics
 async def get_tag_objects_batch(
     tag_names: List[str],

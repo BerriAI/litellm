@@ -44,6 +44,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
     is_valid_fallback_model,
+    resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 from litellm.proxy.auth.auth_utils import (
@@ -1057,8 +1058,14 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         _end_user_object = None
         end_user_params = {}
 
-        end_user_id = get_end_user_id_from_request_body(
+        raw_end_user_id = get_end_user_id_from_request_body(
             request_data, _safe_get_request_headers(request)
+        )
+        end_user_id = await resolve_and_validate_end_user_id(
+            raw_end_user_id=raw_end_user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
         )
         if end_user_id:
             try:
@@ -1823,8 +1830,14 @@ async def _run_centralized_common_checks(
         return
 
     parent_otel_span = user_api_key_auth_obj.parent_otel_span
-    end_user_id = get_end_user_id_from_request_body(
+    raw_end_user_id = get_end_user_id_from_request_body(
         request_data, _safe_get_request_headers(request)
+    )
+    end_user_id = await resolve_and_validate_end_user_id(
+        raw_end_user_id=raw_end_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
     )
 
     fetch_coros = []
@@ -2156,8 +2169,16 @@ async def user_api_key_auth(
             api_key=api_key,
         )
 
-    end_user_id = get_end_user_id_from_request_body(
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+
+    raw_end_user_id = get_end_user_id_from_request_body(
         request_data, _safe_get_request_headers(request)
+    )
+    end_user_id = await resolve_and_validate_end_user_id(
+        raw_end_user_id=raw_end_user_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=user_api_key_auth_obj.parent_otel_span,
     )
     if end_user_id is not None:
         user_api_key_auth_obj.end_user_id = end_user_id
