@@ -1,6 +1,6 @@
 """
-Run endpoints — POST/GET runs under a session, plus the SSE events stream
-and explicit cancel.
+Run endpoints — POST/GET runs under a session, plus the SSE event stream
+(``/stream``) and explicit cancel.
 
 Every endpoint is owner-scoped (caller must own the parent session). The
 SSE stream is resumable — clients pass ``starting_seq=N`` to skip events
@@ -33,6 +33,13 @@ from litellm.proxy.agent_session_endpoints.ids import new_run_id
 from litellm.proxy.agent_session_endpoints.ownership import (
     assert_caller_can_mutate,
     assert_caller_owns_session,
+)
+from litellm.proxy.agent_session_endpoints.pagination import (
+    DEFAULT_PAGE_LIMIT,
+    MAX_PAGE_LIMIT,
+    build_page_response,
+    cursor_where_clause,
+    normalize_limit,
 )
 from litellm.proxy.agent_session_endpoints.schemas import RunCreate, RunResponse
 from litellm.proxy.agent_session_endpoints.serialization import run_row_to_response
@@ -218,20 +225,29 @@ async def get_run(
 async def list_runs(
     session_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    limit: int = Query(default=100, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
+    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(default=DEFAULT_PAGE_LIMIT, ge=1, le=MAX_PAGE_LIMIT),
 ):
+    """List runs for a session.
+
+    Cursor-paginated. Pass ``?cursor=<next_cursor>`` from the previous
+    response to fetch the next page.
+    """
     prisma_client = await _get_prisma_client_or_503()
     session = await _load_session_or_404(prisma_client, session_id)
     assert_caller_owns_session(user_api_key_dict, session)
 
+    page_limit = normalize_limit(limit)
     rows = await prisma_client.db.litellm_agentrun.find_many(
-        where={"session_id": session_id},
-        order={"created_at": "desc"},
-        take=limit,
-        skip=offset,
+        where=cursor_where_clause({"session_id": session_id}, cursor),
+        order=[{"created_at": "desc"}, {"id": "desc"}],
+        take=page_limit + 1,
     )
-    return {"data": [run_row_to_response(r).model_dump() for r in rows]}
+    return build_page_response(
+        rows,
+        page_limit,
+        lambda r: run_row_to_response(r).model_dump(),
+    )
 
 
 @router.post(
@@ -305,9 +321,13 @@ def _sse_event_data(seq: int, event_type: str, payload: Dict[str, Any]) -> str:
 
     The ``id:`` field carries the seq so clients can resume by using the
     HTTP ``Last-Event-ID`` header (or ``starting_seq`` query param).
+
+    Wire shape: ``{seq, type, data}``. The DB column is ``event_type``/
+    ``payload`` (untouched), but the JSON the SDK sees uses Cursor's
+    naming so cross-language clients can share the same schema.
     """
     body = json.dumps(
-        {"seq": seq, "event_type": event_type, "payload": payload},
+        {"seq": seq, "type": event_type, "data": payload},
         default=str,
     )
     return f"id: {seq}\ndata: {body}\n\n"
@@ -382,7 +402,7 @@ def _safe_payload(value: Any) -> Dict[str, Any]:
 
 
 @router.get(
-    "/v2/sessions/{session_id}/runs/{run_id}/events",
+    "/v2/sessions/{session_id}/runs/{run_id}/stream",
     tags=["runs"],
     dependencies=[Depends(user_api_key_auth)],
 )
