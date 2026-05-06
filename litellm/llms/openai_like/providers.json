@@ -11,6 +11,14 @@
       "convert_content_list_to_string": true
     }
   },
+  "qianfan": {
+    "base_url": "https://qianfan.baidubce.com/v2",
+    "api_key_env": "QIANFAN_API_KEY",
+    "api_base_env": "QIANFAN_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
   "helicone": {
     "base_url": "https://ai-gateway.helicone.ai/",
     "api_key_env": "HELICONE_API_KEY"

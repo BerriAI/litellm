@@ -778,6 +778,7 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "https://qianfan.baidubce.com/v2",
 ]
 
 
@@ -814,6 +815,7 @@ openai_compatible_providers: List = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "qianfan",  # Qianfan - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
