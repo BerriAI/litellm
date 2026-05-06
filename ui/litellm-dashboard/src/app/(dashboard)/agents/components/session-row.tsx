@@ -8,7 +8,7 @@
  */
 import Link from "next/link";
 import { Tag, Typography } from "antd";
-import dayjs from "dayjs";
+import { relativeOrAbsolute } from "@/app/(dashboard)/agents/components/_dayjs";
 import type { CloudAgentSession, CloudAgentSessionStatus } from "@/types/cloud-agents";
 
 const { Text, Paragraph } = Typography;
@@ -27,8 +27,7 @@ interface SessionRowProps {
 }
 
 export default function SessionRow({ session, active }: SessionRowProps) {
-  const updated = dayjs(session.updated_at);
-  const updatedLabel = updated.fromNow?.() ?? updated.format("YYYY-MM-DD HH:mm");
+  const updatedLabel = relativeOrAbsolute(session.updated_at);
   return (
     <Link
       href={`/agents/${session.agent_id}/sessions/${session.session_id}`}
