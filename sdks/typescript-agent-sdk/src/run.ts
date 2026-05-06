@@ -8,14 +8,13 @@ import { requestJson, type ResolvedClient } from "./client/http.js";
 import { streamRunEvents } from "./client/sse.js";
 import {
   LiteLLMAgentError,
-  type ConversationTurn,
   type RunEvent,
   type RunInfo,
   type RunResult,
   type RunStatus,
 } from "./types.js";
 
-const TERMINAL_STATES: RunStatus[] = ["completed", "failed", "cancelled"];
+const TERMINAL_STATES: RunStatus[] = ["finished", "cancelled", "error"];
 const DEFAULT_WAIT_POLL_MS = 500;
 
 export class Run {
@@ -102,17 +101,9 @@ export class Run {
     };
   }
 
-  /** Snapshot of the conversation up through this run. */
-  async conversation(): Promise<ConversationTurn[]> {
-    const data = await requestJson<{ turns: ConversationTurn[] }>(
-      this._client,
-      {
-        method: "GET",
-        path: `/v2/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}/conversation`,
-      },
-    );
-    return data.turns ?? [];
-  }
+  // NOTE: There is no per-run conversation endpoint on the backend. The
+  // conversation is session-scoped — call `session.conversation()` (on the
+  // owning `SessionHandle`) for the full turn history.
 
   /** Cancel a running run; no-op if already terminal. */
   async cancel(): Promise<void> {
