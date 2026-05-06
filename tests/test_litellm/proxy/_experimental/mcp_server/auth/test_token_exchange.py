@@ -18,6 +18,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
 )
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
+    MCPOAuth2TokenCache,
     resolve_mcp_auth,
 )
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
@@ -243,6 +244,26 @@ async def test_exchange_token_http_error_does_not_log_response_body():
 
 
 @pytest.mark.asyncio
+async def test_exchange_token_request_error():
+    """Network errors from the IDP are wrapped in a ValueError."""
+    handler = TokenExchangeHandler()
+    server = _obo_server()
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = httpx.ConnectError(
+        "DNS failure",
+        request=httpx.Request("POST", server.token_exchange_endpoint),
+    )
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.token_exchange.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(ValueError, match="failed while connecting"),
+    ):
+        await handler.exchange_token("bad-jwt", server)
+
+@pytest.mark.asyncio
 async def test_exchange_token_missing_access_token():
     """Response without access_token raises ValueError."""
     handler = TokenExchangeHandler()
@@ -304,23 +325,50 @@ async def test_resolve_mcp_auth_with_token_exchange():
 
 
 @pytest.mark.asyncio
-async def test_resolve_mcp_auth_obo_without_subject_token_falls_through():
-    """Without a subject_token, resolve_mcp_auth falls through to client_credentials."""
+async def test_resolve_mcp_auth_obo_without_subject_token_fails_closed():
+    """Without a subject_token, OBO auth fails closed instead of using shared credentials."""
     server = _obo_server(
         token_url="https://auth.example.com/token",
     )
     mock_client = AsyncMock()
     mock_client.post.return_value = _exchange_response("cc-token")
 
-    with patch(
-        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
-        return_value=mock_client,
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(ValueError, match="no subject_token"),
     ):
-        result = await resolve_mcp_auth(server, subject_token=None)
+        await resolve_mcp_auth(server, subject_token=None)
 
-    # Falls through to client_credentials since subject_token is None
-    # The server has client_id/client_secret/token_url so has_client_credentials is True
-    assert result == "cc-token"
+    mock_client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_oauth2_client_credentials_request_error():
+    """OAuth2 client_credentials network errors are wrapped in a ValueError."""
+    token_cache = MCPOAuth2TokenCache()
+    server = _obo_server(
+        auth_type=MCPAuth.oauth2,
+        token_exchange_endpoint=None,
+        token_url="https://auth.example.com/token",
+        oauth2_flow="client_credentials",
+    )
+    mock_client = AsyncMock()
+    mock_client.post.side_effect = httpx.ConnectError(
+        "DNS failure",
+        request=httpx.Request("POST", server.token_url),
+    )
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        pytest.raises(ValueError, match="failed"),
+    ):
+        await token_cache.async_get_token(server)
 
 
 @pytest.mark.asyncio
