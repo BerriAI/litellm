@@ -443,10 +443,12 @@ async def _acompletion(**kwargs: Any) -> Any:
         # does. Otherwise proxies that route some models via the router but
         # allow pass-through for everything else would 400 here.
         model = kwargs.get("model")
+        model_group_alias = llm_router.model_group_alias or {}
         if (
             llm_router.router_general_settings.pass_through_all_models
             and model not in llm_router.model_names
             and not llm_router.has_model_id(model or "")
+            and model not in model_group_alias
         ):
             return await litellm.acompletion(**kwargs)
         return await llm_router.acompletion(**kwargs)
