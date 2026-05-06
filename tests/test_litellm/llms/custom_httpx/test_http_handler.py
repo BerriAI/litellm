@@ -1,3 +1,4 @@
+import asyncio
 import io
 import os
 import pathlib
@@ -18,9 +19,60 @@ from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    MaskedHTTPStatusError,
     _get_httpx_client,
     get_ssl_configuration,
 )
+
+
+@pytest.mark.asyncio
+async def test_async_post_streaming_status_error_should_not_wait_forever_for_body(
+    monkeypatch,
+):
+    """
+    Vertex Anthropic streamRawPredict can return a pre-stream 4xx where the
+    streamed error body never terminates. The handler must still surface the
+    status promptly instead of blocking the downstream client.
+    """
+
+    class HangingErrorStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.Event().wait()
+            if False:
+                yield b""
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            request=request,
+            headers={"content-type": "application/json"},
+            stream=HangingErrorStream(),
+        )
+
+    monkeypatch.setattr(
+        "litellm.llms.custom_httpx.http_handler._STREAMING_ERROR_BODY_READ_TIMEOUT_SECONDS",
+        0.01,
+    )
+
+    litellm_handler = AsyncHTTPHandler()
+    await litellm_handler.client.aclose()
+    litellm_handler.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(mock_handler)
+    )
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as exc_info:
+            await asyncio.wait_for(
+                litellm_handler.post(
+                    "https://vertex.example/streamRawPredict",
+                    stream=True,
+                ),
+                timeout=0.2,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.response.status_code == 400
+    finally:
+        await litellm_handler.close()
 
 
 @pytest.mark.asyncio
