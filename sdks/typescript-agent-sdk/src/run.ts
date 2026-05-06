@@ -56,7 +56,7 @@ export class Run {
     while (!TERMINAL_STATES.includes(this._status)) {
       const info = await requestJson<RunInfo>(this._client, {
         method: "GET",
-        path: `/v1/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}`,
+        path: `/v2/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}`,
       });
       this._status = info.status;
       this._result = info.result;
@@ -76,7 +76,7 @@ export class Run {
   async conversation(): Promise<ConversationTurn[]> {
     const data = await requestJson<{ turns: ConversationTurn[] }>(this._client, {
       method: "GET",
-      path: `/v1/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}/conversation`,
+      path: `/v2/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}/conversation`,
     });
     return data.turns ?? [];
   }
@@ -86,7 +86,7 @@ export class Run {
     if (TERMINAL_STATES.includes(this._status)) return;
     await requestJson<void>(this._client, {
       method: "POST",
-      path: `/v1/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}/cancel`,
+      path: `/v2/sessions/${encodeURIComponent(this.sessionId)}/runs/${encodeURIComponent(this.id)}/cancel`,
     });
     this._status = "cancelled";
   }

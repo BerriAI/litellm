@@ -46,7 +46,7 @@ export class SessionHandle {
     const body = normalizeSendInput(input);
     const info = await requestJson<RunInfo>(this._client, {
       method: "POST",
-      path: `/v1/sessions/${encodeURIComponent(this.id)}/runs`,
+      path: `/v2/sessions/${encodeURIComponent(this.id)}/runs`,
       body,
     });
     return new Run(info, this._client);
@@ -56,7 +56,7 @@ export class SessionHandle {
   async followup(message: string): Promise<void> {
     await requestJson<void>(this._client, {
       method: "POST",
-      path: `/v1/sessions/${encodeURIComponent(this.id)}/followup`,
+      path: `/v2/sessions/${encodeURIComponent(this.id)}/followup`,
       body: { message },
     });
   }
@@ -65,7 +65,7 @@ export class SessionHandle {
   async getRun(runId: string): Promise<Run> {
     const info = await requestJson<RunInfo>(this._client, {
       method: "GET",
-      path: `/v1/sessions/${encodeURIComponent(this.id)}/runs/${encodeURIComponent(runId)}`,
+      path: `/v2/sessions/${encodeURIComponent(this.id)}/runs/${encodeURIComponent(runId)}`,
     });
     return new Run(info, this._client);
   }
@@ -76,7 +76,7 @@ export class SessionHandle {
       this._client,
       {
         method: "GET",
-        path: `/v1/sessions/${encodeURIComponent(this.id)}/runs`,
+        path: `/v2/sessions/${encodeURIComponent(this.id)}/runs`,
         query: { limit: options.limit, cursor: options.cursor },
       }
     );
@@ -90,7 +90,7 @@ export class SessionHandle {
   async conversation(): Promise<ConversationTurn[]> {
     const data = await requestJson<{ turns: ConversationTurn[] }>(this._client, {
       method: "GET",
-      path: `/v1/sessions/${encodeURIComponent(this.id)}/conversation`,
+      path: `/v2/sessions/${encodeURIComponent(this.id)}/conversation`,
     });
     return data.turns ?? [];
   }
@@ -99,7 +99,7 @@ export class SessionHandle {
   async delete(): Promise<void> {
     await requestJson<void>(this._client, {
       method: "DELETE",
-      path: `/v1/sessions/${encodeURIComponent(this.id)}`,
+      path: `/v2/sessions/${encodeURIComponent(this.id)}`,
     });
     this._status = "terminated";
   }

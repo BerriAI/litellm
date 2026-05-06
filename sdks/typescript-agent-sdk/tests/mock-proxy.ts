@@ -157,10 +157,10 @@ export class MockProxy {
     const segments = url.pathname.split("/").filter(Boolean);
 
     try {
-      if (segments[0] !== "v1") {
+      if (segments[0] !== "v2") {
         return notFound(res);
       }
-      // /v1/agents
+      // /v2/agents
       if (segments.length === 2 && segments[1] === "agents") {
         if (method === "POST") return this.createAgent(req, res);
         if (method === "GET") return this.listAgents(res);
@@ -189,7 +189,7 @@ export class MockProxy {
         if (!session) return notFound(res);
         if (method === "GET") return ok(res, serializeSession(session));
       }
-      // /v1/sessions/{sid}/...
+      // /v2/sessions/{sid}/...
       if (segments[1] === "sessions" && segments.length >= 3) {
         const session = this.findSession(segments[2]);
         if (!session) return notFound(res);

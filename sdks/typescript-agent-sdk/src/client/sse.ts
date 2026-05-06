@@ -17,7 +17,7 @@ export interface StreamRunOptions {
 }
 
 /**
- * Stream events from `GET /v1/sessions/{sid}/runs/{rid}/events`.
+ * Stream events from `GET /v2/sessions/{sid}/runs/{rid}/events`.
  *
  * Resume contract:
  *  - On every event, we record `seq`.
@@ -41,7 +41,7 @@ export async function* streamRunEvents(
     try {
       res = await request(client, {
         method: "GET",
-        path: `/v1/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events`,
+        path: `/v2/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/events`,
         query: startingSeq !== undefined ? { starting_seq: startingSeq } : undefined,
         headers:
           startingSeq !== undefined

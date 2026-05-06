@@ -33,7 +33,7 @@ export class AgentHandle {
   async createSession(options: CreateSessionOptions = {}): Promise<SessionHandle> {
     const info = await requestJson<SessionInfo>(this._client, {
       method: "POST",
-      path: `/v1/agents/${encodeURIComponent(this.id)}/sessions`,
+      path: `/v2/agents/${encodeURIComponent(this.id)}/sessions`,
       body: {
         repos: options.repos ?? [],
         envVars: options.envVars ?? {},
@@ -47,7 +47,7 @@ export class AgentHandle {
   async getSession(sessionId: string): Promise<SessionHandle> {
     const info = await requestJson<SessionInfo>(this._client, {
       method: "GET",
-      path: `/v1/agents/${encodeURIComponent(this.id)}/sessions/${encodeURIComponent(sessionId)}`,
+      path: `/v2/agents/${encodeURIComponent(this.id)}/sessions/${encodeURIComponent(sessionId)}`,
     });
     return new SessionHandle(info, this._client);
   }
@@ -58,7 +58,7 @@ export class AgentHandle {
       this._client,
       {
         method: "GET",
-        path: `/v1/agents/${encodeURIComponent(this.id)}/sessions`,
+        path: `/v2/agents/${encodeURIComponent(this.id)}/sessions`,
         query: { limit: options.limit, cursor: options.cursor },
       }
     );
@@ -69,7 +69,7 @@ export class AgentHandle {
   async update(patch: Partial<AgentCreateOptions>): Promise<void> {
     await requestJson<void>(this._client, {
       method: "PATCH",
-      path: `/v1/agents/${encodeURIComponent(this.id)}`,
+      path: `/v2/agents/${encodeURIComponent(this.id)}`,
       body: stripClientOptions(patch),
     });
   }
@@ -78,7 +78,7 @@ export class AgentHandle {
   async delete(): Promise<void> {
     await requestJson<void>(this._client, {
       method: "DELETE",
-      path: `/v1/agents/${encodeURIComponent(this.id)}`,
+      path: `/v2/agents/${encodeURIComponent(this.id)}`,
     });
   }
 }
@@ -89,7 +89,7 @@ export class Agent {
     const client = resolveClient(options);
     const info = await requestJson<AgentInfo>(client, {
       method: "POST",
-      path: "/v1/agents",
+      path: "/v2/agents",
       body: stripClientOptions(options),
     });
     return new AgentHandle(info, client);
@@ -100,7 +100,7 @@ export class Agent {
     const client = resolveClient(options);
     const info = await requestJson<AgentInfo>(client, {
       method: "GET",
-      path: `/v1/agents/${encodeURIComponent(agentId)}`,
+      path: `/v2/agents/${encodeURIComponent(agentId)}`,
     });
     return new AgentHandle(info, client);
   }
@@ -114,7 +114,7 @@ export class Agent {
       client,
       {
         method: "GET",
-        path: "/v1/agents",
+        path: "/v2/agents",
         query: { limit: options.limit, cursor: options.cursor },
       }
     );
