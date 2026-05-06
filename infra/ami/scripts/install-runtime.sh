@@ -7,17 +7,29 @@
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
+
+# Disable the apt cnf-update-db post-invoke hook. It runs a Python script that
+# breaks when we install a non-default python3 alongside (cnf-update-db imports
+# `apt_pkg`, which is bound to /usr/bin/python3 -> python3.12 on Ubuntu 24.04).
+# The hook is purely a UX nicety (`command-not-found`); skipping it makes apt
+# operations idempotent for AMI builds.
+echo 'APT::Update::Post-Invoke-Success "";' | \
+    sudo tee /etc/apt/apt.conf.d/99-no-cnf-update-db >/dev/null
+
 sudo apt-get update -y
 sudo apt-get install -y --no-install-recommends \
     ca-certificates curl wget gnupg jq git unzip xz-utils \
     build-essential pkg-config
 
 # --- Python 3.13 via deadsnakes PPA ---
+# We install python3.13 alongside the system python3 (which stays at 3.12).
+# Tools that need 3.13 invoke `python3.13` explicitly; the daemon's systemd
+# unit uses `/usr/bin/python3.13`. Do NOT remap /usr/bin/python3 — that breaks
+# Ubuntu's python-coupled apt tooling.
 sudo apt-get install -y software-properties-common
 sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt-get update -y
 sudo apt-get install -y python3.13 python3.13-venv python3.13-dev
-sudo update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.13 1 || true
 
 # --- Node 24 via NodeSource ---
 # NodeSource publishes a setup script; we download it to a file and verify
