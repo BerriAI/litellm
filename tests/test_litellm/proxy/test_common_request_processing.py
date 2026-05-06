@@ -898,6 +898,58 @@ class TestProxyBaseLLMRequestProcessing:
             metadata["queue_time_seconds"] >= 0.5
         ), f"queue_time_seconds should be at least 0.5, got {metadata['queue_time_seconds']}"
 
+    @pytest.mark.asyncio
+    async def test_always_include_stream_usage_env_var(self, monkeypatch):
+        """
+        Test that ROUTER_ALWAYS_INCLUDE_STREAM_USAGE env var enables stream usage tracking.
+        """
+        from litellm import constants
+
+        # Set the env var
+        monkeypatch.setenv("ROUTER_ALWAYS_INCLUDE_STREAM_USAGE", "true")
+        # Reload the constant to pick up the env var
+        monkeypatch.setattr(constants, "ROUTER_ALWAYS_INCLUDE_STREAM_USAGE", True)
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"stream": True})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return copy.deepcopy(kwargs.get("data", args[0] if args else {}))
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            return copy.deepcopy(data)
+
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        mock_general_settings = {}
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        route_type = "acompletion"
+
+        (
+            returned_data,
+            logging_obj,
+        ) = await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings=mock_general_settings,
+            user_api_key_dict=mock_user_api_key_dict,
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type=route_type,
+        )
+
+        # Verify stream_options.include_usage is set
+        assert "stream_options" in returned_data
+        assert returned_data["stream_options"].get("include_usage") is True
+
 
 @pytest.mark.asyncio
 class TestCommonRequestProcessingHelpers:
