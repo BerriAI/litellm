@@ -99,21 +99,33 @@ async def test_sweeper_marks_stuck_runs_error(
         headers={"Authorization": "Bearer k"},
         json={"agent_id": a["id"], "repos": []},
     ).json()
-    run = client.post(
-        f"/v2/sessions/{sess['id']}/runs",
+    sid = sess["id"]
+    client.post(
+        f"/v2/sessions/{sid}/runs",
         headers={"Authorization": "Bearer k"},
         json={"prompt": {"text": "x"}},
     ).json()
 
+    # Force the run into stuck state, and put the session into ``busy``
+    # (which is what the run-create hook would have done, modulo
+    # provisioning).
     run_row = fake_prisma_client.db.litellm_agentrun.rows[0]
     run_row.status = "running"
     run_row.updated_at = datetime.now(timezone.utc) - timedelta(
         seconds=RUN_IDLE_TIMEOUT_SECONDS + 60
     )
+    session_row = next(
+        r for r in fake_prisma_client.db.litellm_agentsession.rows if r.id == sid
+    )
+    session_row.status = "busy"
 
     summary = await run_cleanup_pass(fake_prisma_client)
     assert summary["stuck_runs"] == 1
     assert run_row.status == RUN_STATUS_ERROR
+    # Greptile P1: after the sweeper reaps a stuck run, the session must
+    # transition ``busy`` -> ``ready`` so SDK consumers don't see it
+    # stuck on ``busy`` forever.
+    assert session_row.status == SESSION_STATUS_READY
 
 
 @pytest.mark.asyncio
