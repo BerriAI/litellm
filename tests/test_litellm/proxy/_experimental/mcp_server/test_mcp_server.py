@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import contextvars
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1003,12 +1004,14 @@ async def test_concurrent_initialize_session_managers():
     original_session_cm = mcp_server._session_manager_cm
     original_session_stateful_cm = mcp_server._session_manager_stateful_cm
     original_sse_session_cm = mcp_server._sse_session_manager_cm
+    original_cleanup_task = mcp_server._stateful_auth_context_cleanup_task
 
     try:
         mcp_server._SESSION_MANAGERS_INITIALIZED = False
         mcp_server._session_manager_cm = None
         mcp_server._session_manager_stateful_cm = None
         mcp_server._sse_session_manager_cm = None
+        mcp_server._stateful_auth_context_cleanup_task = None
 
         # Mock the session managers to avoid actual MCP initialization
         with (
@@ -1066,11 +1069,21 @@ async def test_concurrent_initialize_session_managers():
             assert mcp_server._SESSION_MANAGERS_INITIALIZED is True
 
     finally:
+        # Cancel the background cleanup task that initialize_session_managers()
+        # spawned. Otherwise it keeps running against module-level dicts for the
+        # rest of the test session (asyncio_default_fixture_loop_scope=session).
+        leaked_task = mcp_server._stateful_auth_context_cleanup_task
+        if leaked_task is not None and leaked_task is not original_cleanup_task:
+            leaked_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await leaked_task
+
         # Restore original state
         mcp_server._SESSION_MANAGERS_INITIALIZED = original_initialized
         mcp_server._session_manager_cm = original_session_cm
         mcp_server._session_manager_stateful_cm = original_session_stateful_cm
         mcp_server._sse_session_manager_cm = original_sse_session_cm
+        mcp_server._stateful_auth_context_cleanup_task = original_cleanup_task
 
 
 @pytest.mark.asyncio
