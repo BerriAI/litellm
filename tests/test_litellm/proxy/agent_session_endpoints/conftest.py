@@ -247,6 +247,9 @@ def _build_test_app(
         run_router,
         session_router,
     )
+    from litellm.proxy.agent_session_endpoints.error_envelope import (
+        register_v2_exception_handlers,
+    )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
     app = FastAPI()
@@ -254,6 +257,8 @@ def _build_test_app(
     app.include_router(session_router)
     app.include_router(run_router)
     app.include_router(internal_router)
+    # Mirror the production setup so tests see the same /v2 error envelope.
+    register_v2_exception_handlers(app)
 
     def _fake_auth() -> UserAPIKeyAuth:
         return UserAPIKeyAuth(

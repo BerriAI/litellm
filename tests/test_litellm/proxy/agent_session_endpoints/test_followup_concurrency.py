@@ -90,7 +90,8 @@ def test_followup_returns_409_when_active_run_is_not_the_latest(
         json={"prompt": {"text": "should be blocked"}},
     )
     assert res.status_code == 409
-    assert "run_busy" in res.json()["detail"]
+    # Error envelope shape: {"error": {"code", "message", ...}}
+    assert "run_busy" in res.json()["error"]["message"]
 
 
 def test_followup_normal_path_creates_run_when_no_active_runs(client, noop_provider):

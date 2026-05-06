@@ -44,7 +44,8 @@ def test_view_only_admin_cannot_create_agent(view_only_admin_client, noop_provid
         json={"name": "evil", "model": "gpt-4"},
     )
     assert res.status_code == 403
-    assert "view-only" in res.json()["detail"].lower()
+    # Error envelope: {"error": {"code", "message", "status"}}
+    assert "view-only" in res.json()["error"]["message"].lower()
 
 
 def test_view_only_admin_cannot_update_other_tenant_agent(
