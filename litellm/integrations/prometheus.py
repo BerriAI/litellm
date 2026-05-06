@@ -25,6 +25,9 @@ from typing import (
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
+    BoundedPrometheusSeriesTracker,
+)
 from litellm.integrations.prometheus_helpers import (
     PrometheusLabelFactoryContext,
     _get_cached_end_user_id_for_cost_tracking,
@@ -81,6 +84,7 @@ class PrometheusLogger(CustomLogger):
                 if _custom_buckets is not None
                 else LATENCY_BUCKETS
             )
+            self._bounded_prometheus_series_tracker = BoundedPrometheusSeriesTracker()
 
             # Create metric factory functions
             self._counter_factory = self._create_metric_factory(Counter)
@@ -984,6 +988,61 @@ class PrometheusLogger(CustomLogger):
 
         return filtered_labels
 
+    def _apply_labeled_metric(
+        self,
+        metric: Any,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        labels: Dict[str, Optional[str]],
+        apply_metric_update: Callable[[Any], None],
+    ) -> None:
+        tracker = getattr(self, "_bounded_prometheus_series_tracker", None)
+        if not isinstance(tracker, BoundedPrometheusSeriesTracker):
+            apply_metric_update(metric.labels(**labels))
+            return
+
+        with tracker.lock:
+            labeled_metric = metric.labels(**labels)
+            self._track_bounded_prometheus_metric_series(metric, metric_name, labels)
+            apply_metric_update(labeled_metric)
+
+    def _track_bounded_prometheus_metric_series(
+        self,
+        metric: Any,
+        metric_name: DEFINED_PROMETHEUS_METRICS,
+        labels: Dict[str, Optional[str]],
+    ) -> None:
+        labelnames = self.get_labels_for_metric(metric_name)
+        if UserAPIKeyLabelNames.END_USER.value not in labelnames:
+            return
+
+        end_user = labels.get(UserAPIKeyLabelNames.END_USER.value)
+        if end_user is None:
+            return
+
+        max_series = getattr(
+            litellm, "prometheus_end_user_metrics_max_series_per_metric", 10000
+        )
+        ttl_seconds = getattr(
+            litellm, "prometheus_end_user_metrics_ttl_seconds", 3600.0
+        )
+        ttl_cleanup_interval_seconds = getattr(
+            litellm,
+            "prometheus_end_user_metrics_cleanup_interval_seconds",
+            60.0,
+        )
+        if max_series is None and ttl_seconds is None:
+            return
+
+        label_values = tuple(labels.get(label) for label in labelnames)
+        self._bounded_prometheus_series_tracker.track_series(
+            metric=metric,
+            metric_name=metric_name,
+            label_values=label_values,
+            max_series=max_series,
+            ttl_seconds=ttl_seconds,
+            cleanup_interval_seconds=ttl_cleanup_interval_seconds,
+        )
+
     def _inc_labeled_counter(
         self,
         counter: Any,
@@ -997,7 +1056,13 @@ class PrometheusLogger(CustomLogger):
             enum_values=enum_values,
             label_context=label_context,
         )
-        counter.labels(**_labels).inc(amount)
+        PrometheusLogger._apply_labeled_metric(
+            self,
+            metric=counter,
+            metric_name=metric_name,
+            labels=_labels,
+            apply_metric_update=lambda labeled_metric: labeled_metric.inc(amount),
+        )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # Define prometheus client
@@ -1476,9 +1541,14 @@ class PrometheusLogger(CustomLogger):
                 enum_values=enum_values,
                 label_context=label_context,
             )
-            self.litellm_llm_api_time_to_first_token_metric.labels(
-                **_ttft_labels
-            ).observe(time_to_first_token_seconds)
+            self._apply_labeled_metric(
+                metric=self.litellm_llm_api_time_to_first_token_metric,
+                metric_name="litellm_llm_api_time_to_first_token_metric",
+                labels=_ttft_labels,
+                apply_metric_update=lambda labeled_metric: labeled_metric.observe(
+                    time_to_first_token_seconds
+                ),
+            )
         else:
             verbose_logger.debug(
                 "Time to first token metric not emitted, stream option in model_parameters is not True"
@@ -1496,8 +1566,13 @@ class PrometheusLogger(CustomLogger):
                 enum_values=enum_values,
                 label_context=label_context,
             )
-            self.litellm_llm_api_latency_metric.labels(**_labels).observe(
-                api_call_total_time_seconds
+            self._apply_labeled_metric(
+                metric=self.litellm_llm_api_latency_metric,
+                metric_name="litellm_llm_api_latency_metric",
+                labels=_labels,
+                apply_metric_update=lambda labeled_metric: labeled_metric.observe(
+                    api_call_total_time_seconds
+                ),
             )
 
         # total request latency
@@ -1513,8 +1588,13 @@ class PrometheusLogger(CustomLogger):
                 enum_values=enum_values,
                 label_context=label_context,
             )
-            self.litellm_request_total_latency_metric.labels(**_labels).observe(
-                total_time_seconds
+            self._apply_labeled_metric(
+                metric=self.litellm_request_total_latency_metric,
+                metric_name="litellm_request_total_latency_metric",
+                labels=_labels,
+                apply_metric_update=lambda labeled_metric: labeled_metric.observe(
+                    total_time_seconds
+                ),
             )
 
         # request queue time (time from arrival to processing start)
@@ -1530,8 +1610,13 @@ class PrometheusLogger(CustomLogger):
                 enum_values=enum_values,
                 label_context=label_context,
             )
-            self.litellm_request_queue_time_metric.labels(**_labels).observe(
-                queue_time_seconds
+            self._apply_labeled_metric(
+                metric=self.litellm_request_queue_time_metric,
+                metric_name="litellm_request_queue_time_seconds",
+                labels=_labels,
+                apply_metric_update=lambda labeled_metric: labeled_metric.observe(
+                    queue_time_seconds
+                ),
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
