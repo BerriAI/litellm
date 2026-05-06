@@ -347,23 +347,8 @@ class TestResolveProjectName:
     def test_falls_back_to_phoenix_env_var(self):
         assert ArizePhoenixLogger._resolve_project_name({}) == "env-phoenix"
 
-    @patch.dict(
-        "os.environ",
-        {"ARIZE_PROJECT_NAME": "env-arize"},
-        clear=False,
-    )
-    def test_falls_back_to_arize_env_var(self):
-        for key in ("PHOENIX_PROJECT_NAME",):
-            patch.dict("os.environ", {key: ""}, clear=False).__enter__()
-        with patch.dict("os.environ", {"PHOENIX_PROJECT_NAME": ""}):
-            # PHOENIX_PROJECT_NAME empty string is falsy — should fall to ARIZE_PROJECT_NAME
-            assert ArizePhoenixLogger._resolve_project_name({}) == "env-arize"
-
     def test_ultimate_fallback_is_default(self):
-        with patch.dict(
-            "os.environ",
-            {"PHOENIX_PROJECT_NAME": "", "ARIZE_PROJECT_NAME": ""},
-        ):
+        with patch.dict("os.environ", {"PHOENIX_PROJECT_NAME": ""}):
             assert ArizePhoenixLogger._resolve_project_name({}) == "default"
 
     def test_litellm_params_metadata_also_checked(self):

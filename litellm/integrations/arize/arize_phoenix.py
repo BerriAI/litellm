@@ -69,7 +69,6 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         By creating our own provider we guarantee Arize Phoenix always gets
         its own exporter pipeline, regardless of initialisation order.
         """
-        from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.trace import SpanKind
 
         # LRU cache of project_name -> TracerProvider, bounded to _MAX_PROJECT_PROVIDERS.
@@ -83,11 +82,7 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
 
         # Resolve the default project name at init time so the first
         # request to the default project hits the cache.
-        default_project = (
-            getattr(self.config, "project_name", None)
-            or os.environ.get("PHOENIX_PROJECT_NAME")
-            or "default"
-        )
+        default_project = self._default_project_name()
         default_provider = self._build_project_provider(default_project)
         self._project_providers[default_project] = default_provider
         self.tracer = default_provider.get_tracer("litellm")
@@ -111,6 +106,13 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
     # ------------------------------------------------------------------
     # Per-project TracerProvider registry
     # ------------------------------------------------------------------
+
+    def _default_project_name(self) -> str:
+        return (
+            getattr(self.config, "project_name", None)
+            or os.environ.get("PHOENIX_PROJECT_NAME")
+            or "default"
+        )
 
     def _build_project_provider(self, project_name: str):
         """
@@ -162,10 +164,10 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
         Resolve the target Phoenix/Arize project for this request.
 
         Priority:
-        1. metadata.arize_project_name_override  (Arize-specific per-request override)
-        2. metadata.phoenix_project_name         (existing Phoenix per-request param)
-        3. PHOENIX_PROJECT_NAME env var   (this is where default traces would go)
-        5. "default"
+        1. metadata.arize_project_name_override  (per-request override)
+        2. metadata.phoenix_project_name         (per-request Phoenix param)
+        3. PHOENIX_PROJECT_NAME env var
+        4. "default"
         """
 
         def _from_metadata(key: str) -> Optional[str]:
@@ -208,7 +210,6 @@ class ArizePhoenixLogger(OpenTelemetry):  # type: ignore
             _from_metadata("arize_project_name_override")
             or _from_metadata("phoenix_project_name")
             or os.environ.get("PHOENIX_PROJECT_NAME")
-            or os.environ.get("ARIZE_PROJECT_NAME")
             or "default"
         )
 
