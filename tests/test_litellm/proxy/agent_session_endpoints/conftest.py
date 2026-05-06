@@ -271,6 +271,19 @@ def admin_client(fake_prisma_client):
 
 
 @pytest.fixture
+def view_only_admin_client(fake_prisma_client):
+    """TestClient where caller is a view-only proxy admin.
+
+    View-only admins are allowed to READ across tenants (so the support
+    UI can render any tenant's resources) but MUST NOT be allowed to
+    mutate state on any tenant's resources — see ``assert_caller_can_mutate``.
+    """
+    return _build_test_app(
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, api_key="sk-view-only-admin"
+    )
+
+
+@pytest.fixture
 def other_tenant_client(fake_prisma_client):
     """TestClient where caller is a different tenant. Used for
     cross-tenant isolation tests."""
