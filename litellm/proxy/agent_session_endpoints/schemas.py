@@ -75,7 +75,14 @@ class AgentResponse(BaseModel):
 
 
 class SessionCreate(BaseModel):
-    agent_id: str
+    """Body for ``POST /v2/agents/{agent_id}/sessions``.
+
+    The parent ``agent_id`` is taken from the URL path — it does NOT
+    appear in the request body. This matches Cursor's nested route
+    shape and keeps the body to caller-supplied per-session overrides
+    only.
+    """
+
     repos: Optional[List[RepoSpec]] = None
     env_vars: Optional[Dict[str, str]] = None
     max_session_minutes: Optional[int] = Field(
@@ -171,8 +178,11 @@ class NextRunResponse(BaseModel):
 class ConversationMessage(BaseModel):
     run_id: str
     seq: int
-    event_type: str
-    payload: Dict[str, Any]
+    # Wire shape matches the SSE event frame (``type``/``data``) and
+    # Cursor's public API. The DB column on AgentRunEvent stays
+    # ``event_type``/``payload`` — see ``serialization.event_row_to_message``.
+    type: str
+    data: Dict[str, Any]
     created_at: Optional[str] = None
 
 
