@@ -80,6 +80,9 @@ model LiteLLM_AgentsTable {
   updated_by String
 }
 
+// LiteLLM_AgentVMConfig is defined further down (LIT-2891 / Epic G section).
+// Owned by Epic G's Settings UI; consumed by Epic B's EC2 provider.
+
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
     organization_alias  String

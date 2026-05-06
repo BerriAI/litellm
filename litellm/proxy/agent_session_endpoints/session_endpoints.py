@@ -61,7 +61,10 @@ from litellm.proxy.agent_session_endpoints.serialization import (
 from litellm.proxy.agent_session_endpoints.session_status import (
     refresh_session_status_from_runs,
 )
-from litellm.proxy.agent_session_endpoints.vm_providers.registry import (
+from litellm.proxy.agent_session_endpoints.vm_providers import (
+    ProvisionContext,
+    Repo,
+    VMHandle,
     get_vm_provider,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -143,9 +146,29 @@ def _proxy_base_url() -> str:
     return os.environ.get("LITELLM_PROXY_BASE_URL", "http://localhost:4000")
 
 
+def _build_provision_repos(
+    repos: List[Dict[str, Any]],
+) -> List[Repo]:
+    """Convert raw dicts (legacy schema) into typed ``Repo`` instances."""
+    out: List[Repo] = []
+    for r in repos or []:
+        if isinstance(r, dict):
+            out.append(
+                Repo(
+                    url=r.get("url", ""),
+                    ref=r.get("ref"),
+                    path=r.get("path"),
+                )
+            )
+        else:
+            out.append(r)
+    return out
+
+
 async def _provision_in_background(
     session_id: str,
     agent_id: str,
+    team_id: Optional[str],
     repos: List[Dict[str, Any]],
     env_vars: Optional[Dict[str, str]],
     daemon_token: str,
@@ -168,24 +191,30 @@ async def _provision_in_background(
 
     try:
         provider = get_vm_provider(provider_name)
-        result = await provider.provision(
+        ctx = ProvisionContext(
             session_id=session_id,
+            team_id=team_id or "",
             agent_id=agent_id,
-            repos=repos,
-            env_vars=env_vars,
-            daemon_token=daemon_token,
-            proxy_base_url=_proxy_base_url(),
+            repos=_build_provision_repos(repos),
+            env_vars=dict(env_vars or {}),
+            secrets={},  # Epic G secrets injected by a separate hook (not yet wired)
+            runtime_config={},
+            aws_creds=None,  # populated by team_config.get_team_vm_config when ec2
+            daemon_jwt=daemon_token,
+            daemon_base_url=_proxy_base_url(),
+            mode="session",
         )
+        handle: VMHandle = await provider.provision(ctx)
         await prisma_client.db.litellm_agentsession.update(
             where={"id": session_id},
             data={
-                "vm_id": result.vm_id,
+                "vm_id": handle.vm_id,
                 "vm_provider": provider_name,
                 "updated_at": _now(),
             },
         )
         verbose_proxy_logger.info(
-            "session.provision ok session_id=%s vm_id=%s", session_id, result.vm_id
+            "session.provision ok session_id=%s vm_id=%s", session_id, handle.vm_id
         )
     except Exception as exc:
         verbose_proxy_logger.exception(
@@ -288,6 +317,7 @@ async def create_session(
         _provision_in_background(
             session_id=session_id,
             agent_id=body.agent_id,
+            team_id=user_api_key_dict.team_id,
             repos=resolved_repos,
             env_vars=resolved_env_vars,
             daemon_token=daemon_token,
@@ -465,9 +495,16 @@ async def _terminate_session_internal(session_id: str, reason: str) -> None:
     # 3. Fire provider.terminate (best-effort; never blocks API caller).
     try:
         provider = get_vm_provider(session.vm_provider or DEFAULT_VM_PROVIDER_NAME)
-        await provider.terminate(
-            session_id=session_id, vm_id=session.vm_id, metadata=None
-        )
+        if session.vm_id:
+            handle = VMHandle(
+                vm_id=session.vm_id,
+                provider=session.vm_provider or DEFAULT_VM_PROVIDER_NAME,
+                metadata={"session_id": session_id},
+            )
+            # NoopProvider.terminate accepts both signatures; EC2Provider
+            # requires aws_creds — wired in Epic C when team_config is fully
+            # plumbed through.
+            await provider.terminate(handle)
     except Exception as exc:
         verbose_proxy_logger.exception(
             "session.terminate: provider.terminate failed session=%s: %s",
