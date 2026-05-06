@@ -18,6 +18,7 @@ The actual long-poll / hydrate transport is owned by Epic B2 — this module
 only owns the auth handshake and CRUD surface.
 """
 
+import os
 import secrets as _stdlib_secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -76,19 +77,37 @@ def _row_to_worker_response(row: Dict[str, Any]) -> AgentWorkerResponse:
 
 
 def _resolve_proxy_url(request: Request) -> str:
-    """Best-effort guess at the public proxy URL for the install one-liner.
+    """Resolve the public proxy URL embedded in the install one-liner.
 
-    The UI shows this URL inside the `--proxy` flag of the install command,
-    so it has to point at the host the worker box can reach. We start from
-    the request's `Host` header (works for the common case of the dashboard
-    being served from the same proxy) and fall back to whatever forwarded
-    headers the operator's reverse proxy set. If the UI overrides this in
-    the future, just stop calling this helper and pass the URL in.
+    SECURITY: this URL ends up in `--proxy <url>` of the curl-pipe-sh
+    install command. If an attacker can influence it, they can redirect
+    the worker (and the freshly-issued pair token) to a host they control.
+    Resolution order:
+
+    1. `LITELLM_CLOUD_AGENT_PROXY_BASE_URL` env var — operator-configured,
+       fully trusted. This is the recommended path for production.
+    2. `X-Forwarded-Host` / `X-Forwarded-Proto` — only honored when the
+       operator opts in via `LITELLM_TRUST_PROXY_HEADERS=1`. Required for
+       deployments behind a reverse proxy that terminates TLS.
+    3. The request's direct `Host` header + URL scheme. Safe by default
+       because it reflects the actual TCP-layer destination of the
+       request, not an attacker-controlled hop hint.
+
+    `localhost:4000` is the last-resort fallback for tests/local dev.
     """
-    forwarded_proto = request.headers.get("x-forwarded-proto")
-    forwarded_host = request.headers.get("x-forwarded-host")
-    host = forwarded_host or request.headers.get("host") or "localhost:4000"
-    scheme = forwarded_proto or request.url.scheme or "https"
+    configured = os.getenv("LITELLM_CLOUD_AGENT_PROXY_BASE_URL")
+    if configured:
+        return configured.rstrip("/")
+
+    if os.getenv("LITELLM_TRUST_PROXY_HEADERS", "0") == "1":
+        forwarded_proto = request.headers.get("x-forwarded-proto")
+        forwarded_host = request.headers.get("x-forwarded-host")
+        if forwarded_host:
+            scheme = forwarded_proto or request.url.scheme or "https"
+            return f"{scheme}://{forwarded_host}"
+
+    host = request.headers.get("host") or "localhost:4000"
+    scheme = request.url.scheme or "https"
     return f"{scheme}://{host}"
 
 
@@ -184,6 +203,12 @@ async def register_agent_worker(
     NOTE: this endpoint is NOT behind `user_api_key_auth` — the worker has
     no API key yet, the pair token *is* its proof of authorization. We
     enforce single-use atomically by checking `used_at IS NULL` on update.
+
+    Defense-in-depth: the pair token is 256 bits of entropy with a 15-min
+    TTL, so brute-force is not a credible threat. We log each failed
+    attempt with the source IP so operators running this behind a WAF or
+    fail2ban can detect and rate-limit abusive callers at the network
+    layer (the proxy itself doesn't ship a built-in per-IP limiter).
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -193,19 +218,38 @@ async def register_agent_worker(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
+    client_ip = request.client.host if request.client is not None else "unknown"
+
     token_hash = hash_pair_token(body.pair_token)
     pair_row = await prisma_client.db.litellm_agentworkerpairingtoken.find_unique(
         where={"token_hash": token_hash}
     )
     if pair_row is None:
+        verbose_proxy_logger.warning(
+            "agent-workers/register: invalid pair token from ip=%s hostname=%s",
+            client_ip,
+            body.hostname,
+        )
         raise HTTPException(status_code=401, detail="Invalid pairing token.")
 
     pair = dict(pair_row) if not isinstance(pair_row, dict) else pair_row
     if pair.get("used_at") is not None:
+        verbose_proxy_logger.warning(
+            "agent-workers/register: replay of consumed pair token from ip=%s hostname=%s team=%s",
+            client_ip,
+            body.hostname,
+            pair.get("team_id"),
+        )
         raise HTTPException(
             status_code=401, detail="Pairing token has already been used."
         )
     if is_expired(pair.get("expires_at")):
+        verbose_proxy_logger.warning(
+            "agent-workers/register: expired pair token from ip=%s hostname=%s team=%s",
+            client_ip,
+            body.hostname,
+            pair.get("team_id"),
+        )
         raise HTTPException(status_code=401, detail="Pairing token has expired.")
 
     team_id = pair["team_id"]
@@ -296,9 +340,8 @@ async def find_worker_by_jwt(
 ) -> Optional[Dict[str, Any]]:
     """Look up a worker row by its (raw) JWT. Returns None if not found.
 
-    We hash and `find_first` instead of indexing on `worker_jwt_hash` directly
-    because the column is currently unindexed — fine for v1 since the team
-    pool is tiny. Add an index when we have >100 workers per team.
+    `worker_jwt_hash` is indexed (see migration), so this is an index
+    lookup — fine for B2's per-heartbeat call pattern.
     """
     jwt_hash = hash_worker_jwt(raw_jwt)
     worker = await prisma_client.db.litellm_agentworker.find_first(
