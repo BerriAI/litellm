@@ -14933,11 +14933,19 @@ if is_agent_jwt_secret_configured():
     from litellm.proxy.agent_session_endpoints import (
         session_router as agent_session_session_router,
     )
+    from litellm.proxy.agent_session_endpoints.error_envelope import (
+        register_v2_exception_handlers,
+    )
 
     app.include_router(agent_session_agent_router)
     app.include_router(agent_session_session_router)
     app.include_router(agent_session_run_router)
     app.include_router(agent_session_internal_router)
+    # Wrap HTTPException + RequestValidationError under /v2/* in the
+    # standard {error: {code, message, status, details?}} envelope so
+    # SDK consumers have a single error contract. Non-/v2/ paths keep
+    # FastAPI defaults (handler short-circuits on path prefix).
+    register_v2_exception_handlers(app)
 else:
     verbose_proxy_logger.error(
         "agent_session_endpoints (/v2/agents, /v2/sessions) NOT mounted: "
