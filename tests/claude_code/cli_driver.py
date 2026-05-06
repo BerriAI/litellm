@@ -78,6 +78,11 @@ def run_claude(
     if not api_key:
         raise ValueError("api_key must be a non-empty string")
 
+    # `claude --print` takes the prompt as the **last positional argument**.
+    # Flags must come before it, otherwise they're parsed as part of the
+    # prompt (or silently dropped, depending on the CLI version) and the
+    # tool_use / vision cells fail with confusing "no tool_use observed"
+    # errors. Build the flag list first, then append the prompt last.
     cmd: List[str] = [
         cli_path,
         "--print",
@@ -86,10 +91,10 @@ def run_claude(
         "--verbose",
         "--model",
         model,
-        prompt,
     ]
     if extra_args:
         cmd.extend(extra_args)
+    cmd.append(prompt)
 
     env = {**os.environ, **(extra_env or {})}
     env["ANTHROPIC_BASE_URL"] = base_url

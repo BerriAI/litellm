@@ -63,6 +63,29 @@ def test_run_claude_assembles_command_correctly():
     assert cmd[-1] == "hello"
 
 
+def test_run_claude_places_extra_args_before_prompt():
+    """`claude --print` expects the prompt as the final positional arg.
+
+    Flags appearing after the prompt are ignored or eaten by the prompt
+    parser, which silently broke the tool_use and vision cells before the
+    fix. Pin the ordering: every flag (including caller-supplied
+    `extra_args`) must precede the prompt.
+    """
+    runner, captured = _make_runner(stdout="")
+    run_claude(
+        prompt="say hi",
+        model="claude-haiku-4-5",
+        base_url="http://localhost:4000",
+        api_key="sk-test",
+        extra_args=["--allowed-tools", "Bash"],
+        runner=runner,
+    )
+    cmd = captured["cmd"]
+    assert cmd[-1] == "say hi"
+    prompt_idx = cmd.index("say hi")
+    assert cmd[prompt_idx - 2 : prompt_idx] == ["--allowed-tools", "Bash"]
+
+
 def test_run_claude_overlays_proxy_env():
     runner, captured = _make_runner(stdout="")
     run_claude(
