@@ -953,8 +953,30 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             "agent_session_endpoints cleanup sweeper failed to start: %s", exc
         )
 
+    ## Warm-pool maintenance loop (LIT-2890 / Epic B2). Refills
+    ## ``LiteLLM_AgentVM`` rows for every team with ``warm_pool_enabled=true``.
+    ## Idempotent; only does work when at least one team has the feature on.
+    try:
+        from litellm.proxy.agent_session_endpoints.warm_pool.manager import (
+            get_warm_pool_manager,
+        )
+
+        get_warm_pool_manager().start()
+    except Exception as exc:
+        verbose_proxy_logger.warning("warm_pool.manager failed to start: %s", exc)
+
     # End of startup event
     yield
+
+    ## Stop the warm-pool maintenance loop.
+    try:
+        from litellm.proxy.agent_session_endpoints.warm_pool.manager import (
+            get_warm_pool_manager,
+        )
+
+        await get_warm_pool_manager().stop()
+    except Exception as exc:
+        verbose_proxy_logger.warning("warm_pool.manager failed to stop: %s", exc)
 
     ## Stop the agent session cleanup sweeper.
     try:
