@@ -1889,6 +1889,7 @@ async def _process_single_key_update(
     proxy_logging_obj: Any,
     llm_router: Optional[Router],
     user_custom_key_update: Optional[Callable] = None,
+    existing_key_row: Optional[LiteLLM_VerificationToken] = None,
 ) -> Dict[str, Any]:
     """
     Process a single key update with all validations and checks.
@@ -1904,6 +1905,7 @@ async def _process_single_key_update(
         user_api_key_cache: User API key cache
         proxy_logging_obj: Proxy logging object
         llm_router: LLM router instance
+        existing_key_row: Optional pre-fetched key row to avoid redundant lookups
 
     Returns:
         Dict containing the updated key information
@@ -1915,10 +1917,11 @@ async def _process_single_key_update(
     _validate_max_budget(update_key_request.max_budget)
 
     # Get and validate existing key
-    existing_key_row = await _get_and_validate_existing_key(
-        token=update_key_request.key,
-        prisma_client=prisma_client,
-    )
+    if existing_key_row is None:
+        existing_key_row = await _get_and_validate_existing_key(
+            token=update_key_request.key,
+            prisma_client=prisma_client,
+        )
 
     # Check team member permissions
     if prisma_client is not None:
@@ -2852,6 +2855,7 @@ async def bulk_update_team_keys(
                 proxy_logging_obj=proxy_logging_obj,
                 llm_router=llm_router,
                 user_custom_key_update=user_custom_key_update,
+                existing_key_row=existing_by_token[db_token],
             )
 
             successful_updates.append(

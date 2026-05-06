@@ -10117,10 +10117,11 @@ async def test_bulk_update_team_keys_success_with_key_ids(monkeypatch):
     )
 
     keys = [_make_team_key("tok-a"), _make_team_key("tok-b")]
+    find_unique = AsyncMock(side_effect=keys)
     mock = _setup_team_keys_mocks(
         monkeypatch,
         find_many=keys,
-        find_unique=AsyncMock(side_effect=keys),
+        find_unique=find_unique,
         update_data=AsyncMock(
             side_effect=[{"data": _updated({"max_budget": 50.0})}] * 2
         ),
@@ -10139,6 +10140,7 @@ async def test_bulk_update_team_keys_success_with_key_ids(monkeypatch):
     where = mock.db.litellm_verificationtoken.find_many.await_args.kwargs["where"]
     assert where["team_id"] == "team-abc"
     assert where["token"] == {"in": ["tok-a", "tok-b"]}
+    find_unique.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -10149,10 +10151,11 @@ async def test_bulk_update_team_keys_success_all_keys_in_team(monkeypatch):
     )
 
     keys = [_make_team_key(f"tok-{i}") for i in range(3)]
+    find_unique = AsyncMock(side_effect=keys)
     mock = _setup_team_keys_mocks(
         monkeypatch,
         find_many=keys,
-        find_unique=AsyncMock(side_effect=keys),
+        find_unique=find_unique,
         update_data=AsyncMock(
             side_effect=[{"data": _updated({"max_budget": 50.0})}] * 3
         ),
@@ -10178,6 +10181,7 @@ async def test_bulk_update_team_keys_success_all_keys_in_team(monkeypatch):
         for c in expires_or
         if isinstance(c.get("expires"), dict)
     )
+    find_unique.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -10479,8 +10483,7 @@ async def test_bulk_update_team_keys_does_not_log_raw_sk_token_on_failure(
     _setup_team_keys_mocks(
         monkeypatch,
         find_many=[row],
-        # Force the per-key fetch to raise so the exception logger fires.
-        find_unique=AsyncMock(side_effect=RuntimeError("boom")),
+        update_data=AsyncMock(side_effect=RuntimeError("boom")),
         hash_identity=False,
     )
 
