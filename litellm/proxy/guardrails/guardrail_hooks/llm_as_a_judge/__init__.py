@@ -154,6 +154,10 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             messages=judge_messages,
             response_format={"type": "json_object"},
             temperature=0,
+            metadata={
+                "user_api_key_metadata": {"disable_global_guardrails": True},
+                "user_api_key_team_metadata": {"disable_global_guardrails": True},
+            },
         )
         raw = response.choices[0].message.content or "{}"  # type: ignore[union-attr]
         return json.loads(raw)

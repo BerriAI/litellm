@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from typing import Any, AsyncGenerator
 
+import json
 import pytest
 from fastapi import HTTPException
 
@@ -51,9 +52,11 @@ async def test_llm_as_a_judge_uses_proxy_router_for_judge_model_alias(
     class MockRouter:
         def __init__(self) -> None:
             self.calls = 0
+            self.kwargs: dict[str, Any] = {}
 
         async def acompletion(self, **kwargs: Any) -> Any:
             self.calls += 1
+            self.kwargs = kwargs
             assert kwargs["model"] == "proxy-judge-alias"
             return SimpleNamespace(
                 choices=[
@@ -92,6 +95,10 @@ async def test_llm_as_a_judge_uses_proxy_router_for_judge_model_alias(
 
     assert exc_info.value.status_code == 422
     assert router.calls == 1
+    assert router.kwargs["metadata"] == {
+        "user_api_key_metadata": {"disable_global_guardrails": True},
+        "user_api_key_team_metadata": {"disable_global_guardrails": True},
+    }
 
 
 @pytest.mark.asyncio
@@ -155,24 +162,30 @@ async def test_llm_as_a_judge_blocks_selected_streaming_chat_completion(
         "messages": [{"role": "user", "content": "hello"}],
         "model": "gpt-4o-mini",
     }
-    emitted_chunks: list[ModelResponseStream] = []
+    emitted_chunks: list[Any] = []
 
     try:
-        with pytest.raises(HTTPException) as exc_info:
-            async for (
-                chunk
-            ) in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="test-key",
-                    request_route="/v1/chat/completions",
-                ),
-                response=mock_stream(),
-                request_data=request_data,
-            ):
-                emitted_chunks.append(chunk)
+        async for (
+            chunk
+        ) in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="test-key",
+                request_route="/v1/chat/completions",
+            ),
+            response=mock_stream(),
+            request_data=request_data,
+        ):
+            emitted_chunks.append(chunk)
     finally:
         unified_module.endpoint_guardrail_translation_mappings = original_mappings
 
-    assert exc_info.value.status_code == 422
     assert judge_calls == 1
-    assert emitted_chunks == []
+    assert len(emitted_chunks) == 1
+    assert isinstance(emitted_chunks[0], str)
+    assert emitted_chunks[0].startswith("data: ")
+    error_payload = json.loads(emitted_chunks[0].removeprefix("data: ").strip())
+    assert (
+        error_payload["error"]["message"]
+        == "LLM judge rejected response: score below threshold"
+    )
+    assert "unsafe response" not in emitted_chunks[0]

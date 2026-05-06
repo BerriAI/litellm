@@ -29,6 +29,32 @@ A2A_CALL_TYPES = (CallTypes.asend_message, CallTypes.send_message)
 GUARDRAIL_NAME = "unified_llm_guardrails"
 
 
+def _get_http_exception_detail(e: HTTPException) -> dict:
+    detail = e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}
+    return detail
+
+
+def _get_openai_sse_error_chunk(e: HTTPException) -> str:
+    detail = _get_http_exception_detail(e)
+    message = detail.get("error", detail.get("message", str(e.detail)))
+    return (
+        "data: "
+        + json.dumps(
+            {
+                "error": {
+                    "message": message,
+                    "type": "guardrail_violation",
+                    "code": e.status_code,
+                    **{
+                        k: v for k, v in detail.items() if k not in ("error", "message")
+                    },
+                }
+            }
+        )
+        + "\n\n"
+    )
+
+
 def _get_a2a_request_id(
     responses_so_far: List[Any], request_data: dict
 ) -> Optional[str]:
@@ -509,11 +535,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             except HTTPException as e:
                 if call_type is not None and CallTypes(call_type) in A2A_CALL_TYPES:
                     request_id = _get_a2a_request_id(responses_so_far, request_data)
-                    detail = (
-                        e.detail
-                        if isinstance(e.detail, dict)
-                        else {"message": str(e.detail)}
-                    )
+                    detail = _get_http_exception_detail(e)
                     error_chunk = (
                         json.dumps(
                             {
@@ -535,6 +557,9 @@ class UnifiedLLMGuardrails(CustomLogger):
                         + "\n"
                     )
                     yield error_chunk
+                elif buffer_streaming_response:
+                    yield _get_openai_sse_error_chunk(e)
+                    return
                 else:
                     raise
 
