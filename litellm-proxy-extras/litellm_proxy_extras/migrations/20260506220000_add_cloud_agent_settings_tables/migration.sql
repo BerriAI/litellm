@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_AgentWorker" (
 );
 CREATE INDEX IF NOT EXISTS "LiteLLM_AgentWorker_team_id_status_idx"
     ON "LiteLLM_AgentWorker" ("team_id", "status");
+-- Lookup by JWT digest is on the hot path — every worker long-poll
+-- heartbeat (LIT-2890 / B2) calls `find_worker_by_jwt`, which filters
+-- by this column. Without an index that's a full scan per heartbeat.
+CREATE INDEX IF NOT EXISTS "LiteLLM_AgentWorker_worker_jwt_hash_idx"
+    ON "LiteLLM_AgentWorker" ("worker_jwt_hash");
 
 CREATE TABLE IF NOT EXISTS "LiteLLM_AgentWorkerPairingToken" (
     "token_hash" TEXT PRIMARY KEY,
