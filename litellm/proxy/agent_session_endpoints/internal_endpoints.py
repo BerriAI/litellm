@@ -33,6 +33,9 @@ from litellm.proxy.agent_session_endpoints.constants import (
     SESSION_STATUS_PROVISIONING,
     SESSION_STATUS_READY,
 )
+from litellm.proxy.agent_session_endpoints.session_status import (
+    refresh_session_status_from_runs,
+)
 from litellm.proxy.agent_session_endpoints.schemas import (
     DaemonHeartbeatRequest,
     DaemonRegisterRequest,
@@ -185,6 +188,11 @@ async def daemon_next_run(
     while True:
         claimed = await _claim_next_queued_run(prisma_client, session_id)
         if claimed is not None:
+            # Run just transitioned queued -> running; if the session is
+            # still ``ready``, flip it to ``busy``. Idempotent — if the
+            # session is already ``busy`` (e.g. concurrent runs), this
+            # is a no-op via ``derive_session_status_from_runs``.
+            await refresh_session_status_from_runs(prisma_client, session_id)
             return NextRunResponse(
                 run_id=claimed.id,
                 prompt=claimed.prompt or {},
@@ -282,6 +290,10 @@ async def daemon_append_event(
                 ),
             },
         )
+        # Drive the session ``busy`` -> ``ready`` flip. Without this,
+        # the parent session stays permanently ``busy`` after the first
+        # run terminates — Greptile P1.
+        await refresh_session_status_from_runs(prisma_client, session_id)
 
     return {
         "run_id": run_id,
