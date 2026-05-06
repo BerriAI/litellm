@@ -26,20 +26,41 @@ class AgentDaemonTokenError(Exception):
     """Raised when a daemon token is invalid (used internally by validators)."""
 
 
+class AgentJWTSecretNotConfiguredError(RuntimeError):
+    """Raised when ``LITELLM_AGENT_JWT_SECRET`` is unset.
+
+    The daemon JWT secret MUST be a separate credential from the proxy
+    master key. Falling back to ``LITELLM_MASTER_KEY`` would conflate two
+    distinct auth surfaces — a captured daemon JWT could then be used to
+    mint regular API keys with master-key authority.
+    """
+
+
+def is_agent_jwt_secret_configured() -> bool:
+    """Return True iff a non-empty ``LITELLM_AGENT_JWT_SECRET`` is present.
+
+    Used at startup by ``proxy_server.py`` to decide whether to mount the
+    agent_session_endpoints routers. Mounting the routers when this is
+    False would silently expose an unsigned auth surface — refuse instead.
+    """
+    return bool(os.environ.get(AGENT_JWT_SECRET_ENV))
+
+
 def _get_signing_secret() -> str:
     """Resolve the JWT signing secret.
 
-    Falls back to ``LITELLM_MASTER_KEY`` for local dev so a fresh proxy
-    boot doesn't blow up; production deploys MUST set
-    ``LITELLM_AGENT_JWT_SECRET``.
+    The daemon JWT secret is a SEPARATE credential from the proxy master
+    key. There is no fallback — if ``LITELLM_AGENT_JWT_SECRET`` is unset,
+    we refuse to mint or validate any token. Mounting the agent_session
+    routers without this env var is itself a startup error (see
+    ``proxy_server.py``).
     """
     secret = os.environ.get(AGENT_JWT_SECRET_ENV)
     if not secret:
-        secret = os.environ.get("LITELLM_MASTER_KEY")
-    if not secret:
-        raise RuntimeError(
-            f"Neither {AGENT_JWT_SECRET_ENV} nor LITELLM_MASTER_KEY is set; "
-            "cannot mint or validate daemon JWTs."
+        raise AgentJWTSecretNotConfiguredError(
+            f"{AGENT_JWT_SECRET_ENV} is not set; cannot mint or validate "
+            "daemon JWTs. This env var must be a dedicated random secret, "
+            "distinct from LITELLM_MASTER_KEY."
         )
     return secret
 
