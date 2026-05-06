@@ -1384,17 +1384,31 @@ class LiteLLMCompletionResponsesConfig:
                 )
             elif tool.get("type") == "function":
                 typed_tool = cast(FunctionToolParam, tool)
+                function_dict = cast(Dict[str, Any], tool.get("function") or {})
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
-                parameters = dict(typed_tool.get("parameters", {}) or {})
+                parameters = dict(
+                    function_dict.get("parameters")
+                    or typed_tool.get("parameters", {})
+                    or {}
+                )
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
+                strict = (
+                    function_dict.get("strict")
+                    if function_dict.get("strict") is not None
+                    else typed_tool.get("strict", False)
+                )
                 chat_completion_tool: Dict[str, Any] = {
                     "type": "function",
                     "function": {
-                        "name": typed_tool.get("name") or "",
-                        "description": typed_tool.get("description") or "",
+                        "name": function_dict.get("name")
+                        or typed_tool.get("name")
+                        or "",
+                        "description": function_dict.get("description")
+                        or typed_tool.get("description")
+                        or "",
                         "parameters": parameters,
-                        "strict": typed_tool.get("strict", False) or False,
+                        "strict": strict or False,
                     },
                 }
                 if tool.get("cache_control"):
@@ -1408,6 +1422,8 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tools.append(
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
+            elif tool.get("type") in {"custom", "shell"}:
+                continue
             else:
                 chat_completion_tools.append(
                     cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)

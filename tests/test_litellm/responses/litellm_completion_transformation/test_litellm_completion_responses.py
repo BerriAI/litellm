@@ -1189,6 +1189,57 @@ class TestToolTransformation:
         assert "allowed_callers" not in result_tool
         assert "input_examples" not in result_tool
 
+    def test_transform_function_tools_reads_chat_completion_style_function_fields(self):
+        """Chat Completion-style nested function tools should keep their metadata."""
+        function_tool = {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": "Read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                },
+                "strict": True,
+            },
+        }
+
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[function_tool]
+        )
+
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["type"] == "function"
+        assert result_tool["function"] == function_tool["function"]
+
+    def test_transform_unsupported_responses_api_tool_types_are_dropped(self):
+        """Responses-only tool types should not be forwarded to Chat Completions APIs."""
+        tools = [
+            {"type": "custom", "name": "shell", "description": "Run shell commands"},
+            {"type": "shell", "name": "shell"},
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object"},
+            },
+        ]
+
+        (
+            result_tools,
+            _,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "get_weather"
+
     def test_transform_code_execution_tools(self):
         """Test that code_execution tools are passed through as-is"""
         code_execution_tool = {
