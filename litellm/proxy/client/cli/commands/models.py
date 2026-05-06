@@ -129,9 +129,11 @@ def list_models(ctx: click.Context, output_format: Literal["table", "json"]) -> 
             table.add_row(
                 str(model.get("id", "")),
                 str(model.get("object", "model")),
-                format_timestamp(created)
-                if isinstance(created, int)
-                else format_iso_datetime_str(created),
+                (
+                    format_timestamp(created)
+                    if isinstance(created, int)
+                    else format_iso_datetime_str(created)
+                ),
                 str(model.get("owned_by", "")),
             )
 

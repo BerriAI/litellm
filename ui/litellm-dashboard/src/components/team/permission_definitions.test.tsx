@@ -74,5 +74,24 @@ describe("permission_definitions", () => {
       expect(PERMISSION_DESCRIPTIONS["/team/daily/activity"]).toBeDefined();
       expect(PERMISSION_DESCRIPTIONS["/team/daily/activity"]).toContain("team usage");
     });
+
+    it("should include spend logs permission", () => {
+      expect(PERMISSION_DESCRIPTIONS["/spend/logs"]).toBeDefined();
+      expect(PERMISSION_DESCRIPTIONS["/spend/logs"]).toContain("spend logs");
+    });
+  });
+
+  describe("spend/logs permission", () => {
+    it("should return GET method for /spend/logs", () => {
+      expect(getMethodForEndpoint("/spend/logs")).toBe("GET");
+    });
+
+    it("should return correct info for /spend/logs permission", () => {
+      const result = getPermissionInfo("/spend/logs");
+      expect(result.method).toBe("GET");
+      expect(result.endpoint).toBe("/spend/logs");
+      expect(result.description).toBe(PERMISSION_DESCRIPTIONS["/spend/logs"]);
+      expect(result.route).toBe("/spend/logs");
+    });
   });
 });

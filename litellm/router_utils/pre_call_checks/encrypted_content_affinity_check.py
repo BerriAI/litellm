@@ -139,9 +139,16 @@ class EncryptedContentAffinityCheck(CustomLogger):
         typed_healthy_deployments = cast(List[dict], healthy_deployments)
 
         # Signal to the response post-processor that encrypted item IDs should be
-        # encoded in the output of this request.
-        litellm_metadata = request_kwargs.setdefault("litellm_metadata", {})
-        litellm_metadata["encrypted_content_affinity_enabled"] = True
+        # encoded in the output of this request.  Only set the flag when
+        # litellm_metadata already exists (Responses API path).  Using
+        # setdefault would create an empty litellm_metadata dict for chat
+        # completions / embeddings, which breaks tag-based routing because
+        # _get_metadata_variable_name_from_kwargs would pick "litellm_metadata"
+        # over "metadata" where tags are actually stored.
+        if "litellm_metadata" in request_kwargs:
+            request_kwargs["litellm_metadata"][
+                "encrypted_content_affinity_enabled"
+            ] = True
 
         request_input = request_kwargs.get("input")
         model_id = self._extract_model_id_from_input(request_input)

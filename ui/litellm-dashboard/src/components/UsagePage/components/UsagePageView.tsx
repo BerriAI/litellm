@@ -169,8 +169,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     }
   }, [isAdmin, userID]);
 
-  // For non-admins, always pass their own user_id
-  const effectiveUserId = isAdmin ? selectedUserId : userID || null;
+  // For non-admins or "my-usage" view, always pass their own user_id
+  const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : selectedUserId;
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
@@ -477,10 +477,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               }
             />
           )}
-          {/* Your Usage Panel */}
-          {usageView === "global" && (
+          {/* Your Usage / Global Usage Panel */}
+          {(usageView === "global" || usageView === "my-usage") && (
             <>
-              {isAdmin && (
+              {isAdmin && usageView === "global" && (
                 <div className="mb-4">
                   <Text className="mb-2">Filter by user</Text>
                   <Select
@@ -641,7 +641,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                               <Card>
                                 <Title>Input Tokens</Title>
                                 <Text className="text-2xl font-bold mt-2 text-blue-600">
-                                  {userSpendData.metadata?.total_prompt_tokens?.toLocaleString() || 0}
+                                  {Math.max(
+                                    0,
+                                    (userSpendData.metadata?.total_prompt_tokens || 0) -
+                                      (userSpendData.metadata?.total_cache_read_input_tokens || 0) -
+                                      (userSpendData.metadata?.total_cache_creation_input_tokens || 0)
+                                  ).toLocaleString()}
                                 </Text>
                               </Card>
                               <Card>

@@ -28,12 +28,12 @@ class TestAzureVideoRouter:
             "object": "video",
             "status": "processing",
             "created_at": 1234567890,
-            "progress": 0
+            "progress": 0,
         }
-        
+
         # Configure the mock handler
         mock_handler.video_generation_handler.return_value = mock_response
-        
+
         # Call the video generation function with mock response
         result = litellm.video_generation(
             prompt=self.prompt,
@@ -41,9 +41,9 @@ class TestAzureVideoRouter:
             seconds=self.seconds,
             size=self.size,
             custom_llm_provider="azure",
-            mock_response=mock_response
+            mock_response=mock_response,
         )
-        
+
         # Verify the result is a VideoObject with the expected data
         assert result.id == mock_response["id"]
         assert result.model == mock_response["model"]

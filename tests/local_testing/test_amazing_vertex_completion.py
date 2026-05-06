@@ -178,7 +178,6 @@ async def test_get_response():
 async def test_aavertex_ai_anthropic_async():
     # load_vertex_ai_credentials()
     try:
-
         model = "claude-3-5-sonnet@20240620"
 
         vertex_ai_project = "pathrise-convert-1606954137718"
@@ -351,7 +350,6 @@ def test_avertex_ai_stream():
 @pytest.mark.flaky(retries=3, delay=1)
 @pytest.mark.asyncio
 async def test_async_vertexai_response_basic():
-
     load_vertex_ai_credentials()
     try:
         user_message = "Hello, how are you?"
@@ -1382,7 +1380,6 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
                     ]
                 )
         elif resp is not None:
-
             assert resp.model == model.split("/")[1]
 
 
@@ -2097,7 +2094,7 @@ def test_vertexai_multimodalembedding_embedding_latest():
         response = embedding(
             model="vertex_ai/multimodalembedding@001",
             input=["hi"],
-            dimensions=1,
+            dimensions=128,
             auto_truncate=True,
             task_type="RETRIEVAL_QUERY",
         )
@@ -2291,6 +2288,8 @@ def test_prompt_factory_nested():
 async def test_completion_fine_tuned_model():
     load_vertex_ai_credentials()
     mock_response = AsyncMock()
+    mock_response.headers = {}
+    mock_response.status_code = 200
 
     def return_val():
         return {
@@ -2326,7 +2325,6 @@ async def test_completion_fine_tuned_model():
         }
 
     mock_response.json = return_val
-    mock_response.status_code = 200
 
     expected_payload = {
         "contents": [
@@ -3495,8 +3493,14 @@ def test_litellm_api_base(monkeypatch, provider, route):
 
 
 def test_gemini_tool_calling_working_demo():
-    load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    """
+    Regression test: tool params with anyOf containing a `{"type": "array"}`
+    branch (no items field at all) must synthesize items before the request
+    is sent to Vertex (Vertex rejects array types missing items).
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
     args = {
         "messages": [
             {
@@ -3566,13 +3570,75 @@ def test_gemini_tool_calling_working_demo():
         ],
         "vertex_location": "global",
     }
-    response = completion(model="vertex_ai/gemini-3-flash-preview", **args)
-    print(response)
+
+    client = HTTPHandler()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello!"}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 15,
+        },
+    }
+
+    with (
+        patch.object(client, "post", return_value=mock_response) as mock_post,
+        patch.object(
+            VertexBase,
+            "_ensure_access_token",
+            return_value=("fake-token", "fake-project"),
+        ),
+    ):
+        completion(
+            model="vertex_ai/gemini-3-flash-preview",
+            client=client,
+            **args,
+        )
+
+    sent_body = mock_post.call_args.kwargs.get(
+        "json"
+    ) or mock_post.call_args.kwargs.get("data")
+    assert sent_body is not None, "expected request body to be sent"
+    if isinstance(sent_body, str):
+        sent_body = json.loads(sent_body)
+
+    function_decl = sent_body["tools"][0]["function_declarations"][0]
+    callbacks_schema = function_decl["parameters"]["properties"]["config"][
+        "properties"
+    ]["callbacks"]
+    array_branches = [
+        branch
+        for branch in callbacks_schema["anyOf"]
+        if branch.get("type", "").lower() == "array"
+    ]
+    assert array_branches, "expected an array branch in callbacks anyOf"
+    for branch in array_branches:
+        assert "items" in branch and branch["items"], (
+            f"array branch in callbacks.anyOf must include non-empty items "
+            f"(Vertex rejects array types missing items). Got: {branch}"
+        )
 
 
 def test_gemini_tool_calling_not_working():
-    load_vertex_ai_credentials()
-    litellm._turn_on_debug()
+    """
+    Regression test: tool params with anyOf containing both an empty-items
+    array branch and a null branch must serialize with items present on the
+    array branch (Vertex rejects array types missing `items`).
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+
     args = {
         "messages": [
             {
@@ -3639,8 +3705,64 @@ def test_gemini_tool_calling_not_working():
         ],
         "vertex_location": "global",
     }
-    response = completion(model="vertex_ai/gemini-3-flash-preview", **args)
-    print(response)
+
+    client = HTTPHandler()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Content-Type": "application/json"}
+    mock_response.json.return_value = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello!"}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 10,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 15,
+        },
+    }
+
+    with (
+        patch.object(client, "post", return_value=mock_response) as mock_post,
+        patch.object(
+            VertexBase,
+            "_ensure_access_token",
+            return_value=("fake-token", "fake-project"),
+        ),
+    ):
+        completion(
+            model="vertex_ai/gemini-3-flash-preview",
+            client=client,
+            **args,
+        )
+
+    sent_body = mock_post.call_args.kwargs.get(
+        "json"
+    ) or mock_post.call_args.kwargs.get("data")
+    assert sent_body is not None, "expected request body to be sent"
+    if isinstance(sent_body, str):
+        sent_body = json.loads(sent_body)
+
+    function_decl = sent_body["tools"][0]["function_declarations"][0]
+    callbacks_schema = function_decl["parameters"]["properties"]["config"][
+        "properties"
+    ]["callbacks"]
+    array_branches = [
+        branch
+        for branch in callbacks_schema["anyOf"]
+        if branch.get("type", "").lower() == "array"
+    ]
+    assert array_branches, "expected an array branch in callbacks anyOf"
+    for branch in array_branches:
+        assert "items" in branch and branch["items"], (
+            f"array branch in callbacks.anyOf must include non-empty items "
+            f"(Vertex rejects array types missing items). Got: {branch}"
+        )
 
 
 def test_vertex_ai_llama_tool_calling():
@@ -3939,8 +4061,13 @@ def test_vertex_ai_gemini_audio_ogg():
     client = HTTPHandler()
     httpx_mock = MagicMock(return_value=mock_response)
 
-    with patch.object(client, "post", new=httpx_mock), patch.object(
-        VertexBase, "_ensure_access_token", return_value=("fake-token", "fake-project")
+    with (
+        patch.object(client, "post", new=httpx_mock),
+        patch.object(
+            VertexBase,
+            "_ensure_access_token",
+            return_value=("fake-token", "fake-project"),
+        ),
     ):
         response = completion(
             model="vertex_ai/gemini-2.0-flash",

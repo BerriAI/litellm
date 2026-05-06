@@ -34,21 +34,25 @@ def setup_mocks(monkeypatch):
     monkeypatch.delenv("AZURE_SCOPE", raising=False)
     monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
 
-    with patch(
-        "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id"
-    ) as mock_entra_token, patch(
-        "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password"
-    ) as mock_username_password_token, patch(
-        "litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc"
-    ) as mock_oidc_token, patch(
-        "litellm.llms.azure.common_utils.get_azure_ad_token_provider"
-    ) as mock_token_provider, patch(
-        "litellm.llms.azure.common_utils.litellm"
-    ) as mock_litellm, patch(
-        "litellm.llms.azure.common_utils.verbose_logger"
-    ) as mock_logger, patch(
-        "litellm.llms.azure.common_utils.select_azure_base_url_or_endpoint"
-    ) as mock_select_url:
+    with (
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_entra_id"
+        ) as mock_entra_token,
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_username_password"
+        ) as mock_username_password_token,
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_from_oidc"
+        ) as mock_oidc_token,
+        patch(
+            "litellm.llms.azure.common_utils.get_azure_ad_token_provider"
+        ) as mock_token_provider,
+        patch("litellm.llms.azure.common_utils.litellm") as mock_litellm,
+        patch("litellm.llms.azure.common_utils.verbose_logger") as mock_logger,
+        patch(
+            "litellm.llms.azure.common_utils.select_azure_base_url_or_endpoint"
+        ) as mock_select_url,
+    ):
         # Configure mocks
         mock_litellm.AZURE_DEFAULT_API_VERSION = "2023-05-15"
         mock_litellm.enable_azure_ad_token_refresh = False
@@ -850,13 +854,12 @@ async def test_azure_client_reuse(function_name, is_async, args):
     mock_client = MagicMock()
 
     # Create the appropriate patches
-    with patch(client_path) as mock_client_class, patch.object(
-        BaseAzureLLM, "set_cached_openai_client"
-    ) as mock_set_cache, patch.object(
-        BaseAzureLLM, "get_cached_openai_client"
-    ) as mock_get_cache, patch.object(
-        BaseAzureLLM, "initialize_azure_sdk_client"
-    ) as mock_init_azure:
+    with (
+        patch(client_path) as mock_client_class,
+        patch.object(BaseAzureLLM, "set_cached_openai_client") as mock_set_cache,
+        patch.object(BaseAzureLLM, "get_cached_openai_client") as mock_get_cache,
+        patch.object(BaseAzureLLM, "initialize_azure_sdk_client") as mock_init_azure,
+    ):
         # Configure the mock client class to return our mock instance
         mock_client_class.return_value = mock_client
 
@@ -923,13 +926,13 @@ async def test_azure_client_cache_separates_sync_and_async():
     mock_async_client = MagicMock()
 
     # Patch the Azure client classes
-    with patch(
-        "litellm.llms.azure.common_utils.AzureOpenAI"
-    ) as mock_sync_client_class, patch(
-        "litellm.llms.azure.common_utils.AsyncAzureOpenAI"
-    ) as mock_async_client_class, patch.object(
-        BaseAzureLLM, "initialize_azure_sdk_client"
-    ) as mock_init_azure:
+    with (
+        patch("litellm.llms.azure.common_utils.AzureOpenAI") as mock_sync_client_class,
+        patch(
+            "litellm.llms.azure.common_utils.AsyncAzureOpenAI"
+        ) as mock_async_client_class,
+        patch.object(BaseAzureLLM, "initialize_azure_sdk_client") as mock_init_azure,
+    ):
         # Configure the mocks to return our instances
         mock_sync_client_class.return_value = mock_sync_client
         mock_async_client_class.return_value = mock_async_client
@@ -1458,9 +1461,10 @@ def test_get_azure_ad_token_provider_with_default_azure_credential():
     can dynamically instantiate DefaultAzureCredential and return a working token provider.
     """
     # Mock Azure identity classes
-    with patch("azure.identity.DefaultAzureCredential") as mock_default_cred, patch(
-        "azure.identity.get_bearer_token_provider"
-    ) as mock_token_provider:
+    with (
+        patch("azure.identity.DefaultAzureCredential") as mock_default_cred,
+        patch("azure.identity.get_bearer_token_provider") as mock_token_provider,
+    ):
         # Configure mocks
         mock_credential_instance = MagicMock()
         mock_default_cred.return_value = mock_credential_instance

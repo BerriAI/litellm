@@ -92,21 +92,25 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
             detected_context, detected_span = otel_integration._get_span_context(kwargs)
 
             # Assert: Should detect the active span
-            assert detected_span is not None, "Should detect active span from global context"
-            assert detected_span is parent_span, "Detected span should be the active parent span"
+            assert (
+                detected_span is not None
+            ), "Should detect active span from global context"
+            assert (
+                detected_span is parent_span
+            ), "Detected span should be the active parent span"
 
             detected_span_context = detected_span.get_span_context()
-            assert detected_span_context.trace_id == parent_span_context.trace_id, (
-                "Detected span should have same trace_id as parent"
-            )
-            assert detected_span_context.span_id == parent_span_context.span_id, (
-                "Detected span should have same span_id as parent"
-            )
+            assert (
+                detected_span_context.trace_id == parent_span_context.trace_id
+            ), "Detected span should have same trace_id as parent"
+            assert (
+                detected_span_context.span_id == parent_span_context.span_id
+            ), "Detected span should have same span_id as parent"
 
     def test_record_exception_on_span(self):
         """
         Test that _record_exception_on_span properly records exception information.
-        
+
         This test verifies that StandardLoggingPayloadErrorInformation is properly
         extracted and set as span attributes using ErrorAttributes constants.
         """
@@ -161,11 +165,11 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
 
         # Check that set_attribute was called with expected values
         actual_calls = [call.args for call in mock_span.set_attribute.call_args_list]
-        
+
         for expected_call in expected_calls:
-            assert expected_call in actual_calls, (
-                f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
-            )
+            assert (
+                expected_call in actual_calls
+            ), f"Expected set_attribute call {expected_call} not found in actual calls: {actual_calls}"
 
     def test_record_exception_on_span_with_fallback(self):
         """
@@ -206,4 +210,6 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         mock_span.record_exception.assert_called_once_with(test_exception)
 
         # Assert: error.message should be set from error_str using ErrorAttributes constant
-        mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
+        mock_span.set_attribute.assert_called_with(
+            ErrorAttributes.ERROR_MESSAGE, "Fallback error message"
+        )

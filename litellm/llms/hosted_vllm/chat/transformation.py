@@ -121,8 +121,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -130,8 +129,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -146,9 +144,14 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                 thinking_blocks = message.pop("thinking_blocks", None)  # type: ignore
                 if thinking_blocks:
                     new_content: list = [
-                        {"type": block["type"], "thinking": block.get("thinking", "")}
-                        if block.get("type") == "thinking"
-                        else {"type": block["type"], "data": block.get("data", "")}
+                        (
+                            {
+                                "type": block["type"],
+                                "thinking": block.get("thinking", ""),
+                            }
+                            if block.get("type") == "thinking"
+                            else {"type": block["type"], "data": block.get("data", "")}
+                        )
                         for block in thinking_blocks
                     ]
                     existing_content = message.get("content")

@@ -46,31 +46,23 @@ function LoginPageContent() {
     // Cross-origin SSO: worker redirected back with a single-use code.
     // Exchange it for the JWT via the worker's /v3/login/exchange endpoint.
     const params = new URLSearchParams(window.location.search);
-    const ssoCode = params.get("code");
+    const rawSsoCode = params.get("code");
+    // Validate the SSO code is a plausible OAuth authorization code (alphanumeric
+    // plus common URL-safe chars) so that arbitrary user input cannot trigger the
+    // exchange endpoint.
+    const ssoCode =
+      rawSsoCode && /^[a-zA-Z0-9._~+/=-]+$/.test(rawSsoCode) ? rawSsoCode : null;
     if (ssoCode) {
-      // codeql[js/user-controlled-bypass]
-      const workerUrl = localStorage.getItem("litellm_worker_url");
+      const rawWorkerUrl = localStorage.getItem("litellm_worker_url");
+      // Validate the stored worker URL: only allow http(s) URLs.
+      const workerUrl =
+        rawWorkerUrl && /^https?:\/\/.+/.test(rawWorkerUrl) ? rawWorkerUrl : null;
       exchangeLoginCode(ssoCode, workerUrl).then(() => {
         params.delete("code");
         const cleanSearch = params.toString();
         window.history.replaceState(null, "", window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""));
         router.replace("/ui/?login=success");
       });
-      return;
-    }
-
-    // Backwards compat: handle direct token in URL (legacy flow)
-    const urlToken = params.get("token");
-    if (urlToken && !isJwtExpired(urlToken)) {
-      document.cookie = `token=${urlToken}; path=/; SameSite=Lax`;
-      params.delete("token");
-      const cleanSearch = params.toString();
-      window.history.replaceState(
-        null,
-        "",
-        window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""),
-      );
-      router.replace("/ui/?login=success");
       return;
     }
 

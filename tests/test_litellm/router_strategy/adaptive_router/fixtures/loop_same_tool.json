@@ -1,0 +1,35 @@
+[
+  {
+    "user_content": null,
+    "assistant_content": null,
+    "tool_calls": [
+      {"id": "c1", "name": "read_file", "arguments": {"path": "/x"}}
+    ],
+    "tool_results": [
+      {"tool_call_id": "c1", "content": "ok"}
+    ],
+    "response_status": 200
+  },
+  {
+    "user_content": null,
+    "assistant_content": null,
+    "tool_calls": [
+      {"id": "c2", "name": "read_file", "arguments": {"path": "/x"}}
+    ],
+    "tool_results": [
+      {"tool_call_id": "c2", "content": "ok"}
+    ],
+    "response_status": 200
+  },
+  {
+    "user_content": null,
+    "assistant_content": null,
+    "tool_calls": [
+      {"id": "c3", "name": "read_file", "arguments": {"path": "/x"}}
+    ],
+    "tool_results": [
+      {"tool_call_id": "c3", "content": "ok"}
+    ],
+    "response_status": 200
+  }
+]

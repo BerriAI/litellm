@@ -459,7 +459,8 @@ async def test_org_admin_create_user_team_wrong_org_permissions(prisma_client):
         ("/key/generate", LitellmUserRoles.PROXY_ADMIN, True),
         ("/key/regenerate", LitellmUserRoles.PROXY_ADMIN, True),
         # # Internal User checks - allowed routes
-        ("/global/spend/logs", LitellmUserRoles.INTERNAL_USER, True),
+        # /global/spend/logs returns proxy-wide spend; non-admin roles must be blocked
+        ("/global/spend/logs", LitellmUserRoles.INTERNAL_USER, False),
         ("/key/delete", LitellmUserRoles.INTERNAL_USER, True),
         ("/key/generate", LitellmUserRoles.INTERNAL_USER, True),
         ("/key/82akk800000000jjsk/regenerate", LitellmUserRoles.INTERNAL_USER, True),

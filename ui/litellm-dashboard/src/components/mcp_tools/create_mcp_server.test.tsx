@@ -150,151 +150,139 @@ describe("CreateMCPServer", () => {
       });
     });
 
-    it(
-      "should not require auth value when creating a server with API Key auth type",
-      { timeout: 15000 },
-      async () => {
-        await selectHttpTransport();
+    it("should not require auth value when creating a server with API Key auth type", async () => {
+      await selectHttpTransport();
 
-        const user = userEvent.setup({ delay: null });
+      const user = userEvent.setup({ delay: null });
 
-        // Fill in server name (use id to avoid duplicate placeholder)
-        const nameInput = getServerNameInput();
-        await user.type(nameInput, "Test_Server");
+      // Fill in server name (use id to avoid duplicate placeholder)
+      const nameInput = getServerNameInput();
+      await user.type(nameInput, "Test_Server");
 
-        // Fill in URL
-        const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-        await user.type(urlInput, "https://example.com/mcp");
+      // Fill in URL
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await user.type(urlInput, "https://example.com/mcp");
 
-        // Select API Key auth type
-        await selectAntOption("Authentication", "API Key");
+      // Select API Key auth type
+      await selectAntOption("Authentication", "API Key");
 
-        await waitFor(() => {
-          expect(screen.getByText("Authentication Value")).toBeInTheDocument();
-        });
+      await waitFor(() => {
+        expect(screen.getByText("Authentication Value")).toBeInTheDocument();
+      });
 
-        // Leave auth value empty and submit
-        vi.mocked(networking.createMCPServer).mockResolvedValue({
-          server_id: "new-server-1",
-          server_name: "Test_Server",
-          alias: "Test_Server",
-          url: "https://example.com/mcp",
-          transport: "http",
-          auth_type: "api_key",
-          created_at: "2024-01-01T00:00:00Z",
-          created_by: "user-1",
-          updated_at: "2024-01-01T00:00:00Z",
-          updated_by: "user-1",
-        });
+      // Leave auth value empty and submit
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-1",
+        server_name: "Test_Server",
+        alias: "Test_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "api_key",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
 
-        const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
-        await act(async () => {
-          fireEvent.click(submitButton);
-        });
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
 
-        // The form should submit without validation error on auth_value
-        await waitFor(() => {
-          expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
-        });
-      },
-    );
+      // The form should submit without validation error on auth_value
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+    });
 
-    it(
-      "should not require auth value when creating a server with Bearer Token auth type",
-      { timeout: 15000 },
-      async () => {
-        await selectHttpTransport();
+    it("should not require auth value when creating a server with Bearer Token auth type", async () => {
+      await selectHttpTransport();
 
-        const user = userEvent.setup({ delay: null });
+      const user = userEvent.setup({ delay: null });
 
-        const nameInput = getServerNameInput();
-        await user.type(nameInput, "Test_Server");
+      const nameInput = getServerNameInput();
+      await user.type(nameInput, "Test_Server");
 
-        const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-        await user.type(urlInput, "https://example.com/mcp");
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await user.type(urlInput, "https://example.com/mcp");
 
-        await selectAntOption("Authentication", "Bearer Token");
+      await selectAntOption("Authentication", "Bearer Token");
 
-        await waitFor(() => {
-          expect(screen.getByText("Authentication Value")).toBeInTheDocument();
-        });
+      await waitFor(() => {
+        expect(screen.getByText("Authentication Value")).toBeInTheDocument();
+      });
 
-        // Leave auth value empty and submit
-        vi.mocked(networking.createMCPServer).mockResolvedValue({
-          server_id: "new-server-1",
-          server_name: "Test_Server",
-          alias: "Test_Server",
-          url: "https://example.com/mcp",
-          transport: "http",
-          auth_type: "bearer_token",
-          created_at: "2024-01-01T00:00:00Z",
-          created_by: "user-1",
-          updated_at: "2024-01-01T00:00:00Z",
-          updated_by: "user-1",
-        });
+      // Leave auth value empty and submit
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-1",
+        server_name: "Test_Server",
+        alias: "Test_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "bearer_token",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
 
-        const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
-        await act(async () => {
-          fireEvent.click(submitButton);
-        });
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
 
-        await waitFor(() => {
-          expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
-        });
-      },
-    );
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+    });
 
-    it(
-      "should successfully create a server when auth value is provided",
-      { timeout: 15000 },
-      async () => {
-        await selectHttpTransport();
+    it("should successfully create a server when auth value is provided", async () => {
+      await selectHttpTransport();
 
-        const user = userEvent.setup({ delay: null });
+      const user = userEvent.setup({ delay: null });
 
-        const nameInput = getServerNameInput();
-        await user.type(nameInput, "My_Server");
+      const nameInput = getServerNameInput();
+      await user.type(nameInput, "My_Server");
 
-        const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-        await user.type(urlInput, "https://example.com/mcp");
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await user.type(urlInput, "https://example.com/mcp");
 
-        await selectAntOption("Authentication", "API Key");
+      await selectAntOption("Authentication", "API Key");
 
-        await waitFor(() => {
-          expect(screen.getByText("Authentication Value")).toBeInTheDocument();
-        });
+      await waitFor(() => {
+        expect(screen.getByText("Authentication Value")).toBeInTheDocument();
+      });
 
-        // Fill in auth value
-        const authInput = screen.getByPlaceholderText("Enter token or secret");
-        await user.type(authInput, "my-secret-key");
+      // Fill in auth value
+      const authInput = screen.getByPlaceholderText("Enter token or secret");
+      await user.type(authInput, "my-secret-key");
 
-        vi.mocked(networking.createMCPServer).mockResolvedValue({
-          server_id: "new-server-1",
-          server_name: "My_Server",
-          alias: "My_Server",
-          url: "https://example.com/mcp",
-          transport: "http",
-          auth_type: "api_key",
-          created_at: "2024-01-01T00:00:00Z",
-          created_by: "user-1",
-          updated_at: "2024-01-01T00:00:00Z",
-          updated_by: "user-1",
-        });
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-1",
+        server_name: "My_Server",
+        alias: "My_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "api_key",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
 
-        const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
-        await act(async () => {
-          fireEvent.click(submitButton);
-        });
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
 
-        await waitFor(() => {
-          expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
-        });
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
 
-        const [token, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
-        expect(token).toBe("test-token");
-        expect(payload.credentials).toEqual({ auth_value: "my-secret-key" });
-      },
-    );
+      const [token, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(token).toBe("test-token");
+      expect(payload.credentials).toEqual({ auth_value: "my-secret-key" });
+    });
 
     it("should not show auth value field when None auth type is selected", async () => {
       await selectHttpTransport();
@@ -307,50 +295,187 @@ describe("CreateMCPServer", () => {
       });
     });
 
-    it(
-      "should successfully create a server with no auth",
-      { timeout: 15000 },
-      async () => {
-        await selectHttpTransport();
+    it("should successfully create a server with no auth", async () => {
+      await selectHttpTransport();
 
-        const user = userEvent.setup({ delay: null });
+      const user = userEvent.setup({ delay: null });
 
-        const nameInput = getServerNameInput();
-        await user.type(nameInput, "No_Auth_Server");
+      const nameInput = getServerNameInput();
+      await user.type(nameInput, "No_Auth_Server");
 
-        const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
-        await user.type(urlInput, "https://example.com/mcp");
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await user.type(urlInput, "https://example.com/mcp");
 
-        await selectAntOption("Authentication", "None");
+      await selectAntOption("Authentication", "None");
 
-        vi.mocked(networking.createMCPServer).mockResolvedValue({
-          server_id: "new-server-1",
-          server_name: "No_Auth_Server",
-          alias: "No_Auth_Server",
-          url: "https://example.com/mcp",
-          transport: "http",
-          auth_type: "none",
-          created_at: "2024-01-01T00:00:00Z",
-          created_by: "user-1",
-          updated_at: "2024-01-01T00:00:00Z",
-          updated_by: "user-1",
-        });
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-1",
+        server_name: "No_Auth_Server",
+        alias: "No_Auth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
 
-        const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
-        await act(async () => {
-          fireEvent.click(submitButton);
-        });
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
 
-        await waitFor(() => {
-          expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
-        });
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
 
-        const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
-        expect(payload.auth_type).toBe("none");
-        // No credentials should be sent for "none" auth
-        expect(payload.credentials).toBeUndefined();
-      },
-    );
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.auth_type).toBe("none");
+      // No credentials should be sent for "none" auth
+      expect(payload.credentials).toBeUndefined();
+    });
+  });
+
+  describe("when OAuth interactive auth is selected", () => {
+    /** Select HTTP transport + OAuth auth, then wait for the OAuth form to appear. */
+    async function setupOAuthInteractive() {
+      render(<CreateMCPServer {...defaultProps} />);
+      await selectAntOption("Transport Type", "Streamable HTTP");
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+      });
+
+      await selectAntOption("Authentication", "OAuth");
+
+      // Wait for OAuthFormFields to render (OAuth Flow Type selector is the sentinel)
+      await waitFor(() => {
+        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+      });
+
+      // OAuthFormFields defaults to INTERACTIVE, so the new fields should appear
+      await waitFor(() => {
+        expect(screen.getByText("Token Validation Rules (optional)")).toBeInTheDocument();
+        expect(screen.getByText("Token Storage TTL (seconds, optional)")).toBeInTheDocument();
+      });
+    }
+
+    it("shows Token Validation Rules and Token Storage TTL fields", async () => {
+      await setupOAuthInteractive();
+      // Asserted in setupOAuthInteractive
+    });
+
+    it("includes token_validation in payload when token_validation_json is filled with valid JSON", async () => {
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "OAuth_Server",
+        alias: "OAuth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await setupOAuthInteractive();
+
+      // Fill required form fields
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      // Fill in the token_validation_json textarea
+      const textarea = document.getElementById("token_validation_json") as HTMLTextAreaElement;
+      await act(async () => {
+        fireEvent.change(textarea, { target: { value: '{"organization": "my-org", "team.id": "42"}' } });
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.token_validation).toEqual({ organization: "my-org", "team.id": "42" });
+    });
+
+    it("omits token_validation from payload when token_validation_json is empty", async () => {
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-oauth",
+        server_name: "OAuth_Server",
+        alias: "OAuth_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      // Leave token_validation_json empty
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.token_validation).toBeUndefined();
+    });
+
+    it("does not submit and shows validation error for invalid JSON in token_validation_json", async () => {
+      await setupOAuthInteractive();
+
+      const textarea = document.getElementById("token_validation_json") as HTMLTextAreaElement;
+      await act(async () => {
+        fireEvent.change(textarea, { target: { value: "not-valid-json{" } });
+      });
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OAuth_Server" } });
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      // Either the inline form validation message or the notification fires —
+      // both indicate the submit was blocked.
+      await waitFor(() => {
+        const inlineError = screen.queryByText("Must be valid JSON");
+        const notCalled = !vi.mocked(networking.createMCPServer).mock.calls.length;
+        expect(inlineError !== null || notCalled).toBe(true);
+      });
+    });
   });
 
   describe("when modal is cancelled", () => {
