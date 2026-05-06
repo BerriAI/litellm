@@ -67,7 +67,7 @@ describe("noop round-trip", () => {
     // Re-fetch the run by ID and confirm the terminal status.
     const fetched = await session.getRun(run.id);
     expect(fetched.id).toBe(run.id);
-    expect(fetched.status).toBe("completed");
+    expect(fetched.status).toBe("finished");
     expect(fetched.result).toBe("hi there");
   });
 });
