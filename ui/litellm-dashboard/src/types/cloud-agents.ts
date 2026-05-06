@@ -9,12 +9,7 @@
  * proxy-side `Agent` type at `src/components/agents/types.ts`.
  */
 
-export type CloudAgentSessionStatus =
-  | "provisioning"
-  | "running"
-  | "paused"
-  | "completed"
-  | "failed";
+export type CloudAgentSessionStatus = "provisioning" | "running" | "paused" | "completed" | "failed";
 
 export interface CloudAgent {
   agent_id: string;
