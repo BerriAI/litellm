@@ -20,9 +20,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from litellm.proxy.agent_session_endpoints.vm_providers.base import AgentVMProvider
-from litellm.proxy.agent_session_endpoints.vm_providers.ec2 import EC2Provider
-from litellm.proxy.agent_session_endpoints.vm_providers.noop import NoopProvider
+from litellm.managed_agents.vms.base import AgentVMProvider
+from litellm.managed_agents.vms.ec2 import EC2Provider
+from litellm.managed_agents.vms.noop import NoopProvider
 
 # Registry of {name: factory_callable}. The factory takes the raw settings
 # dict (e.g. `agent_settings.ec2`) so per-provider config stays inside the
