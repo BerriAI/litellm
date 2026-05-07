@@ -61,6 +61,7 @@ const TabGroup: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         key: String(index),
         label: React.isValidElement(label) ? label.props.children : label,
         children: React.isValidElement(panels[index]) ? panels[index].props.children : null,
+        forceRender: true,
       }))}
     />
   );
