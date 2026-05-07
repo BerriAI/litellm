@@ -1,4 +1,4 @@
-"""Unit tests for `litellm/proxy/agent_session_endpoints/warm_pool/hydrate.py`.
+"""Unit tests for `litellm/managed_agents/vms/warm_pool/hydrate.py`.
 
 Verify the payload builder:
 * respects scope filtering — out-of-scope secrets never land in the payload
@@ -22,7 +22,7 @@ import pytest
 os.environ.setdefault("LITELLM_SALT_KEY", "sk-test-salt-key-do-not-use-in-prod")
 
 
-from litellm.proxy.agent_session_endpoints.warm_pool.hydrate import (
+from litellm.managed_agents.vms.warm_pool.hydrate import (
     build_hydrate_payload,
 )
 from litellm.proxy.agent_settings_endpoints.encryption import encrypt_optional
@@ -248,7 +248,7 @@ async def test_decrypt_failure_skips_secret_does_not_crash(prisma, jwt_expires_a
         raise ValueError("simulated decrypt fail")
 
     with patch(
-        "litellm.proxy.agent_session_endpoints.warm_pool.hydrate.decrypt_optional",
+        "litellm.managed_agents.vms.warm_pool.hydrate.decrypt_optional",
         new=fake_decrypt,
     ):
         payload = await build_hydrate_payload(
