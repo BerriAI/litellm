@@ -238,6 +238,52 @@ async def test_session_history_preserves_responses_reasoning_before_tool_call():
 
 
 @pytest.mark.asyncio
+async def test_chat_completion_with_output_key_uses_choices_not_responses_output():
+    mock_spend_logs = [
+        {
+            "request_id": "chatcmpl-custom-output",
+            "call_type": "aresponses",
+            "session_id": "session-custom-output",
+            "proxy_server_request": {
+                "input": "Return a custom provider response.",
+                "model": "custom/provider-model",
+            },
+            "response": {
+                "id": "chatcmpl-custom-output",
+                "object": "chat.completion",
+                "model": "custom/provider-model",
+                "output": [{"custom_provider_payload": "not a Responses API item"}],
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "Provider answer from choices.",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+            "status": "success",
+        }
+    ]
+
+    with patch.object(
+        ResponsesSessionHandler,
+        "get_all_spend_logs_for_previous_response_id",
+        new_callable=AsyncMock,
+    ) as mock_get_spend_logs:
+        mock_get_spend_logs.return_value = mock_spend_logs
+        result = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+            "chatcmpl-custom-output"
+        )
+
+    messages = result["messages"]
+    assert [message.get("role") for message in messages] == ["user", "assistant"]
+    assert messages[1].get("content") == "Provider answer from choices."
+
+
+@pytest.mark.asyncio
 async def test_previous_response_tool_output_continuation_replays_reasoning_content():
     """
     The continuation path should replay:

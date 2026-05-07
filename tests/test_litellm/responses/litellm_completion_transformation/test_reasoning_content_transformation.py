@@ -325,6 +325,58 @@ class TestReasoningContentFinalResponse:
         assert tool_calls[0].get("id") == tool_call_id
 
 
+def test_merge_consecutive_function_call_messages_preserves_reasoning_content():
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_first",
+                    "type": "function",
+                    "function": {
+                        "name": "first_tool",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        }
+    ]
+    chat_completion_messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "reasoning_content": "Need a second tool before answering.",
+            "tool_calls": [
+                {
+                    "id": "call_second",
+                    "type": "function",
+                    "function": {
+                        "name": "second_tool",
+                        "arguments": "{}",
+                    },
+                }
+            ],
+        }
+    ]
+
+    merged = LiteLLMCompletionResponsesConfig._merge_consecutive_function_call_messages(
+        messages=messages,
+        chat_completion_messages=chat_completion_messages,
+        input_item={"type": "function_call", "call_id": "call_second"},
+        existing_tool_call_ids={"call_first"},
+    )
+
+    assert merged is True
+    assert messages[0].get("reasoning_content") == (
+        "Need a second tool before answering."
+    )
+    assert [tool_call.get("id") for tool_call in messages[0].get("tool_calls", [])] == [
+        "call_first",
+        "call_second",
+    ]
+
+
 def test_streaming_chunk_id_raw():
     """Test that streaming chunk IDs are raw (not encoded) to match OpenAI format"""
     chunk = ModelResponseStream(

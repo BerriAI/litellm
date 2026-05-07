@@ -420,6 +420,15 @@ class LiteLLMCompletionResponsesConfig:
             )
             if new_role != "assistant":
                 continue
+            reasoning_content = (
+                LiteLLMCompletionResponsesConfig._get_chat_message_reasoning_content(
+                    new_msg
+                )
+            )
+            LiteLLMCompletionResponsesConfig._set_assistant_reasoning_content(
+                last_msg,
+                reasoning_content,
+            )
             for tool_call in LiteLLMCompletionResponsesConfig._get_tool_calls_list(
                 new_msg
             ):

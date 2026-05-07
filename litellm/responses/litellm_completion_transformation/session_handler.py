@@ -152,9 +152,8 @@ class ResponsesSessionHandler:
             and _response_output
             and _response_output != {}
         ):
-            if (
-                _response_output.get("object") == "response"
-                or "output" in _response_output
+            if ResponsesSessionHandler._is_responses_api_output_response(
+                _response_output
             ):
                 chat_completion_message_history.extend(
                     LiteLLMCompletionResponsesConfig.transform_responses_api_output_to_chat_completion_messages(
@@ -169,6 +168,35 @@ class ResponsesSessionHandler:
                 if hasattr(choice, "message"):
                     chat_completion_message_history.append(getattr(choice, "message"))
         return chat_completion_message_history
+
+    @staticmethod
+    def _is_responses_api_output_response(response_output: dict) -> bool:
+        if response_output.get("object") == "response":
+            return True
+        if "choices" in response_output:
+            return False
+        output = response_output.get("output")
+        if not isinstance(output, list):
+            return False
+        responses_output_types = {
+            "reasoning",
+            "message",
+            "function_call",
+            "function_call_output",
+            "web_search_call",
+            "file_search_call",
+            "computer_call",
+            "image_generation_call",
+            "code_interpreter_call",
+            "mcp_call",
+            "custom_tool_call",
+        }
+        for output_item in output:
+            if not isinstance(output_item, dict):
+                continue
+            if output_item.get("type") in responses_output_types:
+                return True
+        return False
 
     @staticmethod
     async def get_proxy_server_request_from_spend_log(
