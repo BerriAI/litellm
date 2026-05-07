@@ -115,13 +115,14 @@ curl -X PATCH "http://0.0.0.0:4000/model/<model_id>/update" \
     -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
     -H "Content-Type: application/json" \
     -d '{
-      "model_info": {"id": "<model_id>"},
       "litellm_params": {
         "input_cost_per_token": 0.0000014,
         "output_cost_per_token": 0.0000044
       }
     }'
 ```
+
+The `model_id` is supplied in the URL path. Do **not** include `"model_info": {"id": "<model_id>"}` in the body — Pydantic deserialisation fills in `db_model: false` by default, and the resulting merge can overwrite the stored `db_model: true` flag in Postgres, causing subsequent cache reloads to stop treating the deployment as DB-stored.
 
 Updated pricing applies to **subsequent** requests immediately — `PATCH` calls `clear_cache()`, which reloads DB-stored deployments and re-invokes `Router.register_model()` with the new pricing. No proxy restart is required.
 
