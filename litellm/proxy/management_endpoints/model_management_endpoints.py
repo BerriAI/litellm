@@ -458,12 +458,9 @@ def _get_public_model_name(
     if incoming:
         team_id = (
             patch_data.model_info.team_id if patch_data.model_info else None
-        ) or (
-            db_model.model_info.team_id if db_model.model_info else None
-        )
-        is_internal_shape = (
-            team_id is not None
-            and incoming.startswith(f"model_name_{team_id}_")
+        ) or (db_model.model_info.team_id if db_model.model_info else None)
+        is_internal_shape = team_id is not None and incoming.startswith(
+            f"model_name_{team_id}_"
         )
         is_no_op = incoming == db_model.model_name
         if not (is_internal_shape or is_no_op):

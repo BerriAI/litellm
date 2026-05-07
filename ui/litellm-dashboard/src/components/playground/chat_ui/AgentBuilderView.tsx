@@ -127,6 +127,14 @@ function getAgentModelId(agent: AgentModel): string | null {
   return info?.id ?? null;
 }
 
+// Selection key that always resolves to a non-null string. Prefers the DB
+// id (stable across renames and unique across teams) but falls back to
+// `model_name` so config-file-defined agents — which have no `model_info.id`
+// — remain selectable.
+function getAgentSelectionKey(agent: AgentModel): string {
+  return getAgentModelId(agent) ?? agent.model_name;
+}
+
 function parseUnderlyingModel(litellmModel: string | undefined): string | undefined {
   if (!litellmModel || !litellmModel.startsWith("litellm_agent/")) return undefined;
   return litellmModel.slice("litellm_agent/".length) || undefined;
@@ -194,7 +202,7 @@ export default function AgentBuilderView({
   const selectedAgent =
     selectedId === NEW_AGENT_ID
       ? null
-      : agentModels.find((a) => getAgentModelId(a) === selectedId) ?? null;
+      : agentModels.find((a) => getAgentSelectionKey(a) === selectedId) ?? null;
   const isNewAgent = selectedId === NEW_AGENT_ID;
   const selectedAgentModelId = selectedAgent ? getAgentModelId(selectedAgent) : null;
 
@@ -207,9 +215,9 @@ export default function AgentBuilderView({
       if (
         !selectedId ||
         (selectedId !== NEW_AGENT_ID &&
-          !list.some((a) => getAgentModelId(a) === selectedId))
+          !list.some((a) => getAgentSelectionKey(a) === selectedId))
       ) {
-        setSelectedId(list.length > 0 ? getAgentModelId(list[0]) : null);
+        setSelectedId(list.length > 0 ? getAgentSelectionKey(list[0]) : null);
       }
       return list;
     } catch (e) {
@@ -306,7 +314,7 @@ export default function AgentBuilderView({
     }
     setSaving(true);
     try {
-      await modelCreateCall(accessToken, {
+      const response = await modelCreateCall(accessToken, {
         model_name: draftName.trim(),
         litellm_params: {
           model: `litellm_agent/${draftUnderlyingModel}`,
@@ -317,10 +325,18 @@ export default function AgentBuilderView({
         },
         model_info: {},
       });
-      const newName = draftName.trim();
+      // /model/new returns the row with `model_id` at the top level.
+      // Prefer that id over name-matching so we land on the just-created
+      // agent even when its public name collides with another team's.
+      const createdId: string | null =
+        response?.model_id ?? response?.model_info?.id ?? null;
       const list = await loadAgents();
-      const created = list.find((a) => a.model_name === newName);
-      setSelectedId(getAgentModelId(created ?? list[0]) ?? null);
+      const created = createdId
+        ? list.find((a) => getAgentModelId(a) === createdId)
+        : list.find((a) => a.model_name === draftName.trim());
+      setSelectedId(
+        created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null,
+      );
       setActiveTab("chat");
     } catch (e) {
       NotificationsManager.fromBackend("Failed to save agent");
@@ -356,7 +372,8 @@ export default function AgentBuilderView({
       const stillSelected = list.find(
         (a) => getAgentModelId(a) === selectedAgentModelId,
       );
-      setSelectedId(getAgentModelId(stillSelected ?? list[0]) ?? null);
+      const target = stillSelected ?? list[0];
+      setSelectedId(target ? getAgentSelectionKey(target) : null);
     } catch (e) {
       NotificationsManager.fromBackend("Failed to update agent");
     } finally {
@@ -405,7 +422,7 @@ export default function AgentBuilderView({
             (a) => getAgentModelId(a) !== selectedAgentModelId,
           );
           setSelectedId(
-            remaining.length > 0 ? getAgentModelId(remaining[0]) : null,
+            remaining.length > 0 ? getAgentSelectionKey(remaining[0]) : null,
           );
         } catch (e) {
           NotificationsManager.fromBackend("Failed to delete agent");
@@ -470,14 +487,14 @@ export default function AgentBuilderView({
             ) : (
               <>
                 {agentModels.map((agent) => {
-                  const id = getAgentModelId(agent);
+                  const key = getAgentSelectionKey(agent);
                   return (
                     <button
-                      key={id ?? agent.model_name}
+                      key={key}
                       type="button"
-                      onClick={() => id && setSelectedId(id)}
+                      onClick={() => setSelectedId(key)}
                       className={`mb-1 w-full rounded-md border-l-2 px-3 py-2 text-left text-sm transition-colors ${
-                        selectedId === id
+                        selectedId === key
                           ? "border-blue-500 bg-blue-50 text-blue-800"
                           : "border-transparent hover:bg-gray-50"
                       }`}
