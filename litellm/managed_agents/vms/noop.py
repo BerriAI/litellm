@@ -16,7 +16,7 @@ import threading
 import uuid
 from typing import Any, Dict, List, Optional
 
-from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+from litellm.managed_agents.vms.base import (
     AgentVMProvider,
     ProvisionContext,
     VMHandle,
