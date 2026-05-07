@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import List
 
 from fastapi import Depends, HTTPException
 
@@ -20,6 +21,7 @@ def _agent_row_to_out(row) -> AgentOut:
         model=row.model,
         template_id=row.template_id,
         branch=row.branch,
+        created_at=getattr(row, "created_at", None),
     )
 
 
@@ -68,6 +70,21 @@ async def create_agent(
     row = await prisma_client.db.litellm_managedagenttable.create(data=create_data)
 
     return _agent_row_to_out(row)
+
+
+@router.get("/agents", response_model=List[AgentOut])
+async def list_agents(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> List[AgentOut]:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="prisma client not available")
+
+    rows = await prisma_client.db.litellm_managedagenttable.find_many(
+        order={"created_at": "desc"}
+    )
+    return [_agent_row_to_out(row) for row in rows]
 
 
 @router.get("/agents/{agent_id}", response_model=AgentOut)
