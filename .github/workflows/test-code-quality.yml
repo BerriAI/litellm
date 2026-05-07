@@ -25,10 +25,30 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Resolve litellm-docs checkout source
+        id: docs_source
+        env:
+          DOCS_FORK_REPO: ${{ github.event.pull_request.head.repo.owner.login }}/litellm-docs
+          DOCS_FORK_BRANCH: ${{ github.head_ref }}
+        run: |
+          DOCS_REPOSITORY="BerriAI/litellm-docs"
+          DOCS_REF="main"
+
+          if git ls-remote --exit-code --heads \
+            "https://github.com/${DOCS_FORK_REPO}.git" \
+            "refs/heads/${DOCS_FORK_BRANCH}" >/dev/null 2>&1; then
+            DOCS_REPOSITORY="${DOCS_FORK_REPO}"
+            DOCS_REF="${DOCS_FORK_BRANCH}"
+          fi
+
+          echo "repository=${DOCS_REPOSITORY}" >> "${GITHUB_OUTPUT}"
+          echo "ref=${DOCS_REF}" >> "${GITHUB_OUTPUT}"
+
       - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          repository: BerriAI/litellm-docs
+          repository: ${{ steps.docs_source.outputs.repository }}
+          ref: ${{ steps.docs_source.outputs.ref }}
           path: docs/my-website
           persist-credentials: false
 
