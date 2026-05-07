@@ -21,6 +21,26 @@ from litellm.types.utils import (
 )
 
 
+def _get_web_search_requests(server_tool_use: Any) -> Optional[int]:
+    """
+    Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
+    that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
+    or any other object supporting attribute access.
+
+    Returns ``None`` when the value cannot be resolved — callers can
+    distinguish "absent" from "zero" using ``is None``.
+
+    See https://github.com/BerriAI/litellm/issues/26153 — ``stream_chunk_builder``
+    historically left this as a plain ``dict``, which broke direct attribute
+    access in cost calculation.
+    """
+    if server_tool_use is None:
+        return None
+    if isinstance(server_tool_use, dict):
+        return server_tool_use.get("web_search_requests")
+    return getattr(server_tool_use, "web_search_requests", None)
+
+
 class StandardBuiltInToolCostTracking:
     """
     Helper class for tracking the cost of built-in tools
@@ -339,8 +359,7 @@ class StandardBuiltInToolCostTracking:
                 # and _handle_web_search_cost() is never called.
                 if (
                     hasattr(usage, "server_tool_use")
-                    and usage.server_tool_use is not None
-                    and usage.server_tool_use.web_search_requests is not None
+                    and _get_web_search_requests(usage.server_tool_use) is not None
                 ):
                     return True
             return False
@@ -352,8 +371,7 @@ class StandardBuiltInToolCostTracking:
         elif usage is not None:
             if (
                 hasattr(usage, "server_tool_use")
-                and usage.server_tool_use is not None
-                and usage.server_tool_use.web_search_requests is not None
+                and _get_web_search_requests(usage.server_tool_use) is not None
             ):
                 return True
             elif (
