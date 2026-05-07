@@ -19,6 +19,12 @@ import pytest
 # Set a JWT secret BEFORE any module under test is imported.
 os.environ.setdefault("LITELLM_AGENT_JWT_SECRET", "test-agent-jwt-secret")
 os.environ.setdefault("LITELLM_MASTER_KEY", "sk-1234")
+# Existing endpoint tests assume the legacy daemon-driven path: a queued
+# run stays queued until a daemon claims it. The new managed_agents
+# in-process driver (see ``managed_agents_runner.py``) is opt-out per
+# spec but defaults to on — disable it here so unit tests keep their
+# original semantics. Per-test fixtures can re-enable it via monkeypatch.
+os.environ.setdefault("LITELLM_DISABLE_MANAGED_AGENTS_RUN_DRIVER", "1")
 
 from collections import defaultdict
 from datetime import datetime, timezone
