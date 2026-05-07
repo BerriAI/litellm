@@ -4034,10 +4034,76 @@ async def debug_sso_login(request: Request):
         )
 
 
+def _make_sso_debug_json_serializable(value: Any) -> Any:
+    """Recursively convert SSO/JWT values into JSON-serializable Python types.
+
+    Handles primitives, dicts, lists/tuples/sets, Enums, datetime-like values,
+    Pydantic models (v1 and v2), dataclasses, and arbitrary objects with a
+    ``__dict__``. Anything that still cannot be converted falls back to
+    ``str(value)``.
+
+    Used by the ``/sso/debug/callback`` endpoint so we can surface the FULL
+    SSO provider response and decoded JWT claims in the debug UI rather than
+    silently dropping nested objects.
+    """
+    import datetime
+    from enum import Enum
+
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {
+            str(k): _make_sso_debug_json_serializable(v) for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple, set)):
+        return [_make_sso_debug_json_serializable(v) for v in value]
+    # Pydantic v2
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return _make_sso_debug_json_serializable(model_dump())
+        except Exception:
+            pass
+    # Pydantic v1
+    pydantic_dict = getattr(value, "dict", None)
+    if callable(pydantic_dict) and hasattr(value, "__fields__"):
+        try:
+            return _make_sso_debug_json_serializable(pydantic_dict())
+        except Exception:
+            pass
+    if hasattr(value, "__dict__"):
+        return {
+            str(k): _make_sso_debug_json_serializable(v)
+            for k, v in vars(value).items()
+            if not k.startswith("_")
+        }
+    try:
+        return str(value)
+    except Exception:
+        return repr(value)
+
+
 @router.get("/sso/debug/callback", tags=["experimental"], include_in_schema=False)
 async def debug_sso_callback(request: Request):
     """
-    Returns the OpenID object returned by the SSO provider
+    Returns full SSO debug information so operators can see exactly what the
+    identity provider returned and how LiteLLM parsed it.
+
+    The response now includes three sections instead of just the OpenID-converted
+    fields:
+
+      * ``sso_provider_response`` — full raw response from the SSO provider
+        (id_token / userinfo claims, group memberships, app roles, etc.)
+      * ``litellm_parsed_openid`` — the fields the proxy actually parsed
+        (id, email, display_name, team_ids, user_role, plus any
+        ``GENERIC_USER_EXTRA_ATTRIBUTES`` extra_fields and team_alias when
+        available)
+      * ``decoded_jwt_access_token_claims`` — decoded JWT access-token claims
+        (generic SSO only; populated when the access token is a JWT)
     """
     import json
 
@@ -4077,24 +4143,61 @@ async def debug_sso_callback(request: Request):
     else:
         redirect_url += "/sso/debug/callback"
 
-    result = None
+    parsed_openid: Any = None
+    raw_sso_response: Any = None
+    access_token_payload: Optional[dict] = None
+    provider_label: Optional[str] = None
+
     if google_client_id is not None:
-        result = await GoogleSSOHandler.get_google_callback_response(
+        provider_label = "google"
+        # Single call only — OAuth authorization codes are single-use, so we
+        # cannot fetch both raw + parsed via separate verify_and_process calls.
+        # The raw response is the authoritative provider payload; we surface
+        # it as both the "raw" view and (for backwards compat) the "parsed"
+        # view since Google does not have a separate proxy-side parser.
+        raw_sso_response = await GoogleSSOHandler.get_google_callback_response(
             request=request,
             google_client_id=google_client_id,
             redirect_url=redirect_url,
             return_raw_sso_response=True,
         )
+        parsed_openid = raw_sso_response
     elif microsoft_client_id is not None:
-        result = await MicrosoftSSOHandler.get_microsoft_callback_response(
+        provider_label = "microsoft"
+        raw_sso_response = await MicrosoftSSOHandler.get_microsoft_callback_response(
             request=request,
             microsoft_client_id=microsoft_client_id,
             redirect_url=redirect_url,
             return_raw_sso_response=True,
         )
-
+        # Re-derive the parsed CustomOpenID from the raw response so operators
+        # see exactly what LiteLLM would have stored in the user record.
+        try:
+            user_team_ids: List[str] = []
+            if isinstance(raw_sso_response, dict):
+                user_team_ids = list(
+                    raw_sso_response.get(
+                        MicrosoftSSOHandler.GRAPH_API_RESPONSE_KEY, []
+                    )
+                    or []
+                )
+            parsed_openid = MicrosoftSSOHandler.openid_from_response(
+                response=raw_sso_response if isinstance(raw_sso_response, dict) else {},
+                team_ids=user_team_ids,
+                user_role=None,
+            )
+        except Exception as parse_err:
+            verbose_proxy_logger.debug(
+                f"debug_sso_callback: could not derive parsed Microsoft OpenID: {parse_err}"
+            )
+            parsed_openid = None
     elif generic_client_id is not None:
-        result, _, _ = await get_generic_sso_response(
+        provider_label = "generic"
+        (
+            parsed_openid,
+            raw_sso_response,
+            access_token_payload,
+        ) = await get_generic_sso_response(
             request=request,
             jwt_handler=jwt_handler,
             generic_client_id=generic_client_id,
@@ -4102,36 +4205,26 @@ async def debug_sso_callback(request: Request):
             sso_jwt_handler=sso_jwt_handler,
         )
 
-    # If result is None, return a basic error message
-    if result is None:
+    # If nothing was returned at all, surface the original error page.
+    if parsed_openid is None and raw_sso_response is None:
         return HTMLResponse(
             content="<h1>SSO Authentication Failed</h1><p>No data was returned from the SSO provider.</p>",
             status_code=400,
         )
 
-    # Convert the OpenID object to a dictionary
-    if hasattr(result, "__dict__"):
-        result_dict = result.__dict__
-    else:
-        result_dict = dict(result)
-
-    # Filter out any None values and convert to JSON serializable format
-    filtered_result = {}
-    for key, value in result_dict.items():
-        if value is not None and not key.startswith("_"):
-            if isinstance(value, (str, int, float, bool)) or value is None:
-                filtered_result[key] = value
-            else:
-                try:
-                    # Try to convert to string or another JSON serializable format
-                    filtered_result[key] = str(value)
-                except Exception as e:
-                    filtered_result[key] = f"Complex value (not displayable): {str(e)}"
+    sso_data: Dict[str, Any] = {
+        "provider": provider_label,
+        "sso_provider_response": _make_sso_debug_json_serializable(raw_sso_response),
+        "litellm_parsed_openid": _make_sso_debug_json_serializable(parsed_openid),
+        "decoded_jwt_access_token_claims": _make_sso_debug_json_serializable(
+            access_token_payload
+        ),
+    }
 
     # Replace the placeholder in the template with the actual data
     html_content = jwt_display_template.replace(
         "const userData = SSO_DATA;",
-        f"const userData = {json.dumps(filtered_result, indent=2)};",
+        f"const userData = {json.dumps(sso_data, indent=2, default=str)};",
     )
 
     return HTMLResponse(content=html_content)
