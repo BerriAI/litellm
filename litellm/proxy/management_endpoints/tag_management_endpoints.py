@@ -12,9 +12,10 @@ All /tag management endpoints
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, Dict, List, Optional
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -395,6 +396,32 @@ async def info_tag(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _validate_tag_list_date_range(
+    start_date: Optional[str], end_date: Optional[str]
+) -> None:
+    """Require both dates together, and enforce YYYY-MM-DD format with start <= end."""
+    if (start_date is None) != (end_date is None):
+        raise HTTPException(
+            status_code=400,
+            detail="start_date and end_date must be provided together",
+        )
+    if start_date is None:
+        return
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")  # type: ignore[arg-type]
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format, expected YYYY-MM-DD: {e}",
+        )
+    if start > end:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date must be on or before end_date",
+        )
+
+
 @router.get(
     "/tag/list",
     tags=["tag management"],
@@ -402,6 +429,18 @@ async def info_tag(
 )
 async def list_tags(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    start_date: Optional[str] = Query(
+        None,
+        description=(
+            "Optional start date (YYYY-MM-DD). When provided together with "
+            "end_date, dynamic tags are limited to those active in the window. "
+            "Stored tags are always returned."
+        ),
+    ),
+    end_date: Optional[str] = Query(
+        None,
+        description="Optional end date (YYYY-MM-DD). Must be given with start_date.",
+    ),
 ):
     """
     List all available tags with their budget information.
@@ -410,6 +449,8 @@ async def list_tags(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
+
+    _validate_tag_list_date_range(start_date, end_date)
 
     try:
         ## QUERY STORED TAGS ##
@@ -453,9 +494,13 @@ async def list_tags(
         # Prisma's distinct fetches all columns for all rows and deduplicates
         # in application code, which is extremely slow on large tables.
         # See: https://www.prisma.io/docs/orm/prisma-client/queries/aggregation-grouping-summarizing#distinct-under-the-hood
+        dynamic_tag_where: Dict[str, Any] = {"tag": {"not": None}}
+        if start_date is not None and end_date is not None:
+            dynamic_tag_where["date"] = {"gte": start_date, "lte": end_date}
+
         dynamic_tag_rows = await prisma_client.db.litellm_dailytagspend.group_by(
             by=["tag"],
-            where={"tag": {"not": None}},
+            where=dynamic_tag_where,
             min={"created_at": True},
             max={"updated_at": True},
         )

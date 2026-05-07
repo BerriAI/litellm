@@ -7288,9 +7288,28 @@ export const tagInfoCall = async (accessToken: string, tagNames: string[]): Prom
   }
 };
 
-export const tagListCall = async (accessToken: string): Promise<TagListResponse> => {
+const formatYmd = (value: Date): string => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+export const tagListCall = async (
+  accessToken: string,
+  startTime?: Date | null,
+  endTime?: Date | null,
+): Promise<TagListResponse> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/list` : `/tag/list`;
+
+    if (startTime && endTime) {
+      const params = new URLSearchParams({
+        start_date: formatYmd(startTime),
+        end_date: formatYmd(endTime),
+      });
+      url = `${url}?${params.toString()}`;
+    }
 
     const response = await fetch(url, {
       method: "GET",

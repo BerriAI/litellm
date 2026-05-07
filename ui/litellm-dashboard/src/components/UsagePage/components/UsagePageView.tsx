@@ -145,23 +145,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
-  const getAllTags = async () => {
-    if (!accessToken) {
-      return;
-    }
-    const tags = await tagListCall(accessToken);
-    setAllTags(
-      Object.values(tags).map((tag: Tag) => ({
-        label: tag.name,
-        value: tag.name,
-      })),
-    );
-  };
-
-  useEffect(() => {
-    getAllTags();
-  }, [accessToken]);
-
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
   useEffect(() => {
     if (!isAdmin && userID) {
@@ -174,6 +157,30 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const tags = await tagListCall(accessToken, startTime, endTime);
+        if (cancelled) return;
+        setAllTags(
+          Object.values(tags).map((tag: Tag) => ({
+            label: tag.name,
+            value: tag.name,
+          })),
+        );
+      } catch (e) {
+        if (!cancelled) {
+          console.error("Failed to fetch tag list", e);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, startTime, endTime]);
 
   // Try aggregated endpoint first, fall back to paginated on failure
   const aggregatedFetchIdRef = useRef(0);
