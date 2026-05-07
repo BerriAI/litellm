@@ -97,7 +97,7 @@ def _make_session(session_id="sess-1", **kw):
     return SimpleNamespace(**base)
 
 
-def _make_prisma(agent=None, session=None):
+def _make_prisma(agent=None, session=None, sessions=None):
     p = MagicMock()
     agent_t = MagicMock()
     agent_t.find_unique = AsyncMock(return_value=agent)
@@ -111,6 +111,7 @@ def _make_prisma(agent=None, session=None):
         sess_t.create = AsyncMock()
         sess_t.find_unique = AsyncMock(return_value=None)
     sess_t.update = AsyncMock()
+    sess_t.find_many = AsyncMock(return_value=list(sessions) if sessions else [])
     p.db.litellm_managedagentsessiontable = sess_t
     return p
 
@@ -456,3 +457,47 @@ def test_delete_session_no_task_arn_skips_stop(app_factory, user):
         resp = client.delete("/v1/managed_agents/sessions/sess-9")
     assert resp.status_code == 200
     stop_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# list_sessions
+# ---------------------------------------------------------------------------
+
+
+def test_list_sessions_returns_all_when_no_filter(app_factory, user):
+    client = app_factory(user)
+    rows = [
+        _make_session(session_id="s1", agent_id="agt-1", status="ready"),
+        _make_session(session_id="s2", agent_id="agt-2", status="dead"),
+    ]
+    prisma = _make_prisma(sessions=rows)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/sessions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [r["id"] for r in body] == ["s1", "s2"]
+    # No filter: where is empty dict
+    _, kwargs = prisma.db.litellm_managedagentsessiontable.find_many.call_args
+    assert kwargs["where"] == {}
+    assert kwargs["order"] == {"created_at": "desc"}
+
+
+def test_list_sessions_filters_by_agent_id(app_factory, user):
+    client = app_factory(user)
+    rows = [_make_session(session_id="s1", agent_id="agt-1", status="ready")]
+    prisma = _make_prisma(sessions=rows)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/sessions?agent_id=agt-1")
+    assert resp.status_code == 200
+    assert [r["agent_id"] for r in resp.json()] == ["agt-1"]
+    _, kwargs = prisma.db.litellm_managedagentsessiontable.find_many.call_args
+    assert kwargs["where"] == {"agent_id": "agt-1"}
+
+
+def test_list_sessions_empty(app_factory, user):
+    client = app_factory(user)
+    prisma = _make_prisma(sessions=[])
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/sessions")
+    assert resp.status_code == 200
+    assert resp.json() == []
