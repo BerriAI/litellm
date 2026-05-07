@@ -47,32 +47,35 @@ class TestCustomLogger(CustomLogger):
         self.standard_logging_object = kwargs["standard_logging_object"]
 
 
-async def _wait_for_openai_file_ready(file_id: str, max_attempts: int = 30) -> None:
+async def _acreate_fine_tuning_job_with_propagation_retry(
+    *, max_attempts: int = 12, initial_delay: float = 1.0, **kwargs
+):
     """
-    Poll OpenAI's files API until the uploaded file is in `processed` state.
+    Wrap litellm.acreate_fine_tuning_job and retry on the eventual-consistency
+    400 OpenAI returns when a freshly-uploaded training file isn't yet visible
+    to the fine-tuning endpoint (`'file-... does not exist'`).
 
-    OpenAI file uploads are eventually consistent — a freshly uploaded file
-    may briefly 404 from `retrieve` and is rejected by downstream endpoints
-    (fine-tuning, batches) until processing finishes. Polling avoids the
-    propagation-lag flake.
+    Polling the files-retrieve endpoint or `FileObject.status` doesn't help —
+    OpenAI's `status` field is deprecated, and the retrieve and fine-tuning
+    endpoints don't share a consistency model. Retrying the operation itself
+    is the only reliable signal that propagation has finished.
+
+    Total budget with defaults: ~70s across 12 attempts (exp backoff capped at
+    8s).
     """
-    last_status: Optional[str] = None
+    delay = initial_delay
+    last_error: Optional[openai.BadRequestError] = None
     for _ in range(max_attempts):
         try:
-            file_obj = await litellm.afile_retrieve(
-                file_id=file_id, custom_llm_provider="openai"
-            )
-            last_status = getattr(file_obj, "status", None)
-            if last_status == "processed":
-                return
-            if last_status == "error":
-                raise RuntimeError(f"File {file_id} failed processing (status=error)")
-        except openai.NotFoundError:
-            last_status = "not_found"
-        await asyncio.sleep(1)
-    raise TimeoutError(
-        f"File {file_id} not ready after {max_attempts}s (last_status={last_status})"
-    )
+            return await litellm.acreate_fine_tuning_job(**kwargs)
+        except openai.BadRequestError as e:
+            if "does not exist" not in str(e):
+                raise
+            last_error = e
+        await asyncio.sleep(delay)
+        delay = min(delay * 1.5, 8.0)
+    assert last_error is not None
+    raise last_error
 
 
 @pytest.mark.asyncio
@@ -92,11 +95,11 @@ async def test_create_fine_tune_jobs_async():
         )
         print("Response from creating file=", file_obj)
 
-        await _wait_for_openai_file_ready(file_obj.id)
-
-        create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
-            model="gpt-3.5-turbo-0125",
-            training_file=file_obj.id,
+        create_fine_tuning_response = (
+            await _acreate_fine_tuning_job_with_propagation_retry(
+                model="gpt-3.5-turbo-0125",
+                training_file=file_obj.id,
+            )
         )
 
         print(
