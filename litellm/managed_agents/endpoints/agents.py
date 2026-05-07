@@ -1,4 +1,4 @@
-"""FastAPI router for ``POST /v2/agents`` (LIT-2922).
+"""FastAPI router for ``POST /v2/agents`` (LIT-2922) and ``GET /v2/agents``.
 
 Spec: ``.claude/v2_api_contract.md`` §6.1.
 
@@ -11,13 +11,20 @@ Behavior:
 4. No router registration here — Wave 3 wires this into ``proxy_server.py``.
 """
 
+from typing import Any, Dict, Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 
-from litellm.managed_agents.db import get_agent_by_name, insert_agent
+from litellm.managed_agents.db import (
+    get_agent_by_name,
+    insert_agent,
+    list_agents,
+)
 from litellm.managed_agents.id_utils import new_agent_id
 from litellm.managed_agents.masking import mask_litellm_api_key
 from litellm.managed_agents.types import (
     AgentConfig,
+    AgentList,
     AgentRow,
     CreateAgentRequest,
 )
@@ -102,4 +109,88 @@ async def create_agent(
         created_by=inserted.get("created_by", created_by),
         created_at=inserted["created_at"],
         updated_at=inserted["updated_at"],
+    )
+
+
+def _row_to_agent_response(row: Dict[str, Any]) -> AgentRow:
+    """Map a DB row to a public AgentRow with masked ``litellm_api_key``.
+
+    Handles both raw-dict configs (Prisma JSON column) and `prisma.Json`-wrapped
+    configs (mock-style with a ``.data`` attribute).
+    """
+    raw_config = row.get("config") or {}
+    if hasattr(raw_config, "data"):
+        # prisma.Json wrapper used by some test fakes
+        config_dict: Dict[str, Any] = dict(raw_config.data)
+    else:
+        config_dict = dict(raw_config)
+
+    masked_config = {
+        **config_dict,
+        "litellm_api_key": mask_litellm_api_key(config_dict.get("litellm_api_key", "")),
+    }
+
+    return AgentRow(
+        id=row["id"],
+        name=row["name"],
+        config=AgentConfig(**masked_config),
+        created_by=row.get("created_by"),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+@router.get(
+    "/v2/agents",
+    response_model=AgentList,
+    tags=["managed-agents-v2"],
+)
+async def list_agents_endpoint(
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> AgentList:
+    """List agents created by the caller, newest first.
+
+    Pagination: simple offset-based. ``cursor`` is the next offset (as a
+    decimal string). When omitted, starts at offset 0.
+
+    Returns ``AgentList`` with ``litellm_api_key`` masked on every row.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    created_by = user_api_key_dict.user_id or _DEFAULT_CREATED_BY
+
+    # Parse cursor → offset. Invalid cursors are a 422 (callers should treat
+    # the cursor as opaque and round-trip it).
+    if cursor is None or cursor == "":
+        skip = 0
+    else:
+        try:
+            skip = int(cursor)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Invalid cursor: {cursor!r}")
+
+    # Fetch one extra row to detect ``has_more`` without a separate count call.
+    rows = await list_agents(
+        prisma_client,
+        created_by=created_by,
+        limit=limit + 1,
+        skip=skip,
+    )
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+
+    next_cursor = str(skip + limit) if has_more else None
+
+    return AgentList(
+        data=[_row_to_agent_response(r) for r in page_rows],
+        next_cursor=next_cursor,
+        has_more=has_more,
     )
