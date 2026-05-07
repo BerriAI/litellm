@@ -62,13 +62,13 @@ from litellm.proxy.agent_session_endpoints.serialization import (
 from litellm.proxy.agent_session_endpoints.session_status import (
     refresh_session_status_from_runs,
 )
-from litellm.proxy.agent_session_endpoints.vm_providers import (
+from litellm.managed_agents.vms import (
     ProvisionContext,
     Repo,
     VMHandle,
     get_vm_provider,
 )
-from litellm.proxy.agent_session_endpoints.warm_pool.attach import (
+from litellm.managed_agents.vms.warm_pool.attach import (
     AttachResult,
     WarmPoolEmptyError,
     attach_warm_vm,
