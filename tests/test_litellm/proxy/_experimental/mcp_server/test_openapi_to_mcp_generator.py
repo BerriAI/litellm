@@ -868,3 +868,146 @@ class TestResolveOperationParams:
         assert "per_page" in names
         assert "sha" in names
         assert len(names) == 4  # no duplicates
+
+
+# ---------------------------------------------------------------------------
+# Tool name sanitization for OpenAPI -> MCP
+# Repro: GitHub's REST OpenAPI uses tag-namespaced operationIds like
+# "actions/download-job-logs-for-workflow-run". Without sanitization the
+# generated MCP tool name contains '/', which Anthropic/OpenAI/Bedrock all
+# reject (^[a-zA-Z0-9_-]+$). This block guards the registration + preview
+# paths against that.
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeOpenAPIToolName:
+    def test_replaces_slashes(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert (
+            sanitize_openapi_tool_name("actions/download-job-logs-for-workflow-run")
+            == "actions_download-job-logs-for-workflow-run"
+        )
+
+    def test_replaces_other_punctuation(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("foo.bar:baz qux") == "foo_bar_baz_qux"
+
+    def test_lowercases(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("Pulls/List-Files") == "pulls_list-files"
+
+    def test_already_valid_passes_through(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("plain-tool_name") == "plain-tool_name"
+
+    def test_empty_string(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        assert sanitize_openapi_tool_name("") == ""
+
+    def test_caps_at_128_chars(self):
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            sanitize_openapi_tool_name,
+        )
+
+        out = sanitize_openapi_tool_name("a/" * 200)
+        assert len(out) <= 128
+
+
+class TestRegisterToolsFromOpenAPI:
+    """Verify register_tools_from_openapi emits provider-safe tool names."""
+
+    def test_github_style_operation_ids_are_sanitized(self, monkeypatch):
+        import re
+
+        from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
+
+        registered: list = []
+
+        def _capture(name, description, input_schema, handler):  # noqa: ANN001
+            registered.append(name)
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator.global_mcp_tool_registry,
+            "register_tool",
+            _capture,
+        )
+
+        spec = {
+            "paths": {
+                "/repos/{owner}/{repo}/actions/jobs/{job_id}/logs": {
+                    "get": {
+                        "operationId": "actions/download-job-logs-for-workflow-run",
+                        "summary": "Download job logs",
+                    }
+                },
+                "/repos/{owner}/{repo}/pulls/{pull_number}/files": {
+                    "get": {
+                        "operationId": "pulls/list-files",
+                        "summary": "List files",
+                    }
+                },
+            }
+        }
+
+        openapi_to_mcp_generator.register_tools_from_openapi(
+            spec, base_url="https://api.example.com"
+        )
+
+        assert registered, "expected at least one registered tool"
+        anthropic_re = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+        for name in registered:
+            assert anthropic_re.match(
+                name
+            ), f"tool name {name!r} violates ^[a-zA-Z0-9_-]+$"
+        assert "actions_download-job-logs-for-workflow-run" in registered
+        assert "pulls_list-files" in registered
+
+    def test_missing_operation_id_uses_sanitized_method_path_fallback(
+        self, monkeypatch
+    ):
+        import re
+
+        from litellm.proxy._experimental.mcp_server import openapi_to_mcp_generator
+
+        registered: list = []
+
+        def _capture(name, description, input_schema, handler):  # noqa: ANN001
+            registered.append(name)
+
+        monkeypatch.setattr(
+            openapi_to_mcp_generator.global_mcp_tool_registry,
+            "register_tool",
+            _capture,
+        )
+
+        spec = {
+            "paths": {
+                "/foo/{bar}/baz": {
+                    "get": {"summary": "no operationId here"},
+                }
+            }
+        }
+        openapi_to_mcp_generator.register_tools_from_openapi(
+            spec, base_url="https://api.example.com"
+        )
+
+        assert registered
+        for name in registered:
+            assert re.match(
+                r"^[a-zA-Z0-9_-]+$", name
+            ), f"fallback tool name {name!r} not sanitized"

@@ -366,6 +366,8 @@ class MCPClient:
                     headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
                 elif self.auth_type == MCPAuth.token:
                     headers["Authorization"] = f"token {self._mcp_auth_value}"
+                elif self.auth_type == MCPAuth.oauth2_token_exchange:
+                    headers["Authorization"] = f"Bearer {self._mcp_auth_value}"
             elif isinstance(self._mcp_auth_value, dict):
                 headers.update(self._mcp_auth_value)
         # Note: aws_sigv4 auth is not handled here — SigV4 requires per-request

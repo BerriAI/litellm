@@ -3516,7 +3516,6 @@ async def _check_team_member_budget(
     if (
         team_object is not None
         and team_object.team_id is not None
-        and user_object is not None
         and valid_token is not None
         and valid_token.user_id is not None
     ):
@@ -3619,6 +3618,7 @@ async def _check_team_member_model_access(
             llm_router=llm_router,
             models=member_allowed_models,
             object_type="team",
+            team_id=team_object.team_id,
         )
     except ProxyException:
         raise ProxyException(
