@@ -69,15 +69,19 @@ async def test_orphan_no_db_row_stopped():
 
     prisma, update = _fake_prisma([])
 
-    with patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
-        return_value=arns,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
-        return_value=tasks,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
-    ) as stop_mock:
+    with (
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
+            return_value=arns,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
+            return_value=tasks,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
+        ) as stop_mock,
+    ):
         stats = await reconcile_orphans(
             prisma_client=prisma, region="us-west-2", cluster="test"
         )
@@ -97,15 +101,19 @@ async def test_orphan_dead_row_stopped(status):
 
     prisma, update = _fake_prisma(rows)
 
-    with patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
-        return_value=arns,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
-        return_value=tasks,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
-    ) as stop_mock:
+    with (
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
+            return_value=arns,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
+            return_value=tasks,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
+        ) as stop_mock,
+    ):
         stats = await reconcile_orphans(
             prisma_client=prisma, region="us-west-2", cluster="test"
         )
@@ -128,15 +136,19 @@ async def test_creating_young_skipped():
 
     prisma, update = _fake_prisma(rows)
 
-    with patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
-        return_value=arns,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
-        return_value=tasks,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
-    ) as stop_mock:
+    with (
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
+            return_value=arns,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
+            return_value=tasks,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
+        ) as stop_mock,
+    ):
         stats = await reconcile_orphans(
             prisma_client=prisma, region="us-west-2", cluster="test"
         )
@@ -158,15 +170,19 @@ async def test_creating_stale_stopped_and_marked_failed():
 
     prisma, update = _fake_prisma(rows)
 
-    with patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
-        return_value=arns,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
-        return_value=tasks,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
-    ) as stop_mock:
+    with (
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
+            return_value=arns,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
+            return_value=tasks,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
+        ) as stop_mock,
+    ):
         stats = await reconcile_orphans(
             prisma_client=prisma, region="us-west-2", cluster="test"
         )
@@ -189,15 +205,19 @@ async def test_ready_row_skipped():
 
     prisma, update = _fake_prisma(rows)
 
-    with patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
-        return_value=arns,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
-        return_value=tasks,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
-    ) as stop_mock:
+    with (
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
+            return_value=arns,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
+            return_value=tasks,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
+        ) as stop_mock,
+    ):
         stats = await reconcile_orphans(
             prisma_client=prisma, region="us-west-2", cluster="test"
         )
@@ -210,21 +230,29 @@ async def test_ready_row_skipped():
 @pytest.mark.asyncio
 async def test_no_managed_tasks_returns_zero():
     untagged = [
-        {"taskArn": "arn:aws:ecs:us-west-2:123:task/other", "tags": {}, "lastStatus": "RUNNING"}
+        {
+            "taskArn": "arn:aws:ecs:us-west-2:123:task/other",
+            "tags": {},
+            "lastStatus": "RUNNING",
+        }
     ]
     arns = [t["taskArn"] for t in untagged]
 
     prisma, _ = _fake_prisma([])
 
-    with patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
-        return_value=arns,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
-        return_value=untagged,
-    ), patch(
-        "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
-    ) as stop_mock:
+    with (
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.list_tagged_task_arns",
+            return_value=arns,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.describe_tasks_with_tags",
+            return_value=untagged,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.lifecycle.stop_task_sync"
+        ) as stop_mock,
+    ):
         stats = await reconcile_orphans(
             prisma_client=prisma, region="us-west-2", cluster="test"
         )

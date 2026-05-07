@@ -464,8 +464,22 @@ def test_delete_session_no_task_arn_skips_stop(app_factory, user):
 # ---------------------------------------------------------------------------
 
 
-def test_list_sessions_returns_all_when_no_filter(app_factory, user):
-    client = app_factory(user)
+@pytest.fixture
+def other_user():
+    return UserAPIKeyAuth(
+        api_key="sk-other", user_id="u2", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+
+@pytest.fixture
+def admin():
+    return UserAPIKeyAuth(
+        api_key="sk-admin", user_id="a1", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+
+def test_list_sessions_returns_all_when_no_filter(app_factory, admin):
+    client = app_factory(admin)
     rows = [
         _make_session(session_id="s1", agent_id="agt-1", status="ready"),
         _make_session(session_id="s2", agent_id="agt-2", status="dead"),
@@ -476,14 +490,14 @@ def test_list_sessions_returns_all_when_no_filter(app_factory, user):
     assert resp.status_code == 200
     body = resp.json()
     assert [r["id"] for r in body] == ["s1", "s2"]
-    # No filter: where is empty dict
+    # Admin caller: no owner filter
     _, kwargs = prisma.db.litellm_managedagentsessiontable.find_many.call_args
     assert kwargs["where"] == {}
     assert kwargs["order"] == {"created_at": "desc"}
 
 
-def test_list_sessions_filters_by_agent_id(app_factory, user):
-    client = app_factory(user)
+def test_list_sessions_filters_by_agent_id(app_factory, admin):
+    client = app_factory(admin)
     rows = [_make_session(session_id="s1", agent_id="agt-1", status="ready")]
     prisma = _make_prisma(sessions=rows)
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
@@ -501,3 +515,75 @@ def test_list_sessions_empty(app_factory, user):
         resp = client.get("/v1/managed_agents/sessions")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_list_sessions_filters_by_owner_for_non_admin(app_factory, user):
+    client = app_factory(user)
+    prisma = _make_prisma(sessions=[])
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/sessions")
+    assert resp.status_code == 200
+    _, kwargs = prisma.db.litellm_managedagentsessiontable.find_many.call_args
+    assert kwargs["where"] == {"created_by": "u1"}
+
+
+# ---------------------------------------------------------------------------
+# Ownership / authorization on get and delete
+# ---------------------------------------------------------------------------
+
+
+def test_get_session_returns_404_for_non_owner(app_factory, other_user):
+    client = app_factory(other_user)
+    sess = _make_session(
+        session_id="sess-9",
+        status="ready",
+        sandbox_url="http://1.2.3.4:4096",
+        created_by="u1",
+    )
+    prisma = _make_prisma(session=sess)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/sessions/sess-9")
+    assert resp.status_code == 404
+
+
+def test_get_session_visible_to_admin(app_factory, admin):
+    client = app_factory(admin)
+    sess = _make_session(
+        session_id="sess-9",
+        status="ready",
+        sandbox_url="http://1.2.3.4:4096",
+        created_by="u1",
+    )
+    prisma = _make_prisma(session=sess)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/sessions/sess-9")
+    assert resp.status_code == 200
+
+
+def test_delete_session_returns_404_for_non_owner(app_factory, other_user):
+    client = app_factory(other_user)
+    sess = _make_session(
+        session_id="sess-9",
+        status="ready",
+        task_arn="arn:task/9",
+        created_by="u1",
+    )
+    prisma = _make_prisma(session=sess)
+    stop_mock = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.stop_session_task",
+            new=stop_mock,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.config_loader.MANAGED_AGENTS_CONFIG",
+            SimpleNamespace(
+                aws_region="us-west-2",
+                aws=SimpleNamespace(cluster=None),
+            ),
+        ),
+    ):
+        resp = client.delete("/v1/managed_agents/sessions/sess-9")
+    assert resp.status_code == 404
+    stop_mock.assert_not_called()

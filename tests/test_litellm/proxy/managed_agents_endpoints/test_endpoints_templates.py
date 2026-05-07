@@ -163,6 +163,7 @@ def test_template_create_happy_path(app_factory, admin, fake_prisma):
                 container_port=4096,
                 path="/x",
                 context_dir="/x",
+                build_platform="linux/amd64",
             ),
         ),
         patch("litellm.proxy.managed_agents_endpoints.endpoints.validate_repo_branch"),
@@ -200,11 +201,95 @@ def test_template_create_private_requires_token_400(app_factory, admin, fake_pri
                 container_port=4096,
                 path="/x",
                 context_dir="/x",
+                build_platform="linux/amd64",
             ),
         ),
     ):
         resp = client.post("/v1/managed_agents/sandbox-templates", json=body)
     assert resp.status_code == 400
+
+
+def _template_row(
+    template_id="t1",
+    visibility="public",
+    created_by="u1",
+):
+    return SimpleNamespace(
+        template_id=template_id,
+        template_name=None,
+        dockerfile_id="opencode",
+        container_port=4096,
+        repo_url="https://github.com/x/y",
+        default_branch="main",
+        visibility=visibility,
+        image_uri=None,
+        task_def_arn=None,
+        build_status="ready",
+        build_error=None,
+        created_by=created_by,
+    )
+
+
+def test_list_templates_filters_private_for_non_owner(app_factory, user, fake_prisma):
+    """Non-admin caller passes a where-clause that excludes private templates
+    they don't own; assert the where-clause is correct."""
+    client = app_factory(user)
+    fake_prisma.db.litellm_managedagentsandboxtemplatetable.find_many = AsyncMock(
+        return_value=[]
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+        resp = client.get("/v1/managed_agents/sandbox-templates")
+    assert resp.status_code == 200
+    where = fake_prisma.db.litellm_managedagentsandboxtemplatetable.find_many.call_args.kwargs[
+        "where"
+    ]
+    assert "OR" in where
+    assert {"visibility": "public"} in where["OR"]
+    assert {"created_by": "u1"} in where["OR"]
+
+
+def test_list_templates_admin_sees_all(app_factory, admin, fake_prisma):
+    client = app_factory(admin)
+    fake_prisma.db.litellm_managedagentsandboxtemplatetable.find_many = AsyncMock(
+        return_value=[]
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+        resp = client.get("/v1/managed_agents/sandbox-templates")
+    assert resp.status_code == 200
+    where = fake_prisma.db.litellm_managedagentsandboxtemplatetable.find_many.call_args.kwargs[
+        "where"
+    ]
+    assert where == {}
+
+
+def test_get_private_template_returns_404_for_non_owner(app_factory, user, fake_prisma):
+    client = app_factory(user)
+    fake_prisma.db.litellm_managedagentsandboxtemplatetable.find_unique = AsyncMock(
+        return_value=_template_row(visibility="private", created_by="u-other")
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+        resp = client.get("/v1/managed_agents/sandbox-templates/t1")
+    assert resp.status_code == 404
+
+
+def test_get_private_template_visible_to_owner(app_factory, user, fake_prisma):
+    client = app_factory(user)
+    fake_prisma.db.litellm_managedagentsandboxtemplatetable.find_unique = AsyncMock(
+        return_value=_template_row(visibility="private", created_by="u1")
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+        resp = client.get("/v1/managed_agents/sandbox-templates/t1")
+    assert resp.status_code == 200
+
+
+def test_get_private_template_visible_to_admin(app_factory, admin, fake_prisma):
+    client = app_factory(admin)
+    fake_prisma.db.litellm_managedagentsandboxtemplatetable.find_unique = AsyncMock(
+        return_value=_template_row(visibility="private", created_by="u-other")
+    )
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
+        resp = client.get("/v1/managed_agents/sandbox-templates/t1")
+    assert resp.status_code == 200
 
 
 def test_template_delete_with_agents_409(app_factory, admin, fake_prisma):

@@ -5,7 +5,11 @@ from typing import List
 from fastapi import Depends, HTTPException
 
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.managed_agents_endpoints.endpoints import router
+from litellm.proxy.managed_agents_endpoints.endpoints import (
+    _assert_owner_or_admin,
+    _is_admin,
+    router,
+)
 from litellm.proxy.managed_agents_endpoints.git_validation import (
     decrypt_git_token,
     validate_repo_branch,
@@ -81,8 +85,12 @@ async def list_agents(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="prisma client not available")
 
+    where: dict = {}
+    if not _is_admin(user_api_key_dict) and user_api_key_dict.user_id is not None:
+        where["created_by"] = user_api_key_dict.user_id
+
     rows = await prisma_client.db.litellm_managedagenttable.find_many(
-        order={"created_at": "desc"}
+        where=where, order={"created_at": "desc"}
     )
     return [_agent_row_to_out(row) for row in rows]
 
@@ -102,5 +110,7 @@ async def get_agent(
     )
     if row is None:
         raise HTTPException(status_code=404, detail=f"agent '{agent_id}' not found")
+
+    _assert_owner_or_admin(user_api_key_dict, row.created_by, "agent", agent_id)
 
     return _agent_row_to_out(row)

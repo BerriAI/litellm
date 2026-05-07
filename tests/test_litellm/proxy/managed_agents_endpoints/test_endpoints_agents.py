@@ -1,8 +1,9 @@
 """Tests for managed_agents_endpoints/endpoints_agents.py.
 
-Covers GET /v1/managed_agents/agents (list) and GET /v1/managed_agents/agents/{id}.
-The POST /agents create flow is exercised end-to-end via the session tests, so
-this file focuses on the read endpoints.
+Covers GET /v1/managed_agents/agents (list) and GET /v1/managed_agents/agents/{id},
+including the ownership / authorization gate. The POST /agents create flow is
+exercised end-to-end via the session tests, so this file focuses on the read
+endpoints.
 """
 
 from datetime import datetime, timezone
@@ -29,6 +30,20 @@ def user():
 
 
 @pytest.fixture
+def other_user():
+    return UserAPIKeyAuth(
+        api_key="sk-other", user_id="u2", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+
+
+@pytest.fixture
+def admin():
+    return UserAPIKeyAuth(
+        api_key="sk-admin", user_id="a1", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+
+@pytest.fixture
 def app_factory():
     def make(auth_user):
         app = FastAPI()
@@ -39,7 +54,7 @@ def app_factory():
     return make
 
 
-def _make_agent(agent_id="agt-1", **kw):
+def _make_agent(agent_id="agt-1", created_by="u1", **kw):
     base = dict(
         agent_id=agent_id,
         agent_name="a",
@@ -50,6 +65,7 @@ def _make_agent(agent_id="agt-1", **kw):
         branch="main",
         metadata={},
         created_at=datetime(2026, 5, 7, tzinfo=timezone.utc),
+        created_by=created_by,
     )
     base.update(kw)
     return SimpleNamespace(**base)
@@ -109,6 +125,26 @@ def test_list_agents_500_when_prisma_unavailable(app_factory, user):
     assert "prisma" in resp.json()["detail"].lower()
 
 
+def test_list_agents_filters_by_owner_for_non_admin(app_factory, user):
+    client = app_factory(user)
+    prisma = _make_prisma(agents=[])
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents")
+    assert resp.status_code == 200
+    _, kwargs = prisma.db.litellm_managedagenttable.find_many.call_args
+    assert kwargs["where"] == {"created_by": "u1"}
+
+
+def test_list_agents_admin_no_owner_filter(app_factory, admin):
+    client = app_factory(admin)
+    prisma = _make_prisma(agents=[])
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents")
+    assert resp.status_code == 200
+    _, kwargs = prisma.db.litellm_managedagenttable.find_many.call_args
+    assert kwargs["where"] == {}
+
+
 # ---------------------------------------------------------------------------
 # get_agent
 # ---------------------------------------------------------------------------
@@ -116,7 +152,7 @@ def test_list_agents_500_when_prisma_unavailable(app_factory, user):
 
 def test_get_agent_happy(app_factory, user):
     client = app_factory(user)
-    prisma = _make_prisma(agent=_make_agent(agent_id="agt-9"))
+    prisma = _make_prisma(agent=_make_agent(agent_id="agt-9", created_by="u1"))
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         resp = client.get("/v1/managed_agents/agents/agt-9")
     assert resp.status_code == 200
@@ -133,3 +169,19 @@ def test_get_agent_404(app_factory, user):
         resp = client.get("/v1/managed_agents/agents/missing")
     assert resp.status_code == 404
     assert "missing" in resp.json()["detail"]
+
+
+def test_get_agent_returns_404_for_non_owner(app_factory, other_user):
+    client = app_factory(other_user)
+    prisma = _make_prisma(agent=_make_agent(agent_id="agt-9", created_by="u1"))
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents/agt-9")
+    assert resp.status_code == 404
+
+
+def test_get_agent_visible_to_admin(app_factory, admin):
+    client = app_factory(admin)
+    prisma = _make_prisma(agent=_make_agent(agent_id="agt-9", created_by="u1"))
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents/agt-9")
+    assert resp.status_code == 200

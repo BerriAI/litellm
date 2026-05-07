@@ -1,4 +1,4 @@
-from typing import List
+from typing import Any, Dict, List
 
 import boto3
 from fastapi import APIRouter, Depends, HTTPException
@@ -61,6 +61,31 @@ def _resolve_aws_overrides() -> AwsOverrides:
 def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(status_code=403, detail="admin role required")
+
+
+def _is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+def _assert_owner_or_admin(
+    user_api_key_dict: UserAPIKeyAuth,
+    created_by: object,
+    resource_kind: str,
+    resource_id: str,
+) -> None:
+    """Reject callers that neither own the resource nor are PROXY_ADMIN.
+
+    A 404 is returned for non-owners (rather than 403) so that resource IDs
+    cannot be enumerated by unauthorized callers.
+    """
+    if _is_admin(user_api_key_dict):
+        return
+    caller = user_api_key_dict.user_id
+    if caller is not None and created_by == caller:
+        return
+    raise HTTPException(
+        status_code=404, detail=f"{resource_kind} '{resource_id}' not found"
+    )
 
 
 @router.get("/dockerfiles", response_model=List[DockerfileOut])
@@ -191,6 +216,16 @@ async def create_sandbox_template(
     return _template_row_to_out(updated_row)
 
 
+def _template_visible_to(row, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """A private template is only visible to its creator and admins."""
+    if row.visibility == "public":
+        return True
+    if _is_admin(user_api_key_dict):
+        return True
+    caller = user_api_key_dict.user_id
+    return caller is not None and row.created_by == caller
+
+
 @router.get("/sandbox-templates", response_model=List[TemplateOut])
 async def list_sandbox_templates(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -200,7 +235,18 @@ async def list_sandbox_templates(
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="prisma client not available")
 
-    rows = await prisma_client.db.litellm_managedagentsandboxtemplatetable.find_many()
+    if _is_admin(user_api_key_dict):
+        where_clause = {}
+    else:
+        caller = user_api_key_dict.user_id
+        visibility_filters: List[Dict[str, Any]] = [{"visibility": "public"}]
+        if caller is not None:
+            visibility_filters.append({"created_by": caller})
+        where_clause = {"OR": visibility_filters}
+
+    rows = await prisma_client.db.litellm_managedagentsandboxtemplatetable.find_many(
+        where=where_clause
+    )
     return [_template_row_to_out(row) for row in rows]
 
 
@@ -217,7 +263,7 @@ async def get_sandbox_template(
     row = await prisma_client.db.litellm_managedagentsandboxtemplatetable.find_unique(
         where={"template_id": template_id}
     )
-    if row is None:
+    if row is None or not _template_visible_to(row, user_api_key_dict):
         raise HTTPException(
             status_code=404, detail=f"template '{template_id}' not found"
         )

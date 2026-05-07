@@ -964,9 +964,19 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"Error stopping managed_agents reconciler: {e}"
-            )
+            verbose_proxy_logger.error(f"Error stopping managed_agents reconciler: {e}")
+
+    # Shutdown event - drain pooled passthrough HTTP client
+    try:
+        from litellm.proxy.managed_agents_endpoints.endpoints_passthrough import (
+            close_passthrough_http_client,
+        )
+
+        await close_passthrough_http_client()
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error closing managed_agents passthrough http client: {e}"
+        )
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:

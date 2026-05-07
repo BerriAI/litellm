@@ -9,7 +9,11 @@ from fastapi import Depends, HTTPException, Query
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.managed_agents_endpoints import config_loader as _config_loader
-from litellm.proxy.managed_agents_endpoints.endpoints import router
+from litellm.proxy.managed_agents_endpoints.endpoints import (
+    _assert_owner_or_admin,
+    _is_admin,
+    router,
+)
 from litellm.proxy.managed_agents_endpoints.fargate.bootstrap import (
     bootstrap_shared_infra,
 )
@@ -210,6 +214,10 @@ async def create_session(
         public_ip = await asyncio.to_thread(
             wait_running_get_ip_sync, region, cluster, task_arn, 300
         )
+        # NOTE (v1): proxy↔sandbox traffic is plain HTTP over the task's public IP.
+        # Tracked for follow-up: route through PrivateLink/VPC-internal addressing
+        # or terminate TLS on the harness so prompts/responses and the env-injected
+        # LITELLM_API_KEY do not transit the public internet in cleartext.
         sandbox_url = f"http://{public_ip}:{template.container_port}"
 
         await wait_http_ready(sandbox_url, client, timeout=600)
@@ -284,6 +292,8 @@ async def list_sessions(
     where: Dict[str, Any] = {}
     if agent_id is not None:
         where["agent_id"] = agent_id
+    if not _is_admin(user_api_key_dict) and user_api_key_dict.user_id is not None:
+        where["created_by"] = user_api_key_dict.user_id
 
     rows = await prisma_client.db.litellm_managedagentsessiontable.find_many(
         where=where, order={"created_at": "desc"}
@@ -306,6 +316,7 @@ async def get_session(
     )
     if row is None:
         raise HTTPException(status_code=404, detail=f"session '{session_id}' not found")
+    _assert_owner_or_admin(user_api_key_dict, row.created_by, "session", session_id)
     return _session_row_to_out(row)
 
 
@@ -324,6 +335,7 @@ async def delete_session(
     )
     if row is None:
         raise HTTPException(status_code=404, detail=f"session '{session_id}' not found")
+    _assert_owner_or_admin(user_api_key_dict, row.created_by, "session", session_id)
 
     region = _resolve_region()
     aws_overrides = _resolve_aws_overrides()
