@@ -11,7 +11,7 @@ Public re-exports:
 - `ProvisionError` / `InvalidCredentialsError` — error types
 """
 
-from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+from litellm.managed_agents.vms.base import (
     AgentVMProvider,
     AwsCreds,
     Ec2Config,
@@ -23,13 +23,13 @@ from litellm.proxy.agent_session_endpoints.vm_providers.base import (
     VMState,
     VMStatus,
 )
-from litellm.proxy.agent_session_endpoints.vm_providers.ec2 import EC2Provider
-from litellm.proxy.agent_session_endpoints.vm_providers.factory import (
+from litellm.managed_agents.vms.ec2 import EC2Provider
+from litellm.managed_agents.vms.factory import (
     SUPPORTED_PROVIDERS,
     build_vm_provider,
 )
-from litellm.proxy.agent_session_endpoints.vm_providers.noop import NoopProvider
-from litellm.proxy.agent_session_endpoints.vm_providers.registry import (
+from litellm.managed_agents.vms.noop import NoopProvider
+from litellm.managed_agents.vms.registry import (
     get_vm_provider,
     register_vm_provider,
     reset_vm_provider_registry,
