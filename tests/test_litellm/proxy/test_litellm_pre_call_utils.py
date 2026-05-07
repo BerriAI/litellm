@@ -1144,6 +1144,118 @@ async def test_add_litellm_data_to_request_preserves_user_tags_when_team_opts_in
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_unions_caller_tags_with_static_key_tags():
+    """Caller-supplied tags must UNION with the static tags from key metadata
+    (not overwrite them) when allow_client_tags=True.
+
+    Regression test: prior behavior assigned the caller-supplied list directly
+    to data["metadata"]["tags"], wiping out the static admin-controlled tags
+    (e.g. team/owner/env) that had been merged in earlier in the function. That
+    forced an all-or-nothing trade-off — admin context vs. per-request context —
+    which broke spend-attribution use cases that need both in `request_tags`.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"tags": ["caller-tag-1", "caller-tag-2"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "tags": ["static-key-tag", "shared-tag"],
+            "allow_client_tags": True,
+        },
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    final_tags = updated["metadata"].get("tags") or []
+    # Static admin tags survive
+    assert "static-key-tag" in final_tags
+    assert "shared-tag" in final_tags
+    # Caller-supplied tags are added
+    assert "caller-tag-1" in final_tags
+    assert "caller-tag-2" in final_tags
+    # Deduplicated (shared-tag appears once even if it shows up on both sides)
+    assert final_tags.count("shared-tag") == 1
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_unions_caller_tags_with_static_team_tags():
+    """Team-level static tags must also be unioned with caller-supplied tags
+    when allow_client_tags=True (not just key-level)."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"tags": ["caller-only"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={
+            "tags": ["team-static-1", "team-static-2"],
+            "allow_client_tags": True,
+        },
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    final_tags = updated["metadata"].get("tags") or []
+    assert "team-static-1" in final_tags
+    assert "team-static-2" in final_tags
+    assert "caller-only" in final_tags
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_user_spend_and_budget():
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
