@@ -103,3 +103,17 @@ class SandboxAdapter(Protocol):
         teardown is also enforced by idle/timeout in the provider.
         """
         ...
+
+    async def abort(
+        self,
+        sandbox_url: str,
+        opencode_session_id: str,
+    ) -> None:
+        """Abort the in-flight turn for a session.
+
+        Translates to `POST <sandbox_url>/session/<oc_sid>/abort` for the
+        opencode adapter (empty body). Best-effort: any non-2xx response
+        from the provider is swallowed (the session may already be done).
+        Raises `SandboxUnreachableError` only on connect/timeout failure.
+        """
+        ...
