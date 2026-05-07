@@ -146,7 +146,7 @@ async def get_session_endpoint(
     row = await get_session(
         prisma_client,
         session_id=session_id,
-        created_by=user_api_key_dict.user_id,
+        created_by=user_api_key_dict.user_id or _DEFAULT_CREATED_BY,
     )
 
     if not row:
