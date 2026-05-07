@@ -1,4 +1,5 @@
-"""FastAPI router for `GET /v2/sessions/:id` (LIT-2923).
+"""FastAPI router for `GET /v2/sessions/:id` (LIT-2923) and
+`GET /v2/agents/:agent_id/sessions` (UI listing).
 
 Returns the session row scoped to the caller. Per contract §6.3 the response
 shape matches `POST /v2/sessions` — sandbox spec is reassembled from the
@@ -6,16 +7,24 @@ flat `sandbox_*` columns on the row, and `sandbox_url` / `sandbox_metadata`
 are NEVER included in the response (they are internal-only state).
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from litellm.managed_agents.db import get_session
-from litellm.managed_agents.types import Repo, SandboxSpec, SessionRow
+from litellm.managed_agents.db import (
+    get_agent,
+    get_session,
+    list_sessions_for_agent,
+)
+from litellm.managed_agents.types import Repo, SandboxSpec, SessionList, SessionRow
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
+
+# Mirrors `agents.py` — fallback owner when no user_id is attached to the
+# verification token (master-key call, etc.).
+_DEFAULT_CREATED_BY = "default_user"
 
 
 def _row_to_session_response(row: Dict[str, Any]) -> SessionRow:
@@ -85,3 +94,80 @@ async def get_session_endpoint(
         )
 
     return _row_to_session_response(row)
+
+
+@router.get(
+    "/v2/agents/{agent_id}/sessions",
+    response_model=SessionList,
+    tags=["managed-agents-v2"],
+)
+async def list_sessions_for_agent_endpoint(
+    agent_id: str,
+    status: Optional[str] = None,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> SessionList:
+    """List sessions for a given agent, scoped to the caller.
+
+    First verifies the agent exists and is owned by the caller (404 otherwise
+    — same no-leak rule as `GET /v2/sessions/:id`). Then returns a paginated
+    list of sessions for that agent, newest first.
+
+    Pagination: simple offset-based, same shape as `GET /v2/agents`.
+    Optional `status` filter narrows by SessionStatus.
+
+    Public response shape mirrors `GET /v2/sessions/:id` for each row —
+    `sandbox_url` and `sandbox_metadata` are stripped.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    created_by = user_api_key_dict.user_id or _DEFAULT_CREATED_BY
+
+    # 1. Verify the agent exists for this caller (prevents leaking session
+    #    existence and gives a clear 404 for unknown/unowned agents).
+    agent_row = await get_agent(
+        prisma_client,
+        agent_id=agent_id,
+        created_by=created_by,
+    )
+    if not agent_row:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent {agent_id} not found",
+        )
+
+    # 2. Parse cursor → offset.
+    if cursor is None or cursor == "":
+        skip = 0
+    else:
+        try:
+            skip = int(cursor)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Invalid cursor: {cursor!r}")
+
+    # 3. Fetch one extra row to detect ``has_more``.
+    rows = await list_sessions_for_agent(
+        prisma_client,
+        agent_id=agent_id,
+        created_by=created_by,
+        limit=limit + 1,
+        skip=skip,
+        status=status,
+    )
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+
+    next_cursor = str(skip + limit) if has_more else None
+
+    return SessionList(
+        data=[_row_to_session_response(r) for r in page_rows],
+        next_cursor=next_cursor,
+        has_more=has_more,
+    )
