@@ -157,3 +157,81 @@ def test_virtual_key_rate_limit_metrics_preserve_zero_remaining_values(
     assert any(sample.value == 0 for sample in token_samples)
     assert not any(sample.value == sys.maxsize for sample in request_samples)
     assert not any(sample.value == sys.maxsize for sample in token_samples)
+
+
+def test_virtual_key_rate_limit_metrics_read_remaining_values_from_hidden_headers(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
+    metadata = {
+        "model_group": "gpt-4o-mini",
+    }
+    kwargs = {
+        "litellm_params": {
+            "metadata": metadata,
+        },
+        "standard_logging_object": {
+            **_standard_logging_payload_with_requester_metadata(),
+            "hidden_params": {
+                "additional_headers": {
+                    "x-ratelimit-model_per_key-remaining-requests": 7,
+                    "x-ratelimit-model_per_key-remaining-tokens": 321,
+                },
+            },
+        },
+    }
+
+    prometheus_logger._set_virtual_key_rate_limit_metrics(
+        user_api_key="test-hash",
+        user_api_key_alias="test-alias",
+        kwargs=kwargs,
+        metadata=metadata,
+        model_id="model-123",
+    )
+
+    request_samples = _metric_samples("litellm_remaining_api_key_requests_for_model")
+    token_samples = _metric_samples("litellm_remaining_api_key_tokens_for_model")
+
+    assert any(sample.value == 7 for sample in request_samples)
+    assert any(sample.value == 321 for sample in token_samples)
+    assert not any(sample.value == sys.maxsize for sample in request_samples)
+    assert not any(sample.value == sys.maxsize for sample in token_samples)
+
+
+def test_virtual_key_rate_limit_metrics_preserve_zero_values_from_hidden_headers(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
+    metadata = {
+        "model_group": "gpt-4o-mini",
+    }
+    kwargs = {
+        "litellm_params": {
+            "metadata": metadata,
+        },
+        "standard_logging_object": {
+            **_standard_logging_payload_with_requester_metadata(),
+            "hidden_params": {
+                "additional_headers": {
+                    "x-ratelimit-model_per_key-remaining-requests": 0,
+                    "x-ratelimit-model_per_key-remaining-tokens": 0,
+                },
+            },
+        },
+    }
+
+    prometheus_logger._set_virtual_key_rate_limit_metrics(
+        user_api_key="test-hash",
+        user_api_key_alias="test-alias",
+        kwargs=kwargs,
+        metadata=metadata,
+        model_id="model-123",
+    )
+
+    request_samples = _metric_samples("litellm_remaining_api_key_requests_for_model")
+    token_samples = _metric_samples("litellm_remaining_api_key_tokens_for_model")
+
+    assert any(sample.value == 0 for sample in request_samples)
+    assert any(sample.value == 0 for sample in token_samples)
+    assert not any(sample.value == sys.maxsize for sample in request_samples)
+    assert not any(sample.value == sys.maxsize for sample in token_samples)
