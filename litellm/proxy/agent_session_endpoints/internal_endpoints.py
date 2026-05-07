@@ -19,6 +19,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+import prisma
 from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.responses import ORJSONResponse, Response
 
@@ -261,12 +262,14 @@ async def daemon_append_event(
     next_seq = (last_evt.seq + 1) if last_evt else 1
 
     try:
+        # Prisma rejects bare ``run_id`` for the relation field and bare
+        # dict for the Json ``payload`` column — wrap accordingly.
         evt = await prisma_client.db.litellm_agentrunevent.create(
             data={
-                "run_id": run_id,
+                "run": {"connect": {"id": run_id}},
                 "seq": next_seq,
                 "event_type": body.event_type,
-                "payload": body.payload,
+                "payload": prisma.Json(body.payload),
             }
         )
     except Exception as exc:
@@ -286,10 +289,10 @@ async def daemon_append_event(
         try:
             evt = await prisma_client.db.litellm_agentrunevent.create(
                 data={
-                    "run_id": run_id,
+                    "run": {"connect": {"id": run_id}},
                     "seq": next_seq,
                     "event_type": body.event_type,
-                    "payload": body.payload,
+                    "payload": prisma.Json(body.payload),
                 }
             )
         except Exception as exc2:
