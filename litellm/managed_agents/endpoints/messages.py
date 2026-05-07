@@ -1,9 +1,10 @@
 """Messaging endpoints for managed agents v2.
 
-Implements `POST /v2/sessions/:id/messages` (LIT-2920) and
-`GET /v2/sessions/:id/messages` (LIT-2920) per contract §6.4 / §6.5.
+Implements `POST /v2/sessions/:id/messages` (LIT-2920),
+`GET /v2/sessions/:id/messages` (LIT-2920), and
+`POST /v2/sessions/:id/abort` per contract §6.4 / §6.5.
 
-Both endpoints share the same pre-forward checks (contract §7):
+Both message endpoints share the same pre-forward checks (contract §7):
   1. Auth (handled by Depends).
   2. Session row exists for caller → 404 if missing.
   3. session.status == "ready" → else 503 (provisioning) or 404
@@ -296,3 +297,53 @@ async def list_messages(
         next_cursor=None,
         has_more=False,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /v2/sessions/:id/abort
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/v2/sessions/{session_id}/abort",
+    tags=["managed-agents"],
+)
+async def abort_session(
+    session_id: str,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> Dict[str, Any]:
+    """Abort the in-flight turn for a session.
+
+    Forwards to the sandbox adapter's ``abort`` which POSTs to
+    ``<sandbox_url>/session/<oc_sid>/abort``. Best-effort: provider 4xx is
+    swallowed by the adapter (the session may already be idle). Connection
+    failures bubble up as 504.
+    """
+    session = await _load_ready_session(
+        session_id=session_id,
+        created_by=user_api_key_dict.user_id,
+    )
+    sandbox = _resolve_sandbox(session)
+
+    try:
+        adapter = get_adapter(sandbox["sandbox_type"])
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    try:
+        await adapter.abort(
+            sandbox["sandbox_url"],
+            sandbox["opencode_session_id"],
+        )
+    except SandboxUnreachableError as e:
+        raise HTTPException(
+            status_code=504,
+            detail={"error": "Sandbox unreachable"},
+        ) from e
+    except SandboxBadGatewayError as e:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "Bad gateway"},
+        ) from e
+
+    return {"id": session_id, "aborted": True}
