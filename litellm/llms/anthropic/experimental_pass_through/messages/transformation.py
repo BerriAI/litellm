@@ -18,6 +18,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
+from ...chat.transformation import AnthropicConfig
 from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
@@ -245,6 +246,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             effort = "medium"
         else:
             effort = "low"
+
+        if effort == "xhigh" and not AnthropicConfig._supports_effort_level(
+            model, "xhigh"
+        ):
+            effort = "high"
 
         optional_params["thinking"] = {"type": "adaptive"}
         existing_output_config = optional_params.get("output_config")
