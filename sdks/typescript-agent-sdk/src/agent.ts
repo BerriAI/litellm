@@ -29,12 +29,18 @@ export class AgentHandle {
     this._client = client;
   }
 
-  /** Create a new session running under this agent. */
+  /** Create a new session running under this agent.
+   *
+   * Posts to ``/v2/sessions`` with ``agent_id`` in the body — that's the
+   * actual backend route shape (there is no agent-scoped session create
+   * endpoint).
+   */
   async createSession(options: CreateSessionOptions = {}): Promise<SessionHandle> {
     const info = await requestJson<SessionInfo>(this._client, {
       method: "POST",
-      path: `/v2/agents/${encodeURIComponent(this.id)}/sessions`,
+      path: "/v2/sessions",
       body: {
+        agentId: this.id,
         repos: options.repos ?? [],
         envVars: options.envVars ?? {},
         metadata: options.metadata ?? {},
@@ -43,26 +49,30 @@ export class AgentHandle {
     return new SessionHandle(info, this._client);
   }
 
-  /** Fetch a session by ID under this agent. */
+  /** Fetch a session by ID. */
   async getSession(sessionId: string): Promise<SessionHandle> {
     const info = await requestJson<SessionInfo>(this._client, {
       method: "GET",
-      path: `/v2/agents/${encodeURIComponent(this.id)}/sessions/${encodeURIComponent(sessionId)}`,
+      path: `/v2/sessions/${encodeURIComponent(sessionId)}`,
     });
     return new SessionHandle(info, this._client);
   }
 
-  /** List sessions running under this agent. */
+  /** List sessions running under this agent.
+   *
+   * Backend exposes ``GET /v2/sessions?agent_id=...``; we filter client-side
+   * via that query param.
+   */
   async listSessions(options: ListOptions = {}): Promise<ListResult<SessionInfo>> {
-    const data = await requestJson<{ items: SessionInfo[]; nextCursor?: string }>(
+    const data = await requestJson<{ data: SessionInfo[]; nextCursor?: string }>(
       this._client,
       {
         method: "GET",
-        path: `/v2/agents/${encodeURIComponent(this.id)}/sessions`,
-        query: { limit: options.limit, cursor: options.cursor },
+        path: "/v2/sessions",
+        query: { agentId: this.id, limit: options.limit, cursor: options.cursor },
       }
     );
-    return { items: data.items ?? [], nextCursor: data.nextCursor };
+    return { items: data.data ?? [], nextCursor: data.nextCursor };
   }
 
   /** Patch the agent definition. */
