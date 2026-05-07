@@ -14,16 +14,12 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import {
-  Badge,
-  Button,
-  Icon,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeaderCell,
   TableRow,
-  Text,
 } from "@tremor/react";
 import { InfoCircleOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button as AntButton, Popover, Skeleton, Tag, Tooltip, Typography } from "antd";
@@ -36,6 +32,8 @@ import FilterComponent, { FilterOption } from "../molecules/filter";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { Organization } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
+
+const { Text } = Typography;
 
 interface VirtualKeysTableProps {
   teams: Team[] | null;
@@ -154,15 +152,15 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
         const width = info.cell.column.getSize();
         return (
           <Tooltip title={value}>
-            <Button
-              size="xs"
-              variant="light"
+            <AntButton
+              type="link"
+              size="small"
               className="font-mono text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs font-normal px-2 py-0.5 text-left overflow-hidden truncate block"
               style={{ maxWidth: width, overflow: "hidden" }}
               onClick={() => setSelectedKey(info.row.original)}
             >
               {value ?? "-"}
-            </Button>
+            </AntButton>
           </Tooltip>
         );
       },
@@ -500,65 +498,70 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
             {Array.isArray(models) ? (
               <div className="flex flex-col">
                 {models.length === 0 ? (
-                  <Badge size={"xs"} className="mb-1" color="red">
+                  <Tag className="mb-1" color="red">
                     <Text>All Proxy Models</Text>
-                  </Badge>
+                  </Tag>
                 ) : (
                   <>
                     <div className="flex items-start">
                       {models.length > 3 && (
                         <div>
-                          <Icon
-                            icon={expandedAccordions[info.row.id] ? ChevronDownIcon : ChevronRightIcon}
+                          <button
+                            type="button"
                             className="cursor-pointer"
-                            size="xs"
                             onClick={() => {
                               setExpandedAccordions((prev) => ({
                                 ...prev,
                                 [info.row.id]: !prev[info.row.id],
                               }));
                             }}
-                          />
+                          >
+                            {expandedAccordions[info.row.id] ? (
+                              <ChevronDownIcon className="h-4 w-4" />
+                            ) : (
+                              <ChevronRightIcon className="h-4 w-4" />
+                            )}
+                          </button>
                         </div>
                       )}
                       <div className="flex flex-wrap gap-1">
                         {models.slice(0, 3).map((model, index) =>
                           model === "all-proxy-models" ? (
-                            <Badge key={index} size={"xs"} color="red">
+                            <Tag key={index} color="red">
                               <Text>All Proxy Models</Text>
-                            </Badge>
+                            </Tag>
                           ) : (
-                            <Badge key={index} size={"xs"} color="blue">
+                            <Tag key={index} color="blue">
                               <Text>
                                 {model.length > 30
                                   ? `${getModelDisplayName(model).slice(0, 30)}...`
                                   : getModelDisplayName(model)}
                               </Text>
-                            </Badge>
+                            </Tag>
                           ),
                         )}
                         {models.length > 3 && !expandedAccordions[info.row.id] && (
-                          <Badge size={"xs"} color="gray" className="cursor-pointer">
+                          <Tag color="default" className="cursor-pointer">
                             <Text>
                               +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
                             </Text>
-                          </Badge>
+                          </Tag>
                         )}
                         {expandedAccordions[info.row.id] && (
                           <div className="flex flex-wrap gap-1">
                             {models.slice(3).map((model, index) =>
                               model === "all-proxy-models" ? (
-                                <Badge key={index + 3} size={"xs"} color="red">
+                                <Tag key={index + 3} color="red">
                                   <Text>All Proxy Models</Text>
-                                </Badge>
+                                </Tag>
                               ) : (
-                                <Badge key={index + 3} size={"xs"} color="blue">
+                                <Tag key={index + 3} color="blue">
                                   <Text>
                                     {model.length > 30
                                       ? `${getModelDisplayName(model).slice(0, 30)}...`
                                       : getModelDisplayName(model)}
                                   </Text>
-                                </Badge>
+                                </Tag>
                               ),
                             )}
                           </div>

@@ -5,10 +5,9 @@ import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { Badge, Button, Card, Grid, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
-import { Form, Modal, Tag } from "antd";
+import { Button, Card, Form, Modal, Tag, Tabs, Typography } from "antd";
 import { KeyInfoHeader } from "./KeyInfoHeader";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam, rolesWithWriteAccess } from "../../utils/roles";
 import { mapDisplayToInternalNames, mapInternalToDisplayNames } from "../callback_info_helpers";
 import AutoRotationView from "../common_components/AutoRotationView";
@@ -23,6 +22,49 @@ import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
+
+const { Text, Title } = Typography;
+
+const Badge: React.FC<React.ComponentProps<typeof Tag> & { size?: "xs" | "sm" | "md" }> = ({
+  color,
+  size: _size,
+  ...props
+}) => <Tag color={color === "yellow" ? "gold" : color} {...props} />;
+
+const Grid: React.FC<{
+  children: React.ReactNode;
+  className?: string;
+  numItems?: number;
+  numItemsSm?: number;
+  numItemsLg?: number;
+}> = ({ children, className = "" }) => (
+  <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 ${className}`}>{children}</div>
+);
+
+const Tab: React.FC<{ children: React.ReactNode }> = ({ children }) => <>{children}</>;
+const TabList: React.FC<{ children: React.ReactNode; className?: string }> = ({ children }) => <>{children}</>;
+const TabPanel: React.FC<{ children: React.ReactNode }> = ({ children }) => <>{children}</>;
+const TabPanels: React.FC<{ children: React.ReactNode }> = ({ children }) => <>{children}</>;
+
+const TabGroup: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const tabGroupChildren = React.Children.toArray(children);
+  const tabList = tabGroupChildren.find((child) => React.isValidElement(child) && child.type === TabList);
+  const tabPanels = tabGroupChildren.find((child) => React.isValidElement(child) && child.type === TabPanels);
+  const labels =
+    React.isValidElement(tabList) ? React.Children.toArray(tabList.props.children as React.ReactNode) : [];
+  const panels =
+    React.isValidElement(tabPanels) ? React.Children.toArray(tabPanels.props.children as React.ReactNode) : [];
+
+  return (
+    <Tabs
+      items={labels.map((label, index) => ({
+        key: String(index),
+        label: React.isValidElement(label) ? label.props.children : label,
+        children: React.isValidElement(panels[index]) ? panels[index].props.children : null,
+      }))}
+    />
+  );
+};
 
 interface KeyInfoViewProps {
   keyId: string;
@@ -140,7 +182,12 @@ export default function KeyInfoView({
   if (!currentKeyData) {
     return (
       <div className="p-4">
-        <Button icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+        <Button
+          type="link"
+          icon={<ArrowLeftIcon className="h-4 w-4" />}
+          onClick={onClose}
+          className="mb-4"
+        >
           {backButtonText}
         </Button>
         <Text>Key not found</Text>

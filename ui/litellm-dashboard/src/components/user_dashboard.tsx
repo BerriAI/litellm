@@ -1,6 +1,5 @@
 "use client";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
-import { Col, Grid } from "@tremor/react";
 import { jwtDecode } from "jwt-decode";
 import { useSearchParams } from "next/navigation";
 import React, { useEffect, useState } from "react";
@@ -325,8 +324,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
   console.log("All cookies after redirect:", document.cookie);
   return (
     <div className="w-full mx-4 h-[75vh]">
-      <Grid numItems={1} className="gap-2 p-8 w-full mt-2">
-        <Col numColSpan={1} className="flex flex-col gap-2">
+      <div className="grid grid-cols-1 gap-2 p-8 w-full mt-2">
+        <div className="flex flex-col gap-2">
           {canCreateKey && (
             <CreateKey
               key={selectedTeam ? selectedTeam.team_id : null}
@@ -339,8 +338,8 @@ const UserDashboard: React.FC<UserDashboardProps> = ({
             />
           )}
           <VirtualKeysTable teams={teams} organizations={organizations} />
-        </Col>
-      </Grid>
+        </div>
+      </div>
     </div>
   );
 };

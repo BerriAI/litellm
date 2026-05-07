@@ -1,7 +1,6 @@
 import React, { useState } from "react";
-import { Button, Space } from "antd";
+import { Button, Input, Space } from "antd";
 import { MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { TextInput } from "@tremor/react";
 
 interface KeyValueInputProps {
   value?: Record<string, string>;
@@ -32,8 +31,8 @@ const KeyValueInput: React.FC<KeyValueInputProps> = ({ value = {}, onChange }) =
     <div>
       {pairs.map(([key, val], index) => (
         <Space key={index} style={{ display: "flex", marginBottom: 8 }} align="center">
-          <TextInput placeholder="Header Name" value={key} onChange={(e) => handleChange(index, e.target.value, val)} />
-          <TextInput
+          <Input placeholder="Header Name" value={key} onChange={(e) => handleChange(index, e.target.value, val)} />
+          <Input
             placeholder="Header Value"
             value={val}
             onChange={(e) => handleChange(index, key, e.target.value)}
