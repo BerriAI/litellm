@@ -125,6 +125,19 @@ def discover_vpc_subnet(region: str) -> Tuple[str, str, str]:
     return vpc_id, vpc_cidr, subnets[0]["SubnetId"]
 
 
+def _sg_has_tcp_ingress(sg: dict, port: int) -> bool:
+    for perm in sg.get("IpPermissions", []) or []:
+        if perm.get("IpProtocol") != "tcp":
+            continue
+        if (
+            perm.get("FromPort") is not None
+            and perm.get("ToPort") is not None
+            and perm["FromPort"] <= port <= perm["ToPort"]
+        ):
+            return True
+    return False
+
+
 def ensure_security_group(
     region: str,
     sg_name: str,
@@ -141,10 +154,36 @@ def ensure_security_group(
     )
     existing = r.get("SecurityGroups", [])
     if existing:
+        sg = existing[0]
+        sg_id = sg["GroupId"]
         verbose_proxy_logger.debug(
             f"Security group {sg_name} already exists in VPC {vpc_id}"
         )
-        return existing[0]["GroupId"]
+        # The SG is shared across all templates. If a new template uses a
+        # different container_port, the existing SG won't have an ingress
+        # rule for it and the harness will be unreachable. Add the missing
+        # rule rather than silently returning.
+        if not _sg_has_tcp_ingress(sg, container_port):
+            try:
+                ec2.authorize_security_group_ingress(
+                    GroupId=sg_id,
+                    IpPermissions=[
+                        {
+                            "IpProtocol": "tcp",
+                            "FromPort": container_port,
+                            "ToPort": container_port,
+                            "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                        }
+                    ],
+                )
+                verbose_proxy_logger.info(
+                    f"Added ingress for tcp/{container_port} to {sg_name}"
+                )
+            except ClientError as e:
+                # InvalidPermission.Duplicate => another worker added it concurrently
+                if "InvalidPermission.Duplicate" not in str(e):
+                    raise
+        return sg_id
 
     verbose_proxy_logger.info(f"Creating security group {sg_name} in VPC {vpc_id}")
     sg_id = ec2.create_security_group(

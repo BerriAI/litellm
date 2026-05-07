@@ -8,6 +8,7 @@ from fastapi import Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.managed_agents_endpoints import config_loader as _config_loader
 from litellm.proxy.managed_agents_endpoints.endpoints import (
     _assert_owner_or_admin,
@@ -168,8 +169,16 @@ async def create_session(
     )
     session_id = row.session_id
 
+    encrypted_key = metadata.get("litellm_api_key_encrypted")
+    decrypted_key = (
+        decrypt_value_helper(
+            encrypted_key, key="litellm_api_key", return_original_value=True
+        )
+        if encrypted_key
+        else ""
+    )
     env: Dict[str, str] = {
-        "LITELLM_API_KEY": metadata.get("litellm_api_key", "") or "",
+        "LITELLM_API_KEY": decrypted_key or "",
         "LITELLM_API_BASE": metadata.get("litellm_api_base", "") or "",
         "LITELLM_DEFAULT_MODEL": agent.model,
         "REPO_URL": template.repo_url,
@@ -293,7 +302,11 @@ async def list_sessions(
     where: Dict[str, Any] = {}
     if agent_id is not None:
         where["agent_id"] = agent_id
-    if not _is_admin(user_api_key_dict) and user_api_key_dict.user_id is not None:
+    if not _is_admin(user_api_key_dict):
+        # Non-admin callers see only their own rows. If the API key has no
+        # user_id, treat it as "no rows" rather than exposing every session.
+        if user_api_key_dict.user_id is None:
+            return []
         where["created_by"] = user_api_key_dict.user_id
 
     rows = await prisma_client.db.litellm_managedagentsessiontable.find_many(

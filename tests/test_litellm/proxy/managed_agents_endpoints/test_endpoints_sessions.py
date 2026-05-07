@@ -71,7 +71,10 @@ def _make_agent(template, created_by="u1"):
         tools=[],
         template_id=template.template_id,
         branch="main",
-        metadata={"litellm_api_key": "sk-x", "litellm_api_base": "http://x"},
+        metadata={
+            "litellm_api_key_encrypted": "encrypted-sk-x",
+            "litellm_api_base": "http://x",
+        },
         created_by=created_by,
     )
     a.template = template
@@ -196,6 +199,10 @@ def test_create_session_happy_path_with_initial_prompt(app_factory, user):
         patch(
             "litellm.proxy.managed_agents_endpoints.endpoints_sessions.harness_send_message",
             new=AsyncMock(return_value={"parts": [{"type": "text", "text": "hi"}]}),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_value_helper",
+            return_value="sk-x",
         ),
         patch(
             "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_git_token",
@@ -539,6 +546,20 @@ def test_list_sessions_filters_by_owner_for_non_admin(app_factory, user):
     assert resp.status_code == 200
     _, kwargs = prisma.db.litellm_managedagentsessiontable.find_many.call_args
     assert kwargs["where"] == {"created_by": "u1"}
+
+
+def test_list_sessions_returns_empty_when_user_id_none(app_factory):
+    """Non-admin caller with no user_id must not see other users' rows."""
+    user_no_id = UserAPIKeyAuth(
+        api_key="sk", user_id=None, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    client = app_factory(user_no_id)
+    prisma = _make_prisma(sessions=[_make_session(session_id="s1")])
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/sessions")
+    assert resp.status_code == 200
+    assert resp.json() == []
+    prisma.db.litellm_managedagentsessiontable.find_many.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

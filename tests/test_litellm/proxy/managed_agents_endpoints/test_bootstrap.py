@@ -172,9 +172,16 @@ def test_discover_vpc_subnet_no_public_subnet_raises(mock_ec2):
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_security_group_existing_returns_id(mock_ec2):
+def test_ensure_security_group_existing_with_port_returns_id(mock_ec2):
     mock_ec2.describe_security_groups.return_value = {
-        "SecurityGroups": [{"GroupId": "sg-existing"}]
+        "SecurityGroups": [
+            {
+                "GroupId": "sg-existing",
+                "IpPermissions": [
+                    {"IpProtocol": "tcp", "FromPort": 4096, "ToPort": 4096}
+                ],
+            }
+        ]
     }
     with patch.object(bootstrap, "_ec2", return_value=mock_ec2):
         sg_id = bootstrap.ensure_security_group(
@@ -186,6 +193,54 @@ def test_ensure_security_group_existing_returns_id(mock_ec2):
     mock_ec2.authorize_security_group_ingress.assert_not_called()
     mock_ec2.revoke_security_group_egress.assert_not_called()
     mock_ec2.authorize_security_group_egress.assert_not_called()
+
+
+def test_ensure_security_group_existing_missing_port_authorizes(mock_ec2):
+    """Existing SG was created for a different container_port; we must add
+    an ingress rule for the new port so multi-port deployments work."""
+    mock_ec2.describe_security_groups.return_value = {
+        "SecurityGroups": [
+            {
+                "GroupId": "sg-existing",
+                "IpPermissions": [
+                    {"IpProtocol": "tcp", "FromPort": 4096, "ToPort": 4096}
+                ],
+            }
+        ]
+    }
+    with patch.object(bootstrap, "_ec2", return_value=mock_ec2):
+        sg_id = bootstrap.ensure_security_group(
+            "us-west-2", "litellm-sg", "vpc-1", "10.0.0.0/16", 5000
+        )
+
+    assert sg_id == "sg-existing"
+    mock_ec2.authorize_security_group_ingress.assert_called_once()
+    perms = mock_ec2.authorize_security_group_ingress.call_args.kwargs["IpPermissions"][
+        0
+    ]
+    assert perms["FromPort"] == 5000
+    assert perms["ToPort"] == 5000
+
+
+def test_ensure_security_group_existing_missing_port_swallows_duplicate(mock_ec2):
+    mock_ec2.describe_security_groups.return_value = {
+        "SecurityGroups": [
+            {
+                "GroupId": "sg-existing",
+                "IpPermissions": [
+                    {"IpProtocol": "tcp", "FromPort": 4096, "ToPort": 4096}
+                ],
+            }
+        ]
+    }
+    mock_ec2.authorize_security_group_ingress.side_effect = _client_error(
+        "InvalidPermission.Duplicate"
+    )
+    with patch.object(bootstrap, "_ec2", return_value=mock_ec2):
+        sg_id = bootstrap.ensure_security_group(
+            "us-west-2", "litellm-sg", "vpc-1", "10.0.0.0/16", 5000
+        )
+    assert sg_id == "sg-existing"
 
 
 def test_ensure_security_group_missing_creates_ingress_revoke_and_authorize(mock_ec2):

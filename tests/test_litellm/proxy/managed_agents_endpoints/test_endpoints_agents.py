@@ -206,6 +206,66 @@ def _make_template(template_id="tmpl-1", visibility="public", created_by="u1"):
     )
 
 
+def test_list_agents_returns_empty_when_user_id_none(app_factory):
+    """Non-admin caller with no user_id must not see other users' rows."""
+    user_no_id = UserAPIKeyAuth(
+        api_key="sk", user_id=None, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    client = app_factory(user_no_id)
+    prisma = _make_prisma(agents=[_make_agent(agent_id="x", created_by="someone-else")])
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents")
+    assert resp.status_code == 200
+    assert resp.json() == []
+    prisma.db.litellm_managedagenttable.find_many.assert_not_called()
+
+
+def test_create_agent_encrypts_litellm_api_key(app_factory, user):
+    """The plaintext API key must NOT be persisted in metadata; the
+    encrypted form goes under litellm_api_key_encrypted."""
+    client = app_factory(user)
+    template = _make_template(visibility="public", created_by="u1")
+    p = MagicMock()
+    template_t = MagicMock()
+    template_t.find_unique = AsyncMock(return_value=template)
+    p.db.litellm_managedagentsandboxtemplatetable = template_t
+    agent_t = MagicMock()
+    agent_t.create = AsyncMock(return_value=_make_agent(agent_id="agt-2"))
+    p.db.litellm_managedagenttable = agent_t
+
+    body = {
+        "name": "agt",
+        "model": "anthropic/claude-sonnet-4-6",
+        "template_id": "tmpl-1",
+        "litellm_api_key": "sk-secret",
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", p),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_agents.encrypt_value_helper",
+            return_value="ENCRYPTED",
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_agents.decrypt_git_token",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_agents.validate_repo_branch"
+        ),
+    ):
+        resp = client.post("/v1/managed_agents/agents", json=body)
+
+    import json as _json
+
+    assert resp.status_code == 200, resp.text
+    raw_meta = agent_t.create.call_args.kwargs["data"]["metadata"]
+    metadata = _json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
+    assert metadata["litellm_api_key_encrypted"] == "ENCRYPTED"
+    assert "litellm_api_key" not in metadata
+    assert "sk-secret" not in str(metadata)
+
+
 def test_create_agent_rejects_private_template_for_non_owner(app_factory, other_user):
     client = app_factory(other_user)
     template = _make_template(visibility="private", created_by="u1")

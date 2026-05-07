@@ -5,6 +5,7 @@ from typing import List
 from fastapi import Depends, HTTPException
 
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.managed_agents_endpoints.endpoints import (
     _assert_owner_or_admin,
     _is_admin,
@@ -55,6 +56,10 @@ async def create_agent(
     git_token = await decrypt_git_token(prisma_client, template.git_credential_id)
     await asyncio.to_thread(validate_repo_branch, template.repo_url, branch, git_token)
 
+    encrypted_key = (
+        encrypt_value_helper(body.litellm_api_key) if body.litellm_api_key else None
+    )
+
     create_data = jsonify_object(
         {
             "agent_name": body.name,
@@ -63,7 +68,7 @@ async def create_agent(
             "tools": json.dumps(body.tools),
             "branch": branch,
             "metadata": {
-                "litellm_api_key": body.litellm_api_key,
+                "litellm_api_key_encrypted": encrypted_key,
                 "litellm_api_base": body.litellm_api_base,
             },
             "created_by": user_api_key_dict.user_id,
@@ -87,7 +92,11 @@ async def list_agents(
         raise HTTPException(status_code=500, detail="prisma client not available")
 
     where: dict = {}
-    if not _is_admin(user_api_key_dict) and user_api_key_dict.user_id is not None:
+    if not _is_admin(user_api_key_dict):
+        # Non-admin callers see only their own rows. If the API key has no
+        # user_id, treat it as "no rows" rather than exposing every agent.
+        if user_api_key_dict.user_id is None:
+            return []
         where["created_by"] = user_api_key_dict.user_id
 
     rows = await prisma_client.db.litellm_managedagenttable.find_many(
