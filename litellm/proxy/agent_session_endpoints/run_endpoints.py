@@ -31,6 +31,10 @@ from litellm.proxy.agent_session_endpoints.constants import (
     SSE_TERMINAL_QUIESCE_SECONDS,
 )
 from litellm.proxy.agent_session_endpoints.ids import new_run_id
+from litellm.proxy.agent_session_endpoints.managed_agents_runner import (
+    is_managed_agents_enabled,
+    schedule_run,
+)
 from litellm.proxy.agent_session_endpoints.ownership import (
     assert_caller_can_mutate,
     assert_caller_owns_session,
@@ -191,6 +195,14 @@ async def create_run(
     # ``ready`` -> ``busy`` flip so SDK consumers polling
     # GET /v2/sessions/{id} see the right status.
     await refresh_session_status_from_runs(prisma_client, session_id)
+
+    # Hand the queued row off to the in-process managed_agents runner
+    # so the LLM tool loop actually executes. When this is disabled
+    # (e.g. tests pinned to the legacy NoopVMProvider behavior, or a
+    # daemon-driven deployment) we leave the row queued for the daemon
+    # to claim via /runs/next/internal/poll, matching prior behavior.
+    if is_managed_agents_enabled():
+        schedule_run(run_id=row.id, session_id=session_id)
     return run_row_to_response(row)
 
 
