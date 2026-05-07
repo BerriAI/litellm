@@ -55,6 +55,13 @@ _request_auth_header: contextvars.ContextVar[Optional[str]] = contextvars.Contex
     "_request_auth_header", default=None
 )
 
+# Per-request extra headers forwarded from the client request.
+# Populated from MCPServer.extra_headers names matched against raw request
+# headers in server.py before dispatching to a local/OpenAPI tool handler.
+_request_extra_headers: contextvars.ContextVar[Optional[Dict[str, str]]] = (
+    contextvars.ContextVar("_request_extra_headers", default=None)
+)
+
 
 def _sanitize_path_parameter_value(param_value: Any, param_name: str) -> str:
     """Ensure path params cannot introduce directory traversal."""
@@ -297,6 +304,20 @@ def build_input_schema(operation: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _merge_openapi_tool_request_headers(
+    static_headers: Dict[str, str]
+) -> Dict[str, str]:
+    """Merge static closure headers with per-request ContextVar overrides."""
+    effective_headers = dict(static_headers)
+    request_extra = _request_extra_headers.get()
+    if request_extra:
+        effective_headers.update(request_extra)
+    override_auth = _request_auth_header.get()
+    if override_auth:
+        effective_headers["Authorization"] = override_auth
+    return effective_headers
+
+
 def create_tool_function(
     path: str,
     method: str,
@@ -334,14 +355,7 @@ def create_tool_function(
         The function safely handles parameter names that aren't valid Python identifiers
         by using **kwargs instead of named parameters.
         """
-        # Allow per-request auth override (e.g. BYOK credential set via ContextVar).
-        # The ContextVar holds the full Authorization header value, including the
-        # correct prefix (Bearer / ApiKey / Basic) formatted by the caller in
-        # server.py based on the server's configured auth_type.
-        effective_headers = dict(headers)
-        override_auth = _request_auth_header.get()
-        if override_auth:
-            effective_headers["Authorization"] = override_auth
+        effective_headers = _merge_openapi_tool_request_headers(headers)
 
         # Build URL from base_url and path
         url = base_url + path

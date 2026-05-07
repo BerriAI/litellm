@@ -158,6 +158,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
         _request_auth_header,
+        _request_extra_headers,
     )
     from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
@@ -2195,11 +2196,42 @@ if MCP_AVAILABLE:
                     auth_header_value = f"Basic {mcp_auth_header}"
                 else:
                     auth_header_value = f"Bearer {mcp_auth_header}"
+
+            # Forward named client headers to OpenAPI tool upstream requests.
+            # MCPServer.extra_headers lists header names to copy from raw_headers.
+            # OAuth2 M2M: never take Authorization from the caller (matches
+            # _prepare_mcp_server_headers for managed MCP).
+            forwarded_headers: Optional[Dict[str, str]] = None
+            if mcp_server and mcp_server.extra_headers and raw_headers:
+                normalized_raw = {
+                    str(k).lower(): v
+                    for k, v in raw_headers.items()
+                    if isinstance(k, str)
+                }
+                skip_caller_authorization = bool(
+                    getattr(mcp_server, "has_client_credentials", False)
+                )
+                for header_name in mcp_server.extra_headers:
+                    if not isinstance(header_name, str):
+                        continue
+                    if (
+                        skip_caller_authorization
+                        and header_name.lower() == "authorization"
+                    ):
+                        continue
+                    value = normalized_raw.get(header_name.lower())
+                    if value is not None:
+                        if forwarded_headers is None:
+                            forwarded_headers = {}
+                        forwarded_headers[header_name] = value
+
             _auth_token = _request_auth_header.set(auth_header_value)
+            _extra_token = _request_extra_headers.set(forwarded_headers)
             try:
                 local_content = await _handle_local_mcp_tool(name, arguments)
             finally:
                 _request_auth_header.reset(_auth_token)
+                _request_extra_headers.reset(_extra_token)
             response = CallToolResult(content=cast(Any, local_content), isError=False)
 
         # Try managed MCP server tool (pass the full prefixed name)

@@ -497,7 +497,8 @@ class MCPServerManager:
             # Add any static headers from server config.
             #
             # Note: `extra_headers` on MCPServer is a List[str] of header names to forward
-            # from the client request (not available in this OpenAPI tool generation step).
+            # from each client MCP request; values are applied at call time via
+            # `_request_extra_headers` in server.py (not baked in here).
             # `static_headers` is a dict of concrete headers to always send.
             headers = (
                 merge_mcp_headers(
