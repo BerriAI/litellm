@@ -125,9 +125,9 @@ curl -X PATCH "http://0.0.0.0:4000/model/<model_id>/update" \
 
 Updated pricing applies to **subsequent** requests immediately — `PATCH` calls `clear_cache()`, which reloads DB-stored deployments and re-invokes `Router.register_model()` with the new pricing. No proxy restart is required.
 
-:::caution Avoid the deprecated `POST /model/update` for cost-field changes
+:::note Prefer `PATCH /model/{model_id}/update` over the legacy `POST /model/update`
 
-The legacy `POST /model/update` endpoint returns HTTP 200 but silently drops cost values when applied to a DB-stored model. Use the per-id `PATCH /model/{model_id}/update` form documented above.
+The legacy `POST /model/update` endpoint **does** persist cost-field changes to the database, but it does **not** call `clear_cache()`. The router's in-memory state is not refreshed, so the new prices remain inactive until the next proxy restart. The per-id `PATCH /model/{model_id}/update` form (shown above) updates the database AND hot-reloads the router in the same request, so prices take effect immediately.
 
 :::
 
