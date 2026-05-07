@@ -118,12 +118,17 @@ def _row_to_agent_response(row: Dict[str, Any]) -> AgentRow:
     Handles both raw-dict configs (Prisma JSON column) and `prisma.Json`-wrapped
     configs (mock-style with a ``.data`` attribute).
     """
-    raw_config = row.get("config") or {}
-    if hasattr(raw_config, "data"):
-        # prisma.Json wrapper used by some test fakes
-        config_dict: Dict[str, Any] = dict(raw_config.data)
-    else:
+    raw_config: Any = row.get("config") or {}
+    # prisma.Json wrapper used by some test fakes exposes the dict via ``.data``;
+    # use ``getattr`` so static type checkers don't flag attribute access on the
+    # ``dict`` branch of the union.
+    wrapped = getattr(raw_config, "data", None)
+    if isinstance(wrapped, dict):
+        config_dict: Dict[str, Any] = dict(wrapped)
+    elif isinstance(raw_config, dict):
         config_dict = dict(raw_config)
+    else:
+        config_dict = {}
 
     masked_config = {
         **config_dict,
