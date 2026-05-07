@@ -1,4 +1,5 @@
-"""Unit tests for `GET /v2/sessions/:id` (LIT-2923).
+"""Unit tests for `GET /v2/sessions/:id` (LIT-2923) and
+`GET /v2/agents/:agent_id/sessions`.
 
 Approach:
 - Build a minimal FastAPI app with only `sessions.router` mounted (Wave 3
@@ -17,8 +18,8 @@ Contract-critical assertions:
 
 import os
 import sys
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -321,3 +322,391 @@ def test_get_session_passes_through_all_statuses(monkeypatch, status):
     resp = client.get("/v2/sessions/ses_status_test")
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == status
+
+
+# ---------------------------------------------------------------------------
+# GET /v2/agents/:agent_id/sessions — list sessions for an agent
+# ---------------------------------------------------------------------------
+
+
+def _make_session_dict(
+    *,
+    session_id: str,
+    agent_id: str,
+    created_by: str,
+    created_at: datetime,
+    status: str = "ready",
+) -> Dict[str, Any]:
+    """Plain-dict session row, suitable for the in-memory `_FakeSessionTable`.
+
+    Mirrors the columns the handler reads via `_row_to_session_response`.
+    """
+    return {
+        "id": session_id,
+        "agent_id": agent_id,
+        "sandbox_type": "opencode",
+        "sandbox_size": "small",
+        "sandbox_timeout_minutes": 60,
+        "sandbox_idle_timeout_minutes": 10,
+        "sandbox_image": "litellm/opencode:latest",
+        "sandbox_url": "http://127.0.0.1:1234",
+        "sandbox_metadata": {"opencode_session_id": "oc_sid_xxx"},
+        "status": status,
+        "repos": [],
+        "env_vars": {},
+        "created_by": created_by,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "terminated_at": None,
+    }
+
+
+def _make_agent_dict(
+    *,
+    agent_id: str,
+    created_by: str,
+) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    return {
+        "id": agent_id,
+        "name": f"agent-for-{agent_id}",
+        "config": {
+            "model": "anthropic/claude-opus-4",
+            "system_prompt": "test",
+            "tools": ["read"],
+            "litellm_api_key": "sk-test",
+            "litellm_base_url": "http://localhost:4000",
+        },
+        "created_by": created_by,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+class _FakeAgentSessionDB:
+    """In-memory stub for both `litellm_managedagent` and
+    `litellm_managedagentsession` with the methods the handlers call.
+
+    Built ad-hoc per test so we can seed agents and sessions independently.
+    """
+
+    def __init__(self) -> None:
+        self.agents: Dict[str, Dict[str, Any]] = {}
+        self.sessions: Dict[str, Dict[str, Any]] = {}
+
+    # --- prisma-shaped access ---
+    def as_prisma(self) -> MagicMock:
+        agent_table = MagicMock()
+        agent_table.find_first = AsyncMock(side_effect=self._agent_find_first)
+
+        session_table = MagicMock()
+        session_table.find_first = AsyncMock(side_effect=self._session_find_first)
+        session_table.find_many = AsyncMock(side_effect=self._session_find_many)
+
+        prisma = MagicMock()
+        prisma.db = MagicMock()
+        prisma.db.litellm_managedagent = agent_table
+        prisma.db.litellm_managedagentsession = session_table
+        return prisma
+
+    # --- agent ---
+    async def _agent_find_first(self, *, where: Dict[str, Any]) -> Optional[MagicMock]:
+        for row in self.agents.values():
+            if all(row.get(k) == v for k, v in where.items()):
+                m = MagicMock()
+                m.model_dump.return_value = dict(row)
+                return m
+        return None
+
+    # --- session ---
+    async def _session_find_first(
+        self, *, where: Dict[str, Any]
+    ) -> Optional[MagicMock]:
+        for row in self.sessions.values():
+            if all(row.get(k) == v for k, v in where.items()):
+                m = MagicMock()
+                m.model_dump.return_value = dict(row)
+                return m
+        return None
+
+    async def _session_find_many(
+        self,
+        *,
+        where: Dict[str, Any],
+        take: int,
+        skip: int,
+        order: Dict[str, str],
+    ) -> List[MagicMock]:
+        matched = [
+            row
+            for row in self.sessions.values()
+            if all(row.get(k) == v for k, v in where.items())
+        ]
+        order_key, order_dir = next(iter(order.items()))
+        matched.sort(
+            key=lambda r: r.get(order_key) or datetime.min,
+            reverse=(order_dir == "desc"),
+        )
+        page = matched[skip : skip + take]
+        out = []
+        for row in page:
+            m = MagicMock()
+            m.model_dump.return_value = dict(row)
+            out.append(m)
+        return out
+
+
+def test_list_sessions_for_agent_returns_only_that_agent(monkeypatch):
+    """Sessions belonging to another agent must NOT leak into the response."""
+    db = _FakeAgentSessionDB()
+    db.agents["agt_a"] = _make_agent_dict(agent_id="agt_a", created_by="user_a")
+    db.agents["agt_b"] = _make_agent_dict(agent_id="agt_b", created_by="user_a")
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    db.sessions["ses_a1"] = _make_session_dict(
+        session_id="ses_a1",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=1),
+    )
+    db.sessions["ses_a2"] = _make_session_dict(
+        session_id="ses_a2",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=2),
+    )
+    db.sessions["ses_b1"] = _make_session_dict(
+        session_id="ses_b1",
+        agent_id="agt_b",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=3),
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/agents/agt_a/sessions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert len(body["data"]) == 2
+    returned_ids = {row["id"] for row in body["data"]}
+    assert returned_ids == {"ses_a1", "ses_a2"}
+    assert "ses_b1" not in returned_ids
+    # Every row's agent_id is the queried agent.
+    for row in body["data"]:
+        assert row["agent_id"] == "agt_a"
+
+
+def test_list_sessions_for_agent_unknown_agent_returns_404(monkeypatch):
+    """Unknown agent (not present for this caller) → 404 before any session lookup."""
+    db = _FakeAgentSessionDB()
+    # No agents seeded.
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/agents/agt_does_not_exist/sessions")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Agent agt_does_not_exist not found"
+
+
+def test_list_sessions_for_agent_other_users_agent_returns_404(monkeypatch):
+    """Agent belongs to another caller → 404, not 403."""
+    db = _FakeAgentSessionDB()
+    db.agents["agt_a"] = _make_agent_dict(agent_id="agt_a", created_by="user_a")
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_b"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/agents/agt_a/sessions")
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Agent agt_a not found"
+
+
+def test_list_sessions_for_agent_scopes_by_caller(monkeypatch):
+    """Caller must not see another user's sessions even for an agent they own.
+
+    (Defense-in-depth: the agent ownership check already blocks cross-user
+    access, but the session query is independently scoped by created_by.)
+    """
+    db = _FakeAgentSessionDB()
+    db.agents["agt_shared"] = _make_agent_dict(
+        agent_id="agt_shared", created_by="user_a"
+    )
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    # Two sessions on agt_shared, owned by user_a (the caller).
+    db.sessions["ses_a1"] = _make_session_dict(
+        session_id="ses_a1",
+        agent_id="agt_shared",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=1),
+    )
+    # A session on the same agent_id but with created_by=user_other —
+    # should never leak (bookkeeping anomaly that scoping must catch).
+    db.sessions["ses_other"] = _make_session_dict(
+        session_id="ses_other",
+        agent_id="agt_shared",
+        created_by="user_other",
+        created_at=base + timedelta(seconds=99),
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/agents/agt_shared/sessions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    returned_ids = {row["id"] for row in body["data"]}
+    assert returned_ids == {"ses_a1"}
+    assert "ses_other" not in returned_ids
+
+
+def test_list_sessions_for_agent_strips_internal_fields(monkeypatch):
+    """`sandbox_url` and `sandbox_metadata` MUST NOT appear in the listing."""
+    db = _FakeAgentSessionDB()
+    db.agents["agt_a"] = _make_agent_dict(agent_id="agt_a", created_by="user_a")
+    db.sessions["ses_a1"] = _make_session_dict(
+        session_id="ses_a1",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/agents/agt_a/sessions")
+    assert resp.status_code == 200, resp.text
+    # Internal-only state must be absent from the entire response body.
+    assert "sandbox_url" not in resp.text
+    assert "sandbox_metadata" not in resp.text
+    assert "opencode_session_id" not in resp.text
+
+
+def test_list_sessions_for_agent_pagination_walks_pages(monkeypatch):
+    """Seed 4 sessions, page through with limit=2."""
+    db = _FakeAgentSessionDB()
+    db.agents["agt_a"] = _make_agent_dict(agent_id="agt_a", created_by="user_a")
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    for i in range(4):
+        db.sessions[f"ses_{i}"] = _make_session_dict(
+            session_id=f"ses_{i}",
+            agent_id="agt_a",
+            created_by="user_a",
+            created_at=base + timedelta(seconds=i),
+        )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp1 = client.get("/v2/agents/agt_a/sessions?limit=2")
+    assert resp1.status_code == 200, resp1.text
+    page1 = resp1.json()
+    assert len(page1["data"]) == 2
+    assert page1["has_more"] is True
+    assert page1["next_cursor"] == "2"
+
+    resp2 = client.get(
+        f"/v2/agents/agt_a/sessions?limit=2&cursor={page1['next_cursor']}"
+    )
+    assert resp2.status_code == 200, resp2.text
+    page2 = resp2.json()
+    assert len(page2["data"]) == 2
+    assert page2["has_more"] is False
+    assert page2["next_cursor"] is None
+
+    # Pages cover all 4 records and don't overlap.
+    page1_ids = [r["id"] for r in page1["data"]]
+    page2_ids = [r["id"] for r in page2["data"]]
+    all_seen = set(page1_ids) | set(page2_ids)
+    assert len(all_seen) == 4
+    assert set(page1_ids).isdisjoint(set(page2_ids))
+
+
+def test_list_sessions_for_agent_filters_by_status(monkeypatch):
+    db = _FakeAgentSessionDB()
+    db.agents["agt_a"] = _make_agent_dict(agent_id="agt_a", created_by="user_a")
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    db.sessions["ses_ready"] = _make_session_dict(
+        session_id="ses_ready",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=1),
+        status="ready",
+    )
+    db.sessions["ses_term"] = _make_session_dict(
+        session_id="ses_term",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=2),
+        status="terminated",
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/agents/agt_a/sessions?status=ready")
+    assert resp.status_code == 200, resp.text
+    ids = {r["id"] for r in resp.json()["data"]}
+    assert ids == {"ses_ready"}
+
+
+def test_list_sessions_for_agent_invalid_cursor_returns_422(monkeypatch):
+    db = _FakeAgentSessionDB()
+    db.agents["agt_a"] = _make_agent_dict(agent_id="agt_a", created_by="user_a")
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/agents/agt_a/sessions?cursor=not-a-number")
+    assert resp.status_code == 422, resp.text
+
+
+def test_list_sessions_for_agent_db_not_connected_returns_500(monkeypatch):
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/agents/agt_a/sessions")
+    assert resp.status_code == 500, resp.text
+    detail = resp.json()["detail"]
+    assert detail["error"] == CommonProxyErrors.db_not_connected_error.value
