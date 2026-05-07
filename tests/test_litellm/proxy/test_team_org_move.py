@@ -6,7 +6,6 @@ Covers the SSO/Entra scenario where:
 - Non-proxy-admins (team admins) must have all team members pre-added to the org,
   preserving the original security model (no privilege escalation via team move).
 """
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -48,10 +47,10 @@ def _make_org(organization_id="org-1", members=None, models=None):
 
 
 def _make_team(team_id="team-1", member_ids=None, organization_id=None):
-    members = [Member(user_id=uid, role="user") for uid in (member_ids or [])]
-    members.append(
-        Member(user_id=SpecialProxyStrings.default_user_id.value, role="admin")
-    )
+    members = [
+        Member(user_id=uid, role="user") for uid in (member_ids or [])
+    ]
+    members.append(Member(user_id=SpecialProxyStrings.default_user_id.value, role="admin"))
     return LiteLLM_TeamTable(
         team_id=team_id,
         team_alias="test-team",
@@ -121,18 +120,12 @@ class TestValidateTeamOrgChange:
         team = _make_team(member_ids=["u1"], organization_id="org-1")
         org = _make_org(organization_id="org-1")
 
-        assert (
-            validate_team_org_change(
-                team=team, organization=org, llm_router=router, is_proxy_admin=False
-            )
-            is True
-        )
-        assert (
-            validate_team_org_change(
-                team=team, organization=org, llm_router=router, is_proxy_admin=True
-            )
-            is True
-        )
+        assert validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=False
+        ) is True
+        assert validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=True
+        ) is True
 
     def test_default_user_excluded_from_membership_check(self):
         """default_user_id is never checked for org membership."""
@@ -156,7 +149,6 @@ class TestAutoAddTeamMembersToOrg:
 
         mock_add = AsyncMock()
         import litellm.proxy.management_endpoints.team_endpoints as te
-
         original = te.add_member_to_organization
         te.add_member_to_organization = mock_add
 
@@ -182,7 +174,6 @@ class TestAutoAddTeamMembersToOrg:
 
         mock_add = AsyncMock()
         import litellm.proxy.management_endpoints.team_endpoints as te
-
         original = te.add_member_to_organization
         te.add_member_to_organization = mock_add
 
@@ -206,7 +197,6 @@ class TestAutoAddTeamMembersToOrg:
 
         mock_add = AsyncMock()
         import litellm.proxy.management_endpoints.team_endpoints as te
-
         original = te.add_member_to_organization
         te.add_member_to_organization = mock_add
 
@@ -229,7 +219,6 @@ class TestAutoAddTeamMembersToOrg:
 
         mock_add = AsyncMock(side_effect=Exception("duplicate key"))
         import litellm.proxy.management_endpoints.team_endpoints as te
-
         original = te.add_member_to_organization
         te.add_member_to_organization = mock_add
 

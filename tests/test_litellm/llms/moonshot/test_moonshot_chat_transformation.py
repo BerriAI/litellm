@@ -666,9 +666,7 @@ class TestKimiK26ModelRegistry:
 
     def test_kimi_k26_in_model_cost_map(self, model_cost_map):
         """kimi-k2.6 should be present in the model cost map."""
-        assert (
-            "moonshot/kimi-k2.6" in model_cost_map
-        ), "moonshot/kimi-k2.6 not found in model_cost"
+        assert "moonshot/kimi-k2.6" in model_cost_map, "moonshot/kimi-k2.6 not found in model_cost"
 
     def test_kimi_k26_pricing(self, model_cost_map):
         """kimi-k2.6 pricing should match official Kimi API rates."""

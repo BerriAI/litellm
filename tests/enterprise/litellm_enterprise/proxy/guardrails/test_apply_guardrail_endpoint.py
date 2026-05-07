@@ -105,9 +105,7 @@ async def test_apply_guardrail_endpoint_with_presidio_guardrail():
         mock_guardrail = Mock(spec=CustomGuardrail)
         # Simulate masking PII entities - returns GenericGuardrailAPIInputs (dict with texts key)
         mock_guardrail.apply_guardrail = AsyncMock(
-            return_value={
-                "texts": ["My name is [PERSON] and my email is [EMAIL_ADDRESS]"]
-            }
+            return_value={"texts": ["My name is [PERSON] and my email is [EMAIL_ADDRESS]"]}
         )
 
         # Configure the registry to return our mock guardrail

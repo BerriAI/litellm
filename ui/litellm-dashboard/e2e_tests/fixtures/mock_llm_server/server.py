@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+
 app = FastAPI(title="Mock LLM Server")
 app.add_middleware(
     CORSMiddleware,

@@ -2327,8 +2327,7 @@ class TestAnthropicStreamWrapperToolArgs:
 
     def _find_tool_deltas(self, events):
         return [
-            e
-            for e in events
+            e for e in events
             if isinstance(e, dict)
             and e.get("type") == "content_block_delta"
             and isinstance(e.get("delta"), dict)
@@ -2374,6 +2373,7 @@ class TestAnthropicStreamWrapperToolArgs:
         combined = "".join(d["delta"]["partial_json"] for d in tool_deltas)
         parsed = json.loads(combined)
         assert parsed == {"city": "Tokyo"}
+
 
 
 def test_translate_anthropic_tool_choice_none():

@@ -2,12 +2,12 @@
 Unit tests for BaseResponsesAPIStreamingIterator
 
 Tests core functionality including:
-1. Processing chunks and handling ResponseCompletedEvent
+1. Processing chunks and handling ResponseCompletedEvent 
 2. Ensuring _update_responses_api_response_id_with_model_id is called for final chunk
 3. Verifying ID update is NOT called for non-final chunks (delta events)
 4. Edge case handling for invalid JSON, empty chunks, and [DONE] markers
 
-These tests ensure the streaming iterator correctly processes response chunks
+These tests ensure the streaming iterator correctly processes response chunks 
 and applies model ID updates only to completed responses, as required for proper
 response tracking and logging.
 """

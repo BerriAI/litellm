@@ -2,7 +2,7 @@
 Simple xAI Voice Agent using LiveKit SDK with LiteLLM Gateway
 
 This example shows how to use LiveKit's xAI realtime plugin through LiteLLM proxy.
-LiteLLM acts as a unified interface, allowing you to switch between xAI, OpenAI,
+LiteLLM acts as a unified interface, allowing you to switch between xAI, OpenAI, 
 and Azure realtime APIs without changing your agent code.
 """
 

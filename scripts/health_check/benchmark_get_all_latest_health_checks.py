@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bench LiteLLM_HealthCheckTable + PrismaClient
+Bench LiteLLM_HealthCheckTable + PrismaClient 
     - set DATABASE_URL to your Postgres
     - Run ```prisma generate``` to install prisma client before running test )
     - This test writes to the default "public" database. Make sure to run cleanup after testing

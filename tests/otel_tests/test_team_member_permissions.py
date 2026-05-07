@@ -4,13 +4,13 @@
 
 
     Invalid Permissions:
-    - User tries creating a key with team_id = team_id -> expect to fail. Invalid Permissions
-    - User tries editing a key with team_id = team_id -> expect to fail. Invalid Permissions
-    - User tries deleting a key with team_id = team_id -> expect to fail. Invalid Permissions
-    - User tries regenerating a key with team_id = team_id -> expect to fail. Invalid Permissions
+    - User tries creating a key with team_id = team_id -> expect to fail. Invalid Permissions 
+    - User tries editing a key with team_id = team_id -> expect to fail. Invalid Permissions 
+    - User tries deleting a key with team_id = team_id -> expect to fail. Invalid Permissions 
+    - User tries regenerating a key with team_id = team_id -> expect to fail. Invalid Permissions 
 
     Valid Permissions:
-    - User tries calling /key/info with team_id, expect to get valid response
+    - User tries calling /key/info with team_id, expect to get valid response 
 
 
 
@@ -26,7 +26,7 @@
 
     Invalid Permissions:
     - User tries creating a key with team_id = team_id -> expect to fail. Invalid Permissions
-    - User tries calling /key/info with team_id, expect to get valid response
+    - User tries calling /key/info with team_id, expect to get valid response 
 
 
 

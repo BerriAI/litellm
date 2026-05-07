@@ -35,7 +35,7 @@ import httpx
 class EvalCase:
     category: str
     prompt: str
-    ideal: str  # criteria the judge checks the response against
+    ideal: str          # criteria the judge checks the response against
 
 
 EVAL_CASES: List[EvalCase] = [
@@ -177,19 +177,14 @@ async def evaluate(
     async with httpx.AsyncClient() as client:
         for i, case in enumerate(EVAL_CASES, 1):
             print(f"\n[{i}/{len(EVAL_CASES)}] category={case.category}")
-            print(
-                f"  prompt   : {case.prompt[:80]}{'…' if len(case.prompt) > 80 else ''}"
-            )
+            print(f"  prompt   : {case.prompt[:80]}{'…' if len(case.prompt) > 80 else ''}")
 
             session_id = f"eval-{uuid.uuid4()}"
 
             # Round 1: single-turn real request — get the actual LLM response to judge.
             try:
                 response, chosen = await _chat(
-                    client,
-                    proxy_url,
-                    api_key,
-                    router,
+                    client, proxy_url, api_key, router,
                     [{"role": "user", "content": case.prompt}],
                     session_id=session_id,
                 )
@@ -199,25 +194,16 @@ async def evaluate(
                 continue
 
             print(f"  model    : {chosen or router}")
-            print(
-                f"  response : {response[:120].replace(chr(10), ' ')}{'…' if len(response) > 120 else ''}"
-            )
+            print(f"  response : {response[:120].replace(chr(10), ' ')}{'…' if len(response) > 120 else ''}")
 
             # Judge the real response.
             judge_msgs = [
                 {"role": "system", "content": JUDGE_SYSTEM},
-                {
-                    "role": "user",
-                    "content": _judge_user(case.prompt, case.ideal, response),
-                },
+                {"role": "user", "content": _judge_user(case.prompt, case.ideal, response)},
             ]
             try:
                 verdict, _ = await _chat(
-                    client,
-                    proxy_url,
-                    api_key,
-                    judge_model,
-                    judge_msgs,
+                    client, proxy_url, api_key, judge_model, judge_msgs,
                 )
             except Exception as exc:  # noqa: BLE001
                 print(f"  ERROR calling judge: {exc}", file=sys.stderr)
@@ -241,19 +227,15 @@ async def evaluate(
             # On PASS → satisfaction follow-up (+alpha). On FAIL → neutral (no signal).
             follow_up = SATISFY_FOLLOWUP if is_pass else NEUTRAL_FOLLOWUP
             bandit_msgs = [
-                {"role": "user", "content": case.prompt},
+                {"role": "user",      "content": case.prompt},
                 {"role": "assistant", "content": response},
-                {"role": "user", "content": "ok continue"},
+                {"role": "user",      "content": "ok continue"},
                 {"role": "assistant", "content": FAB_ASSISTANT},
-                {"role": "user", "content": follow_up},
+                {"role": "user",      "content": follow_up},
             ]
             try:
                 await _chat(
-                    client,
-                    proxy_url,
-                    api_key,
-                    router,
-                    bandit_msgs,
+                    client, proxy_url, api_key, router, bandit_msgs,
                     session_id=session_id,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -275,17 +257,11 @@ async def evaluate(
 # Entry point
 # ---------------------------------------------------------------------------
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Evaluate the adaptive router with LLM-as-judge."
-    )
-    ap.add_argument("--proxy-url", default="http://localhost:4000")
-    ap.add_argument("--api-key", required=True, help="proxy API key")
-    ap.add_argument(
-        "--router", default="smart-cheap-router", help="adaptive router model name"
-    )
-    ap.add_argument(
-        "--judge-model", default="smart", help="model name for the judge (via proxy)"
-    )
+    ap = argparse.ArgumentParser(description="Evaluate the adaptive router with LLM-as-judge.")
+    ap.add_argument("--proxy-url",    default="http://localhost:4000")
+    ap.add_argument("--api-key",      required=True, help="proxy API key")
+    ap.add_argument("--router",       default="smart-cheap-router", help="adaptive router model name")
+    ap.add_argument("--judge-model",  default="smart", help="model name for the judge (via proxy)")
     args = ap.parse_args()
 
     asyncio.run(evaluate(args.proxy_url, args.api_key, args.router, args.judge_model))

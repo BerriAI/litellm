@@ -232,9 +232,9 @@ def test_qostodian_nexus_builtin_extra_headers():
     ]
 
     for header in expected_headers:
-        assert (
-            header in instance.extra_headers
-        ), f"Expected built-in header '{header}' to be in extra_headers"
+        assert header in instance.extra_headers, (
+            f"Expected built-in header '{header}' to be in extra_headers"
+        )
 
 
 def test_qostodian_nexus_extra_headers_merged():

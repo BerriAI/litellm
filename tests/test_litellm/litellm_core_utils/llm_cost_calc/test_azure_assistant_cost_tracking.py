@@ -3,7 +3,7 @@ Test Azure OpenAI Assistant Features Cost Tracking
 
 Tests cost calculation for Azure's new assistant features:
 - File Search (storage-based pricing)
-- Code Interpreter (session-based pricing)
+- Code Interpreter (session-based pricing) 
 - Computer Use (token-based pricing)
 - Vector Store (storage-based pricing)
 """

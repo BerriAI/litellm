@@ -201,7 +201,7 @@ class BaseOpenAILLM:
 
     @staticmethod
     def get_openai_client_initialization_param_fields(
-        client_type: Literal["openai", "azure"],
+        client_type: Literal["openai", "azure"]
     ) -> Tuple[str, ...]:
         """Returns a tuple of fields that are used to initialize the OpenAI client"""
         if client_type == "openai":

@@ -233,6 +233,4 @@ async def test_filter_db_fallback_receives_resolved_model_names():
         "gpt-4o",
         "gpt-5",
     }, f"DB query should receive resolved model names, got {queried_names}"
-    assert (
-        "Group-A" not in queried_names
-    ), "Raw access group name should not be in DB query"
+    assert "Group-A" not in queried_names, "Raw access group name should not be in DB query"

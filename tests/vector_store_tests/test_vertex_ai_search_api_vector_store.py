@@ -7,6 +7,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 
+
 # Mock response from actual Vertex AI Search API
 MOCK_VERTEX_SEARCH_RESPONSE = {
     "results": [

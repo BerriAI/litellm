@@ -459,21 +459,18 @@ class TestAzureAIServiceTierCostCalculation:
     @pytest.fixture(autouse=True)
     def register_test_model(self):
         import litellm
-
-        litellm.register_model(
-            model_cost={
-                "test-azure-ai-model": {
-                    "input_cost_per_token": 0.001,
-                    "output_cost_per_token": 0.002,
-                    "input_cost_per_token_priority": 0.01,
-                    "output_cost_per_token_priority": 0.02,
-                    "input_cost_per_token_flex": 0.0005,
-                    "output_cost_per_token_flex": 0.001,
-                    "litellm_provider": "azure_ai",
-                    "max_tokens": 8192,
-                }
+        litellm.register_model(model_cost={
+            "test-azure-ai-model": {
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "input_cost_per_token_priority": 0.01,
+                "output_cost_per_token_priority": 0.02,
+                "input_cost_per_token_flex": 0.0005,
+                "output_cost_per_token_flex": 0.001,
+                "litellm_provider": "azure_ai",
+                "max_tokens": 8192,
             }
-        )
+        })
 
     def test_service_tier_priority_higher_cost(self):
         """Priority tier should cost more than standard for azure_ai."""

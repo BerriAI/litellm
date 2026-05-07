@@ -1500,7 +1500,8 @@ class TestProxyFunctionCalling:
         assert result is True, "Resolvable model names work with fallback logic"
 
         # Documentation notes:
-        print("""
+        print(
+            """
         PROXY MODEL RESOLUTION BEHAVIOR:
         
         ✅ WORKS (with current fallback logic):
@@ -1515,7 +1516,8 @@ class TestProxyFunctionCalling:
            
         💡 SOLUTION: Use LiteLLM proxy server with proper model_list configuration
            that maps custom names to underlying models.
-        """)
+        """
+        )
 
     @pytest.mark.parametrize(
         "proxy_model_with_hints,expected_result",
@@ -1877,7 +1879,8 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print("""
+        print(
+            """
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -1930,7 +1933,8 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """)
+        """
+        )
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2144,7 +2148,8 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print("""
+        print(
+            """
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2197,7 +2202,8 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """)
+        """
+        )
 
         # Verify that direct underlying models work as expected
         bedrock_models = [
@@ -2411,7 +2417,8 @@ class TestProxyFunctionCalling:
         This test provides documentation on how the proxy server configuration
         would typically map custom model names to underlying models.
         """
-        print("""
+        print(
+            """
         
         REAL-WORLD PROXY SERVER CONFIGURATION EXAMPLE:
         ===============================================
@@ -2464,7 +2471,8 @@ class TestProxyFunctionCalling:
         - Consistent request/response format
         - Enhanced streaming support for function calls
         
-        """)
+        """
+        )
 
         # Verify that direct underlying models work as expected
         bedrock_models = [

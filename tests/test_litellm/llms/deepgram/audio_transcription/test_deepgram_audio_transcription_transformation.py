@@ -53,7 +53,7 @@ def test_file():
 )
 def test_audio_file_handling(fixture_name, request):
     handler = DeepgramAudioTranscriptionConfig()
-    audio_file, expected_output = request.getfixturevalue(fixture_name)
+    (audio_file, expected_output) = request.getfixturevalue(fixture_name)
     result = handler.transform_audio_transcription_request(
         model="deepseek-audio-transcription",
         audio_file=audio_file,

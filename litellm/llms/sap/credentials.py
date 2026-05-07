@@ -207,7 +207,7 @@ def resolve_resource_group(sources: List[Source]) -> Optional[str]:
 
 
 def _parse_service_key_once(
-    service_key: Optional[Union[str, dict]],
+    service_key: Optional[Union[str, dict]]
 ) -> Optional[Dict[str, Any]]:
     """
     Pre-parse service_key if it's a string to avoid repeated JSON parsing.

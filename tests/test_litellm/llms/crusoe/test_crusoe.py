@@ -39,10 +39,7 @@ def test_crusoe_dynamic_config_env_vars():
 
     with patch.dict(
         os.environ,
-        {
-            "CRUSOE_API_KEY": "test-key",
-            "CRUSOE_API_BASE": "https://custom.crusoe.com/v1",
-        },
+        {"CRUSOE_API_KEY": "test-key", "CRUSOE_API_BASE": "https://custom.crusoe.com/v1"},
     ):
         api_base, api_key = config._get_openai_compatible_provider_info(None, None)
 
@@ -72,9 +69,7 @@ def test_crusoe_supported_params():
     from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
     config = create_config_class(JSONProviderRegistry.get("crusoe"))()
-    params = config.get_supported_openai_params(
-        model="meta-llama/Llama-3.3-70B-Instruct"
-    )
+    params = config.get_supported_openai_params(model="meta-llama/Llama-3.3-70B-Instruct")
 
     assert isinstance(params, list)
     assert len(params) > 0
@@ -96,9 +91,7 @@ def test_crusoe_param_mapping_max_completion_tokens():
         drop_params=False,
     )
 
-    assert (
-        "max_tokens" in optional_params
-    ), "max_completion_tokens should be mapped to max_tokens"
+    assert "max_tokens" in optional_params, "max_completion_tokens should be mapped to max_tokens"
     assert optional_params["max_tokens"] == 1024
     assert "max_completion_tokens" not in optional_params
 

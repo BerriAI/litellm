@@ -6,6 +6,7 @@ import tempfile
 from typing_extensions import override
 from openai import AssistantEventHandler
 
+
 client = openai.OpenAI(base_url="http://0.0.0.0:4000/openai", api_key="sk-1234")
 
 

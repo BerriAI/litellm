@@ -314,13 +314,15 @@ class TestContentFilterGuardrail:
 
         # Create a temporary blocked words file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("""blocked_words:
+            f.write(
+                """blocked_words:
   - keyword: "test_keyword"
     action: "BLOCK"
     description: "Test keyword"
   - keyword: "another_word"
     action: "MASK"
-""")
+"""
+            )
             temp_file = f.name
 
         try:

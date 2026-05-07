@@ -103,7 +103,7 @@ def _last_user_content(messages: Optional[List[Dict[str, Any]]]) -> Optional[str
 
 
 def _recent_tool_results(
-    messages: Optional[List[Dict[str, Any]]],
+    messages: Optional[List[Dict[str, Any]]]
 ) -> List[Dict[str, Any]]:
     """Extract the current turn's tool result payloads from the request messages.
 

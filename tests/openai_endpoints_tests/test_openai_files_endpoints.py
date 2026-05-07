@@ -6,6 +6,7 @@ import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI
 from typing import Optional, List, Union
 
+
 BASE_URL = "http://localhost:4000"  # Replace with your actual base URL
 API_KEY = "sk-1234"  # Replace with your actual API key
 

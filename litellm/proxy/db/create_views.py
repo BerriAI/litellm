@@ -34,7 +34,8 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         if not any(marker in error_msg for marker in _VIEW_NOT_FOUND_MARKERS):
             raise
         # If an error occurs, the view does not exist, so create it
-        await db.execute_raw("""
+        await db.execute_raw(
+            """
                 CREATE VIEW "LiteLLM_VerificationTokenView" AS
                 SELECT
                 v.*,
@@ -46,7 +47,8 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
                 FROM "LiteLLM_VerificationToken" v
                 LEFT JOIN "LiteLLM_TeamTable" t ON v.team_id = t.team_id
                 LEFT JOIN "LiteLLM_ProjectTable" p ON v.project_id = p.project_id;
-            """)
+            """
+        )
 
         verbose_logger.debug("LiteLLM_VerificationTokenView Created!")
 

@@ -72,8 +72,8 @@ PROMPTS: Dict[str, List[str]] = {
 # so that signals attribute to the right (type, model) bandit cell.
 SATISFY: Dict[str, str] = {
     "code_generation": "thanks, that works! now write me a python function that does the inverse",
-    "factual_lookup": "perfect, thanks! who is the current prime minister?",
-    "writing": "great, thanks! now write a follow-up email confirming attendance",
+    "factual_lookup":  "perfect, thanks! who is the current prime minister?",
+    "writing":         "great, thanks! now write a follow-up email confirming attendance",
 }
 
 # Neutral follow-up — does not match any signal regex, does not move the bandit.
@@ -83,8 +83,8 @@ NEUTRAL_FOLLOWUP = "ok, noted"
 # Defaults: smart dominates code/writing; both are fine for factual_lookup.
 ORACLE: Dict[str, Dict[str, float]] = {
     "code_generation": {"smart": 0.92, "fast": 0.35},
-    "factual_lookup": {"smart": 0.90, "fast": 0.85},
-    "writing": {"smart": 0.85, "fast": 0.55},
+    "factual_lookup":  {"smart": 0.90, "fast": 0.85},
+    "writing":         {"smart": 0.85, "fast": 0.55},
 }
 
 # Fabricated assistant turn — content doesn't matter for the hook, only the role.
@@ -94,11 +94,11 @@ FAB_ASSISTANT = "Got it. Working on that now."
 def _build_messages(prompt: str, last_user: str) -> List[Dict[str, str]]:
     """5-message conversation that passes the SIGNAL_GATE_MIN_MESSAGES=4 gate."""
     return [
-        {"role": "user", "content": prompt},
+        {"role": "user",      "content": prompt},
         {"role": "assistant", "content": FAB_ASSISTANT},
-        {"role": "user", "content": "ok continue"},
+        {"role": "user",      "content": "ok continue"},
         {"role": "assistant", "content": FAB_ASSISTANT},
-        {"role": "user", "content": last_user},
+        {"role": "user",      "content": last_user},
     ]
 
 
@@ -155,11 +155,7 @@ async def _drive_one_session(
     #
     # Round 1: neutral follow-up → no signal fires, but we learn the pick.
     ok, chosen = await _send(
-        client,
-        proxy_url,
-        api_key,
-        router,
-        session_id,
+        client, proxy_url, api_key, router, session_id,
         _build_messages(prompt, NEUTRAL_FOLLOWUP),
         mock_response=FAB_ASSISTANT,
     )
@@ -175,15 +171,10 @@ async def _drive_one_session(
     # follow-up matches satisfaction → +alpha for (request_type, chosen).
     history = _build_messages(prompt, NEUTRAL_FOLLOWUP) + [
         {"role": "assistant", "content": FAB_ASSISTANT},
-        {"role": "user", "content": follow_up},
+        {"role": "user",      "content": follow_up},
     ]
     await _send(
-        client,
-        proxy_url,
-        api_key,
-        router,
-        session_id,
-        history,
+        client, proxy_url, api_key, router, session_id, history,
         mock_response=FAB_ASSISTANT,
     )
     return chosen
@@ -192,22 +183,13 @@ async def _drive_one_session(
 async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--proxy-url", default="http://localhost:4000")
-    ap.add_argument(
-        "--api-key", required=True, help="proxy key with /v1/chat/completions perms"
-    )
-    ap.add_argument("--router", default="smart-cheap-router")
-    ap.add_argument("--rounds", type=int, default=100)
-    ap.add_argument(
-        "--rate",
-        type=float,
-        default=0.5,
-        help="seconds between sessions; lower = faster",
-    )
-    ap.add_argument(
-        "--types",
-        default="code_generation,factual_lookup,writing",
-        help="comma-separated subset of request types to drive",
-    )
+    ap.add_argument("--api-key",   required=True, help="proxy key with /v1/chat/completions perms")
+    ap.add_argument("--router",    default="smart-cheap-router")
+    ap.add_argument("--rounds",    type=int, default=100)
+    ap.add_argument("--rate",      type=float, default=0.5,
+                    help="seconds between sessions; lower = faster")
+    ap.add_argument("--types",     default="code_generation,factual_lookup,writing",
+                    help="comma-separated subset of request types to drive")
     args = ap.parse_args()
 
     types = [t.strip() for t in args.types.split(",") if t.strip() in PROMPTS]
@@ -225,12 +207,7 @@ async def main() -> None:
             rt = random.choice(types)
             prompt = random.choice(PROMPTS[rt])
             chosen = await _drive_one_session(
-                client,
-                args.proxy_url,
-                args.api_key,
-                args.router,
-                rt,
-                prompt,
+                client, args.proxy_url, args.api_key, args.router, rt, prompt,
             )
             if chosen:
                 counts[(rt, chosen)] = counts.get((rt, chosen), 0) + 1

@@ -6,6 +6,7 @@ from tabulate import tabulate
 from termcolor import colored
 import os
 
+
 # Define the list of models to benchmark
 # select any LLM listed here: https://docs.litellm.ai/docs/providers
 models = ["gpt-3.5-turbo", "claude-2"]

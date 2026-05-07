@@ -11,6 +11,7 @@ from litellm.llms.bedrock.common_utils import (
 )
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 
+
 NOVA_ARN = "arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/a1b2c3d4e5f6"
 NOVA_MODEL = f"bedrock/nova/{NOVA_ARN}"
 NOVA2_MODEL = f"bedrock/nova-2/{NOVA_ARN}"

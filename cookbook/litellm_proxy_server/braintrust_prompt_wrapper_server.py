@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Header, Query
 from fastapi.responses import JSONResponse
 import uvicorn
 
+
 app = FastAPI(
     title="Braintrust Prompt Wrapper",
     description="Wrapper server for Braintrust prompts to work with LiteLLM",

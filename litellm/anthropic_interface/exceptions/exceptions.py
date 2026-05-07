@@ -2,6 +2,7 @@
 
 from typing_extensions import Literal, Required, TypedDict
 
+
 # Known Anthropic error types
 # Source: https://docs.anthropic.com/en/api/errors
 AnthropicErrorType = Literal[

@@ -127,14 +127,16 @@ def test_input_validation():
     # Create a temporary directory with a test prompt
     with tempfile.TemporaryDirectory() as temp_dir:
         prompt_file = Path(temp_dir) / "test_validation.prompt"
-        prompt_file.write_text("""---
+        prompt_file.write_text(
+            """---
 input:
   schema:
     name: string
     age: integer
     active: boolean
 ---
-Hello {{name}}, you are {{age}} years old and {'active' if active else 'inactive'}.""")
+Hello {{name}}, you are {{age}} years old and {'active' if active else 'inactive'}."""
+        )
 
         manager = PromptManager(prompt_directory=str(temp_dir))
 
@@ -246,14 +248,16 @@ def test_frontmatter_parsing():
     with tempfile.TemporaryDirectory() as temp_dir:
         # Test with frontmatter
         prompt_with_frontmatter = Path(temp_dir) / "with_frontmatter.prompt"
-        prompt_with_frontmatter.write_text("""---
+        prompt_with_frontmatter.write_text(
+            """---
 model: gpt-4
 temperature: 0.8
 input:
   schema:
     topic: string
 ---
-Write about {{topic}}.""")
+Write about {{topic}}."""
+        )
 
         # Test without frontmatter
         prompt_without_frontmatter = Path(temp_dir) / "without_frontmatter.prompt"
@@ -366,7 +370,8 @@ def test_prompt_file_to_json_conversion():
     # Create a temporary prompt file with frontmatter
     with tempfile.TemporaryDirectory() as temp_dir:
         prompt_file = Path(temp_dir) / "test_conversion.prompt"
-        prompt_file.write_text("""---
+        prompt_file.write_text(
+            """---
 model: gpt-4
 temperature: 0.7
 max_tokens: 200
@@ -379,7 +384,8 @@ output:
 ---
 You are an AI assistant. Given the context: {{context}}
 
-Please respond to: {{user_input}}""")
+Please respond to: {{user_input}}"""
+        )
 
         manager = PromptManager()
         json_data = manager.prompt_file_to_json(prompt_file)

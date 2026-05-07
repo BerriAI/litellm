@@ -176,11 +176,7 @@ class TestRedactNestedMatchAndRegexKeys:
                 {
                     "sensitiveInformationPolicy": {
                         "piiEntities": [
-                            {
-                                "type": "NAME",
-                                "match": "secret-name",
-                                "action": "BLOCKED",
-                            }
+                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
                         ]
                     },
                     "wordPolicy": {
@@ -191,22 +187,16 @@ class TestRedactNestedMatchAndRegexKeys:
             "regex": "should-redact-key-named-regex",
         }
         out = redact_nested_match_and_regex_keys(payload)
-        assert (
-            out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-                "match"
-            ]
-            == "[REDACTED]"
-        )
+        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+            "match"
+        ] == "[REDACTED]"
         assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
             "[REDACTED]"
         )
         assert out["regex"] == "[REDACTED]"
-        assert (
-            payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-                "match"
-            ]
-            == "secret-name"
-        )
+        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
+            0
+        ]["match"] == "secret-name"
 
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None

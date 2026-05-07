@@ -9,6 +9,7 @@ import litellm
 import os
 from abc import ABC, abstractmethod
 
+
 # Test resources
 TEST_IMAGE_PATH = "test_image_edit.png"
 # Tiny in-repo PDF served via jsdelivr (sha-pinned, immutable). The arxiv

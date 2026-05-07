@@ -53,9 +53,7 @@ class CheckBatchCost:
                 "user_api_key_alias": getattr(user_row, "user_alias", None),
             }
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}"
-            )
+            verbose_proxy_logger.error(f"CheckBatchCost: could not look up user {user_id} for batch {batch_id}: {e}")
             return {}
 
     async def _cleanup_stale_managed_objects(self) -> None:
@@ -64,22 +62,11 @@ class CheckBatchCost:
         in non-terminal states as 'stale_expired'. These will never complete and
         should not be polled.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS
-        )
+        cutoff = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
         result = await self.prisma_client.db.litellm_managedobjecttable.update_many(
             where={
                 "file_purpose": "batch",
-                "status": {
-                    "not_in": [
-                        "completed",
-                        "complete",
-                        "failed",
-                        "expired",
-                        "cancelled",
-                        "stale_expired",
-                    ]
-                },
+                "status": {"not_in": ["completed", "complete", "failed", "expired", "cancelled", "stale_expired"]},
                 "created_at": {"lt": cutoff},
             },
             data={"status": "stale_expired"},
@@ -133,12 +120,9 @@ class CheckBatchCost:
 
         try:
             from litellm.integrations.prometheus import PrometheusLogger
-
             prom_logger = PrometheusLogger.get_instance()
         except Exception as e:
-            verbose_proxy_logger.error(
-                f"CheckBatchCost: could not get Prometheus logger: {e}"
-            )
+            verbose_proxy_logger.error(f"CheckBatchCost: could not get Prometheus logger: {e}")
             prom_logger = None
 
         processed_models: List[Tuple[Optional[str], Optional[str]]] = []
@@ -177,11 +161,7 @@ class CheckBatchCost:
                     order={"created_at": "asc"},
                 )
             except Exception as query_err:
-                if (
-                    "batch_processed" not in str(query_err).lower()
-                    and "unknown column" not in str(query_err).lower()
-                    and "does not exist" not in str(query_err).lower()
-                ):
+                if "batch_processed" not in str(query_err).lower() and "unknown column" not in str(query_err).lower() and "does not exist" not in str(query_err).lower():
                     raise
                 # Permanent schema gap — cache the result so future cycles skip straight to fallback
                 self._has_batch_processed_column = False
@@ -236,13 +216,14 @@ class CheckBatchCost:
                     f"Skipping job {unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
                 )
                 if prom_logger:
-                    prom_logger.record_check_batch_cost_error(
-                        "provider_retrieval_error"
-                    )
+                    prom_logger.record_check_batch_cost_error("provider_retrieval_error")
                 continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
-            if response.status == "completed" and response.output_file_id is not None:
+            if (
+                response.status == "completed"
+                and response.output_file_id is not None
+            ):
                 verbose_proxy_logger.info(
                     f"Batch ID: {batch_id} is complete, tracking cost and usage"
                 )
@@ -269,25 +250,20 @@ class CheckBatchCost:
                 decoded = _is_base64_encoded_unified_file_id(raw_output_file_id)
                 if decoded:
                     try:
-                        raw_output_file_id = decoded.split("llm_output_file_id,")[
-                            1
-                        ].split(";")[0]
+                        raw_output_file_id = decoded.split("llm_output_file_id,")[1].split(";")[0]
                     except (IndexError, AttributeError):
                         pass
 
-                credentials = (
-                    self.llm_router.get_deployment_credentials_with_provider(model_id)
-                    or {}
-                )
+                credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
                 _file_content = await afile_content(
                     file_id=raw_output_file_id,
                     **credentials,
                 )
 
                 # Access content - handle both direct attribute and method call
-                if hasattr(_file_content, "content"):
+                if hasattr(_file_content, 'content'):
                     content_bytes = _file_content.content  # type: ignore[union-attr]
-                elif hasattr(_file_content, "read"):
+                elif hasattr(_file_content, 'read'):
                     content_bytes = await _file_content.read()  # type: ignore[misc]
                 else:
                     content_bytes = _file_content  # type: ignore[assignment]
@@ -314,9 +290,7 @@ class CheckBatchCost:
                         f"Skipping job {unified_object_id} because it is not a valid deployment info"
                     )
                     if prom_logger:
-                        prom_logger.record_check_batch_cost_error(
-                            "deployment_not_found"
-                        )
+                        prom_logger.record_check_batch_cost_error("deployment_not_found")
                     continue
                 custom_llm_provider = deployment_info.litellm_params.custom_llm_provider
                 litellm_model_name = deployment_info.litellm_params.model
@@ -328,11 +302,7 @@ class CheckBatchCost:
 
                 # Pass deployment model_info so custom batch pricing
                 # (input_cost_per_token_batches etc.) is used for cost calc
-                deployment_model_info = (
-                    deployment_info.model_info.model_dump()
-                    if deployment_info.model_info
-                    else {}
-                )
+                deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
                 batch_cost, batch_usage, batch_models = (
                     await calculate_batch_cost_and_usage(
                         file_content_dictionary=file_content_as_dict,
@@ -379,9 +349,7 @@ class CheckBatchCost:
 
                 # Record batch duration (completed_at - created_at)
                 if prom_logger and response.completed_at and response.created_at:
-                    duration_seconds = float(
-                        response.completed_at - response.created_at
-                    )
+                    duration_seconds = float(response.completed_at - response.created_at)
                     if duration_seconds >= 0:
                         prom_logger.record_managed_batch_duration(
                             duration_seconds=duration_seconds,
@@ -390,9 +358,7 @@ class CheckBatchCost:
                         )
 
                 # Track this job for the final metrics summary
-                processed_models.append(
-                    (model_name, str(llm_provider) if llm_provider else None)
-                )
+                processed_models.append((model_name, str(llm_provider) if llm_provider else None))
 
                 # mark the job as complete
                 try:

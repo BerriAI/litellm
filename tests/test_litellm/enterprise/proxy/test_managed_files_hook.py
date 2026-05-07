@@ -110,9 +110,10 @@ async def test_should_pass_credentials_to_afile_retrieve():
 
     mock_afile_retrieve = AsyncMock(return_value=_make_file_object("file-output-abc"))
 
-    with (
-        patch("litellm.afile_retrieve", mock_afile_retrieve),
-        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+    with patch(
+        "litellm.afile_retrieve", mock_afile_retrieve
+    ), patch(
+        "litellm.proxy.proxy_server.llm_router", mock_router
     ):
         await managed_files.async_post_call_success_hook(
             data={},
@@ -127,9 +128,7 @@ async def test_should_pass_credentials_to_afile_retrieve():
             f"afile_retrieve must receive api_key from router credentials. "
             f"Got kwargs: {call_kwargs.kwargs}"
         )
-        assert (
-            call_kwargs.kwargs.get("api_base") == "https://my-azure.openai.azure.com/"
-        ), (
+        assert call_kwargs.kwargs.get("api_base") == "https://my-azure.openai.azure.com/", (
             f"afile_retrieve must receive api_base from router credentials. "
             f"Got kwargs: {call_kwargs.kwargs}"
         )
@@ -151,9 +150,10 @@ async def test_should_fallback_when_no_router():
 
     mock_afile_retrieve = AsyncMock(return_value=_make_file_object("file-output-abc"))
 
-    with (
-        patch("litellm.afile_retrieve", mock_afile_retrieve),
-        patch("litellm.proxy.proxy_server.llm_router", None),
+    with patch(
+        "litellm.afile_retrieve", mock_afile_retrieve
+    ), patch(
+        "litellm.proxy.proxy_server.llm_router", None
     ):
         await managed_files.async_post_call_success_hook(
             data={},

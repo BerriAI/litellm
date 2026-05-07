@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+
 # Azure DALL-E sync + async paths route through ``assert_same_origin``
 # the same way as the cases below. The helper itself is unit-tested in
 # ``tests/test_litellm/litellm_core_utils/test_url_utils.py``; the

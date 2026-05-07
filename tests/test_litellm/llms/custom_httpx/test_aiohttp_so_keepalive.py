@@ -158,7 +158,4 @@ def test_socket_factory_uses_tcp_keepalive_when_keepidle_unavailable(monkeypatch
     assert (
         setsockopt_calls[(socket.IPPROTO_TCP, fake_socket_module.TCP_KEEPALIVE)] == 60
     )
-    assert (
-        socket.IPPROTO_TCP,
-        getattr(socket, "TCP_KEEPIDLE", -1),
-    ) not in setsockopt_calls
+    assert (socket.IPPROTO_TCP, getattr(socket, "TCP_KEEPIDLE", -1)) not in setsockopt_calls

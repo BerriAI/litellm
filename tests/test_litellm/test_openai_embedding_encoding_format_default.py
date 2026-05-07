@@ -51,7 +51,9 @@ def test_openai_embedding_encoding_format_default(
 
 
 @pytest.mark.parametrize("env_none", ["none", "NONE", " none "])
-def test_openai_embedding_encoding_format_env_none_omits_param(monkeypatch, env_none):
+def test_openai_embedding_encoding_format_env_none_omits_param(
+    monkeypatch, env_none
+):
     """LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT=none omits encoding_format (provider default)."""
     monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", env_none)
 

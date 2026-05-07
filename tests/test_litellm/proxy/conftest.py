@@ -14,6 +14,7 @@ import pytest
 import yaml
 from fastapi.testclient import TestClient
 
+
 _PROXY_MODULE_GLOBALS_TO_ISOLATE = (
     "master_key",
     "prisma_client",

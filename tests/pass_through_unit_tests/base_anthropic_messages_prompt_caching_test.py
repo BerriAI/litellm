@@ -22,8 +22,10 @@ sys.path.insert(0, os.path.abspath("../../.."))
 import pytest
 import litellm
 
+
 # Large document for caching tests (needs 1024+ tokens for Claude models)
-LARGE_DOCUMENT_FOR_CACHING = """
+LARGE_DOCUMENT_FOR_CACHING = (
+    """
 This is a comprehensive legal agreement between Party A and Party B.
 
 ARTICLE 1: DEFINITIONS
@@ -75,7 +77,9 @@ ARTICLE 9: GENERAL PROVISIONS
 9.5 Waiver of any provision shall not constitute ongoing waiver.
 
 IN WITNESS WHEREOF, the parties have executed this Agreement.
-""" * 8  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
+"""
+    * 8
+)  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
 
 
 class BaseAnthropicMessagesPromptCachingTest(ABC):

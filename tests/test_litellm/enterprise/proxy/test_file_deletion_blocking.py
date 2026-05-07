@@ -61,7 +61,7 @@ def _make_managed_files_instance_with_batches(
 ):
     """
     Create a _PROXY_LiteLLMManagedFiles instance with mocked DB and batches.
-
+    
     Args:
         file_id: The unified file ID
         batches: List of batch records to return from DB
@@ -79,7 +79,7 @@ def _make_managed_files_instance_with_batches(
 
     # Mock prisma
     mock_prisma = MagicMock()
-
+    
     # Mock file table queries
     mock_prisma.db.litellm_managedfiletable.find_first = AsyncMock(
         return_value=mock_file_record
@@ -87,7 +87,7 @@ def _make_managed_files_instance_with_batches(
     mock_prisma.db.litellm_managedfiletable.delete = AsyncMock(
         return_value=mock_file_record
     )
-
+    
     # Mock batch/object table queries
     mock_prisma.db.litellm_managedobjecttable.find_many = AsyncMock(
         return_value=batches
@@ -95,13 +95,11 @@ def _make_managed_files_instance_with_batches(
 
     # Mock cache
     mock_cache = MagicMock()
-    mock_cache.async_get_cache = AsyncMock(
-        return_value={
-            "unified_file_id": file_id,
-            "model_mappings": {"model-123": "provider-file-abc"},
-            "flat_model_file_ids": ["provider-file-abc"],
-        }
-    )
+    mock_cache.async_get_cache = AsyncMock(return_value={
+        "unified_file_id": file_id,
+        "model_mappings": {"model-123": "provider-file-abc"},
+        "flat_model_file_ids": ["provider-file-abc"],
+    })
     mock_cache.async_set_cache = AsyncMock()
 
     instance = _PROXY_LiteLLMManagedFiles(
@@ -119,17 +117,17 @@ def test_is_batch_polling_enabled_when_job_registered():
     from litellm_enterprise.proxy.hooks.managed_files import (
         _PROXY_LiteLLMManagedFiles,
     )
-
+    
     instance = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )
-
+    
     # Mock scheduler with registered job
     mock_scheduler = MagicMock()
     mock_job = MagicMock()
     mock_scheduler.get_job.return_value = mock_job
-
+    
     with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         assert instance._is_batch_polling_enabled() is True
 
@@ -139,16 +137,16 @@ def test_is_batch_polling_disabled_when_job_not_registered():
     from litellm_enterprise.proxy.hooks.managed_files import (
         _PROXY_LiteLLMManagedFiles,
     )
-
+    
     instance = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )
-
+    
     # Mock scheduler without registered job
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = None
-
+    
     with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         assert instance._is_batch_polling_enabled() is False
 
@@ -158,12 +156,12 @@ def test_is_batch_polling_disabled_when_no_scheduler():
     from litellm_enterprise.proxy.hooks.managed_files import (
         _PROXY_LiteLLMManagedFiles,
     )
-
+    
     instance = _PROXY_LiteLLMManagedFiles(
         internal_usage_cache=MagicMock(),
         prisma_client=MagicMock(),
     )
-
+    
     with patch("litellm.proxy.proxy_server.scheduler", None):
         assert instance._is_batch_polling_enabled() is False
 
@@ -176,28 +174,26 @@ async def test_get_batches_referencing_file_finds_batch_with_input_file():
     """Test finding a batch that references the file as input_file_id."""
     unified_file_id = _make_unified_file_id("file-input-123")
     unified_batch_id = _make_unified_batch_id("batch-123")
-
+    
     batch_file_object = {
         "id": "batch-123",
         "input_file_id": unified_file_id,  # Batch references this file
         "status": "validating",
     }
-
+    
     batch_record = _make_batch_db_record(
         unified_object_id=unified_batch_id,
         status="validating",
         file_object=batch_file_object,
     )
-
+    
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=[batch_record],
     )
-
-    referencing_batches = await managed_files._get_batches_referencing_file(
-        unified_file_id
-    )
-
+    
+    referencing_batches = await managed_files._get_batches_referencing_file(unified_file_id)
+    
     assert len(referencing_batches) == 1
     assert referencing_batches[0]["batch_id"] == unified_batch_id
     assert referencing_batches[0]["status"] == "validating"
@@ -208,29 +204,27 @@ async def test_get_batches_referencing_file_finds_batch_with_output_file():
     """Test finding a batch that references the file as output_file_id."""
     unified_file_id = _make_unified_file_id("file-output-456")
     unified_batch_id = _make_unified_batch_id("batch-456")
-
+    
     batch_file_object = {
         "id": "batch-456",
         "input_file_id": "file-input-different",
         "output_file_id": unified_file_id,  # Batch references this file
         "status": "in_progress",
     }
-
+    
     batch_record = _make_batch_db_record(
         unified_object_id=unified_batch_id,
         status="in_progress",
         file_object=batch_file_object,
     )
-
+    
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=[batch_record],
     )
-
-    referencing_batches = await managed_files._get_batches_referencing_file(
-        unified_file_id
-    )
-
+    
+    referencing_batches = await managed_files._get_batches_referencing_file(unified_file_id)
+    
     assert len(referencing_batches) == 1
     assert referencing_batches[0]["status"] == "in_progress"
 
@@ -240,29 +234,27 @@ async def test_get_batches_referencing_file_ignores_terminal_batches():
     """Test that batches in terminal states are not returned."""
     unified_file_id = _make_unified_file_id("file-123")
     unified_batch_id = _make_unified_batch_id("batch-completed")
-
+    
     batch_file_object = {
         "id": "batch-completed",
         "input_file_id": unified_file_id,
         "status": "completed",
     }
-
+    
     # Batch is in terminal state in DB
     batch_record = _make_batch_db_record(
         unified_object_id=unified_batch_id,
         status="completed",  # Terminal state
         file_object=batch_file_object,
     )
-
+    
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=[],  # Query returns no batches (terminal states filtered out)
     )
-
-    referencing_batches = await managed_files._get_batches_referencing_file(
-        unified_file_id
-    )
-
+    
+    referencing_batches = await managed_files._get_batches_referencing_file(unified_file_id)
+    
     assert len(referencing_batches) == 0
 
 
@@ -270,36 +262,26 @@ async def test_get_batches_referencing_file_ignores_terminal_batches():
 async def test_get_batches_referencing_file_finds_multiple_batches():
     """Test finding multiple batches referencing the same file."""
     unified_file_id = _make_unified_file_id("file-shared")
-
+    
     batch1 = _make_batch_db_record(
         unified_object_id=_make_unified_batch_id("batch-1"),
         status="validating",
-        file_object={
-            "id": "batch-1",
-            "input_file_id": unified_file_id,
-            "status": "validating",
-        },
+        file_object={"id": "batch-1", "input_file_id": unified_file_id, "status": "validating"},
     )
-
+    
     batch2 = _make_batch_db_record(
         unified_object_id=_make_unified_batch_id("batch-2"),
         status="in_progress",
-        file_object={
-            "id": "batch-2",
-            "input_file_id": unified_file_id,
-            "status": "in_progress",
-        },
+        file_object={"id": "batch-2", "input_file_id": unified_file_id, "status": "in_progress"},
     )
-
+    
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=[batch1, batch2],
     )
-
-    referencing_batches = await managed_files._get_batches_referencing_file(
-        unified_file_id
-    )
-
+    
+    referencing_batches = await managed_files._get_batches_referencing_file(unified_file_id)
+    
     assert len(referencing_batches) == 2
     statuses = [b["status"] for b in referencing_batches]
     assert "validating" in statuses
@@ -318,32 +300,32 @@ async def test_file_deletion_blocked_when_batch_polling_enabled_and_batch_refere
     """
     unified_file_id = _make_unified_file_id("file-to-delete")
     unified_batch_id = _make_unified_batch_id("batch-active")
-
+    
     batch_file_object = {
         "id": "batch-active",
         "input_file_id": unified_file_id,
         "status": "validating",
     }
-
+    
     batch_record = _make_batch_db_record(
         unified_object_id=unified_batch_id,
         status="validating",
         file_object=batch_file_object,
     )
-
+    
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=[batch_record],
     )
-
+    
     # Mock scheduler with registered batch cost job
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = MagicMock()  # Job exists
-
+    
     with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         with pytest.raises(HTTPException) as exc_info:
             await managed_files._check_file_deletion_allowed(unified_file_id)
-
+        
         assert exc_info.value.status_code == 400
         error_detail = exc_info.value.detail
         assert "Cannot delete file" in error_detail
@@ -360,28 +342,28 @@ async def test_file_deletion_allowed_when_batch_polling_disabled():
     """
     unified_file_id = _make_unified_file_id("file-to-delete")
     unified_batch_id = _make_unified_batch_id("batch-active")
-
+    
     batch_file_object = {
         "id": "batch-active",
         "input_file_id": unified_file_id,
         "status": "validating",
     }
-
+    
     batch_record = _make_batch_db_record(
         unified_object_id=unified_batch_id,
         status="validating",
         file_object=batch_file_object,
     )
-
+    
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=[batch_record],
     )
-
+    
     # Mock scheduler without registered job (batch cost tracking disabled)
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = None
-
+    
     with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         # Should not raise an exception
         await managed_files._check_file_deletion_allowed(unified_file_id)
@@ -394,16 +376,16 @@ async def test_file_deletion_allowed_when_no_batches_reference_file():
     even when batch cost tracking is enabled.
     """
     unified_file_id = _make_unified_file_id("file-to-delete")
-
+    
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=[],  # No batches reference this file
     )
-
+    
     # Mock scheduler with registered job (batch cost tracking enabled)
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = MagicMock()
-
+    
     with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         # Should not raise an exception
         await managed_files._check_file_deletion_allowed(unified_file_id)
@@ -416,32 +398,32 @@ async def test_afile_delete_calls_check_deletion_allowed():
     """
     unified_file_id = _make_unified_file_id("file-to-delete")
     unified_batch_id = _make_unified_batch_id("batch-active")
-
+    
     batch_file_object = {
         "id": "batch-active",
         "input_file_id": unified_file_id,
         "status": "in_progress",
     }
-
+    
     batch_record = _make_batch_db_record(
         unified_object_id=unified_batch_id,
         status="in_progress",
         file_object=batch_file_object,
     )
-
+    
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=[batch_record],
     )
-
+    
     # Mock llm_router
     mock_router = MagicMock()
     mock_router.afile_delete = AsyncMock()
-
+    
     # Mock scheduler with registered job
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = MagicMock()
-
+    
     with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         with pytest.raises(HTTPException) as exc_info:
             await managed_files.afile_delete(
@@ -449,7 +431,7 @@ async def test_afile_delete_calls_check_deletion_allowed():
                 litellm_parent_otel_span=None,
                 llm_router=mock_router,
             )
-
+        
         # Should raise error before calling router delete
         assert exc_info.value.status_code == 400
         mock_router.afile_delete.assert_not_called()
@@ -462,7 +444,7 @@ async def test_database_limit_respected():
     This is a performance optimization - we only fetch what we need.
     """
     unified_file_id = _make_unified_file_id("file-shared")
-
+    
     # Create exactly 10 batches (what DB will return with take=10)
     ten_batches = []
     for i in range(10):
@@ -472,32 +454,30 @@ async def test_database_limit_respected():
             file_object={
                 "id": f"batch-{i}",
                 "input_file_id": unified_file_id,
-                "status": "validating",
+                "status": "validating"
             },
         )
         ten_batches.append(batch)
-
+    
     # Mock will return only 10 batches (as DB would with take=10)
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=ten_batches,
     )
-
-    referencing_batches = await managed_files._get_batches_referencing_file(
-        unified_file_id
-    )
-
+    
+    referencing_batches = await managed_files._get_batches_referencing_file(unified_file_id)
+    
     # Should return all 10 that reference the file
     assert len(referencing_batches) == 10
-
+    
     # Verify error message handles "10+" case (since we got exactly 10, might be more in DB)
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = MagicMock()
-
+    
     with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         with pytest.raises(HTTPException) as exc_info:
             await managed_files._check_file_deletion_allowed(unified_file_id)
-
+        
         error_detail = exc_info.value.detail
         # When we get exactly 10 matches, show "10+" to indicate there might be more
         assert "10+ batch(es)" in error_detail
@@ -511,40 +491,32 @@ async def test_error_message_includes_batch_details():
     unified_file_id = _make_unified_file_id("file-to-delete")
     batch1_id = _make_unified_batch_id("batch-1")
     batch2_id = _make_unified_batch_id("batch-2")
-
+    
     batch1 = _make_batch_db_record(
         unified_object_id=batch1_id,
         status="validating",
-        file_object={
-            "id": "batch-1",
-            "input_file_id": unified_file_id,
-            "status": "validating",
-        },
+        file_object={"id": "batch-1", "input_file_id": unified_file_id, "status": "validating"},
     )
-
+    
     batch2 = _make_batch_db_record(
         unified_object_id=batch2_id,
         status="in_progress",
-        file_object={
-            "id": "batch-2",
-            "output_file_id": unified_file_id,
-            "status": "in_progress",
-        },
+        file_object={"id": "batch-2", "output_file_id": unified_file_id, "status": "in_progress"},
     )
-
+    
     managed_files = _make_managed_files_instance_with_batches(
         file_id=unified_file_id,
         batches=[batch1, batch2],
     )
-
+    
     # Mock scheduler with registered job
     mock_scheduler = MagicMock()
     mock_scheduler.get_job.return_value = MagicMock()
-
+    
     with patch("litellm.proxy.proxy_server.scheduler", mock_scheduler):
         with pytest.raises(HTTPException) as exc_info:
             await managed_files._check_file_deletion_allowed(unified_file_id)
-
+        
         error_detail = exc_info.value.detail
         assert "2 batch(es)" in error_detail
         assert "validating" in error_detail

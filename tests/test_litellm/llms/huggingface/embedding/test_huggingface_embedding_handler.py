@@ -11,6 +11,7 @@ sys.path.insert(
 import litellm
 import pytest
 
+
 MOCK_EMBEDDING_RESPONSE = [[0.1, 0.2, 0.3, 0.4, 0.5]]
 
 

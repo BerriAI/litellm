@@ -2,7 +2,6 @@
 """
 Test to verify the Google GenAI generate_content adapter functionality
 """
-
 import json
 import os
 import sys

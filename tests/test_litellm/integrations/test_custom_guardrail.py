@@ -1086,12 +1086,9 @@ class TestCustomGuardrailSpendLogMatchRedaction:
             ][0]["match"]
             == "[REDACTED]"
         )
-        assert (
-            raw["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-                "match"
-            ]
-            == "GG"
-        )
+        assert raw["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+            "match"
+        ] == "GG"
 
     def test_add_standard_logging_redacts_regex_field(self):
         cg = CustomGuardrail(guardrail_name="test-rail")

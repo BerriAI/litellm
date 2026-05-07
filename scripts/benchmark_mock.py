@@ -8,6 +8,7 @@ import statistics
 
 import aiohttp
 
+
 REQUEST_BODY = {
     "model": "db-openai-endpoint",
     "messages": [{"role": "user", "content": "hi"}],

@@ -2,7 +2,6 @@
 """
 Test to verify the new Google GenAI router methods
 """
-
 import asyncio
 import os
 import sys

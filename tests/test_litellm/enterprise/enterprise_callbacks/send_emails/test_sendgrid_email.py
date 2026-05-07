@@ -32,12 +32,12 @@ def mock_env_vars():
     # Store original values
     original_api_key = os.environ.get("SENDGRID_API_KEY")
     original_sender_email = os.environ.get("SENDGRID_SENDER_EMAIL")
-
+    
     # Set test API key and remove SENDGRID_SENDER_EMAIL to ensure isolation
     os.environ["SENDGRID_API_KEY"] = "test_api_key"
     if "SENDGRID_SENDER_EMAIL" in os.environ:
         del os.environ["SENDGRID_SENDER_EMAIL"]
-
+    
     try:
         yield
     finally:
@@ -46,7 +46,7 @@ def mock_env_vars():
             os.environ["SENDGRID_API_KEY"] = original_api_key
         elif "SENDGRID_API_KEY" in os.environ:
             del os.environ["SENDGRID_API_KEY"]
-
+        
         if original_sender_email is not None:
             os.environ["SENDGRID_SENDER_EMAIL"] = original_sender_email
 

@@ -25,6 +25,7 @@ from litellm.integrations.gcs_bucket.gcs_bucket import (
 )
 from litellm.types.utils import StandardCallbackDynamicParams
 
+
 # This is the response payload that GCS would return.
 mock_response_data = {
     "id": "chatcmpl-9870a859d6df402795f75dc5fca5b2e0",

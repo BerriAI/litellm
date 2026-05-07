@@ -54,9 +54,7 @@ class TestCacheCodecSerialize:
     def test_with_model_type_already_correct_instance_skips_revalidation(self):
         """Fast-path: value is already model_type — model_validate must NOT be called."""
         m = _SampleModel(name="fast", count=7)
-        with patch.object(
-            _SampleModel, "model_validate", wraps=_SampleModel.model_validate
-        ) as mock_validate:
+        with patch.object(_SampleModel, "model_validate", wraps=_SampleModel.model_validate) as mock_validate:
             out = CacheCodec.serialize(m, model_type=_SampleModel)
         assert out == {"name": "fast", "count": 7}
         mock_validate.assert_not_called()
@@ -64,9 +62,7 @@ class TestCacheCodecSerialize:
     def test_with_model_type_subclass_instance_skips_revalidation(self):
         """Subclass is isinstance of base → should also take the fast path."""
         sub = _SampleSubModel(name="sub", count=2)
-        with patch.object(
-            _SampleModel, "model_validate", wraps=_SampleModel.model_validate
-        ) as mock_validate:
+        with patch.object(_SampleModel, "model_validate", wraps=_SampleModel.model_validate) as mock_validate:
             out = CacheCodec.serialize(sub, model_type=_SampleModel)
         assert out == {"name": "sub", "count": 2}
         mock_validate.assert_not_called()

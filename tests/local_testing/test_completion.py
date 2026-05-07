@@ -1638,13 +1638,15 @@ def custom_callback(
 
         #################################################
 
-        print(f"""
+        print(
+            f"""
                 Model: {model},
                 Messages: {messages},
                 User: {user},
                 Seed: {kwargs["seed"]},
                 temperature: {kwargs["temperature"]},
-            """)
+            """
+        )
 
         assert kwargs["user"] == "ishaans app"
         assert kwargs["model"] == "gpt-3.5-turbo-1106"

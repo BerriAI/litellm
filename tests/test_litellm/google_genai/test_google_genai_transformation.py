@@ -2,7 +2,6 @@
 """
 Test to verify the Google GenAI transformation logic for generateContent parameters
 """
-
 import os
 import sys
 

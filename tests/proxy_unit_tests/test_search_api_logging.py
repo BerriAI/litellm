@@ -2,7 +2,7 @@
 Test search API logging and cost tracking in proxy.
 
 Tests that search API requests are properly logged to LiteLLM_SpendLogs
-with correct fields populated (call_type, model, custom_llm_provider,
+with correct fields populated (call_type, model, custom_llm_provider, 
 model_group, spend, etc.)
 """
 

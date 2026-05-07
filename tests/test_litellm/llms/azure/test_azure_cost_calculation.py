@@ -8,6 +8,7 @@ import litellm
 from litellm.llms.azure.cost_calculation import cost_per_token
 from litellm.types.utils import Usage
 
+
 # Register a test model with tier-specific pricing
 TEST_MODEL = "test-azure-gpt-4.1"
 TEST_MODEL_COST = {

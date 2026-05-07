@@ -1469,7 +1469,11 @@ def test_vertex_request_labels_from_litellm_params_extracts_requester_metadata()
 
 
 def test_vertex_request_labels_from_litellm_params_accepts_litellm_metadata():
-    lp = {"litellm_metadata": {"requester_metadata": {"team": "platform", "count": 3}}}
+    lp = {
+        "litellm_metadata": {
+            "requester_metadata": {"team": "platform", "count": 3}
+        }
+    }
     assert vertex_request_labels_from_litellm_params(lp) == {"team": "platform"}
 
 

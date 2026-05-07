@@ -18,6 +18,7 @@ from fastapi import HTTPException
 import litellm
 from litellm.proxy._types import InvitationClaim
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
