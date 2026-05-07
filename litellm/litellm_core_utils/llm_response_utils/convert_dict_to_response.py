@@ -595,10 +595,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
                         thinking_blocks = choice["message"]["thinking_blocks"]
                         provider_specific_fields["thinking_blocks"] = thinking_blocks
 
+                    # Align with live provider responses: reasoning_content is message-level only.
                     if reasoning_content:
-                        provider_specific_fields["reasoning_content"] = (
-                            reasoning_content
-                        )
+                        provider_specific_fields.pop("reasoning_content", None)
 
                     message = Message(
                         content=content,

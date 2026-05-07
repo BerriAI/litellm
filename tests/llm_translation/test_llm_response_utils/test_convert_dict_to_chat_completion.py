@@ -902,7 +902,51 @@ def test_convert_to_model_response_object_with_thinking_content():
 
     resp: ModelResponse = convert_to_model_response_object(**args)
     assert resp is not None
-    assert resp.choices[0].message.reasoning_content is not None
+    msg = resp.choices[0].message
+    assert msg.reasoning_content is not None
+    assert "reasoning_content" not in (msg.provider_specific_fields or {})
+
+
+def test_convert_to_model_response_object_strips_reasoning_content_from_provider_specific_fields():
+    """
+    Stale or merged provider_specific_fields must not duplicate top-level reasoning_content.
+    Duplication breaks disk cache keys on later turns (see Anthropic extended thinking).
+    """
+    duplicate = "same reasoning"
+    args = {
+        "response_object": {
+            "id": "chatcmpl-dup-reasoning",
+            "created": 1741057687,
+            "model": "claude-4-sonnet-20250514",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "index": 0,
+                    "message": {
+                        "content": "Answer.",
+                        "role": "assistant",
+                        "reasoning_content": duplicate,
+                        "provider_specific_fields": {
+                            "citations": None,
+                            "reasoning_content": duplicate,
+                            "thinking_blocks": [],
+                        },
+                    },
+                }
+            ],
+            "usage": {
+                "completion_tokens": 1,
+                "prompt_tokens": 1,
+                "total_tokens": 2,
+            },
+        },
+        "model_response_object": ModelResponse(),
+    }
+    resp = convert_to_model_response_object(**args)
+    msg = resp.choices[0].message
+    assert msg.reasoning_content == duplicate
+    assert "reasoning_content" not in (msg.provider_specific_fields or {})
 
 
 def test_convert_to_model_response_object_with_empty_error_object():
