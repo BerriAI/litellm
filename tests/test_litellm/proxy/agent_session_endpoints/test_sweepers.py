@@ -27,7 +27,7 @@ from litellm.proxy.agent_session_endpoints.sweepers import (
     STATUS_READY,
     STATUS_TERMINATED,
 )
-from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+from litellm.managed_agents.vms.base import (
     AgentVMProvider,
     ProvisionContext,
     VMHandle,
