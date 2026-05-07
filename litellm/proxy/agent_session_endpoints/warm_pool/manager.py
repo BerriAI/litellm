@@ -30,7 +30,7 @@ from litellm.proxy.agent_session_endpoints.vm_providers.base import (
     Repo,
 )
 from litellm.proxy.agent_session_endpoints.vm_providers.factory import (
-    get_vm_provider as build_vm_provider,
+    build_vm_provider,
 )
 from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
     get_team_vm_config,
