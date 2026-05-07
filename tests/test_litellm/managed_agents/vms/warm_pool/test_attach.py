@@ -1,4 +1,4 @@
-"""Unit tests for `litellm/proxy/agent_session_endpoints/warm_pool/attach.py`.
+"""Unit tests for `litellm/managed_agents/vms/warm_pool/attach.py`.
 
 Cover the race-safe attach path:
 * the CAS via `update_many(state='warm')` blocks double-attach
@@ -22,9 +22,9 @@ import pytest
 os.environ.setdefault("LITELLM_SALT_KEY", "sk-test-salt-key-do-not-use-in-prod")
 
 
-from litellm.proxy.agent_session_endpoints.vm_providers.base import AwsCreds, Ec2Config
-from litellm.proxy.agent_session_endpoints.vm_providers.team_config import TeamVMConfig
-from litellm.proxy.agent_session_endpoints.warm_pool.attach import (
+from litellm.managed_agents.vms.base import AwsCreds, Ec2Config
+from litellm.managed_agents.vms.team_config import TeamVMConfig
+from litellm.managed_agents.vms.warm_pool.attach import (
     WarmPoolEmptyError,
     attach_warm_vm,
 )
@@ -127,7 +127,7 @@ def fake_team_creds(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "litellm.proxy.agent_session_endpoints.warm_pool.attach.get_team_vm_config",
+        "litellm.managed_agents.vms.warm_pool.attach.get_team_vm_config",
         fake,
     )
 
