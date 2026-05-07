@@ -41,6 +41,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 
+# Mirrors `agents.py` — fallback owner when no user_id is attached to the
+# verification token (master-key call, etc.). Without this, master-key
+# callers cannot read back sessions they created (the row stores
+# "default_user" but the lookup would pass None).
+_DEFAULT_CREATED_BY = "default_user"
+
 # SSE response headers per contract §6.6.
 SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -52,7 +58,7 @@ SSE_HEADERS = {
 # ---------------------------------------------------------------------------
 # Pre-forward helper
 # ---------------------------------------------------------------------------
-# TODO: extract to shared helper — `litellm/managed_agents/endpoints/_helpers.py`
+# TODO: extract to shared helper — `litellm/proxy/managed_agents_endpoints/_helpers.py`
 # once the messages endpoint lands. Both endpoints need the same logic.
 
 
@@ -79,7 +85,7 @@ async def _load_ready_session(
     session_row = await get_session(
         prisma_client,
         session_id=session_id,
-        created_by=user_api_key_dict.user_id,
+        created_by=user_api_key_dict.user_id or _DEFAULT_CREATED_BY,
     )
     if not session_row:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
