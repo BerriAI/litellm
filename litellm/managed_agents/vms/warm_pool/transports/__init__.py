@@ -10,7 +10,7 @@ Public surface:
 - ``SSMHydrateTransport`` — the production transport
 """
 
-from litellm.proxy.agent_session_endpoints.warm_pool.transports.ssm import (
+from litellm.managed_agents.vms.warm_pool.transports.ssm import (
     HydrateTransport,
     HydrateTransportError,
     SSMHydrateTransport,
