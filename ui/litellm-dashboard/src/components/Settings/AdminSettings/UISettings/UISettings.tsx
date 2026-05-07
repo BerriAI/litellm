@@ -299,7 +299,7 @@ export default function UISettings() {
             </Space>
           </Space>
 
-<Space align="start" size="middle">
+          <Space align="start" size="middle">
               <Switch
                 checked={Boolean(values.forward_client_headers_to_llm_api)}
                 disabled={isUpdating}
