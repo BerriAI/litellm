@@ -224,6 +224,24 @@ class JWTHandler:
 
         return []
 
+    def get_all_jwt_team_ids(self, token: dict) -> List[str]:
+        """
+        Return team IDs from both the plural ``team_ids_jwt_field`` and the
+        singular ``team_id_jwt_field`` claim, as a deduplicated list preserving
+        plural-first order.
+
+        Membership-reconciliation paths (SSO callback, JWT-bearer sync) need
+        to consider both claim shapes. Reading only the plural field — as
+        callers historically did — silently dropped users whose IdP populates
+        the singular field, which is what Okta and Auth0 default to when a
+        user has a single primary team.
+        """
+        team_ids: List[str] = list(self.get_team_ids_from_jwt(token))
+        singular = self.get_team_id(token, default_value=None)
+        if singular and singular not in team_ids:
+            team_ids.append(singular)
+        return team_ids
+
     def get_end_user_id(
         self, token: dict, default_value: Optional[str]
     ) -> Optional[str]:
