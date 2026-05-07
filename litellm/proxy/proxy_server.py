@@ -957,7 +957,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## ``LiteLLM_AgentVM`` rows for every team with ``warm_pool_enabled=true``.
     ## Idempotent; only does work when at least one team has the feature on.
     try:
-        from litellm.proxy.agent_session_endpoints.warm_pool.manager import (
+        from litellm.managed_agents.vms.warm_pool.manager import (
             get_warm_pool_manager,
         )
 
@@ -970,7 +970,7 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     ## Stop the warm-pool maintenance loop.
     try:
-        from litellm.proxy.agent_session_endpoints.warm_pool.manager import (
+        from litellm.managed_agents.vms.warm_pool.manager import (
             get_warm_pool_manager,
         )
 
