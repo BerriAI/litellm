@@ -229,9 +229,7 @@ def test_create_agent_duplicate_name_same_user_returns_409(client_and_mocks):
     assert fake_table.create.await_count == 1
 
 
-def test_create_agent_same_name_different_user_returns_200(
-    client_and_mocks, monkeypatch
-):
+def test_create_agent_same_name_different_user_returns_200(client_and_mocks):
     client, fake_table, _ = client_and_mocks
 
     # First user creates "code-reviewer".
