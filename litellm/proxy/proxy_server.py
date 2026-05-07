@@ -4074,7 +4074,10 @@ class ProxyConfig:
                 "user_url_allowed_hosts", None
             )
             if _user_url_allowed_hosts is not None:
-                litellm.user_url_allowed_hosts = list(_user_url_allowed_hosts)
+                if isinstance(_user_url_allowed_hosts, str):
+                    litellm.user_url_allowed_hosts = [_user_url_allowed_hosts]
+                else:
+                    litellm.user_url_allowed_hosts = list(_user_url_allowed_hosts)
             ## BUDGET RESCHEDULER ##
             proxy_budget_rescheduler_min_time = general_settings.get(
                 "proxy_budget_rescheduler_min_time", proxy_budget_rescheduler_min_time
