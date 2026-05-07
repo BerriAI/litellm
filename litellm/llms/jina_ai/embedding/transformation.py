@@ -85,8 +85,7 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         )  # type: ignore
         dynamic_api_key = api_key or (
             get_secret_str("JINA_AI_API_KEY")
-            or get_secret_str("JINA_AI_API_KEY")
-            or get_secret_str("JINA_AI_API_KEY")
+            or get_secret_str("JINA_API_KEY")
             or get_secret_str("JINA_AI_TOKEN")
         )
         return LlmProviders.JINA_AI.value, api_base, dynamic_api_key

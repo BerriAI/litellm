@@ -6,6 +6,7 @@ sys.path.insert(
     0, os.path.abspath("../../../../../..")
 )  # Adds the parent directory to the system path
 
+import litellm.llms.jina_ai.embedding.transformation as jina_embedding_transformation
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 
 
@@ -25,6 +26,29 @@ class TestJinaAIEmbeddingTransform:
             drop_params=False,
         )
         assert result == {"dimensions": 1024}
+
+    def test_provider_info_uses_jina_api_key_alias(self, monkeypatch):
+        """Test provider info resolves the shared Jina credential alias"""
+
+        def fake_get_secret_str(secret_name):
+            if secret_name == "JINA_API_KEY":
+                return "test-jina-key"
+            return None
+
+        monkeypatch.setattr(
+            jina_embedding_transformation, "get_secret_str", fake_get_secret_str
+        )
+
+        custom_llm_provider, api_base, dynamic_api_key = (
+            self.config._get_openai_compatible_provider_info(
+                api_base=None,
+                api_key=None,
+            )
+        )
+
+        assert custom_llm_provider == "jina_ai"
+        assert api_base == "https://api.jina.ai/v1"
+        assert dynamic_api_key == "test-jina-key"
 
     def test_transform_embedding_request_text_input(self):
         """Test transformation of a standard text embedding request"""
