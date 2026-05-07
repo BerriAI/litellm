@@ -25,12 +25,13 @@ FileCreateProvider = Literal[
     "hosted_vllm",
     "manus",
     "anthropic",
+    "pg_vector",
 ]
 FileRetrieveProvider = Literal[
-    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic"
+    "openai", "azure", "gemini", "vertex_ai", "hosted_vllm", "manus", "anthropic", "pg_vector"
 ]
-FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic"]
-FileListProvider = Literal["openai", "azure", "manus", "anthropic"]
+FileDeleteProvider = Literal["openai", "azure", "gemini", "manus", "anthropic", "pg_vector"]
+FileListProvider = Literal["openai", "azure", "manus", "anthropic", "pg_vector"]
 import litellm
 from litellm import get_secret_str
 from litellm.files.streaming import FileContentStreamingResponse
