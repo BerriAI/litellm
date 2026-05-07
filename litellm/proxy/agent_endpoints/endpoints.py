@@ -77,6 +77,43 @@ def _check_agent_management_permission(user_api_key_dict: UserAPIKeyAuth) -> Non
         )
 
 
+def _extract_extension_fields(raw_body: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract x- prefixed extension fields from raw request body's agent_card_params.
+
+    The A2A protocol specification supports custom extension properties with
+    namespace prefixes (e.g., x-provider-org, x-routing-hints) on AgentCards.
+    However, Pydantic's TypedDict validation strips unknown fields during
+    request parsing. This function recovers those fields from the raw request
+    body so they can be merged back before storage.
+
+    Returns a dict of {field_name: field_value} for all x- prefixed keys
+    found in agent_card_params, or an empty dict if none are present.
+    """
+    agent_card_params = raw_body.get("agent_card_params", {})
+    if not isinstance(agent_card_params, dict):
+        return {}
+    return {k: v for k, v in agent_card_params.items() if k.startswith("x-")}
+
+
+def _merge_extension_fields(
+    agent: Dict[str, Any], extension_fields: Dict[str, Any]
+) -> None:
+    """
+    Merge x- prefixed extension fields back into agent's agent_card_params.
+
+    Modifies the agent dict in-place. If agent_card_params doesn't exist
+    or extension_fields is empty, this is a no-op.
+    """
+    if not extension_fields:
+        return
+    agent_card_params = agent.get("agent_card_params")
+    if agent_card_params is None:
+        return
+    if isinstance(agent_card_params, dict):
+        agent_card_params.update(extension_fields)
+
+
 AGENT_HEALTH_CHECK_TIMEOUT_SECONDS = float(
     os.environ.get("LITELLM_AGENT_HEALTH_CHECK_TIMEOUT", "5.0")
 )
@@ -280,11 +317,16 @@ from litellm.proxy.agent_endpoints.agent_registry import (
     response_model=AgentResponse,
 )
 async def create_agent(
+    fastapi_request: Request,
     request: AgentConfig,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Create a new agent
+
+    Supports A2A protocol extension fields (x- prefixed) in agent_card_params.
+    These custom properties are preserved during registration and returned
+    in agent card discovery endpoints.
 
     Example Request:
     ```bash
@@ -313,7 +355,11 @@ async def create_agent(
                             "tags": ["hello world"],
                             "examples": ["hi", "hello world"]
                         }
-                    ]
+                    ],
+                    "x-provider-org": {
+                        "business": "telecom",
+                        "domain": "customer-service"
+                    }
                 },
                 "litellm_params": {
                     "make_public": true
@@ -332,6 +378,13 @@ async def create_agent(
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
+        # Recover A2A extension fields (x- prefixed) from raw request body.
+        # Pydantic's TypedDict validation strips unknown fields, but the A2A
+        # protocol specification supports custom extension properties.
+        raw_body = await fastapi_request.json()
+        extension_fields = _extract_extension_fields(raw_body)
+        _merge_extension_fields(request, extension_fields)  # type: ignore
+
         # Get the user ID from the API key auth
         created_by = user_api_key_dict.user_id or "unknown"
 
@@ -472,11 +525,14 @@ async def get_agent_by_id(
 )
 async def update_agent(
     agent_id: str,
+    fastapi_request: Request,
     request: AgentConfig,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Update an existing agent
+
+    Supports A2A protocol extension fields (x- prefixed) in agent_card_params.
 
     Example Request:
     ```bash
@@ -518,6 +574,11 @@ async def update_agent(
         )
 
     try:
+        # Recover A2A extension fields (x- prefixed) from raw request body
+        raw_body = await fastapi_request.json()
+        extension_fields = _extract_extension_fields(raw_body)
+        _merge_extension_fields(request, extension_fields)  # type: ignore
+
         # Check if agent exists
         existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
             where={"agent_id": agent_id}
@@ -565,11 +626,14 @@ async def update_agent(
 )
 async def patch_agent(
     agent_id: str,
+    fastapi_request: Request,
     request: PatchAgentRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Update an existing agent
+
+    Supports A2A protocol extension fields (x- prefixed) in agent_card_params.
 
     Example Request:
     ```bash
@@ -611,6 +675,11 @@ async def patch_agent(
         )
 
     try:
+        # Recover A2A extension fields (x- prefixed) from raw request body
+        raw_body = await fastapi_request.json()
+        extension_fields = _extract_extension_fields(raw_body)
+        _merge_extension_fields(request, extension_fields)  # type: ignore
+
         # Check if agent exists
         existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
             where={"agent_id": agent_id}
