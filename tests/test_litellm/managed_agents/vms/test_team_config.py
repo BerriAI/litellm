@@ -29,7 +29,7 @@ def _set_master_key(monkeypatch):
 
 def test_encrypt_decrypt_aws_field_round_trip(monkeypatch):
     _set_master_key(monkeypatch)
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         decrypt_aws_field,
         encrypt_aws_field,
     )
@@ -44,7 +44,7 @@ def test_encrypt_decrypt_aws_field_round_trip(monkeypatch):
 
 
 def test_encrypt_aws_field_returns_none_for_empty():
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         encrypt_aws_field,
     )
 
@@ -53,7 +53,7 @@ def test_encrypt_aws_field_returns_none_for_empty():
 
 
 def test_decrypt_aws_field_returns_none_for_empty():
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         decrypt_aws_field,
     )
 
@@ -68,10 +68,10 @@ async def test_no_db_no_env_raises_invalid_credentials(monkeypatch):
     monkeypatch.delenv("LITELLM_AGENT_AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("LITELLM_AGENT_AWS_SECRET_ACCESS_KEY", raising=False)
 
-    from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+    from litellm.managed_agents.vms.base import (
         InvalidCredentialsError,
     )
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         get_team_vm_config,
     )
 
@@ -91,7 +91,7 @@ async def test_env_fallback_when_no_db_row(monkeypatch):
     monkeypatch.setenv("LITELLM_AGENT_AWS_SECRET_ACCESS_KEY", "secret-from-env")
     monkeypatch.setenv("LITELLM_AGENT_AWS_REGION", "us-east-1")
 
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         get_team_vm_config,
     )
 
@@ -114,7 +114,7 @@ async def test_falls_back_to_env_when_prisma_table_missing(monkeypatch):
     monkeypatch.setenv("LITELLM_AGENT_AWS_ACCESS_KEY_ID", "AKIAFROMENVFALLBACK")
     monkeypatch.setenv("LITELLM_AGENT_AWS_SECRET_ACCESS_KEY", "secret-fallback")
 
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         get_team_vm_config,
     )
 
@@ -135,7 +135,7 @@ def _row_with_encrypted_creds(
     region: str = "us-west-2",
 ) -> Any:
     """Build a fake `LiteLLM_AgentVMConfig` Prisma row with G's column shape."""
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         encrypt_aws_field,
     )
 
@@ -163,7 +163,7 @@ def _row_with_encrypted_creds(
 async def test_byoc_cross_team_isolation(monkeypatch):
     """Validation #12: two teams resolve to two distinct creds objects."""
     _set_master_key(monkeypatch)
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         get_team_vm_config,
     )
 
@@ -198,10 +198,10 @@ async def test_byoc_cross_team_isolation(monkeypatch):
 @pytest.mark.asyncio
 async def test_db_row_with_no_creds_raises(monkeypatch):
     _set_master_key(monkeypatch)
-    from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+    from litellm.managed_agents.vms.base import (
         InvalidCredentialsError,
     )
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         get_team_vm_config,
     )
 
@@ -237,10 +237,10 @@ async def test_iam_role_method_returns_none_creds_falls_back_env(monkeypatch):
     monkeypatch.delenv("LITELLM_AGENT_AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("LITELLM_AGENT_AWS_SECRET_ACCESS_KEY", raising=False)
 
-    from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+    from litellm.managed_agents.vms.base import (
         InvalidCredentialsError,
     )
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.team_config import (
         get_team_vm_config,
     )
 
