@@ -1,4 +1,4 @@
-"""Unit tests for ``POST /v2/agents`` (LIT-2922).
+"""Unit tests for ``POST /v2/agents`` (LIT-2922) and ``GET /v2/agents``.
 
 Auth pattern: FastAPI ``app.dependency_overrides`` for ``user_api_key_auth``.
 
@@ -12,8 +12,8 @@ by checking ``app.router.routes`` first.
 import os
 import sys
 import types
-from datetime import datetime
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -55,6 +55,7 @@ class _FakeAgentTable:
         self.rows: Dict[str, Dict[str, Any]] = {}
         self.create = AsyncMock(side_effect=self._create)
         self.find_first = AsyncMock(side_effect=self._find_first)
+        self.find_many = AsyncMock(side_effect=self._find_many)
 
     async def _create(self, *, data: Dict[str, Any]) -> types.SimpleNamespace:
         # Mirror Prisma's behavior: store + return a row-like object.
@@ -83,6 +84,31 @@ class _FakeAgentTable:
             if all(row.get(k) == v for k, v in where.items()):
                 return types.SimpleNamespace(model_dump=lambda r=row: dict(r))
         return None
+
+    async def _find_many(
+        self,
+        *,
+        where: Dict[str, Any],
+        take: int,
+        skip: int,
+        order: Dict[str, str],
+    ) -> List[types.SimpleNamespace]:
+        # Filter on `where` (typically just created_by here).
+        matched = [
+            row
+            for row in self.rows.values()
+            if all(row.get(k) == v for k, v in where.items())
+        ]
+
+        # Order by created_at; default desc to match the handler.
+        order_key, order_dir = next(iter(order.items()))
+        matched.sort(
+            key=lambda r: r.get(order_key) or datetime.min,
+            reverse=(order_dir == "desc"),
+        )
+
+        page = matched[skip : skip + take]
+        return [types.SimpleNamespace(model_dump=lambda r=row: dict(r)) for row in page]
 
 
 @pytest.fixture
@@ -308,6 +334,143 @@ def test_create_agent_db_not_connected_returns_500(client_and_mocks, monkeypatch
     monkeypatch.setattr(ps, "prisma_client", None)
 
     resp = client.post("/v2/agents", json=_valid_payload(name="no-db"))
+    assert resp.status_code == 500, resp.text
+    detail = resp.json()["detail"]
+    assert "DB not connected" in detail["error"]
+
+
+# ---------------------------------------------------------------------------
+# GET /v2/agents — list
+# ---------------------------------------------------------------------------
+
+
+def _seed_agents(
+    fake_table: "_FakeAgentTable",
+    *,
+    count: int,
+    created_by: str,
+    name_prefix: str = "agent",
+    base_time: Optional[datetime] = None,
+) -> None:
+    """Seed `count` agents into the fake table for the given `created_by`.
+
+    Each row is given a strictly increasing `created_at` so the desc-order
+    list returns the highest index first.
+    """
+    if base_time is None:
+        base_time = datetime(2026, 5, 1, tzinfo=timezone.utc)
+
+    for i in range(count):
+        agent_id = f"agt_{name_prefix}_{i:08d}"
+        fake_table.rows[agent_id] = {
+            "id": agent_id,
+            "name": f"{name_prefix}-{i}",
+            "config": {
+                "model": "anthropic/claude-opus-4",
+                "system_prompt": "test",
+                "tools": ["read"],
+                "litellm_api_key": f"sk-secret-{i}",
+                "litellm_base_url": "http://localhost:4000",
+            },
+            "created_by": created_by,
+            "created_at": base_time + timedelta(seconds=i),
+            "updated_at": base_time + timedelta(seconds=i),
+        }
+
+
+def test_list_agents_returns_only_caller_rows(client_and_mocks):
+    client, fake_table, fake_user = client_and_mocks
+
+    _seed_agents(fake_table, count=2, created_by=fake_user.user_id, name_prefix="mine")
+    _seed_agents(fake_table, count=3, created_by="user_other", name_prefix="theirs")
+
+    resp = client.get("/v2/agents")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    # Only the caller's two rows should be returned.
+    assert len(body["data"]) == 2
+    for row in body["data"]:
+        assert row["created_by"] == fake_user.user_id
+
+    assert body["has_more"] is False
+    assert body["next_cursor"] is None
+
+
+def test_list_agents_masks_api_key(client_and_mocks):
+    client, fake_table, fake_user = client_and_mocks
+
+    _seed_agents(fake_table, count=1, created_by=fake_user.user_id)
+
+    resp = client.get("/v2/agents")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert len(body["data"]) == 1
+    cfg = body["data"][0]["config"]
+    # Mask is "first 4 chars + ****"  → "sk-s****"
+    assert cfg["litellm_api_key"] == "sk-s****"
+    # Raw secret must never appear in response body.
+    assert "sk-secret-0" not in resp.text
+
+
+def test_list_agents_pagination_cursor_walks_pages(client_and_mocks):
+    """Seed 4 records, page through with limit=2, walk via cursor."""
+    client, fake_table, fake_user = client_and_mocks
+
+    _seed_agents(fake_table, count=4, created_by=fake_user.user_id)
+
+    # Page 1.
+    resp1 = client.get("/v2/agents?limit=2")
+    assert resp1.status_code == 200, resp1.text
+    page1 = resp1.json()
+    assert len(page1["data"]) == 2
+    assert page1["has_more"] is True
+    assert page1["next_cursor"] == "2"
+
+    # Desc order: page 1 should contain the two newest (indices 3 and 2).
+    page1_ids = [r["id"] for r in page1["data"]]
+
+    # Page 2.
+    resp2 = client.get(f"/v2/agents?limit=2&cursor={page1['next_cursor']}")
+    assert resp2.status_code == 200, resp2.text
+    page2 = resp2.json()
+    assert len(page2["data"]) == 2
+    # We've now seen all 4 records → no more pages.
+    assert page2["has_more"] is False
+    assert page2["next_cursor"] is None
+
+    page2_ids = [r["id"] for r in page2["data"]]
+
+    # Pages must not overlap and must collectively cover all 4 seeded rows.
+    all_seen = set(page1_ids) | set(page2_ids)
+    assert len(all_seen) == 4, "All 4 records should appear across the 2 pages"
+    assert set(page1_ids).isdisjoint(set(page2_ids))
+
+
+def test_list_agents_empty_returns_empty_data(client_and_mocks):
+    client, _, _ = client_and_mocks
+
+    resp = client.get("/v2/agents")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["data"] == []
+    assert body["has_more"] is False
+    assert body["next_cursor"] is None
+
+
+def test_list_agents_invalid_cursor_returns_422(client_and_mocks):
+    client, _, _ = client_and_mocks
+
+    resp = client.get("/v2/agents?cursor=not-a-number")
+    assert resp.status_code == 422, resp.text
+
+
+def test_list_agents_db_not_connected_returns_500(client_and_mocks, monkeypatch):
+    client, _, _ = client_and_mocks
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    resp = client.get("/v2/agents")
     assert resp.status_code == 500, resp.text
     detail = resp.json()["detail"]
     assert "DB not connected" in detail["error"]
