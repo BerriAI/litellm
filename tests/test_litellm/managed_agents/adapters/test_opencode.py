@@ -44,6 +44,22 @@ SandboxUnreachableError = adapter_base.SandboxUnreachableError
 MessageRow = types_module.MessageRow
 
 
+@pytest.fixture(autouse=True)
+def _bypass_async_client_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In production the adapter pulls a cached ``httpx.AsyncClient`` from
+    ``get_async_httpx_client``. The cache survives across tests, so once
+    a client is created its transport is fixed and ``respx`` (which
+    patches new clients only) cannot intercept it. For tests we replace
+    ``_get_async_client`` with a fresh-client factory so each test sees
+    its own respx mock cleanly.
+    """
+    monkeypatch.setattr(
+        opencode_module,
+        "_get_async_client",
+        lambda timeout: httpx.AsyncClient(timeout=timeout),
+    )
+
+
 SANDBOX_URL = "http://127.0.0.1:1234"
 OC_SID = "ses_oc_xxx"
 OUR_SID = "ses_test"
@@ -725,9 +741,9 @@ class TestStreamEvents:
             for _ in range(5):
                 await asyncio.sleep(0.01)
 
-            assert not other_grant_route.called, (
-                "auto-grant must not fire for permissions on other sessions"
-            )
+            assert (
+                not other_grant_route.called
+            ), "auto-grant must not fire for permissions on other sessions"
 
     @pytest.mark.asyncio
     async def test_connect_error_raises_sandbox_unreachable(self) -> None:
