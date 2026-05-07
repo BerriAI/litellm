@@ -171,8 +171,8 @@ export default function SessionThreadView() {
   );
   const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
 
-  const messagesEndRef = useRef<HTMLDivElement | null>(null);
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Only ASSISTANT messages count as "in flight". User messages from opencode
   // have no completed_at so they normalize as in_progress, but they're not
@@ -563,8 +563,8 @@ interface MainPanelProps {
   handleSend: () => void;
   handleAbort: () => void;
   handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  messagesEndRef: React.RefObject<HTMLDivElement | null>;
-  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
+  messagesEndRef: React.RefObject<HTMLDivElement>;
+  scrollContainerRef: React.RefObject<HTMLDivElement>;
   pendingMessageId: string | null;
 }
 
