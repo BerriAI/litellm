@@ -3,7 +3,7 @@
 This is the canonical CI gate for the v2 MVP. Each test exercises one of
 the three flows in ``.claude/v2_api_contract.md`` §1 against:
 
-  - the real FastAPI router stack (``litellm.managed_agents.router``),
+  - the real FastAPI router stack (``litellm.proxy.managed_agents_endpoints.router``),
   - a real local ``opencode serve`` process started by the
     ``opencode_server`` session fixture, and
   - a hand-INSERTed ``LiteLLM_ManagedAgentSession`` row that points at
