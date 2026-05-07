@@ -2,7 +2,7 @@
 
 Drive the real `claude` CLI against a running LiteLLM proxy that routes
 Claude requests to AWS Bedrock via the `Converse` API, enable extended
-thinking via `MAX_THINKING_TOKENS`, allow the built-in `Bash` tool, and
+thinking via `--effort high`, allow the built-in `Bash` tool, and
 ask Claude to plan-and-execute a task that requires both reasoning and
 a tool call. Assert the upstream returned both a `thinking` content
 block and a `tool_use` content block in the same turn.
@@ -43,7 +43,7 @@ BEDROCK_CONVERSE_MODELS = [
     "claude-opus-4-7-bedrock-converse",
 ]
 
-THINKING_ENV = {"MAX_THINKING_TOKENS": "4096"}
+THINKING_ARGS = ["--effort", "max"]
 THINKING_TOOL_PROMPT = (
     "Think step by step about which shell command would print just the word "
     "'pong'. Then use the Bash tool to run that exact command and report what "
@@ -91,8 +91,8 @@ def test_thinking_with_tool_use_bedrock_converse(compat_result):
         prompt=THINKING_TOOL_PROMPT,
         base_url=base_url,
         api_key=api_key,
-        extra_env=THINKING_ENV,
-        extra_args=TOOL_USE_ARGS,
+        # thinking + tools combined into a single extra_args; see THINKING_ARGS
+        extra_args=THINKING_ARGS + TOOL_USE_ARGS,
     )
 
     failures = []

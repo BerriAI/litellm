@@ -1,9 +1,10 @@
 """vision x Vertex AI.
 
 Drive the real `claude` CLI against a running LiteLLM proxy that routes
-Claude requests to Anthropic's models on Google Cloud Vertex AI, attach
-a small image via the CLI's `--image` flag, and assert that the
-upstream produces a non-empty reply.
+to Vertex AI, attach a small image as an inline base64 `image` content
+block via the CLI's `--input-format stream-json` mode, and assert that
+the upstream produces a non-empty reply. This proves the proxy
+preserves Claude Code's multimodal content blocks end-to-end.
 
 The (feature, provider) for this cell is inferred from the file path by
 `tests/claude_code/conftest.py`:
@@ -11,11 +12,19 @@ The (feature, provider) for this cell is inferred from the file path by
     tests/claude_code/vision/test_vertex_ai.py
                        ^^^^^^      ^^^^^^^^^
                        feature_id  provider
+
+Why stream-json input rather than `--image <path>`: the claude CLI
+dropped `--image` in 2.x. Image attachments are now driven via either
+the Files API (server-uploaded blobs referenced by file_id) or by
+sending an Anthropic-shaped user message through stdin. We use the
+latter because it requires no upstream pre-upload — the test stays
+hermetic and the wire shape (an `image` content block) is exactly what
+the proxy must preserve.
 """
 
 from __future__ import annotations
 
-import base64
+import json
 import os
 
 import pytest
@@ -35,12 +44,50 @@ VERTEX_AI_MODELS = [
     "claude-opus-4-7-vertex",
 ]
 
-RED_PIXEL_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+# Minimal 1x1 red PNG, base64-encoded. We embed it directly as the
+# `image` content block's source — no temp file or Files API upload
+# needed, the test stays hermetic.
+RED_PIXEL_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8"
+    "z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+VISION_PROMPT = (
+    "What single color do you see in the attached image? Answer in one word."
+)
 
 
-def test_vision_vertex_ai(compat_result, tmp_path):
+def _build_stdin_input() -> str:
+    """Build the newline-delimited JSON payload for `--input-format stream-json`.
+
+    The CLI consumes a stream of `user` events whose `message.content` is
+    a list of Anthropic content blocks. A single user event with one
+    text block + one image block is enough to exercise the multimodal
+    code path.
+    """
+    user_event = {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": VISION_PROMPT},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": RED_PIXEL_PNG_B64,
+                    },
+                },
+            ],
+        },
+    }
+    return json.dumps(user_event) + "\n"
+
+
+def test_vision_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with an image
-    attached and assert a non-empty reply."""
+    attached via stream-json input and assert a non-empty reply."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
     api_key = os.environ.get(PROXY_API_KEY_ENV)
     if not base_url or not api_key:
@@ -57,15 +104,15 @@ def test_vision_vertex_ai(compat_result, tmp_path):
             f"{PROXY_BASE_URL_ENV} / {PROXY_API_KEY_ENV} not configured", pytrace=False
         )
 
-    image_path = tmp_path / "red_pixel.png"
-    image_path.write_bytes(base64.b64decode(RED_PIXEL_PNG_B64))
-
     outcomes = run_claude_models_parallel(
         models=VERTEX_AI_MODELS,
-        prompt="What single color do you see in the attached image? Answer in one word.",
+        # When using --input-format stream-json the CLI rejects a
+        # positional prompt; the prompt + image come in via stdin.
+        prompt=None,
         base_url=base_url,
         api_key=api_key,
-        extra_args=["--image", str(image_path)],
+        extra_args=["--input-format", "stream-json"],
+        stdin_input=_build_stdin_input(),
     )
 
     failures = []

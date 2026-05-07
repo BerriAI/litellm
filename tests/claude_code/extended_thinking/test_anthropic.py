@@ -1,10 +1,10 @@
 """extended_thinking x Anthropic.
 
 Drive the real `claude` CLI against a running LiteLLM proxy that routes
-to Anthropic, enable extended thinking via `MAX_THINKING_TOKENS`, and
-assert that the upstream returned a `thinking` content block. This
-proves the proxy preserves Anthropic's `thinking` request parameter
-and the upstream response's `thinking` content blocks end-to-end.
+to Anthropic, enable extended thinking via `--effort high`, and assert
+that the upstream returned a `thinking` content block. This proves the
+proxy preserves Anthropic's `thinking` request parameter and the
+upstream response's `thinking` content blocks end-to-end.
 
 The (feature, provider) for this cell is inferred from the file path by
 `tests/claude_code/conftest.py`:
@@ -40,13 +40,23 @@ ANTHROPIC_MODELS = [
     "claude-opus-4-7",
 ]
 
-# A small budget is enough to surface a non-empty thinking block on
-# even a trivial reasoning prompt; the test cares about wire shape, not
-# answer quality.
-THINKING_ENV = {"MAX_THINKING_TOKENS": "4096"}
+# --effort max maps to the largest thinking budget on every supported
+# Claude tier; the test cares about wire shape, not answer quality. We
+# use a CLI flag (rather than the legacy MAX_THINKING_TOKENS env var)
+# because Claude Code 2.x reads thinking config from --effort, not from
+# the env, and silently no-ops the env var. We use `max` rather than
+# `high` because Sonnet 4.6 / Opus 4.7 only emit thinking blocks when
+# the budget is generous and the prompt is non-trivial.
+THINKING_ARGS = ["--effort", "max"]
+# A puzzle non-trivial enough that Sonnet/Opus actually engage thinking
+# rather than answer from memory. Trivial arithmetic ("3-2=?") is
+# optimized away on the modern tiers and arrives without a thinking
+# block, which would make this test silently false-fail under
+# `--effort max`. Haiku 4.5 thinks even for trivial prompts; Sonnet 4.6
+# and Opus 4.7 only emit thinking when the upstream judges it useful.
 THINKING_PROMPT = (
-    "Think step by step: if I have three apples and eat two, how many remain? "
-    "Answer with the single digit only."
+    "I have a 3-gallon jug and a 5-gallon jug. How can I measure "
+    "exactly 4 gallons of water? Think through the steps carefully."
 )
 
 
@@ -90,7 +100,7 @@ def test_extended_thinking_anthropic(compat_result):
         prompt=THINKING_PROMPT,
         base_url=base_url,
         api_key=api_key,
-        extra_env=THINKING_ENV,
+        extra_args=THINKING_ARGS,
     )
 
     failures = []

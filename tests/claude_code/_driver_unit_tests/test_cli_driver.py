@@ -34,10 +34,11 @@ class _Completed:
 def _make_runner(*, stdout: str = "", returncode: int = 0, stderr: str = ""):
     captured = {}
 
-    def runner(cmd, env, capture_output, text, timeout, check):
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
         captured["cmd"] = cmd
         captured["env"] = env
         captured["timeout"] = timeout
+        captured["input"] = input
         return _Completed(returncode=returncode, stdout=stdout, stderr=stderr)
 
     return runner, captured
@@ -61,16 +62,19 @@ def test_run_claude_assembles_command_correctly():
     assert "stream-json" in cmd
     assert "--model" in cmd
     assert "claude-haiku-4-5" in cmd
-    assert cmd[-1] == "hello"
+    # prompt is the last positional after the `--` end-of-options marker.
+    assert cmd[-2:] == ["--", "hello"]
 
 
 def test_run_claude_places_extra_args_before_prompt():
     """`claude --print` expects the prompt as the final positional arg.
 
     Flags appearing after the prompt are ignored or eaten by the prompt
-    parser, which silently broke the tool_use and vision cells before the
-    fix. Pin the ordering: every flag (including caller-supplied
-    `extra_args`) must precede the prompt.
+    parser (especially variadic flags like `--allowed-tools <tools...>`),
+    which silently broke the tool_use, vision, and web_search cells
+    before the fix. Pin the ordering: every flag (including
+    caller-supplied `extra_args`) must precede the `--` end-of-options
+    marker, which itself precedes the prompt.
     """
     runner, captured = _make_runner(stdout="")
     run_claude(
@@ -82,9 +86,15 @@ def test_run_claude_places_extra_args_before_prompt():
         runner=runner,
     )
     cmd = captured["cmd"]
-    assert cmd[-1] == "say hi"
-    prompt_idx = cmd.index("say hi")
-    assert cmd[prompt_idx - 2 : prompt_idx] == ["--allowed-tools", "Bash"]
+    assert cmd[-3:] == ["--allowed-tools", "Bash", "--"] or cmd[-2:] == [
+        "--",
+        "say hi",
+    ]
+    # Stronger: prompt is last, `--` immediately precedes it, and the
+    # caller's extra_args sit somewhere earlier in the command.
+    assert cmd[-2:] == ["--", "say hi"]
+    assert "--allowed-tools" in cmd
+    assert cmd.index("--allowed-tools") < cmd.index("--")
 
 
 def test_run_claude_overlays_proxy_env():
@@ -414,7 +424,7 @@ def test_run_claude_models_parallel_returns_one_result_per_model():
     """Each model gets its own DriverResult keyed under the helper's dict."""
     seen_models: List[str] = []
 
-    def runner(cmd, env, capture_output, text, timeout, check):
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
         # The model id is two slots after `--model` in the assembled command.
         idx = cmd.index("--model")
         model = cmd[idx + 1]
@@ -452,7 +462,7 @@ def test_run_claude_models_parallel_returns_one_result_per_model():
 def test_run_claude_models_parallel_returns_errors_as_values():
     """A model whose CLI is missing surfaces as a ClaudeCLIError, not a raise."""
 
-    def runner(cmd, env, capture_output, text, timeout, check):
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
         idx = cmd.index("--model")
         model = cmd[idx + 1]
         if model == "boom":
@@ -485,7 +495,7 @@ def test_run_claude_models_parallel_returns_errors_as_values():
 def test_run_claude_models_parallel_preserves_nonzero_exit_codes():
     """Mixed success/failure on exit code should not collapse into one verdict."""
 
-    def runner(cmd, env, capture_output, text, timeout, check):
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
         idx = cmd.index("--model")
         model = cmd[idx + 1]
         if model == "fail":
@@ -536,7 +546,7 @@ def test_run_claude_models_parallel_stamps_duration_on_each_result():
     """
     import time
 
-    def runner(cmd, env, capture_output, text, timeout, check):
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
         idx = cmd.index("--model")
         model = cmd[idx + 1]
         time.sleep(0.05 if model == "fast" else 0.40)
@@ -565,7 +575,7 @@ def test_run_claude_models_parallel_breakdown_logs_to_stderr(capsys):
     """The breakdown helper must emit a per-model timing block so users
     can answer "why didn't parallel help?" without re-instrumenting."""
 
-    def runner(cmd, env, capture_output, text, timeout, check):
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
         return _Completed(returncode=0, stdout="")
 
     run_claude_models_parallel(
@@ -588,7 +598,7 @@ def test_run_claude_models_parallel_breakdown_marks_cli_errors(capsys):
     """When a model raises ClaudeCLIError, the breakdown should still
     show its row tagged as `cli-error` rather than crashing or omitting it."""
 
-    def runner(cmd, env, capture_output, text, timeout, check):
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
         idx = cmd.index("--model")
         if cmd[idx + 1] == "boom":
             raise FileNotFoundError(2, "no such file", "claude")
@@ -613,7 +623,7 @@ def test_run_claude_models_parallel_forwards_extra_args_and_env():
     captured_envs: List[dict] = []
     captured_cmds: List[List[str]] = []
 
-    def runner(cmd, env, capture_output, text, timeout, check):
+    def runner(cmd, env, capture_output, text, timeout, check, input=None):
         captured_envs.append(env)
         captured_cmds.append(cmd)
         return _Completed(returncode=0, stdout="")

@@ -1,7 +1,7 @@
 """thinking_with_tool_use x Anthropic.
 
 Drive the real `claude` CLI against a running LiteLLM proxy that routes
-to Anthropic, enable extended thinking via `MAX_THINKING_TOKENS`, allow
+to Anthropic, enable extended thinking via `--effort high`, allow
 the built-in `Bash` tool, and ask Claude to plan-and-execute a task
 that requires both reasoning and a tool call. Assert the upstream
 returned both a `thinking` content block and a `tool_use` content
@@ -47,7 +47,7 @@ ANTHROPIC_MODELS = [
 # Extended thinking on, with a small budget — enough to surface a
 # non-empty thinking block on a trivial reasoning prompt without
 # blowing up wall time.
-THINKING_ENV = {"MAX_THINKING_TOKENS": "4096"}
+THINKING_ARGS = ["--effort", "max"]
 
 # Prompt designed to force both blocks: the model has to *reason* about
 # what command to run before *invoking* the Bash tool. Using a fixed
@@ -105,8 +105,8 @@ def test_thinking_with_tool_use_anthropic(compat_result):
         prompt=THINKING_TOOL_PROMPT,
         base_url=base_url,
         api_key=api_key,
-        extra_env=THINKING_ENV,
-        extra_args=TOOL_USE_ARGS,
+        # thinking + tools combined into a single extra_args; see THINKING_ARGS
+        extra_args=THINKING_ARGS + TOOL_USE_ARGS,
     )
 
     failures = []

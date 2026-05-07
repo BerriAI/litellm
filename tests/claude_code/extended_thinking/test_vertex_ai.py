@@ -2,7 +2,7 @@
 
 Drive the real `claude` CLI against a running LiteLLM proxy that routes
 Claude requests to Anthropic's models on Google Cloud Vertex AI, enable
-extended thinking via `MAX_THINKING_TOKENS`, and assert that the
+extended thinking via `--effort high`, and assert that the
 upstream returned a `thinking` content block.
 
 The (feature, provider) for this cell is inferred from the file path by
@@ -35,10 +35,10 @@ VERTEX_AI_MODELS = [
     "claude-opus-4-7-vertex",
 ]
 
-THINKING_ENV = {"MAX_THINKING_TOKENS": "4096"}
+THINKING_ARGS = ["--effort", "max"]
 THINKING_PROMPT = (
-    "Think step by step: if I have three apples and eat two, how many remain? "
-    "Answer with the single digit only."
+    "I have a 3-gallon jug and a 5-gallon jug. How can I measure "
+    "exactly 4 gallons of water? Think through the steps carefully."
 )
 
 
@@ -80,7 +80,7 @@ def test_extended_thinking_vertex_ai(compat_result):
         prompt=THINKING_PROMPT,
         base_url=base_url,
         api_key=api_key,
-        extra_env=THINKING_ENV,
+        extra_args=THINKING_ARGS,
     )
 
     failures = []
