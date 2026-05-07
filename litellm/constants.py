@@ -540,6 +540,7 @@ LITELLM_CHAT_PROVIDERS = [
     "openai",
     "openai_like",
     "bytez",
+    "consus",
     "xai",
     "custom_openai",
     "text-completion-openai",
@@ -783,6 +784,7 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "https://api.consus.io/v1",
 ]
 
 
@@ -802,6 +804,7 @@ openai_compatible_providers: List = [
     "perplexity",
     "xinference",
     "xai",
+    "consus",
     "zai",
     "together_ai",
     "fireworks_ai",
