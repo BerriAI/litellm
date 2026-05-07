@@ -1,5 +1,6 @@
 """Pydantic v2 type definitions for the managed_agents proxy feature."""
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -89,6 +90,7 @@ class AgentOut(BaseModel):
     model: str
     template_id: str
     branch: str
+    created_at: Optional[datetime] = None
 
 
 class SessionCreateIn(BaseModel):
@@ -107,6 +109,7 @@ class SessionOut(BaseModel):
     status: str
     task_arn: Optional[str] = None
     response: Optional[Dict[str, Any]] = None
+    created_at: Optional[datetime] = None
 
 
 class MessageIn(BaseModel):
