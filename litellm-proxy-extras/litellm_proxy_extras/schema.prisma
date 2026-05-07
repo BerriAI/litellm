@@ -1390,6 +1390,8 @@ model LiteLLM_ManagedAgent {
   created_by String?
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
+
+  @@unique([name, created_by])
 }
 
 model LiteLLM_ManagedAgentSession {
