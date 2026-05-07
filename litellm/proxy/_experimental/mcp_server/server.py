@@ -2208,9 +2208,7 @@ if MCP_AVAILABLE:
                     for k, v in raw_headers.items()
                     if isinstance(k, str)
                 }
-                skip_caller_authorization = bool(
-                    getattr(mcp_server, "has_client_credentials", False)
-                )
+                skip_caller_authorization = bool(mcp_server.has_client_credentials)
                 for header_name in mcp_server.extra_headers:
                     if not isinstance(header_name, str):
                         continue
