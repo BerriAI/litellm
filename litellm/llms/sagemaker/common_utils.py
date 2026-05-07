@@ -208,9 +208,12 @@ class AWSEventStreamDecoder:
 
     def _parse_message_from_event(self, event) -> Optional[str]:
         if SAGEMAKER_RESPONSE_STREAM_SHAPE is None:
-            raise ValueError(
-                "SageMaker event-stream shape could not be loaded from botocore. "
-                "Ensure botocore is correctly installed."
+            raise SagemakerError(
+                status_code=500,
+                message=(
+                    "SageMaker event-stream shape could not be loaded from botocore. "
+                    "Ensure botocore is correctly installed."
+                ),
             )
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(

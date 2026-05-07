@@ -92,15 +92,17 @@ def test_sagemaker_parse_message_from_event_raises_on_none_shape():
     from unittest.mock import MagicMock, patch
 
     import litellm.llms.sagemaker.common_utils as mod
+    from litellm.llms.sagemaker.common_utils import SagemakerError
 
     decoder = AWSEventStreamDecoder(model="test-model")
     mock_event = MagicMock()
 
     with patch.object(mod, "SAGEMAKER_RESPONSE_STREAM_SHAPE", None):
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(SagemakerError) as exc_info:
             decoder._parse_message_from_event(mock_event)
 
-    assert "botocore" in str(exc_info.value).lower()
+    assert exc_info.value.status_code == 500
+    assert "botocore" in str(exc_info.value.message).lower()
     # The botocore parser must never have been called
     mock_event.to_response_dict.assert_not_called()
 
