@@ -20,7 +20,7 @@ from unittest.mock import patch
 
 import pytest
 
-from litellm.proxy.agent_session_endpoints.vm_providers import (
+from litellm.managed_agents.vms import (
     AwsCreds,
     EC2Provider,
     Ec2Config,
