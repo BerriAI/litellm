@@ -16,8 +16,12 @@ opencode 1.14.41 wire shapes documented in
   - The stream loop also tracks the most recent assistant ``message_id``
     so ``session.idle`` (which doesn't carry one in opencode payloads)
     can be enriched before being yielded as ``message.completed``.
-  - On ``permission.asked`` events the adapter fires a fire-and-forget
-    auto-grant request so tool calls don't hang waiting for approval.
+  - On ``permission.asked`` events for OUR session the adapter fires a
+    fire-and-forget auto-grant request so tool calls don't hang waiting
+    for approval. Permission events for other opencode sessions on the
+    same server are dropped — auto-grant only runs after the
+    ``event_matches_session`` filter so a caller streaming /events on
+    session A cannot approve permissions for session B.
     This is MVP behavior — once we expose permission gating to v2
     callers we'll surface these as real events instead.
 
@@ -207,14 +211,16 @@ class OpencodeAdapter:
                             f"opencode /event returned {response.status_code}"
                         )
                     async for parsed in self._iter_sse(response):
-                        # Permission auto-grant runs regardless of session
-                        # filter — tool blocks block opencode itself, so
-                        # we want to clear them ASAP whenever we see one.
-                        if parsed.get("type") == "permission.asked":
-                            self._auto_grant_permission(sandbox_url, parsed)
+                        # Drop events for other sessions FIRST. Without this,
+                        # any caller streaming /events on session A could
+                        # auto-grant permissions for session B on the same
+                        # opencode server.
+                        if not event_matches_session(parsed, opencode_session_id):
                             continue
 
-                        if not event_matches_session(parsed, opencode_session_id):
+                        # Auto-grant permission for OUR session only.
+                        if parsed.get("type") == "permission.asked":
+                            self._auto_grant_permission(sandbox_url, parsed)
                             continue
 
                         # Track the in-flight assistant message id BEFORE
