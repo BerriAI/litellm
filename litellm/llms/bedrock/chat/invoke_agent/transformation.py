@@ -299,29 +299,9 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             )
 
     def _get_response_stream_shape(self):
-        """Get the response stream shape for parsing, reusing existing logic."""
-        try:
-            # Try to reuse the cached shape from the existing decoder
-            from litellm.llms.bedrock.chat.invoke_handler import (
-                get_response_stream_shape,
-            )
+        from litellm.llms.bedrock.common_utils import BEDROCK_RESPONSE_STREAM_SHAPE
 
-            return get_response_stream_shape()
-        except ImportError:
-            # Fallback: create our own shape
-            try:
-                from botocore.loaders import Loader
-                from botocore.model import ServiceModel
-
-                loader = Loader()
-                bedrock_service_dict = loader.load_service_model(
-                    "bedrock-runtime", "service-2"
-                )
-                bedrock_service_model = ServiceModel(bedrock_service_dict)
-                return bedrock_service_model.shape_for("ResponseStream")
-            except Exception as e:
-                verbose_logger.warning(f"Could not load response stream shape: {e}")
-                return None
+        return BEDROCK_RESPONSE_STREAM_SHAPE
 
     def _extract_response_content(self, events: InvokeAgentEventList) -> str:
         """Extract the final response content from parsed events."""
