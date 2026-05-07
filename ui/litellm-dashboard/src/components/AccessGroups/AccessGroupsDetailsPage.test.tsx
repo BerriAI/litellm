@@ -8,13 +8,7 @@ import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails");
 vi.mock("./AccessGroupsModal/AccessGroupEditModal", () => ({
-  AccessGroupEditModal: ({
-    visible,
-    onCancel,
-  }: {
-    visible: boolean;
-    onCancel: () => void;
-  }) =>
+  AccessGroupEditModal: ({ visible, onCancel }: { visible: boolean; onCancel: () => void }) =>
     visible ? (
       <div role="dialog" aria-label="Edit Access Group">
         <button onClick={onCancel}>Close Modal</button>
@@ -50,15 +44,15 @@ const baseMockReturnValue = {
   refetch: vi.fn(),
 } as unknown as ReturnType<typeof useAccessGroupDetails>;
 
-const createMockAccessGroup = (
-  overrides: Partial<AccessGroupResponse> = {}
-): AccessGroupResponse => ({
+const createMockAccessGroup = (overrides: Partial<AccessGroupResponse> = {}): AccessGroupResponse => ({
   access_group_id: "ag-1",
   access_group_name: "Test Group",
   description: "A test access group",
   access_model_names: ["model-1", "model-2"],
   access_mcp_server_ids: ["mcp-1"],
   access_agent_ids: ["agent-1"],
+  access_pass_through_routes: ["/shared-analytics"],
+  access_vector_store_ids: ["vs-shared-kb"],
   assigned_team_ids: ["team-1"],
   assigned_key_ids: ["key-1", "key-2"],
   created_at: "2025-01-01T00:00:00Z",
@@ -81,9 +75,7 @@ describe("AccessGroupDetail", () => {
   });
 
   it("should render the component", () => {
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
     expect(screen.getByRole("heading", { name: "Test Group" })).toBeInTheDocument();
   });
 
@@ -94,9 +86,7 @@ describe("AccessGroupDetail", () => {
       isLoading: true,
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.queryByRole("heading", { name: "Test Group" })).not.toBeInTheDocument();
   });
@@ -108,9 +98,7 @@ describe("AccessGroupDetail", () => {
       isLoading: false,
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText("Access group not found")).toBeInTheDocument();
     expect(screen.getByRole("button")).toBeInTheDocument();
@@ -118,9 +106,7 @@ describe("AccessGroupDetail", () => {
 
   it("should call onBack when back button is clicked", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     const buttons = screen.getAllByRole("button");
     const backButton = buttons.find((btn) => !btn.textContent?.includes("Edit"));
@@ -130,18 +116,14 @@ describe("AccessGroupDetail", () => {
   });
 
   it("should display access group name and ID", () => {
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByRole("heading", { name: "Test Group" })).toBeInTheDocument();
     expect(screen.getByText(/ID:/)).toBeInTheDocument();
   });
 
   it("should display description in Group Details", () => {
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText("Group Details")).toBeInTheDocument();
     expect(screen.getByText("A test access group")).toBeInTheDocument();
@@ -153,18 +135,14 @@ describe("AccessGroupDetail", () => {
       data: createMockAccessGroup({ description: null }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
   it("should open edit modal when Edit Access Group button is clicked", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.queryByRole("dialog", { name: "Edit Access Group" })).not.toBeInTheDocument();
 
@@ -176,9 +154,7 @@ describe("AccessGroupDetail", () => {
 
   it("should close edit modal when Close Modal is clicked", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     await user.click(screen.getByRole("button", { name: /Edit Access Group/i }));
     expect(screen.getByRole("dialog", { name: "Edit Access Group" })).toBeInTheDocument();
@@ -188,9 +164,7 @@ describe("AccessGroupDetail", () => {
   });
 
   it("should display attached keys", () => {
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText("Attached Keys")).toBeInTheDocument();
     expect(screen.getByText("key-1")).toBeInTheDocument();
@@ -198,9 +172,7 @@ describe("AccessGroupDetail", () => {
   });
 
   it("should display attached teams", () => {
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText("Attached Teams")).toBeInTheDocument();
     expect(screen.getByText("team-1")).toBeInTheDocument();
@@ -214,9 +186,7 @@ describe("AccessGroupDetail", () => {
       }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByRole("button", { name: "View All (6)" })).toBeInTheDocument();
   });
@@ -230,9 +200,7 @@ describe("AccessGroupDetail", () => {
       }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     await user.click(screen.getByRole("button", { name: "View All (6)" }));
     expect(screen.getByRole("button", { name: "Show Less" })).toBeInTheDocument();
@@ -249,9 +217,7 @@ describe("AccessGroupDetail", () => {
       }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByRole("button", { name: "View All (6)" })).toBeInTheDocument();
   });
@@ -262,9 +228,7 @@ describe("AccessGroupDetail", () => {
       data: createMockAccessGroup({ assigned_key_ids: [] }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText("No keys attached")).toBeInTheDocument();
   });
@@ -275,17 +239,13 @@ describe("AccessGroupDetail", () => {
       data: createMockAccessGroup({ assigned_team_ids: [] }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText("No teams attached")).toBeInTheDocument();
   });
 
   it("should display Models tab with model IDs", () => {
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByRole("tab", { name: /Models/i })).toBeInTheDocument();
     expect(screen.getByText("model-1")).toBeInTheDocument();
@@ -294,9 +254,7 @@ describe("AccessGroupDetail", () => {
 
   it("should display MCP Servers tab with server IDs", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     const mcpTab = screen.getByRole("tab", { name: /MCP Servers/i });
     expect(mcpTab).toBeInTheDocument();
@@ -306,14 +264,32 @@ describe("AccessGroupDetail", () => {
 
   it("should display Agents tab with agent IDs", async () => {
     const user = userEvent.setup();
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     const agentsTab = screen.getByRole("tab", { name: /Agents/i });
     expect(agentsTab).toBeInTheDocument();
     await user.click(agentsTab);
     expect(screen.getByText("agent-1")).toBeInTheDocument();
+  });
+
+  it("should display Pass-through tab with route IDs", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
+
+    const passThroughTab = screen.getByRole("tab", { name: /Pass-through/i });
+    expect(passThroughTab).toBeInTheDocument();
+    await user.click(passThroughTab);
+    expect(screen.getByText("/shared-analytics")).toBeInTheDocument();
+  });
+
+  it("should display Vector Stores tab with vector store IDs", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
+
+    const vectorStoresTab = screen.getByRole("tab", { name: /Vector Stores/i });
+    expect(vectorStoresTab).toBeInTheDocument();
+    await user.click(vectorStoresTab);
+    expect(screen.getByText("vs-shared-kb")).toBeInTheDocument();
   });
 
   it("should show empty state in Models tab when no models assigned", () => {
@@ -322,9 +298,7 @@ describe("AccessGroupDetail", () => {
       data: createMockAccessGroup({ access_model_names: [] }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText("No models assigned to this group")).toBeInTheDocument();
   });
@@ -336,9 +310,7 @@ describe("AccessGroupDetail", () => {
       data: createMockAccessGroup({ access_mcp_server_ids: [] }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     await user.click(screen.getByRole("tab", { name: /MCP Servers/i }));
     expect(screen.getByText("No MCP servers assigned to this group")).toBeInTheDocument();
@@ -351,9 +323,7 @@ describe("AccessGroupDetail", () => {
       data: createMockAccessGroup({ access_agent_ids: [] }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     await user.click(screen.getByRole("tab", { name: /Agents/i }));
     expect(screen.getByText("No agents assigned to this group")).toBeInTheDocument();
@@ -366,17 +336,13 @@ describe("AccessGroupDetail", () => {
       data: createMockAccessGroup({ assigned_key_ids: [longKeyId] }),
     } as ReturnType<typeof useAccessGroupDetails>);
 
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText(/a{10}\.\.\.a{6}/)).toBeInTheDocument();
   });
 
   it("should display created and last updated timestamps", () => {
-    renderWithProviders(
-      <AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />
-    );
+    renderWithProviders(<AccessGroupDetail accessGroupId={accessGroupId} onBack={mockOnBack} />);
 
     expect(screen.getByText("Created")).toBeInTheDocument();
     expect(screen.getByText("Last Updated")).toBeInTheDocument();

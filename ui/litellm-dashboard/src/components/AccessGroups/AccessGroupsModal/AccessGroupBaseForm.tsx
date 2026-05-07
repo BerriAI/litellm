@@ -1,9 +1,12 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
+import PassThroughRoutesSelector from "@/components/common_components/PassThroughRoutesSelector";
+import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import type { FormInstance } from "antd";
 import { Form, Input, Select, Space, Tabs } from "antd";
-import { BotIcon, InfoIcon, LayersIcon, ServerIcon } from "lucide-react";
+import { BotIcon, DatabaseIcon, InfoIcon, LayersIcon, ServerIcon } from "lucide-react";
 
 const { TextArea } = Input;
 
@@ -13,6 +16,8 @@ export interface AccessGroupFormValues {
   modelIds: string[];
   mcpServerIds: string[];
   agentIds: string[];
+  passThroughRoutes: string[];
+  vectorStoreIds: string[];
 }
 
 interface AccessGroupBaseFormProps {
@@ -20,10 +25,8 @@ interface AccessGroupBaseFormProps {
   isNameDisabled?: boolean;
 }
 
-export function AccessGroupBaseForm({
-  form,
-  isNameDisabled = false,
-}: AccessGroupBaseFormProps) {
+export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGroupBaseFormProps) {
+  const { accessToken } = useAuthorized();
   const { data: agentsData } = useAgents();
   const { data: mcpServersData } = useMCPServers();
 
@@ -50,19 +53,10 @@ export function AccessGroupBaseForm({
               },
             ]}
           >
-            <Input
-              placeholder="e.g. Engineering Team"
-              disabled={isNameDisabled}
-            />
+            <Input placeholder="e.g. Engineering Team" disabled={isNameDisabled} />
           </Form.Item>
-          <Form.Item
-            name="description"
-            label="Description"
-          >
-            <TextArea
-              rows={4}
-              placeholder="Describe the purpose of this access group..."
-            />
+          <Form.Item name="description" label="Description">
+            <TextArea rows={4} placeholder="Describe the purpose of this access group..." />
           </Form.Item>
         </div>
       ),
@@ -118,6 +112,52 @@ export function AccessGroupBaseForm({
       key: "4",
       label: (
         <Space align="center" size={4}>
+          <ServerIcon size={16} />
+          Pass-through
+        </Space>
+      ),
+      children: (
+        <div style={{ paddingTop: 16 }}>
+          <Form.Item
+            name="passThroughRoutes"
+            label="Allowed pass-through routes"
+            extra="Select registered pass-through routes or type a route prefix."
+          >
+            <PassThroughRoutesSelector
+              accessToken={accessToken ?? ""}
+              value={form.getFieldValue("passThroughRoutes") ?? []}
+              onChange={(values) => form.setFieldsValue({ passThroughRoutes: values })}
+              placeholder="Select or enter pass-through routes"
+            />
+          </Form.Item>
+        </div>
+      ),
+    },
+    {
+      key: "5",
+      label: (
+        <Space align="center" size={4}>
+          <DatabaseIcon size={16} />
+          Vector Stores
+        </Space>
+      ),
+      children: (
+        <div style={{ paddingTop: 16 }}>
+          <Form.Item name="vectorStoreIds" label="Allowed vector stores">
+            <VectorStoreSelector
+              accessToken={accessToken ?? ""}
+              value={form.getFieldValue("vectorStoreIds") ?? []}
+              onChange={(values) => form.setFieldsValue({ vectorStoreIds: values })}
+              placeholder="Select vector stores"
+            />
+          </Form.Item>
+        </div>
+      ),
+    },
+    {
+      key: "6",
+      label: (
+        <Space align="center" size={4}>
           <BotIcon size={16} />
           Agents
         </Space>
@@ -151,6 +191,8 @@ export function AccessGroupBaseForm({
         modelIds: [],
         mcpServerIds: [],
         agentIds: [],
+        passThroughRoutes: [],
+        vectorStoreIds: [],
       }}
     >
       <Tabs defaultActiveKey="1" items={items} />

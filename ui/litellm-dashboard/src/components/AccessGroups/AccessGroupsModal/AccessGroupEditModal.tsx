@@ -1,14 +1,8 @@
 import React, { useEffect } from "react";
 import { Modal, Form } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import {
-  AccessGroupBaseForm,
-  AccessGroupFormValues,
-} from "./AccessGroupBaseForm";
-import {
-  useEditAccessGroup,
-  AccessGroupUpdateParams,
-} from "@/app/(dashboard)/hooks/accessGroups/useEditAccessGroup";
+import { AccessGroupBaseForm, AccessGroupFormValues } from "./AccessGroupBaseForm";
+import { useEditAccessGroup, AccessGroupUpdateParams } from "@/app/(dashboard)/hooks/accessGroups/useEditAccessGroup";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
 interface AccessGroupEditModalProps {
@@ -18,12 +12,7 @@ interface AccessGroupEditModalProps {
   onSuccess?: () => void;
 }
 
-export function AccessGroupEditModal({
-  visible,
-  accessGroup,
-  onCancel,
-  onSuccess,
-}: AccessGroupEditModalProps) {
+export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess }: AccessGroupEditModalProps) {
   const [form] = Form.useForm<AccessGroupFormValues>();
   const editMutation = useEditAccessGroup();
 
@@ -36,6 +25,8 @@ export function AccessGroupEditModal({
         modelIds: accessGroup.access_model_names ?? [],
         mcpServerIds: accessGroup.access_mcp_server_ids ?? [],
         agentIds: accessGroup.access_agent_ids ?? [],
+        passThroughRoutes: accessGroup.access_pass_through_routes ?? [],
+        vectorStoreIds: accessGroup.access_vector_store_ids ?? [],
       });
     }
   }, [visible, accessGroup, form]);
@@ -50,6 +41,8 @@ export function AccessGroupEditModal({
           access_model_names: values.modelIds,
           access_mcp_server_ids: values.mcpServerIds,
           access_agent_ids: values.agentIds,
+          access_pass_through_routes: values.passThroughRoutes,
+          access_vector_store_ids: values.vectorStoreIds,
         };
 
         editMutation.mutate(
