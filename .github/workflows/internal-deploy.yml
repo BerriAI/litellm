@@ -1,0 +1,450 @@
+name: internal-deploy
+#
+# Rayward internal LLM gateway — build, sign, attest, and deploy to Azure.
+#
+# Triggered on:
+#   - push to litellm_internal_staging (auto-deploy)
+#   - workflow_dispatch (manual rebuild; supports no_cache toggle)
+#
+# Pipeline:
+#   build-and-sign   → build linux/amd64, push to ACR, Trivy scan by digest,
+#                      cosign keyless sign, SLSA provenance attest.
+#   deploy           → checks out infras repo (terraform code only; /infras
+#                      stays pure IaC), then runs 5 inline steps:
+#                      validate digest → cosign verify → run migration Job
+#                      with --image override → terraform apply → verify
+#                      active Container App revision.
+#
+# -----------------------------------------------------------------------------
+# REQUIRED GITHUB REPO SECRETS (set under Settings → Secrets and variables →
+# Actions on THIS repo):
+#
+#   AZURE_CLIENT_ID         — App registration (client) ID for the federated
+#                             OIDC identity. Workflow uses it via azure/login@v2.
+#   AZURE_TENANT_ID         — d8f3d927-adb3-45d9-9bdd-5934ea4763bb
+#   AZURE_SUBSCRIPTION_ID   — b82db89c-67c0-4105-b8c3-a575098d7bc3
+#   INFRAS_REPO_TOKEN       — GitHub PAT (fine-grained, repo: Contents:Read on
+#                             the infras repo). Used to check out infras during
+#                             deploy. Scope: read-only on infras repo only.
+#
+# -----------------------------------------------------------------------------
+# REQUIRED AZURE-SIDE PREREQUISITES (run once, manually, by an operator with
+# `az login` and Owner on the subscription):
+#
+#   1. Create the AAD app registration + service principal:
+#        APP_ID=$(az ad app create --display-name rayward-llm-ci-prod \
+#          --query appId -o tsv)
+#        az ad sp create --id "$APP_ID" >/dev/null
+#
+#   2. Add a federated credential whose subject claim matches THIS workflow's
+#      branch ref (replace <OWNER>/<REPO> with the actual GitHub repo path —
+#      e.g. raywardai/litellm). One credential per ref-pattern you want to
+#      allow; for the staging branch:
+#
+#        az ad app federated-credential create \
+#          --id "$APP_ID" \
+#          --parameters '{
+#            "name": "rayward-llm-staging-branch",
+#            "issuer": "https://token.actions.githubusercontent.com",
+#            "subject": "repo:<OWNER>/<REPO>:ref:refs/heads/litellm_internal_staging",
+#            "audiences": ["api://AzureADTokenExchange"]
+#          }'
+#
+#      For workflow_dispatch from arbitrary branches you may also want:
+#        "subject": "repo:<OWNER>/<REPO>:ref:refs/heads/main"
+#      …or scope to environment-based subjects if you wire up GH Environments.
+#
+#   3. Grant roles on the right scopes (least-privilege):
+#        SUB=b82db89c-67c0-4105-b8c3-a575098d7bc3
+#        RG=rayward-llm-prod-rg
+#        ACR_ID=$(az acr show --name raywardllmprodacr --query id -o tsv)
+#
+#        # Push images to ACR
+#        az role assignment create --assignee "$APP_ID" \
+#          --role AcrPush --scope "$ACR_ID"
+#
+#        # Apply Terraform (Container App + Migration Job updates) and run jobs
+#        az role assignment create --assignee "$APP_ID" \
+#          --role Contributor \
+#          --scope "/subscriptions/$SUB/resourceGroups/$RG"
+#
+#        # Read Terraform state from the bootstrap storage account
+#        TF_SA_ID=$(az storage account show \
+#          --name raywardtfstateprod --resource-group rg-tf-state-prod \
+#          --query id -o tsv)
+#        az role assignment create --assignee "$APP_ID" \
+#          --role "Storage Blob Data Contributor" --scope "$TF_SA_ID"
+#
+#   4. Record APP_ID into the GH repo secret AZURE_CLIENT_ID.
+#
+# -----------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [litellm_internal_staging]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+      - "cookbook/**"
+      - "tests/**"
+  workflow_dispatch:
+    inputs:
+      no_cache:
+        description: "Pass --no-cache to docker build (slower, but bypasses BuildKit layer cache)"
+        required: false
+        default: "false"
+        type: boolean
+
+# id-token: write   → required by azure/login OIDC and cosign keyless signing
+# attestations: write → required by actions/attest-build-provenance
+# contents: read    → required to checkout this repo (and the infras repo via PAT)
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  actions: read
+
+env:
+  ACR: raywardllmprodacr.azurecr.io
+  IMAGE_NAME: litellm
+
+jobs:
+  build-and-sign:
+    name: Build, scan, sign, attest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+      image_ref_by_digest: ${{ steps.push.outputs.image_ref_by_digest }}
+      image_tag_sha: ${{ steps.tags.outputs.image_tag_sha }}
+
+    steps:
+      - name: Checkout litellm
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Azure login (OIDC, federated credential)
+        # Federated credential subject MUST be:
+        #   repo:<OWNER>/<REPO>:ref:refs/heads/litellm_internal_staging
+        # Adjust the federated credential in AAD if you also dispatch this from
+        # other branches.
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login
+        run: |
+          echo "Logging in to ACR ${ACR}"
+          az acr login --name "${ACR%%.*}"
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          IMAGE_TAG_SHA="${GITHUB_SHA}-prod"
+          echo "image_tag_sha=${IMAGE_TAG_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_ref_sha=${ACR}/${IMAGE_NAME}:${IMAGE_TAG_SHA}" >> "$GITHUB_OUTPUT"
+          echo "image_ref_latest=${ACR}/${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
+          echo "Will tag: ${ACR}/${IMAGE_NAME}:${IMAGE_TAG_SHA} and :latest"
+
+      - name: Build and push image (linux/amd64)
+        id: push
+        env:
+          IMAGE_REF_SHA:    ${{ steps.tags.outputs.image_ref_sha }}
+          IMAGE_REF_LATEST: ${{ steps.tags.outputs.image_ref_latest }}
+          NO_CACHE: ${{ inputs.no_cache }}
+        run: |
+          echo "Building and pushing ${IMAGE_REF_SHA} + :latest"
+          NO_CACHE_FLAG=""
+          if [[ "${NO_CACHE}" == "true" ]]; then
+            NO_CACHE_FLAG="--no-cache"
+          fi
+
+          # Single buildx invocation: build for linux/amd64 and push both tags.
+          # Buildx produces a manifest digest (sha256:...) we capture below.
+          docker buildx build \
+            --platform linux/amd64 \
+            --file docker/Dockerfile.non_root \
+            --tag "${IMAGE_REF_SHA}" \
+            --tag "${IMAGE_REF_LATEST}" \
+            --provenance=false \
+            --push \
+            ${NO_CACHE_FLAG} \
+            .
+
+          # buildx imagetools inspect prints the manifest digest of the pushed
+          # image. This is the digest we sign and pin in Terraform — NEVER use
+          # the local `docker inspect` digest, which is the local image ID.
+          DIGEST=$(docker buildx imagetools inspect "${IMAGE_REF_SHA}" \
+            --format '{{ .Manifest.Digest }}')
+
+          if [[ -z "${DIGEST}" || "${DIGEST}" != sha256:* ]]; then
+            echo "ERROR: failed to capture manifest digest (got: '${DIGEST}')" >&2
+            exit 1
+          fi
+
+          IMAGE_REF_BY_DIGEST="${ACR}/${IMAGE_NAME}@${DIGEST}"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "image_ref_by_digest=${IMAGE_REF_BY_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Pushed digest: ${DIGEST}"
+          echo "Image-by-digest reference: ${IMAGE_REF_BY_DIGEST}"
+
+      - name: Trivy vulnerability scan (by digest, fail on HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          # Scan the immutable image-by-digest reference, not the mutable :tag —
+          # avoids racing with another concurrent push that retags :latest.
+          image-ref: ${{ steps.push.outputs.image_ref_by_digest }}
+          format: table
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          # Use pinned vuln DB mirrors so a transient ghcr outage doesn't break
+          # builds, and so the scan is reproducible.
+          # (See https://github.com/aquasecurity/trivy/discussions/7989)
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Cosign keyless sign (Sigstore Fulcio + Rekor)
+        env:
+          IMAGE_REF_BY_DIGEST: ${{ steps.push.outputs.image_ref_by_digest }}
+        run: |
+          echo "Signing ${IMAGE_REF_BY_DIGEST}"
+          cosign sign --yes "${IMAGE_REF_BY_DIGEST}"
+
+      - name: SLSA build provenance attestation
+        # NOTE: We use actions/attest-build-provenance rather than
+        # slsa-framework/slsa-github-generator/.github/workflows/generator_container_slsa3.yml
+        # because the latter is a *reusable workflow* that builds and pushes
+        # the image itself (it does not accept a pre-built image-by-digest as
+        # an input). We need our own buildx step (cosign sign + scan in same
+        # job, custom Dockerfile, ACR login). attest-build-provenance produces
+        # a SLSA v1.0 provenance predicate, attaches it to the registry as a
+        # cosign-compatible attestation, and is officially maintained by GitHub.
+        # Trade-off vs. SLSA L3 generator: we lose the isolated-builder L3
+        # property (our build runs in the same job that signs). For an internal
+        # gateway with a small trusted operator set, this is acceptable; revisit
+        # if external auditors require L3.
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.ACR }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Job summary
+        env:
+          IMAGE_REF_BY_DIGEST: ${{ steps.push.outputs.image_ref_by_digest }}
+          IMAGE_TAG_SHA:       ${{ steps.tags.outputs.image_tag_sha }}
+          DIGEST:              ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "## Image built, scanned, signed, attested"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Tag (sha)     | \`${ACR}/${IMAGE_NAME}:${IMAGE_TAG_SHA}\` |"
+            echo "| Tag (latest)  | \`${ACR}/${IMAGE_NAME}:latest\` |"
+            echo "| Digest        | \`${DIGEST}\` |"
+            echo "| By-digest ref | \`${IMAGE_REF_BY_DIGEST}\` |"
+            echo "| Workflow      | \`${{ github.workflow }}\` on \`${{ github.ref_name }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Apply Terraform + run migration
+    needs: build-and-sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    env:
+      DIGEST: ${{ needs.build-and-sign.outputs.digest }}
+
+    steps:
+      - name: Checkout infras repo
+        uses: actions/checkout@v4
+        with:
+          repository: rayward-internal/infras
+          ref: feat/v1-internal-gateway
+          token: ${{ secrets.INFRAS_REPO_TOKEN }}
+          path: infras
+
+      - name: Azure login (OIDC, federated credential)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login (writes docker config used by cosign verify)
+        run: az acr login --name "${ACR%%.*}"
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          # Modules require >= 1.10 (per modules/*/versions.tf). Match local.
+          terraform_version: 1.14.9
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Deploy steps inlined from the previous deploy.sh — keeps /infras as
+      # pure terraform-as-code. Order matters: migration runs BEFORE the
+      # Container App revision swap.
+
+      - name: Validate digest format
+        run: |
+          set -euo pipefail
+          if ! [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "ERROR: digest must match ^sha256:[0-9a-f]{64}\$ (got: '${DIGEST}')" >&2
+            exit 2
+          fi
+          echo "digest OK: ${DIGEST}"
+
+      - name: Cosign verify image signature
+        env:
+          IMAGE_REF: ${{ env.ACR }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-sign.outputs.digest }}
+        run: |
+          set -euo pipefail
+          # Cert identity = this workflow file on any ref. Tighten the regex
+          # if you want stricter scoping (e.g. only litellm_internal_staging).
+          CERT_IDENTITY_REGEXP="^https://github\.com/${{ github.repository }}/.github/workflows/internal-deploy\.yml@.*$"
+          cosign verify \
+            --certificate-identity-regexp "${CERT_IDENTITY_REGEXP}" \
+            --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+            "${IMAGE_REF}" >/dev/null
+          echo "cosign verify OK"
+
+      - name: Run migration job (with --image override)
+        # Critical ordering: migration runs BEFORE the Container App revision
+        # swap. ACA flips traffic the moment a new revision is healthy, and
+        # new code may rely on the new schema. `--image` overrides for THIS
+        # execution only; the Job spec is updated to the new digest by the
+        # terraform apply that follows.
+        env:
+          IMAGE_REF: ${{ env.ACR }}/${{ env.IMAGE_NAME }}@${{ needs.build-and-sign.outputs.digest }}
+          JOB_NAME: rayward-llm-prod-migrate
+          RG: rayward-llm-prod-rg
+          MIGRATION_TIMEOUT_SECONDS: "600"
+          MIGRATION_POLL_INTERVAL_SECONDS: "5"
+        run: |
+          set -euo pipefail
+          # `az containerapp job start --image` builds a fresh container
+          # template ignoring command/args/env from the Job spec. Passing them
+          # back as CLI flags hits az argparse fights (it interprets
+          # `--schema`, `-c`, etc. as its own flags). YAML overlay sidesteps
+          # that — we build a complete container template in a temp file.
+          OVERLAY=$(mktemp /tmp/job-overlay.XXXXXX.yaml)
+          cat > "${OVERLAY}" <<EOF
+          containers:
+            - name: migrate
+              image: ${IMAGE_REF}
+              command:
+                - /app/.venv/bin/prisma
+              args:
+                - migrate
+                - deploy
+                - --schema
+                - /app/litellm-proxy-extras/litellm_proxy_extras/schema.prisma
+              env:
+                - name: DATABASE_URL
+                  secretRef: direct-database-url
+              resources:
+                cpu: 0.5
+                memory: 1Gi
+          EOF
+          echo "--- overlay ---"
+          cat "${OVERLAY}"
+          echo "--- /overlay ---"
+          EXECUTION_NAME=$(az containerapp job start \
+            --name "${JOB_NAME}" \
+            --resource-group "${RG}" \
+            --yaml "${OVERLAY}" \
+            --query name -o tsv)
+          rm -f "${OVERLAY}"
+          if [[ -z "${EXECUTION_NAME}" || "${EXECUTION_NAME}" == "None" ]]; then
+            echo "ERROR: failed to start job (no execution name)" >&2
+            exit 1
+          fi
+          echo "execution: ${EXECUTION_NAME}"
+
+          ELAPSED=0
+          STATUS="Unknown"
+          while (( ELAPSED < MIGRATION_TIMEOUT_SECONDS )); do
+            STATUS=$(az containerapp job execution show \
+              --name "${JOB_NAME}" \
+              --resource-group "${RG}" \
+              --job-execution-name "${EXECUTION_NAME}" \
+              --query properties.status -o tsv 2>/dev/null || echo "Unknown")
+            case "${STATUS}" in
+              Succeeded)
+                echo "migration Succeeded after ${ELAPSED}s"
+                break
+                ;;
+              Failed|Stopped|Degraded|Cancelled)
+                echo "ERROR: migration ended in non-success state: ${STATUS}" >&2
+                exit 1
+                ;;
+              *)
+                echo "status=${STATUS} (waiting; ${ELAPSED}s/${MIGRATION_TIMEOUT_SECONDS}s)"
+                ;;
+            esac
+            sleep "${MIGRATION_POLL_INTERVAL_SECONDS}"
+            ELAPSED=$(( ELAPSED + MIGRATION_POLL_INTERVAL_SECONDS ))
+          done
+          if [[ "${STATUS}" != "Succeeded" ]]; then
+            echo "ERROR: migration timed out after ${MIGRATION_TIMEOUT_SECONDS}s (last: ${STATUS})" >&2
+            exit 1
+          fi
+
+      - name: Terraform plan + apply
+        # Passes image_digest + name_prefix via -var. terraform.tfvars is
+        # gitignored on the infras repo and not present in this checkout.
+        working-directory: infras/azure/envs/prod
+        run: |
+          set -euo pipefail
+          terraform init -input=false -upgrade=false
+          terraform plan -input=false -out=tfplan \
+            -var "image_digest=${DIGEST}" \
+            -var "name_prefix=rayward-llm-prod"
+          terraform apply -input=false -auto-approve tfplan
+
+      - name: Verify active revision
+        env:
+          APP_NAME: rayward-llm-prod-app
+          RG: rayward-llm-prod-rg
+        run: |
+          set -euo pipefail
+          ACTIVE_IMAGE=$(az containerapp revision list \
+            --name "${APP_NAME}" \
+            --resource-group "${RG}" \
+            --query "[?properties.active==\`true\`].properties.template.containers[0].image" \
+            -o tsv)
+          if [[ -z "${ACTIVE_IMAGE}" ]]; then
+            echo "ERROR: no active revision found on ${APP_NAME}" >&2
+            exit 1
+          fi
+          echo "active image(s): ${ACTIVE_IMAGE}"
+          if ! grep -Fq "${DIGEST}" <<< "${ACTIVE_IMAGE}"; then
+            echo "ERROR: active revision does not reference ${DIGEST}" >&2
+            echo "got: ${ACTIVE_IMAGE}" >&2
+            exit 1
+          fi
+          echo "active revision pinned to ${DIGEST} — deploy verified"
+
+      - name: Job summary
+        if: always()
+        env:
+          DIGEST: ${{ needs.build-and-sign.outputs.digest }}
+        run: |
+          {
+            echo "## Deploy result"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Digest deployed | \`${DIGEST}\` |"
+            echo "| Status          | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

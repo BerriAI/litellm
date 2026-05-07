@@ -1,231 +1,89 @@
+# Rayward internal LLM gateway — v1 prod config.
+#
+# This file is the actual deployment config baked into the image. Secrets come
+# from env vars (resolved at runtime from Azure Key Vault via Container Apps).
+#
+# Auth model:
+#   - Azure OpenAI:  Managed Identity → Entra short-lived tokens.
+#                    Enabled by `enable_azure_ad_token_refresh: true` below;
+#                    each Azure model omits api_key so DefaultAzureCredential
+#                    is used. The Container App's system-assigned MI must hold
+#                    "Cognitive Services OpenAI User" on the AOAI account.
+#   - Bedrock (v1.1c) and Vertex (v1.1d): added later via WIF + MI-token-bridge.
+#                    Their model_list entries also omit api_key.
+
 model_list:
-  - model_name: gpt-3.5-turbo-end-user-test
+  - model_name: gpt-5.5
     litellm_params:
-      model: gpt-3.5-turbo
-      region_name: "eu"
-    model_info:
-      id: "1"
-  - model_name: gpt-3.5-turbo-end-user-test
-    litellm_params:
-      model: openai/gpt-4.1-mini
-      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: openai/gpt-4.1-mini
-      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
-  - model_name: gpt-3.5-turbo-large
-    litellm_params: 
-      model: "gpt-3.5-turbo-1106"
-      api_key: os.environ/OPENAI_API_KEY
-      rpm: 480
-      timeout: 300
-      stream_timeout: 60
-  - model_name: gpt-4
-    litellm_params:
-      model: openai/gpt-4.1-mini
-      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
-      rpm: 480
-      timeout: 300
-      stream_timeout: 60
-  - model_name: sagemaker-completion-model
-    litellm_params:
-      model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
-      input_cost_per_second: 0.000420  
-  - model_name: text-embedding-ada-002
-    litellm_params: 
-      model: openai/text-embedding-ada-002
-      api_key: os.environ/OPENAI_API_KEY
-    model_info:
-      mode: embedding
-      base_model: text-embedding-ada-002
-  - model_name: dall-e-2 # some tests use dall-e-2 which is now deprecated, alias to dall-e-3
-    litellm_params:
-      model: openai/dall-e-3
-  - model_name: openai-dall-e-3
-    litellm_params:
-      model: dall-e-3
-  - model_name: fake-openai-endpoint
-    litellm_params:
-      model: openai/gpt-3.5-turbo
-      api_key: fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-  - model_name: fake-openai-endpoint-2
-    litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      stream_timeout: 0.001
-      rpm: 1
-  - model_name: fake-openai-endpoint-3
-    litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      stream_timeout: 0.001
-      rpm: 1000
-  - model_name: fake-openai-endpoint-4
-    litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      num_retries: 50
-  - model_name: fake-openai-endpoint-3
-    litellm_params:
-      model: openai/my-fake-model-2
-      api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      stream_timeout: 0.001
-      rpm: 1000
-  - model_name: bad-model
-    litellm_params:
-      model: openai/bad-model
-      api_key: os.environ/OPENAI_API_KEY
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      mock_timeout: True
-      timeout: 60
-      rpm: 1000
-    model_info:
-      health_check_timeout: 1
-  - model_name: good-model
-    litellm_params:
-      model: openai/bad-model
-      api_key: os.environ/OPENAI_API_KEY
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      rpm: 1000
-    model_info:
-      health_check_timeout: 1
-  - model_name: "*"
-    litellm_params:
-      model: openai/*
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: realtime-v1
-    litellm_params:
-      model: azure/gpt-realtime-20250828-standard
-      api_version: "2025-08-28"
-      realtime_protocol: GA # Possible values: "GA"/ "v1", "beta" 
+      model: azure/gpt-5.5
+      api_base: os.environ/AZURE_OPENAI_ENDPOINT
+      api_version: os.environ/AZURE_OPENAI_API_VERSION
+      # NO api_key — DefaultAzureCredential via MI
 
-  - model_name: realtime-beta
+  - model_name: gpt-5.4
     litellm_params:
-      model: azure/gpt-realtime-20250828-standard
-      api_version: 2025-04-01-preview
+      model: azure/gpt-5.4
+      api_base: os.environ/AZURE_OPENAI_ENDPOINT
+      api_version: os.environ/AZURE_OPENAI_API_VERSION
 
+  - model_name: gpt-5.3-codex
+    litellm_params:
+      model: azure/gpt-5.3-codex
+      api_base: os.environ/AZURE_OPENAI_ENDPOINT
+      api_version: os.environ/AZURE_OPENAI_API_VERSION
 
-  # provider specific wildcard routing
-  - model_name: "anthropic/*"
+  - model_name: text-embedding-3-large
     litellm_params:
-      model: "anthropic/*"
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: "bedrock/*"
-    litellm_params:
-      model: "bedrock/*"
-  - model_name: "groq/*"
-    litellm_params:
-      model: "groq/*"
-      api_key: os.environ/GROQ_API_KEY
-  - model_name: mistral-embed
-    litellm_params:
-      model: mistral/mistral-embed
-  - model_name: gpt-instruct # [PROD TEST] - tests if `/health` automatically infers this to be a text completion model
-    litellm_params:
-      model: text-completion-openai/gpt-3.5-turbo-instruct
-  - model_name: fake-openai-endpoint-5
-    litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.app/
-      timeout: 1
-  - model_name: badly-configured-openai-endpoint
-    litellm_params:
-      model: openai/my-fake-model
-      api_key: my-fake-key
-      api_base: https://exampleopenaiendpoint-production.up.railway.appxxxx/
-  - model_name: gemini-1.5-flash
-    litellm_params:
-      model: gemini/gemini-1.5-flash
-      api_key: os.environ/GOOGLE_API_KEY
-  - model_name: gpt-4o
-    litellm_params:
-      model: gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
+      model: azure/text-embedding-3-large
+      api_base: os.environ/AZURE_OPENAI_ENDPOINT
+      api_version: os.environ/AZURE_OPENAI_API_VERSION
 
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: azure/text-embedding-3-small
+      api_base: os.environ/AZURE_OPENAI_ENDPOINT
+      api_version: os.environ/AZURE_OPENAI_API_VERSION
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  salt_key: os.environ/LITELLM_SALT_KEY
+
+  # Postgres pool (Supabase Transaction pooler, port 6543).
+  # Direct (Session pooler 5432) is exposed via DIRECT_DATABASE_URL for the
+  # Prisma migrate Container Apps Job; it's NOT used for runtime traffic.
+  database_url: os.environ/DATABASE_URL
+
+  # Provider creds + model_list live in this YAML, NOT the DB. Mercor-era
+  # supply-chain hardening: keep the DB schema slim so leaking the DB password
+  # doesn't leak provider creds.
+  store_model_in_db: false
 
 litellm_settings:
-  # set_verbose: True  # Uncomment this if you want to see verbose logs; not recommended in production
-  drop_params: True
-  success_callback: ["prometheus"]
-  # max_budget: 100 
-  # budget_duration: 30d
-  num_retries: 5
-  request_timeout: 600
-  telemetry: False
-  context_window_fallbacks: [{"gpt-3.5-turbo": ["gpt-3.5-turbo-large"]}]
-  default_team_settings: 
-    - team_id: team-1
-      success_callback: ["langfuse"]
-      failure_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PROJECT1_PUBLIC # Project 1
-      langfuse_secret: os.environ/LANGFUSE_PROJECT1_SECRET # Project 1
-    - team_id: team-2
-      success_callback: ["langfuse"]
-      failure_callback: ["langfuse"]
-      langfuse_public_key: os.environ/LANGFUSE_PROJECT2_PUBLIC # Project 2
-      langfuse_secret: os.environ/LANGFUSE_PROJECT2_SECRET # Project 2
-      langfuse_host: https://us.cloud.langfuse.com
-  # cache: true   # [OPTIONAL] use for caching responses 
-  # enable_caching_on_provider_specific_optional_params: True  # Include provider-specific params in cache keys
-  # cache_params:  # And for shared health check
-  #   type: redis
-  #   host: localhost
-  #   port: 6379
+  drop_params: true                  # silently drop unsupported params per provider
+  telemetry: false                   # no usage telemetry to BerriAI
+  turn_off_message_logging: true     # don't log prompt/response bodies in spend logs
 
-# For /fine_tuning/jobs endpoints
-finetune_settings:
-  - custom_llm_provider: azure
-    api_base: os.environ/AZURE_API_BASE
-    api_key: os.environ/AZURE_API_KEY
-    api_version: "2023-03-15-preview"
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
+  # Use Managed Identity / DefaultAzureCredential for ALL azure/* models that
+  # don't carry an explicit api_key. Refreshes tokens automatically before expiry.
+  enable_azure_ad_token_refresh: true
 
-# for /files endpoints
-files_settings:
-  - custom_llm_provider: azure
-    api_base: os.environ/AZURE_API_BASE
-    api_key: os.environ/AZURE_API_KEY
-    api_version: "2023-03-15-preview"
-  - custom_llm_provider: openai
-    api_key: os.environ/OPENAI_API_KEY
+  # Prometheus metrics for the Grafana dashboard (scraped via the Cloudflare
+  # Access service-token policy on /metrics).
+  callbacks: ["prometheus"]
+
+  # Langfuse is OPT-IN per-request via header (see implementation plan Task 11
+  # Step 4). Default success_callback list intentionally empty.
+  # IMPLEMENTATION TODO: at Container App boot, verify whether the pinned
+  # litellm version supports header-driven callback gating; if not, write a
+  # small custom hook that consults `x-litellm-trace: langfuse` before invoking
+  # the langfuse callback. Langfuse keys (LANGFUSE_PUBLIC_KEY/SECRET_KEY/HOST)
+  # are wired in via env vars but unused until the gating is verified.
+  success_callback: []
 
 router_settings:
-  routing_strategy: usage-based-routing-v2 
-  redis_host: os.environ/REDIS_HOST
-  redis_password: os.environ/REDIS_PASSWORD
-  redis_port: os.environ/REDIS_PORT
-  enable_pre_call_checks: true
-  model_group_alias: {"my-special-fake-model-alias-name": "fake-openai-endpoint-3"} 
-
-general_settings: 
-  master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
-  store_model_in_db: True
-  proxy_budget_rescheduler_min_time: 60
-  proxy_budget_rescheduler_max_time: 64
-  proxy_batch_write_at: 1
-  database_connection_pool_limit: 10
-  # background_health_checks: true
-  # use_shared_health_check: true
-  # health_check_interval: 30
-  # database_url: "postgresql://<user>:<password>@<host>:<port>/<dbname>" # [OPTIONAL] use for token-based auth to proxy
-
-  pass_through_endpoints:
-    - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
-      target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
-      headers:                                            # headers to forward to this URL
-        content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
-        accept: application/json
-      forward_headers: True
-
-# environment_variables:
-  # settings for using redis caching
-  # REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
-  # REDIS_PORT: "16337"
-  # REDIS_PASSWORD: 
+  # Round-robin within model groups if/when we add fallbacks. With one
+  # deployment per model_name we get deterministic routing.
+  routing_strategy: "simple-shuffle"
+  # Retry on 429s and transient 5xx for chat-style models.
+  num_retries: 2
+  timeout: 60

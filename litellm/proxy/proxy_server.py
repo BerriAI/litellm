@@ -1577,6 +1577,17 @@ app.add_middleware(
 app.add_middleware(PrometheusAuthMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 
+# CF-INJECTED-ORIGIN-SECRET-MIDDLEWARE — Rayward v1 internal-gateway control.
+# Rejects any request missing the Cloudflare Transform Rule's secret header,
+# unless CF_ORIGIN_SECRET env var is unset (then the middleware aborts startup,
+# refusing to silently allow all traffic).
+if os.environ.get("CF_ORIGIN_SECRET"):
+    from litellm.proxy.middleware.cf_origin_secret import (
+        CloudflareOriginSecretMiddleware,
+    )
+
+    app.add_middleware(CloudflareOriginSecretMiddleware)
+
 
 def mount_swagger_ui():
     swagger_directory = os.path.join(current_dir, "swagger")

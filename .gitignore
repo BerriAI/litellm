@@ -3,6 +3,7 @@
 .venv_policy_test
 .env
 .claude
+.superpowers/
 .newenv
 newenv/*
 litellm/proxy/myenv/*

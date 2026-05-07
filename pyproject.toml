@@ -100,6 +100,11 @@ proxy-runtime = [
     "opentelemetry-api==1.28.0",
     "opentelemetry-sdk==1.28.0",
     "opentelemetry-exporter-otlp==1.28.0",
+    # Azure Monitor OTEL distro — auto-instruments traces/metrics/logs and
+    # ships them to Application Insights via APPLICATIONINSIGHTS_CONNECTION_STRING.
+    # Activated by wrapping the litellm CLI with `opentelemetry-instrument`
+    # in docker/prod_entrypoint.sh.
+    "azure-monitor-opentelemetry==1.6.10",
     "ddtrace==2.19.0",
     "sentry-sdk==2.21.0",
     "mangum==0.17.0",
