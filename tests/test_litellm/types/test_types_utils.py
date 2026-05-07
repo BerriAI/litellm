@@ -45,6 +45,7 @@ def test_usage_dump():
     from litellm.types.utils import (
         CompletionTokensDetailsWrapper,
         PromptTokensDetailsWrapper,
+        ServerToolUse,
         Usage,
     )
 
@@ -73,6 +74,16 @@ def test_usage_dump():
 
     new_usage = Usage(**current_usage.model_dump())
     assert new_usage.prompt_tokens_details.web_search_requests == 1
+
+    server_tool_usage = Usage(
+        completion_tokens=10,
+        prompt_tokens=5,
+        total_tokens=15,
+        server_tool_use=ServerToolUse(web_search_requests=2),
+    )
+    new_server_tool_usage = Usage(**server_tool_usage.model_dump())
+    assert isinstance(new_server_tool_usage.server_tool_use, ServerToolUse)
+    assert new_server_tool_usage.server_tool_use.web_search_requests == 2
 
 
 def test_usage_completion_tokens_details_text_tokens():

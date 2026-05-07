@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm import stream_chunk_builder
+from litellm import completion_cost, stream_chunk_builder
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
@@ -520,7 +520,66 @@ def test_stream_chunk_builder_anthropic_web_search():
     assert usage.prompt_tokens == 50
     assert usage.completion_tokens == 27
     assert usage.total_tokens == 77
-    assert usage.server_tool_use["web_search_requests"] == 2
+    assert usage.server_tool_use.web_search_requests == 2
+
+
+def test_stream_chunk_builder_anthropic_web_search_cost_calculation():
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-mocked-usage-1",
+        created=1745513206,
+        model="claude-sonnet-4-5-20250929",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="", role="assistant"),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=0,
+            prompt_tokens=50,
+            total_tokens=50,
+            completion_tokens_details=None,
+            server_tool_use=ServerToolUse(web_search_requests=2),
+            prompt_tokens_details=None,
+        ),
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-mocked-usage-1",
+        created=1745513207,
+        model="claude-sonnet-4-5-20250929",
+        object="chat.completion.chunk",
+        system_fingerprint=None,
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="done", role=None),
+                logprobs=None,
+            )
+        ],
+        provider_specific_fields=None,
+        stream_options={"include_usage": True},
+        usage=Usage(
+            completion_tokens=27,
+            prompt_tokens=0,
+            total_tokens=27,
+            completion_tokens_details=None,
+            prompt_tokens_details=None,
+        ),
+    )
+
+    response = stream_chunk_builder(chunks=[chunk1, chunk2])
+
+    assert response is not None
+    assert isinstance(response.usage.server_tool_use, ServerToolUse)
+    assert completion_cost(completion_response=response) > 0
 
 
 def test_sort_chunks_handles_dict_hidden_params_created_at():
