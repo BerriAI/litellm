@@ -14,6 +14,7 @@ class TestLangfuseOtelIntegration:
         """Test that config is created correctly with required environment variables."""
         # Clean environment of any Langfuse-related variables
         env_vars_to_clean = [
+            "LANGFUSE_BASE_URL",
             "LANGFUSE_HOST",
             "OTEL_EXPORTER_OTLP_ENDPOINT",
             "OTEL_EXPORTER_OTLP_HEADERS",
@@ -78,6 +79,21 @@ class TestLangfuseOtelIntegration:
             config = LangfuseOtelLogger.get_langfuse_otel_config()
             # Endpoint assertion removed as side effect is gone
             assert isinstance(config, OpenTelemetryConfig)
+
+    def test_get_langfuse_otel_config_with_base_url(self):
+        """Test config with LANGFUSE_BASE_URL."""
+        with patch.dict(
+            os.environ,
+            {
+                "LANGFUSE_PUBLIC_KEY": "test_public_key",
+                "LANGFUSE_SECRET_KEY": "test_secret_key",
+                "LANGFUSE_BASE_URL": "https://base-url.langfuse.com",
+            },
+            clear=False,
+        ):
+            config = LangfuseOtelLogger.get_langfuse_otel_config()
+            assert isinstance(config, OpenTelemetryConfig)
+            assert config.endpoint == "https://base-url.langfuse.com/api/public/otel"
 
     def test_get_langfuse_otel_config_with_host_no_protocol(self):
         """Test config with custom host without protocol."""
@@ -393,12 +409,13 @@ class TestLangfuseOtelIntegration:
         assert result == {}
 
     def test_get_langfuse_otel_config_with_otel_host_priority(self):
-        """LANGFUSE_OTEL_HOST should take priority over LANGFUSE_HOST."""
+        """LANGFUSE_OTEL_HOST should take priority over LANGFUSE_BASE_URL and LANGFUSE_HOST."""
         with patch.dict(
             os.environ,
             {
                 "LANGFUSE_PUBLIC_KEY": "test_public_key",
                 "LANGFUSE_SECRET_KEY": "test_secret_key",
+                "LANGFUSE_BASE_URL": "https://base-url.langfuse.com",
                 "LANGFUSE_HOST": "https://should-not-be-used.com",
                 "LANGFUSE_OTEL_HOST": "https://otel-host.com",
             },
@@ -406,7 +423,23 @@ class TestLangfuseOtelIntegration:
         ):
             config = LangfuseOtelLogger.get_langfuse_otel_config()
             assert isinstance(config, OpenTelemetryConfig)
-            # Endpoint assertion removed as side effect is gone
+            assert config.endpoint == "https://otel-host.com/api/public/otel"
+
+    def test_get_langfuse_otel_config_with_base_url_priority_over_host(self):
+        """LANGFUSE_BASE_URL should take priority over deprecated LANGFUSE_HOST."""
+        with patch.dict(
+            os.environ,
+            {
+                "LANGFUSE_PUBLIC_KEY": "test_public_key",
+                "LANGFUSE_SECRET_KEY": "test_secret_key",
+                "LANGFUSE_BASE_URL": "https://base-url.langfuse.com",
+                "LANGFUSE_HOST": "https://deprecated-host.langfuse.com",
+            },
+            clear=False,
+        ):
+            config = LangfuseOtelLogger.get_langfuse_otel_config()
+            assert isinstance(config, OpenTelemetryConfig)
+            assert config.endpoint == "https://base-url.langfuse.com/api/public/otel"
 
 
 class TestLangfuseOtelResponsesAPI:

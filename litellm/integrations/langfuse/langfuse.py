@@ -106,8 +106,10 @@ def resolve_langfuse_credentials(
         )
         public_key = langfuse_public_key or os.getenv("LANGFUSE_PUBLIC_KEY")
 
-    resolved_host = langfuse_host or os.getenv(
-        "LANGFUSE_HOST", "https://cloud.langfuse.com"
+    resolved_host = (
+        langfuse_host
+        or os.getenv("LANGFUSE_BASE_URL")
+        or os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
     )
 
     return public_key, secret_key, resolved_host

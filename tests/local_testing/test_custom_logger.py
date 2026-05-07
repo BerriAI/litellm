@@ -108,6 +108,7 @@ def test_get_callback_env_vars():
     assert env_vars == [
         "LANGFUSE_PUBLIC_KEY",
         "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_BASE_URL",
         "LANGFUSE_HOST",
     ]
 

@@ -10,13 +10,33 @@ import pytest
 
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
-from litellm.integrations.langfuse.langfuse import LangFuseLogger
+from litellm.integrations.langfuse.langfuse import (
+    LangFuseLogger,
+    resolve_langfuse_credentials,
+)
 
 sys.path.insert(0, os.path.abspath("../.."))
-from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
+
+
+def test_resolve_langfuse_credentials_prefers_base_url_over_host():
+    with patch.dict(
+        os.environ,
+        {
+            "LANGFUSE_PUBLIC_KEY": "test-public-key",
+            "LANGFUSE_SECRET_KEY": "test-secret-key",
+            "LANGFUSE_BASE_URL": "https://base-url.langfuse.com",
+            "LANGFUSE_HOST": "https://deprecated-host.langfuse.com",
+        },
+        clear=False,
+    ):
+        public_key, secret_key, host = resolve_langfuse_credentials()
+
+        assert public_key == "test-public-key"
+        assert secret_key == "test-secret-key"
+        assert host == "https://base-url.langfuse.com"
 
 
 class TestLangfuseUsageDetails(unittest.TestCase):

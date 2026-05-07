@@ -260,9 +260,14 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         Returned in the following order of precedence:
         1. LANGFUSE_OTEL_HOST
-        2. LANGFUSE_HOST
+        2. LANGFUSE_BASE_URL
+        3. LANGFUSE_HOST
         """
-        return os.environ.get("LANGFUSE_OTEL_HOST") or os.environ.get("LANGFUSE_HOST")
+        return (
+            os.environ.get("LANGFUSE_OTEL_HOST")
+            or os.environ.get("LANGFUSE_BASE_URL")
+            or os.environ.get("LANGFUSE_HOST")
+        )
 
     def _create_open_telemetry_config_from_langfuse_env(self) -> OpenTelemetryConfig:
         """
@@ -311,7 +316,9 @@ class LangfuseOtelLogger(OpenTelemetry):
         Environment Variables:
             LANGFUSE_PUBLIC_KEY: Required. Langfuse public key for authentication.
             LANGFUSE_SECRET_KEY: Required. Langfuse secret key for authentication.
-            LANGFUSE_HOST: Optional. Custom Langfuse host URL. Defaults to US cloud.
+            LANGFUSE_OTEL_HOST: Optional. Custom Langfuse OTEL host URL.
+            LANGFUSE_BASE_URL: Optional. Custom Langfuse base URL.
+            LANGFUSE_HOST: Optional. Deprecated custom Langfuse host URL. Defaults to US cloud.
 
         Returns:
             OpenTelemetryConfig: A Pydantic model containing Langfuse OTEL configuration.
