@@ -1,4 +1,5 @@
 import logging
+import sys
 
 import pytest
 from prometheus_client import REGISTRY
@@ -123,3 +124,36 @@ def test_virtual_key_rate_limit_metrics_accept_custom_metadata_labels(
         and sample.value == 3
         for sample in samples
     )
+
+
+def test_virtual_key_rate_limit_metrics_preserve_zero_remaining_values(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    prometheus_logger = _create_prometheus_logger_with_custom_labels(monkeypatch)
+    metadata = {
+        "model_group": "gpt-4o-mini",
+        "litellm-key-remaining-requests-gpt-4o-mini": 0,
+        "litellm-key-remaining-tokens-gpt-4o-mini": 0,
+    }
+    kwargs = {
+        "litellm_params": {
+            "metadata": metadata,
+        },
+        "standard_logging_object": _standard_logging_payload_with_requester_metadata(),
+    }
+
+    prometheus_logger._set_virtual_key_rate_limit_metrics(
+        user_api_key="test-hash",
+        user_api_key_alias="test-alias",
+        kwargs=kwargs,
+        metadata=metadata,
+        model_id="model-123",
+    )
+
+    request_samples = _metric_samples("litellm_remaining_api_key_requests_for_model")
+    token_samples = _metric_samples("litellm_remaining_api_key_tokens_for_model")
+
+    assert any(sample.value == 0 for sample in request_samples)
+    assert any(sample.value == 0 for sample in token_samples)
+    assert not any(sample.value == sys.maxsize for sample in request_samples)
+    assert not any(sample.value == sys.maxsize for sample in token_samples)
