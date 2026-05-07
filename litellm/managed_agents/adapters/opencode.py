@@ -272,6 +272,36 @@ class OpencodeAdapter:
                 e,
             )
 
+    async def abort(
+        self,
+        sandbox_url: str,
+        opencode_session_id: str,
+    ) -> None:
+        """POST <sandbox_url>/session/<oc_sid>/abort. Best-effort.
+
+        Aborts the in-flight turn for a session. Connection failures bubble
+        up as ``SandboxUnreachableError`` so the handler can return 504.
+        Non-2xx responses from opencode (404 if the session is already
+        terminated, 4xx if there's no in-flight turn) are swallowed —
+        aborting an idle session is not a meaningful error.
+        """
+        url = self._url(sandbox_url, f"/session/{opencode_session_id}/abort")
+        try:
+            async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+                response = await client.post(url, json={})
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            raise SandboxUnreachableError(
+                f"opencode unreachable at {sandbox_url}: {e}"
+            ) from e
+
+        if response.status_code not in (200, 202, 204):
+            verbose_logger.debug(
+                "opencode abort returned %d for %s/%s (best-effort, ignored)",
+                response.status_code,
+                sandbox_url,
+                opencode_session_id,
+            )
+
     # -----------------------------------------------------------------------
     # Internal helpers
     # -----------------------------------------------------------------------
