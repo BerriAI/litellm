@@ -267,7 +267,7 @@ jobs:
       - name: Checkout infras repo
         uses: actions/checkout@v4
         with:
-          repository: rayward-internal/infras
+          repository: rayward-internal/llm-gateway-infra
           ref: feat/v1-internal-gateway
           token: ${{ secrets.INFRAS_REPO_TOKEN }}
           path: infras
