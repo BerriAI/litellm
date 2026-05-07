@@ -5,7 +5,7 @@
 # `LiteLLM_AgentVMConfig`, populated via Settings UI (Epic G).
 #
 # See:
-#   litellm/proxy/agent_session_endpoints/vm_providers/ec2.py
+#   litellm/managed_agents/vms/ec2.py
 #   infra/ami/README.md  (how to build the AMI)
 
 model_list:
