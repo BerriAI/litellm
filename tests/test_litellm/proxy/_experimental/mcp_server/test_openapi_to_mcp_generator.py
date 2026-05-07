@@ -17,6 +17,8 @@ import pytest
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
     _resolve_param_list,
     _resolve_ref,
+    _request_auth_header,
+    _request_extra_headers,
     build_input_schema,
     create_tool_function,
     extract_parameters,
@@ -76,6 +78,67 @@ class TestCreateToolFunction:
             assert "repository-id" in str(call_args[0][0]) or "test-repo" in str(
                 call_args[0][0]
             )
+
+    @pytest.mark.asyncio
+    async def test_request_extra_headers_are_forwarded(self):
+        """OpenAPI tools should merge per-request header passthrough."""
+        operation = {}
+        func = create_tool_function(
+            path="/protected",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Static": "static"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-TOKEN": "request-token"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            assert call_args.kwargs["headers"] == {
+                "X-Static": "static",
+                "X-TOKEN": "request-token",
+            }
+
+    @pytest.mark.asyncio
+    async def test_auth_context_overrides_request_extra_authorization_header(self):
+        """BYOK auth must keep highest precedence over generic request headers."""
+        operation = {}
+        func = create_tool_function(
+            path="/protected",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            extra_token = _request_extra_headers.set(
+                {"Authorization": "Bearer request-token", "X-TOKEN": "request-token"}
+            )
+            auth_token = _request_auth_header.set("Bearer byok-token")
+            try:
+                result = await func()
+            finally:
+                _request_auth_header.reset(auth_token)
+                _request_extra_headers.reset(extra_token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            assert call_args.kwargs["headers"] == {
+                "Authorization": "Bearer byok-token",
+                "X-TOKEN": "request-token",
+            }
 
     @pytest.mark.asyncio
     async def test_leading_digit_parameter(self):

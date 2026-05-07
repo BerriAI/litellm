@@ -320,3 +320,46 @@ def merge_mcp_headers(
         merged.update({str(k): str(v) for k, v in static_headers.items()})
 
     return merged or None
+
+
+def build_mcp_runtime_extra_headers(
+    *,
+    server: Any,
+    oauth2_headers: Optional[Mapping[str, str]] = None,
+    raw_headers: Optional[Mapping[Any, str]] = None,
+    hook_extra_headers: Optional[Mapping[str, str]] = None,
+    include_static_headers: bool = False,
+) -> Optional[Dict[str, str]]:
+    """Build per-request outbound headers for MCP and OpenAPI MCP calls."""
+    extra_headers: Dict[str, str] = {}
+
+    if oauth2_headers:
+        extra_headers.update({str(k): str(v) for k, v in oauth2_headers.items()})
+
+    configured_headers = getattr(server, "extra_headers", None)
+    if configured_headers and raw_headers:
+        normalized_raw_headers = {
+            str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
+        }
+        for header in configured_headers:
+            if not isinstance(header, str):
+                continue
+            if (
+                getattr(server, "has_client_credentials", False)
+                and header.lower() == "authorization"
+            ):
+                continue
+            header_value = normalized_raw_headers.get(header.lower())
+            if header_value is None:
+                continue
+            extra_headers[header] = str(header_value)
+
+    if include_static_headers:
+        static_headers = getattr(server, "static_headers", None)
+        if static_headers:
+            extra_headers.update({str(k): str(v) for k, v in static_headers.items()})
+
+    if hook_extra_headers:
+        extra_headers.update({str(k): str(v) for k, v in hook_extra_headers.items()})
+
+    return extra_headers or None
