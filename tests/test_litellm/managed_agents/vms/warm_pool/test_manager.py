@@ -1,4 +1,4 @@
-"""Unit tests for `litellm/proxy/agent_session_endpoints/warm_pool/manager.py`.
+"""Unit tests for `litellm/managed_agents/vms/warm_pool/manager.py`.
 
 Cover the maintenance loop logic without hitting AWS or the database:
 * refill spawns the deficit when fewer warm VMs exist than configured
@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from litellm.proxy.agent_session_endpoints.warm_pool.manager import WarmPoolManager
+from litellm.managed_agents.vms.warm_pool.manager import WarmPoolManager
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +187,7 @@ async def test_refill_spawns_deficit(fake_prisma, manager):
 @pytest.mark.asyncio
 async def test_refill_caps_at_max_concurrent(fake_prisma, manager):
     """Pool size 100, 0 warm -> spawn at most MAX_CONCURRENT_SPAWNS_PER_TEAM."""
-    from litellm.proxy.agent_session_endpoints.warm_pool.manager import (
+    from litellm.managed_agents.vms.warm_pool.manager import (
         MAX_CONCURRENT_SPAWNS_PER_TEAM,
     )
 
