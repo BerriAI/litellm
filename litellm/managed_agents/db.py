@@ -150,6 +150,38 @@ async def list_sessions_for_agent(
     return [_row_to_dict(r) for r in rows]
 
 
+async def list_sessions(
+    prisma_client: PrismaClient,
+    *,
+    created_by: Optional[str],
+    limit: int,
+    skip: int,
+    agent_id: Optional[str] = None,
+    status: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """List ALL sessions for a caller, optionally filtered by agent_id and/or status.
+
+    Same shape as `list_sessions_for_agent` minus the required `agent_id`.
+    Used by `GET /v2/sessions` to power a global session listing for the UI.
+    Newest-first ordering, simple offset-based pagination. Returns a list of
+    plain dicts; the caller maps each to the public response shape (stripping
+    `sandbox_url` / `sandbox_metadata`).
+    """
+    where: Dict[str, Any] = {"created_by": created_by}
+    if agent_id is not None:
+        where["agent_id"] = agent_id
+    if status is not None:
+        where["status"] = status
+
+    rows = await prisma_client.db.litellm_managedagentsession.find_many(
+        where=where,
+        take=limit,
+        skip=skip,
+        order={"created_at": "desc"},
+    )
+    return [_row_to_dict(r) for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Message helpers (placeholder — opencode is the source of truth for v2)
 # ---------------------------------------------------------------------------
