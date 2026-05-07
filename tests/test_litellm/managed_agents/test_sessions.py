@@ -710,3 +710,259 @@ def test_list_sessions_for_agent_db_not_connected_returns_500(monkeypatch):
     assert resp.status_code == 500, resp.text
     detail = resp.json()["detail"]
     assert detail["error"] == CommonProxyErrors.db_not_connected_error.value
+
+
+# ---------------------------------------------------------------------------
+# GET /v2/sessions — global list across all caller's agents
+# ---------------------------------------------------------------------------
+
+
+def test_list_sessions_returns_all_caller_sessions(monkeypatch):
+    """Without filters, GET /v2/sessions returns sessions across every agent
+    the caller owns.
+    """
+    db = _FakeAgentSessionDB()
+    db.agents["agt_a"] = _make_agent_dict(agent_id="agt_a", created_by="user_a")
+    db.agents["agt_b"] = _make_agent_dict(agent_id="agt_b", created_by="user_a")
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    db.sessions["ses_a1"] = _make_session_dict(
+        session_id="ses_a1",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=1),
+    )
+    db.sessions["ses_a2"] = _make_session_dict(
+        session_id="ses_a2",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=2),
+    )
+    db.sessions["ses_b1"] = _make_session_dict(
+        session_id="ses_b1",
+        agent_id="agt_b",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=3),
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/sessions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    returned_ids = {row["id"] for row in body["data"]}
+    assert returned_ids == {"ses_a1", "ses_a2", "ses_b1"}
+
+
+def test_list_sessions_scopes_by_caller(monkeypatch):
+    """Sessions belonging to other callers must NEVER leak into the response."""
+    db = _FakeAgentSessionDB()
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    db.sessions["ses_mine"] = _make_session_dict(
+        session_id="ses_mine",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=1),
+    )
+    db.sessions["ses_other"] = _make_session_dict(
+        session_id="ses_other",
+        agent_id="agt_a",
+        created_by="user_other",
+        created_at=base + timedelta(seconds=2),
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/sessions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    returned_ids = {row["id"] for row in body["data"]}
+    assert returned_ids == {"ses_mine"}
+    assert "ses_other" not in returned_ids
+
+
+def test_list_sessions_filters_by_agent_id(monkeypatch):
+    """`agent_id=` query param narrows results to that agent only."""
+    db = _FakeAgentSessionDB()
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    db.sessions["ses_a1"] = _make_session_dict(
+        session_id="ses_a1",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=1),
+    )
+    db.sessions["ses_b1"] = _make_session_dict(
+        session_id="ses_b1",
+        agent_id="agt_b",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=2),
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/sessions?agent_id=agt_a")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    returned_ids = {row["id"] for row in body["data"]}
+    assert returned_ids == {"ses_a1"}
+
+
+def test_list_sessions_filters_by_status(monkeypatch):
+    """`status=` query param narrows results to that status."""
+    db = _FakeAgentSessionDB()
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    db.sessions["ses_ready"] = _make_session_dict(
+        session_id="ses_ready",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=1),
+        status="ready",
+    )
+    db.sessions["ses_term"] = _make_session_dict(
+        session_id="ses_term",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=base + timedelta(seconds=2),
+        status="terminated",
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/sessions?status=ready")
+    assert resp.status_code == 200, resp.text
+    ids = {r["id"] for r in resp.json()["data"]}
+    assert ids == {"ses_ready"}
+
+
+def test_list_sessions_pagination_walks_pages(monkeypatch):
+    """Seed 4 sessions, page through with limit=2."""
+    db = _FakeAgentSessionDB()
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    for i in range(4):
+        db.sessions[f"ses_{i}"] = _make_session_dict(
+            session_id=f"ses_{i}",
+            agent_id="agt_a",
+            created_by="user_a",
+            created_at=base + timedelta(seconds=i),
+        )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp1 = client.get("/v2/sessions?limit=2")
+    assert resp1.status_code == 200, resp1.text
+    page1 = resp1.json()
+    assert len(page1["data"]) == 2
+    assert page1["has_more"] is True
+    assert page1["next_cursor"] == "2"
+
+    resp2 = client.get(f"/v2/sessions?limit=2&cursor={page1['next_cursor']}")
+    assert resp2.status_code == 200, resp2.text
+    page2 = resp2.json()
+    assert len(page2["data"]) == 2
+    assert page2["has_more"] is False
+    assert page2["next_cursor"] is None
+
+    page1_ids = [r["id"] for r in page1["data"]]
+    page2_ids = [r["id"] for r in page2["data"]]
+    all_seen = set(page1_ids) | set(page2_ids)
+    assert len(all_seen) == 4
+    assert set(page1_ids).isdisjoint(set(page2_ids))
+
+
+def test_list_sessions_strips_internal_fields(monkeypatch):
+    """`sandbox_url`, `sandbox_metadata`, `opencode_session_id` MUST be stripped."""
+    db = _FakeAgentSessionDB()
+    db.sessions["ses_a1"] = _make_session_dict(
+        session_id="ses_a1",
+        agent_id="agt_a",
+        created_by="user_a",
+        created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/sessions")
+    assert resp.status_code == 200, resp.text
+    assert "sandbox_url" not in resp.text
+    assert "sandbox_metadata" not in resp.text
+    assert "opencode_session_id" not in resp.text
+
+
+def test_list_sessions_invalid_cursor_returns_422(monkeypatch):
+    db = _FakeAgentSessionDB()
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/sessions?cursor=not-a-number")
+    assert resp.status_code == 422, resp.text
+
+
+def test_list_sessions_db_not_connected_returns_500(monkeypatch):
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/sessions")
+    assert resp.status_code == 500, resp.text
+    detail = resp.json()["detail"]
+    assert detail["error"] == CommonProxyErrors.db_not_connected_error.value
+
+
+def test_list_sessions_empty_when_no_sessions(monkeypatch):
+    db = _FakeAgentSessionDB()
+
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(ps, "prisma_client", db.as_prisma())
+
+    app = _build_app(auth=_user_auth("user_a"))
+    client = TestClient(app)
+
+    resp = client.get("/v2/sessions")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["data"] == []
+    assert body["has_more"] is False
+    assert body["next_cursor"] is None
