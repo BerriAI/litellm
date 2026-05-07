@@ -979,15 +979,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = True
-                    if thinking_budget >= 10000:
-                        is_gemini3flash = (
-                            "gemini-3-flash-preview" in model.lower()
-                            or "gemini-3-flash" in model.lower()
-                        )
-                        params["thinkingLevel"] = (
-                            "minimal" if is_gemini3flash else "low"
-                        )
-                    else:
+                    # Follow provider defaults unless explicitly opted into legacy behavior.
+                    if litellm.enable_gemini_default_thinking_level_low is True:
                         is_gemini3flash = (
                             "gemini-3-flash-preview" in model.lower()
                             or "gemini-3-flash" in model.lower()

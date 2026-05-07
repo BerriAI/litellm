@@ -6,11 +6,13 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from .dall_e_2_transformation import AzureDallE2ImageGenerationConfig
 from .dall_e_3_transformation import AzureDallE3ImageGenerationConfig
 from .gpt_transformation import AzureGPTImageGenerationConfig
+from .http_utils import azure_deployment_image_generation_json_body
 
 __all__ = [
     "AzureDallE2ImageGenerationConfig",
     "AzureDallE3ImageGenerationConfig",
     "AzureGPTImageGenerationConfig",
+    "azure_deployment_image_generation_json_body",
 ]
 
 

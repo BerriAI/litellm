@@ -26,6 +26,7 @@ from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -1007,6 +1008,7 @@ class BaseLLMHTTPHandler:
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        litellm_params: Optional[Dict[str, Any]] = None,
     ) -> RerankResponse:
         # get config from model, custom llm provider
         headers = provider_config.validate_environment(
@@ -1026,6 +1028,7 @@ class BaseLLMHTTPHandler:
             model=model,
             optional_rerank_params=optional_rerank_params,
             headers=headers,
+            litellm_params=litellm_params,
         )
 
         ## LOGGING
@@ -2535,10 +2538,16 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        delete_kwargs: Dict[str, Any] = {
+            "url": url,
+            "headers": headers,
+            "timeout": timeout,
+        }
+        if data:
+            delete_kwargs["json"] = data
+
         try:
-            response = await async_httpx_client.delete(
-                url=url, headers=headers, json=data, timeout=timeout
-            )
+            response = await async_httpx_client.delete(**delete_kwargs)
 
         except Exception as e:
             raise self._handle_error(
@@ -2619,10 +2628,16 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        delete_kwargs: Dict[str, Any] = {
+            "url": url,
+            "headers": headers,
+            "timeout": timeout,
+        }
+        if data:
+            delete_kwargs["json"] = data
+
         try:
-            response = sync_httpx_client.delete(
-                url=url, headers=headers, json=data, timeout=timeout
-            )
+            response = sync_httpx_client.delete(**delete_kwargs)
 
         except Exception as e:
             raise self._handle_error(
@@ -5240,7 +5255,6 @@ class BaseLLMHTTPHandler:
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
-                "OpenAI-Beta": "realtime=v1",
             }
 
         if extra_headers:
@@ -5564,6 +5578,9 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+        data = image_edit_provider_config.finalize_image_edit_request_data(
+            data, api_base
+        )
 
         ## LOGGING
         logging_obj.pre_call(
@@ -5661,6 +5678,9 @@ class BaseLLMHTTPHandler:
             image_edit_optional_request_params=image_edit_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+        data = image_edit_provider_config.finalize_image_edit_request_data(
+            data, api_base
         )
 
         ## LOGGING
@@ -8934,7 +8954,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -9001,7 +9024,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -9200,7 +9226,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
@@ -9283,7 +9312,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         request_body: Dict[str, Any] = dict(vector_store_update_optional_params)
 
@@ -9349,7 +9381,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
@@ -9414,7 +9449,10 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url = f"{api_base}/{vector_store_id}"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}"
 
         logging_obj.pre_call(
             input="",
