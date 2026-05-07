@@ -1,10 +1,10 @@
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -41,6 +41,7 @@ def _session_row_to_out(row, response: Optional[Dict[str, Any]] = None) -> Sessi
         status=row.status,
         task_arn=row.task_arn,
         response=response,
+        created_at=getattr(row, "created_at", None),
     )
 
 
@@ -268,6 +269,26 @@ async def create_session(
         raise HTTPException(status_code=500, detail=f"session create failed: {e}")
     finally:
         await client.aclose()
+
+
+@router.get("/sessions", response_model=List[SessionOut])
+async def list_sessions(
+    agent_id: Optional[str] = Query(default=None),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> List[SessionOut]:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="prisma client not available")
+
+    where: Dict[str, Any] = {}
+    if agent_id is not None:
+        where["agent_id"] = agent_id
+
+    rows = await prisma_client.db.litellm_managedagentsessiontable.find_many(
+        where=where, order={"created_at": "desc"}
+    )
+    return [_session_row_to_out(row) for row in rows]
 
 
 @router.get("/sessions/{session_id}", response_model=SessionOut)
