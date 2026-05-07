@@ -22,14 +22,17 @@ if ! command -v nvm &> /dev/null; then
   [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 fi
 
-# Use nvm to set the required Node.js version
-nvm use v20
+nvm install v20 || { echo "Error: Failed to install Node.js v20. Deployment aborted."; exit 1; }
+nvm use v20 || { echo "Error: Failed to switch to Node.js v20. Deployment aborted."; exit 1; }
 
-# Check if nvm use was successful
-if [ $? -ne 0 ]; then
-  echo "Error: Failed to switch to Node.js v20. Deployment aborted."
-  exit 1
-fi
+ACTUAL_NODE_VERSION="$(node -v 2>/dev/null || echo none)"
+case "$ACTUAL_NODE_VERSION" in
+  v20.*) ;;
+  *)
+    echo "Error: Node v20 required, got '${ACTUAL_NODE_VERSION}'. Deployment aborted."
+    exit 1
+    ;;
+esac
 
 # print contents of ui_colors.json
 echo "Contents of ui_colors.json:"
