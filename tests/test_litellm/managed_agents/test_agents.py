@@ -208,6 +208,7 @@ def test_create_agent_success(client_and_mocks):
     from litellm.proxy.common_utils.encrypt_decrypt_utils import (
         decrypt_value_helper,
     )
+
     persisted_key = inserted["config"].data["litellm_api_key"]
     assert persisted_key != payload["config"]["litellm_api_key"]
     assert (
