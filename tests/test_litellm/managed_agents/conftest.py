@@ -40,6 +40,59 @@ if str(_ENDPOINTS_TEST_DIR) not in sys.path:
     sys.path.insert(0, str(_ENDPOINTS_TEST_DIR))
 
 
+# Map of relation-name -> FK column name used by our payloads. The real
+# Prisma client translates {"agent": {"connect": {"id": X}}} into the
+# underlying agent_id FK column; the in-memory FakePrismaClient we share
+# with the proxy tests doesn't, so we do the unwrap at write time before
+# handing the data dict to ``_Table.create``.
+_RELATION_FK_MAP = {
+    "agent": "agent_id",
+    "session": "session_id",
+    "run": "run_id",
+}
+
+
+def _unwrap_relations(data):
+    """Translate Prisma relation-syntax keys into bare FK columns.
+
+    Operates on a copy so callers' dicts are not mutated. Only handles the
+    ``{"connect": {"id": <value>}}`` shape, which is what every payload in
+    ``litellm/managed_agents`` uses.
+    """
+    out = dict(data)
+    for relation, fk in _RELATION_FK_MAP.items():
+        rel_value = out.pop(relation, None)
+        if isinstance(rel_value, dict):
+            connect = rel_value.get("connect")
+            if isinstance(connect, dict) and "id" in connect:
+                out[fk] = connect["id"]
+    return out
+
+
+def _patch_table_creates(db) -> None:
+    """Wrap ``_Table.create`` on the shared fake to handle Prisma relations.
+
+    We monkey the wrapper into each per-instance table so the change does
+    not leak into the proxy tests that import the same FakePrismaClient.
+    """
+    table_names = [
+        "litellm_agent",
+        "litellm_agentsession",
+        "litellm_agentrun",
+        "litellm_agentrunevent",
+    ]
+    for name in table_names:
+        table = getattr(db, name, None)
+        if table is None:
+            continue
+        original_create = table.create
+
+        async def create(data, _orig=original_create):
+            return await _orig(data=_unwrap_relations(data))
+
+        table.create = create  # type: ignore[assignment]
+
+
 @pytest.fixture
 def fake_db():
     """Bare in-memory Prisma client; use this directly via ``client.db``.
@@ -51,4 +104,6 @@ def fake_db():
     # Local import: see _ENDPOINTS_TEST_DIR sys.path manipulation above.
     from conftest import FakePrismaClient  # type: ignore  # noqa: E402
 
-    return FakePrismaClient()
+    client = FakePrismaClient()
+    _patch_table_creates(client.db)
+    return client
