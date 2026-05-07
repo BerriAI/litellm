@@ -80,6 +80,18 @@ class AgentCreate(BaseModel):
     branch: Optional[str] = None
     litellm_api_key: Optional[str] = None
     litellm_api_base: Optional[str] = None
+    pfp_url: Optional[str] = None
+
+
+class AgentUpdate(BaseModel):
+    """Partial update — every field is optional. Only provided fields are
+    written. Setting a string field to "" clears it; null is treated as
+    no-op (field absent in the request)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = None
+    pfp_url: Optional[str] = None
 
 
 class AgentOut(BaseModel):
@@ -90,6 +102,7 @@ class AgentOut(BaseModel):
     model: str
     template_id: str
     branch: str
+    pfp_url: Optional[str] = None
     created_at: Optional[datetime] = None
 
 
