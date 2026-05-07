@@ -181,10 +181,12 @@ def opencode_server() -> Iterator[str]:
     last_err: Optional[Exception] = None
     while time.time() < deadline:
         if proc.poll() is not None:
-            stderr = proc.stderr.read().decode("utf-8", errors="replace") if proc.stderr else ""
-            pytest.skip(
-                f"opencode exited early (rc={proc.returncode}): {stderr[:500]}"
+            stderr = (
+                proc.stderr.read().decode("utf-8", errors="replace")
+                if proc.stderr
+                else ""
             )
+            pytest.skip(f"opencode exited early (rc={proc.returncode}): {stderr[:500]}")
         try:
             resp = httpx.get(health_url, timeout=2.0)
             if resp.status_code == 200 and resp.json().get("healthy") is True:
@@ -199,8 +201,7 @@ def opencode_server() -> Iterator[str]:
         except subprocess.TimeoutExpired:
             proc.kill()
         pytest.skip(
-            f"opencode did not become healthy within 30s "
-            f"(last err: {last_err!r})"
+            f"opencode did not become healthy within 30s " f"(last err: {last_err!r})"
         )
 
     try:
@@ -332,17 +333,28 @@ class _ProxyClient:
         self._base_url = base_url
         self._client = httpx.Client(base_url=base_url, timeout=30.0)
 
-    def get(self, path: str, *, params: Optional[Dict[str, Any]] = None,
-            headers: Optional[Dict[str, str]] = None) -> httpx.Response:
+    def get(
+        self,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> httpx.Response:
         return self._client.get(path, params=params, headers=headers)
 
-    def post(self, path: str, *, json: Any = None,
-             headers: Optional[Dict[str, str]] = None) -> httpx.Response:
+    def post(
+        self, path: str, *, json: Any = None, headers: Optional[Dict[str, str]] = None
+    ) -> httpx.Response:
         return self._client.post(path, json=json, headers=headers)
 
-    def stream(self, method: str, path: str, *,
-               headers: Optional[Dict[str, str]] = None,
-               read_timeout: float = 5.0) -> Any:
+    def stream(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        read_timeout: float = 5.0,
+    ) -> Any:
         """Open a streaming HTTP request. ``read_timeout`` controls how
         long ``iter_lines()`` will wait between bytes before raising.
 
@@ -357,7 +369,9 @@ class _ProxyClient:
         self._client.close()
 
 
-def _run_uvicorn_in_thread(app: Any, host: str, port: int) -> Tuple[Any, threading.Thread]:
+def _run_uvicorn_in_thread(
+    app: Any, host: str, port: int
+) -> Tuple[Any, threading.Thread]:
     """Spin up uvicorn in a background thread.
 
     Returns ``(server, thread)``. The caller is responsible for shutting
@@ -401,8 +415,12 @@ def app_client(
 
     from litellm.proxy.managed_agents_endpoints.agents import router as agents_router
     from litellm.proxy.managed_agents_endpoints.events import router as events_router
-    from litellm.proxy.managed_agents_endpoints.messages import router as messages_router
-    from litellm.proxy.managed_agents_endpoints.sessions import router as sessions_router
+    from litellm.proxy.managed_agents_endpoints.messages import (
+        router as messages_router,
+    )
+    from litellm.proxy.managed_agents_endpoints.sessions import (
+        router as sessions_router,
+    )
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
