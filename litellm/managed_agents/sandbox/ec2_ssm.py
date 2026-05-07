@@ -15,7 +15,7 @@ This placeholder exists so:
     sites.
 
 The real implementation belongs in a follow-up that wires
-``litellm/proxy/agent_session_endpoints/vm_providers/`` (already on the
+``litellm/managed_agents/vms/`` (already on the
 integration branch) into ``execute_tool``. Tracked as a deferred item on
 LIT-2879.
 """
@@ -52,6 +52,6 @@ class EC2SandboxViaSSM(Sandbox):
     ) -> ToolResult:
         raise NotImplementedError(
             "EC2SandboxViaSSM is a placeholder. Wire it to "
-            "litellm/proxy/agent_session_endpoints/vm_providers/ec2 in a "
+            "litellm/managed_agents/vms/ec2 in a "
             "follow-up PR."
         )
