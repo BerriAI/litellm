@@ -4,11 +4,15 @@ Spec: ``.claude/v2_api_contract.md`` §6.1.
 
 Behavior:
 1. Auth via ``user_api_key_auth``; ``created_by`` is scoped to the caller.
-2. Names are unique per ``created_by`` — duplicate returns 409.
-3. The ``litellm_api_key`` is masked in the response (``masking.mask_litellm_api_key``).
-   The raw key is stored in the DB row; encryption-at-rest is handled by the
-   proxy's standard config-secret pipeline (Wave 1 owns that contract).
-4. No router registration here — Wave 3 wires this into ``proxy_server.py``.
+2. Names are unique per ``created_by`` — duplicate returns 409. The DB also
+   carries a ``UNIQUE(name, created_by)`` constraint as a backstop against
+   the read-then-write race.
+3. The ``litellm_api_key`` is encrypted at rest via the proxy's standard
+   secret-encryption helper (``encrypt_value_helper``) before insert and
+   decrypted only for masking on read. The response always carries the
+   masked form (``masking.mask_litellm_api_key``).
+4. Router registration lives in ``proxy_server.py`` via the composite
+   ``managed_agents_router``.
 """
 
 from typing import Any, Dict, Optional
@@ -30,6 +34,10 @@ from litellm.managed_agents.types import (
 )
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 
 router = APIRouter()
 
@@ -86,20 +94,45 @@ async def create_agent(
 
     agent_id = new_agent_id()
     config_dict = request.config.model_dump()
+    plaintext_api_key = config_dict["litellm_api_key"]
 
-    inserted = await insert_agent(
-        prisma_client,
-        agent_id=agent_id,
-        name=request.name,
-        config=config_dict,
-        created_by=created_by,
-    )
+    # Encrypt secrets before persistence — same pipeline used by
+    # ``model_management_endpoints`` and ``mcp_management_endpoints``.
+    # The masked form returned to the caller is computed from the
+    # plaintext, not the ciphertext, so the response prefix still
+    # reflects the real key.
+    config_to_persist = {
+        **config_dict,
+        "litellm_api_key": encrypt_value_helper(plaintext_api_key),
+    }
 
-    # Mask on read. The original key was persisted by ``insert_agent`` above;
-    # the masked copy is what we return to the caller.
+    try:
+        inserted = await insert_agent(
+            prisma_client,
+            agent_id=agent_id,
+            name=request.name,
+            config=config_to_persist,
+            created_by=created_by,
+        )
+    except Exception as e:
+        # Backstop for the DB-level UNIQUE(name, created_by) constraint —
+        # if a concurrent insert beat us between the pre-check and here,
+        # surface a 409 instead of leaking the underlying integrity error.
+        msg = str(e)
+        if (
+            "Unique constraint" in msg
+            or "duplicate key" in msg
+            or "UNIQUE constraint failed" in msg
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Agent with name '{request.name}' already exists for this user.",
+            ) from e
+        raise
+
     masked_config = {
         **config_dict,
-        "litellm_api_key": mask_litellm_api_key(config_dict["litellm_api_key"]),
+        "litellm_api_key": mask_litellm_api_key(plaintext_api_key),
     }
 
     return AgentRow(
@@ -116,7 +149,11 @@ def _row_to_agent_response(row: Dict[str, Any]) -> AgentRow:
     """Map a DB row to a public AgentRow with masked ``litellm_api_key``.
 
     Handles both raw-dict configs (Prisma JSON column) and `prisma.Json`-wrapped
-    configs (mock-style with a ``.data`` attribute).
+    configs (mock-style with a ``.data`` attribute). The stored
+    ``litellm_api_key`` is encrypted; we decrypt it before masking so the
+    response prefix still reflects the original key. If decryption fails
+    (e.g. a legacy plaintext row from a prior schema version, or a salt-key
+    mismatch) we fall back to masking the raw stored value.
     """
     raw_config: Any = row.get("config") or {}
     # prisma.Json wrapper used by some test fakes exposes the dict via ``.data``;
@@ -130,9 +167,18 @@ def _row_to_agent_response(row: Dict[str, Any]) -> AgentRow:
     else:
         config_dict = {}
 
+    stored_key = config_dict.get("litellm_api_key", "") or ""
+    decrypted = decrypt_value_helper(
+        value=stored_key,
+        key="litellm_api_key",
+        exception_type="debug",
+        return_original_value=True,
+    )
+    plaintext_for_mask = decrypted if isinstance(decrypted, str) else stored_key
+
     masked_config = {
         **config_dict,
-        "litellm_api_key": mask_litellm_api_key(config_dict.get("litellm_api_key", "")),
+        "litellm_api_key": mask_litellm_api_key(plaintext_for_mask),
     }
 
     return AgentRow(
