@@ -180,13 +180,14 @@ def mock_adapter(monkeypatch):
     """Monkeypatch ``get_adapter`` to return a configurable AsyncMock.
 
     The same adapter instance is returned by ``get_adapter`` for every
-    call inside the handler — both ``send_message`` and ``list_messages``
-    are exposed as AsyncMocks so each test can configure side effects /
-    return values independently.
+    call inside the handler — ``send_message``, ``list_messages``, and
+    ``abort`` are exposed as AsyncMocks so each test can configure side
+    effects / return values independently.
     """
     adapter = MagicMock()
     adapter.send_message = AsyncMock(return_value=None)
     adapter.list_messages = AsyncMock(return_value=[])
+    adapter.abort = AsyncMock(return_value=None)
     monkeypatch.setattr(
         "litellm.managed_agents.endpoints.messages.get_adapter",
         lambda sandbox_type: adapter,
@@ -556,3 +557,108 @@ class TestListMessages:
 
         assert resp.status_code in (400, 401, 403), resp.text
         mock_adapter.list_messages.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# POST /v2/sessions/:id/abort
+# ---------------------------------------------------------------------------
+
+
+class TestAbortSession:
+    def test_ready_session_aborts_and_returns_ok(
+        self, monkeypatch, client, mock_adapter
+    ):
+        """Happy path: ready session → 200, adapter.abort called with the
+        session's sandbox_url + opencode_session_id, returns
+        ``{"id": session_id, "aborted": True}``.
+        """
+        fake_prisma = _build_fake_prisma(sessions=[_make_session_row()])
+        monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+        _override_auth()
+
+        resp = client.post(
+            f"/v2/sessions/{SESSION_ID}/abort",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body == {"id": SESSION_ID, "aborted": True}
+
+        mock_adapter.abort.assert_awaited_once_with(SANDBOX_URL, OC_SID)
+
+    def test_missing_session_returns_404(self, monkeypatch, client, mock_adapter):
+        fake_prisma = _build_fake_prisma(sessions=[])
+        monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+        _override_auth()
+
+        resp = client.post(
+            f"/v2/sessions/{SESSION_ID}/abort",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert resp.status_code == 404
+        assert SESSION_ID in resp.json()["detail"]
+        mock_adapter.abort.assert_not_awaited()
+
+    def test_provisioning_session_returns_503(self, monkeypatch, client, mock_adapter):
+        fake_prisma = _build_fake_prisma(
+            sessions=[_make_session_row(status="provisioning")],
+        )
+        monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+        _override_auth()
+
+        resp = client.post(
+            f"/v2/sessions/{SESSION_ID}/abort",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert resp.status_code == 503
+        assert resp.json()["detail"] == "Session not ready"
+        assert resp.headers.get("retry-after") == "5"
+        mock_adapter.abort.assert_not_awaited()
+
+    def test_terminated_session_returns_404(self, monkeypatch, client, mock_adapter):
+        fake_prisma = _build_fake_prisma(
+            sessions=[_make_session_row(status="terminated")],
+        )
+        monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+        _override_auth()
+
+        resp = client.post(
+            f"/v2/sessions/{SESSION_ID}/abort",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert resp.status_code == 404
+        mock_adapter.abort.assert_not_awaited()
+
+    def test_sandbox_unreachable_returns_504(self, monkeypatch, client, mock_adapter):
+        fake_prisma = _build_fake_prisma(sessions=[_make_session_row()])
+        monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+        _override_auth()
+
+        mock_adapter.abort.side_effect = SandboxUnreachableError("boom")
+
+        resp = client.post(
+            f"/v2/sessions/{SESSION_ID}/abort",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert resp.status_code == 504
+        assert resp.json()["detail"] == {"error": "Sandbox unreachable"}
+
+    def test_sandbox_bad_gateway_returns_502(self, monkeypatch, client, mock_adapter):
+        fake_prisma = _build_fake_prisma(sessions=[_make_session_row()])
+        monkeypatch.setattr(ps, "prisma_client", fake_prisma)
+        _override_auth()
+
+        mock_adapter.abort.side_effect = SandboxBadGatewayError("malformed")
+
+        resp = client.post(
+            f"/v2/sessions/{SESSION_ID}/abort",
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == {"error": "Bad gateway"}
