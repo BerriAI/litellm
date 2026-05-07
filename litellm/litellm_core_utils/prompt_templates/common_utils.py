@@ -459,7 +459,13 @@ def update_messages_with_model_file_ids(
                 if isinstance(content, str):
                     continue
                 for c in content:
-                    if c["type"] == "file":
+                    if not isinstance(c, dict):
+                        # Content list items aren't always dicts. e.g.
+                        # text_completion forwards a token-ids list/list-of-
+                        # lists through this path. Skip non-dict items
+                        # instead of indexing into them.
+                        continue
+                    if c.get("type") == "file":
                         file_object = cast(ChatCompletionFileObject, c)
                         file_object_file_field = file_object.get("file")
                         if not isinstance(file_object_file_field, dict):

@@ -473,3 +473,22 @@ def test_update_messages_with_model_file_ids_mapping_miss_falls_back_to_decode()
     updated = update_messages_with_model_file_ids(messages, "model-A", mapping)
 
     assert updated[0]["content"][0]["file"]["file_id"] == "file-ECBPW7ML9g7XHdwGgUPZaM"
+
+
+def test_update_messages_with_model_file_ids_tolerates_non_dict_content_items():
+    """Content list items aren't always dicts. text_completion forwards
+    token-ids (list of ints, or list of list of ints for batch) through
+    this path. The function must skip non-dict items instead of indexing
+    into them."""
+    messages_token_ids = [{"role": "user", "content": [15496, 995]}]
+    messages_token_ids_batch = [{"role": "user", "content": [[15496, 995], [9906, 0]]}]
+
+    # Both should pass through unchanged without raising.
+    assert (
+        update_messages_with_model_file_ids(messages_token_ids, "model-A", {})
+        == messages_token_ids
+    )
+    assert (
+        update_messages_with_model_file_ids(messages_token_ids_batch, "model-A", {})
+        == messages_token_ids_batch
+    )
