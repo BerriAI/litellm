@@ -8,6 +8,7 @@ Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Sign the Contributor License Agreement (CLA)** - [see details](#contributor-license-agreement-cla)
 - [ ] **Keep scope isolated** - Your changes should address 1 specific problem at a time
+- [ ] **Use a Conventional Commits PR title** - [see details](#commit-and-pr-conventions)
 
 #### Proxy (Backend) PRs
 
@@ -67,9 +68,9 @@ make lint
 # Run unit tests to ensure nothing is broken
 make test-unit
 
-# Commit your changes
+# Commit your changes (see "Commit and PR Conventions" below for the title format)
 git add .
-git commit -m "Your descriptive commit message"
+git commit -m "feat(scope): short description of your change"
 
 # Push and create a PR
 git push origin your-feature-branch
@@ -311,6 +312,40 @@ Ensure the UI builds successfully before submitting your PR:
 ```bash
 npm run build
 ```
+
+## Commit and PR Conventions
+
+LiteLLM follows [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/) for **PR titles**. A GitHub Actions check (`.github/workflows/validate-pr-title.yml`) enforces the format on every PR.
+
+### Format
+
+```
+<type>(<optional scope>): <description>
+```
+
+- **Allowed types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+- **Scope** (optional): a short noun for the area touched, lowercase, e.g. `mcp`, `ui-teams`, `proxy-auth`.
+- **Description**: short imperative-mood summary, no trailing period.
+- **Breaking changes**: append `!` after the type/scope, e.g. `feat(api)!: drop /v1/foo`.
+
+### Examples
+
+- `feat(mcp): add oauth2 authorization flow`
+- `fix(ui-teams): refresh table on member change`
+- `refactor(ui-playground): extract message renderer`
+- `docs: clarify proxy startup steps`
+- `chore(release): merge internal staging into main`
+
+### Why
+
+Branches we care about have different merge strategies:
+
+- **`litellm_internal_staging`** is **squash-merge only**, so the PR title becomes the squash commit subject. Conventional titles are mechanically parseable for changelogs and easy to cherry-pick.
+- **`main`** is **merge-commit only** (no squash), so the underlying conventional commits are preserved through release rollups.
+
+You don't need to rewrite local commit history on the PR branch; the squash flattens to the PR title at merge time. Only the **PR title** needs to match the convention.
+
+> PRs to `main` (release rollups) are exempt from this check, since they aggregate already-conventional commits from staging.
 
 ## Submitting Your PR
 

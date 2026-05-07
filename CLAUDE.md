@@ -48,6 +48,10 @@ When contributing to the project, use the appropriate templates:
 **Pull Requests** (`.github/pull_request_template.md`):
 - Add at least 1 test in `tests/litellm/`
 - Ensure `make test-unit` passes
+- **PR title must follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)** — `<type>(<optional scope>): <description>`. Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Use `!` for breaking changes. The `validate-pr-title` GHA enforces this on every PR (except rollups to `main`).
+  - Why: `litellm_internal_staging` is squash-merge only, so the PR title becomes the staging commit subject — keep it parseable for changelogs and cherry-picks. `main` is merge-only and preserves the underlying commits.
+  - Examples: `feat(mcp): add oauth2 authorization flow`, `fix(ui-teams): refresh table on member change`, `chore(release): merge internal staging into main`.
+  - Local commits on the PR branch don't have to match — the squash flattens to the PR title at merge time. Only the PR title needs to match.
 
 ## Architecture Overview
 

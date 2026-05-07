@@ -482,6 +482,8 @@ make test-unit      # Run unit tests
 make format-check   # Check formatting only
 ```
 
+**PR titles follow [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/)** (e.g. `feat(mcp): add oauth2 flow`, `fix(ui-teams): refresh table`). A GitHub Actions check enforces the format. See [CONTRIBUTING.md → Commit and PR Conventions](CONTRIBUTING.md#commit-and-pr-conventions) for details.
+
 For detailed contributing guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 > **📖 Contributing to documentation?** The LiteLLM docs have moved to a separate repository: [BerriAI/litellm-docs](https://github.com/BerriAI/litellm-docs). Please open doc PRs there. Docs are served at [docs.litellm.ai](https://docs.litellm.ai).
