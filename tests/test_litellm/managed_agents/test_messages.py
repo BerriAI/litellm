@@ -27,7 +27,7 @@ from litellm.managed_agents.adapters.base import (
     SandboxBadGatewayError,
     SandboxUnreachableError,
 )
-from litellm.managed_agents.endpoints.messages import router as messages_router
+from litellm.proxy.managed_agents_endpoints.messages import router as messages_router
 from litellm.managed_agents.types import MessageRow
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -189,7 +189,7 @@ def mock_adapter(monkeypatch):
     adapter.list_messages = AsyncMock(return_value=[])
     adapter.abort = AsyncMock(return_value=None)
     monkeypatch.setattr(
-        "litellm.managed_agents.endpoints.messages.get_adapter",
+        "litellm.proxy.managed_agents_endpoints.messages.get_adapter",
         lambda sandbox_type: adapter,
     )
     return adapter
