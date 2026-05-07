@@ -8,8 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class DockerfileConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    path: str
+    path: Optional[str] = None
     container_port: int = 4096
+    build_platform: str = "linux/amd64"
 
 
 class AwsOverrides(BaseModel):

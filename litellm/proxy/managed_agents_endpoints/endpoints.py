@@ -149,6 +149,7 @@ async def create_sandbox_template(
             container_port=dockerfile_entry.container_port,
             region=region,
             aws_overrides=aws_overrides,
+            build_platform=dockerfile_entry.build_platform,
         )
     except Exception as e:
         verbose_proxy_logger.exception(

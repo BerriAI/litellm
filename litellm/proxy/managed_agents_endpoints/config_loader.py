@@ -23,6 +23,16 @@ from litellm.proxy.managed_agents_endpoints.types import ManagedAgentsConfig
 
 _DOCKERFILE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
+_BUILTIN_HARNESSES_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "harnesses"
+)
+
+
+def _builtin_dockerfile_path(dockerfile_id: str) -> Optional[str]:
+    """Return path to bundled harnesses/<id>/Dockerfile if it exists."""
+    candidate = os.path.join(_BUILTIN_HARNESSES_DIR, dockerfile_id, "Dockerfile")
+    return candidate if os.path.isfile(candidate) else None
+
 
 @dataclass(frozen=True)
 class DockerfileEntry:
@@ -31,6 +41,7 @@ class DockerfileEntry:
     context_dir: str  # absolute path to context dir (default: dockerfile dir)
     container_port: int
     content_hash: str  # sha256 of dockerfile + context
+    build_platform: str  # e.g. "linux/amd64", "linux/arm64"
 
 
 # Module-level state. Populated by ``initialize`` at proxy startup.
@@ -91,7 +102,17 @@ def build_dockerfile_registry(
     for dockerfile_id, dockerfile_cfg in config.dockerfiles.items():
         _validate_dockerfile_id(dockerfile_id)
 
-        abs_path = _resolve_path(dockerfile_cfg.path)
+        if dockerfile_cfg.path:
+            abs_path = _resolve_path(dockerfile_cfg.path)
+        else:
+            builtin = _builtin_dockerfile_path(dockerfile_id)
+            if builtin is None:
+                raise FileNotFoundError(
+                    f"managed_agents: dockerfile id '{dockerfile_id}' has no "
+                    f"path set and no bundled harnesses/{dockerfile_id}/"
+                    f"Dockerfile exists"
+                )
+            abs_path = builtin
         if not os.path.isfile(abs_path):
             raise FileNotFoundError(
                 f"managed_agents: dockerfile path for id '{dockerfile_id}' "
@@ -112,6 +133,7 @@ def build_dockerfile_registry(
             context_dir=context_dir,
             container_port=dockerfile_cfg.container_port,
             content_hash=content_hash,
+            build_platform=dockerfile_cfg.build_platform,
         )
         registry[dockerfile_id] = entry
 

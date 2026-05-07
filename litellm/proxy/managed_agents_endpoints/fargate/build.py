@@ -47,6 +47,19 @@ def _sanitize_dockerfile_id(dockerfile_id: str) -> str:
     return _DOCKERFILE_ID_SANITIZE_RE.sub("-", dockerfile_id.lower())
 
 
+def _platform_to_cpu_arch(platform: str) -> str:
+    """Map docker `--platform` value to ECS task def `runtimePlatform.cpuArchitecture`."""
+    p = platform.lower().strip()
+    if p in ("linux/amd64", "amd64", "linux/x86_64", "x86_64"):
+        return "X86_64"
+    if p in ("linux/arm64", "arm64", "linux/aarch64", "aarch64"):
+        return "ARM64"
+    raise ValueError(
+        f"unsupported build_platform '{platform}' for Fargate "
+        f"(expected linux/amd64 or linux/arm64)"
+    )
+
+
 def _register_task_definition(
     *,
     region: str,
@@ -54,6 +67,7 @@ def _register_task_definition(
     image_uri: str,
     container_port: int,
     shared_infra: SharedInfra,
+    cpu_architecture: str,
 ) -> str:
     ecs = _ecs_client(region)
     r = ecs.register_task_definition(
@@ -64,7 +78,7 @@ def _register_task_definition(
         memory="1024",
         executionRoleArn=shared_infra.task_exec_role_arn,
         runtimePlatform={
-            "cpuArchitecture": "X86_64",
+            "cpuArchitecture": cpu_architecture,
             "operatingSystemFamily": "LINUX",
         },
         containerDefinitions=[
@@ -95,6 +109,7 @@ async def provision_template(
     container_port: int,
     region: str,
     aws_overrides: AwsOverrides,
+    build_platform: str = "linux/amd64",
     log_callback: Optional[Callable[[str], None]] = None,
 ) -> ProvisionedTemplate:
     """Bootstrap shared infra → build/push image → register task def. Idempotent."""
@@ -129,6 +144,8 @@ async def provision_template(
                 f"provision_template build start dockerfile_id={dockerfile_id} "
                 f"hash={image_hash[:12]} repo={repo_name}"
             )
+            cpu_arch = _platform_to_cpu_arch(build_platform)
+
             image_uri = await asyncio.to_thread(
                 build_and_push,
                 region=region,
@@ -136,6 +153,7 @@ async def provision_template(
                 dockerfile_path=dockerfile_path,
                 context_dir=ctx_dir,
                 content_hash=image_hash,
+                platform=build_platform,
                 log_callback=log_callback,
             )
 
@@ -146,6 +164,7 @@ async def provision_template(
                 image_uri=image_uri,
                 container_port=container_port,
                 shared_infra=shared_infra,
+                cpu_architecture=cpu_arch,
             )
             verbose_proxy_logger.info(
                 f"provision_template register-task-def complete family={family} "

@@ -183,6 +183,7 @@ def docker_build(
     context_dir: str,
     image_uri: str,
     *,
+    platform: str = "linux/amd64",
     log_callback: Optional[Callable[[str], None]] = None,
 ) -> None:
     if not os.path.isfile(dockerfile_path):
@@ -199,7 +200,7 @@ def docker_build(
         "docker",
         "build",
         "--platform",
-        "linux/amd64",
+        platform,
         "-f",
         dockerfile_path,
         "-t",
@@ -235,6 +236,7 @@ def build_and_push(
     dockerfile_path: str,
     context_dir: str,
     content_hash: str,
+    platform: str = "linux/amd64",
     log_callback: Optional[Callable[[str], None]] = None,
 ) -> str:
     if not os.path.isfile(dockerfile_path):
@@ -258,10 +260,17 @@ def build_and_push(
         return image_uri
 
     verbose_proxy_logger.info(
-        f"Building image {repo_name}:{tag} from {dockerfile_path} (context={ctx})"
+        f"Building image {repo_name}:{tag} from {dockerfile_path} "
+        f"(context={ctx}, platform={platform})"
     )
     docker_login(region)
-    docker_build(dockerfile_path, ctx, image_uri, log_callback=log_callback)
+    docker_build(
+        dockerfile_path,
+        ctx,
+        image_uri,
+        platform=platform,
+        log_callback=log_callback,
+    )
     docker_push(image_uri, log_callback=log_callback)
     verbose_proxy_logger.info(f"Pushed image {image_uri}")
     return image_uri
