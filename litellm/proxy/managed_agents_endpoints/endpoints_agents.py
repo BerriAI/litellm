@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import List
+from typing import Any, Dict, List
 
 from fastapi import Depends, HTTPException
 
@@ -16,17 +16,39 @@ from litellm.proxy.managed_agents_endpoints.git_validation import (
     decrypt_git_token,
     validate_repo_branch,
 )
-from litellm.proxy.managed_agents_endpoints.types import AgentCreate, AgentOut
+from litellm.proxy.managed_agents_endpoints.types import (
+    AgentCreate,
+    AgentOut,
+    AgentUpdate,
+)
 from litellm.proxy.utils import jsonify_object
 
 
+def _coerce_metadata(raw: Any) -> Dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
 def _agent_row_to_out(row) -> AgentOut:
+    metadata = _coerce_metadata(getattr(row, "metadata", None))
+    pfp_url = metadata.get("pfp_url")
     return AgentOut(
         id=row.agent_id,
         name=row.agent_name,
         model=row.model,
         template_id=row.template_id,
         branch=row.branch,
+        pfp_url=pfp_url if isinstance(pfp_url, str) else None,
         created_at=getattr(row, "created_at", None),
     )
 
@@ -60,6 +82,13 @@ async def create_agent(
         encrypt_value_helper(body.litellm_api_key) if body.litellm_api_key else None
     )
 
+    metadata: Dict[str, Any] = {
+        "litellm_api_key_encrypted": encrypted_key,
+        "litellm_api_base": body.litellm_api_base,
+    }
+    if body.pfp_url is not None:
+        metadata["pfp_url"] = body.pfp_url
+
     create_data = jsonify_object(
         {
             "agent_name": body.name,
@@ -67,10 +96,7 @@ async def create_agent(
             "prompt": body.prompt,
             "tools": json.dumps(body.tools),
             "branch": branch,
-            "metadata": {
-                "litellm_api_key_encrypted": encrypted_key,
-                "litellm_api_base": body.litellm_api_base,
-            },
+            "metadata": metadata,
             "created_by": user_api_key_dict.user_id,
             "updated_by": user_api_key_dict.user_id,
         }
@@ -124,3 +150,47 @@ async def get_agent(
     _assert_owner_or_admin(user_api_key_dict, row.created_by, "agent", agent_id)
 
     return _agent_row_to_out(row)
+
+
+@router.patch("/agents/{agent_id}", response_model=AgentOut)
+async def update_agent(
+    agent_id: str,
+    body: AgentUpdate,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> AgentOut:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="prisma client not available")
+
+    row = await prisma_client.db.litellm_managedagenttable.find_unique(
+        where={"agent_id": agent_id}
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"agent '{agent_id}' not found")
+
+    _assert_owner_or_admin(user_api_key_dict, row.created_by, "agent", agent_id)
+
+    update_data: Dict[str, Any] = {"updated_by": user_api_key_dict.user_id}
+    fields = body.model_dump(exclude_unset=True)
+
+    if "name" in fields:
+        update_data["agent_name"] = fields["name"] or None
+
+    if "pfp_url" in fields:
+        metadata = _coerce_metadata(getattr(row, "metadata", None))
+        new_pfp = fields["pfp_url"]
+        if new_pfp:
+            metadata["pfp_url"] = new_pfp
+        else:
+            metadata.pop("pfp_url", None)
+        update_data["metadata"] = metadata
+
+    if len(update_data) == 1:  # only updated_by
+        return _agent_row_to_out(row)
+
+    updated = await prisma_client.db.litellm_managedagenttable.update(
+        where={"agent_id": agent_id},
+        data=jsonify_object(update_data),
+    )
+    return _agent_row_to_out(updated)
