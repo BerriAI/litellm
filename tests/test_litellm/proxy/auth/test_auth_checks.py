@@ -906,6 +906,285 @@ def test_can_object_call_model_no_access_to_alias_or_underlying():
     assert "my-fake-gpt" in str(exc_info.value.message)
 
 
+# -- Team-member access-group resolution with team-scoped DB models -----------
+
+
+def _make_team_scoped_router(team_id: str = "team-a"):
+    """
+    Build a Router whose model_list looks like what the proxy creates for
+    team-scoped BYOK DB models: the internal model_name is
+    ``<public_name>_<team_id>_<uuid>`` and the public name lives in
+    ``model_info.team_public_model_name``.  Two models belong to the
+    access group ``fast-models``; one (``mock-power``) does not.
+    """
+    from litellm import Router
+
+    model_list = [
+        {
+            "model_name": f"mock-fast-1_{team_id}_aaa",
+            "litellm_params": {
+                "model": "openai/mock-fast-1",
+                "api_key": "fake",
+            },
+            "model_info": {
+                "id": f"demo-mock-fast-1-{team_id}",
+                "team_id": team_id,
+                "team_public_model_name": "mock-fast-1",
+                "access_groups": ["fast-models"],
+            },
+        },
+        {
+            "model_name": f"mock-fast-2_{team_id}_bbb",
+            "litellm_params": {
+                "model": "openai/mock-fast-2",
+                "api_key": "fake",
+            },
+            "model_info": {
+                "id": f"demo-mock-fast-2-{team_id}",
+                "team_id": team_id,
+                "team_public_model_name": "mock-fast-2",
+                "access_groups": ["fast-models"],
+            },
+        },
+        {
+            "model_name": f"mock-power_{team_id}_ccc",
+            "litellm_params": {
+                "model": "openai/mock-power",
+                "api_key": "fake",
+            },
+            "model_info": {
+                "id": f"demo-mock-power-{team_id}",
+                "team_id": team_id,
+                "team_public_model_name": "mock-power",
+            },
+        },
+    ]
+    return Router(model_list=model_list)
+
+
+def test_can_object_call_model_access_group_with_team_id():
+    """
+    When team_id is passed, _can_object_call_model should resolve
+    model_info.access_groups for team-scoped DB models and allow
+    access via group name.
+    """
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    result = _can_object_call_model(
+        model="mock-fast-1",
+        llm_router=router,
+        models=["fast-models", "mock-power"],
+        object_type="team",
+        team_id="team-a",
+    )
+    assert result is True
+
+
+def test_can_object_call_model_access_group_without_team_id_fails():
+    """
+    Without team_id the router cannot find team-scoped DB models, so
+    access group resolution fails and the call is denied.
+    This is the pre-fix behavior.
+    """
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model="mock-fast-1",
+            llm_router=router,
+            models=["fast-models", "mock-power"],
+            object_type="team",
+            # team_id intentionally omitted
+        )
+
+
+def test_can_object_call_model_literal_name_with_team_id():
+    """
+    Literal model name matching should still work when team_id is
+    passed — no regression from adding team_id.
+    """
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    result = _can_object_call_model(
+        model="mock-power",
+        llm_router=router,
+        models=["fast-models", "mock-power"],
+        object_type="team",
+        team_id="team-a",
+    )
+    assert result is True
+
+
+def test_can_object_call_model_denied_model_with_team_id():
+    """
+    A model not in the allowed list (by name or access group) should
+    still be denied even when team_id is passed.
+    """
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    with pytest.raises(ProxyException):
+        _can_object_call_model(
+            model="mock-vision",
+            llm_router=router,
+            models=["fast-models", "mock-power"],
+            object_type="team",
+            team_id="team-a",
+        )
+
+
+def test_can_object_call_model_second_group_member_with_team_id():
+    """
+    Both models in the access group should be reachable, not just
+    the first one.
+    """
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    router = _make_team_scoped_router()
+
+    result = _can_object_call_model(
+        model="mock-fast-2",
+        llm_router=router,
+        models=["fast-models"],
+        object_type="team",
+        team_id="team-a",
+    )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_with_access_group():
+    """
+    End-to-end test of _check_team_member_model_access: a member whose
+    allowed_models contains an access group name should be allowed to
+    call models in that group for team-scoped DB models.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+
+    router = _make_team_scoped_router()
+    team = LiteLLM_TeamTable(team_id="team-a")
+    token = UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a")
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            allowed_models=["fast-models", "mock-power"],
+        ),
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_membership",
+        return_value=membership,
+    ):
+        # Should not raise — mock-fast-1 is in the fast-models group
+        await _check_team_member_model_access(
+            model="mock-fast-1",
+            team_object=team,
+            valid_token=token,
+            llm_router=router,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_denied_model():
+    """
+    A member with per-member allowed_models should be denied access to
+    a model that is neither listed by name nor covered by an access group.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        ProxyException,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+
+    router = _make_team_scoped_router()
+    team = LiteLLM_TeamTable(team_id="team-a")
+    token = UserAPIKeyAuth(token="sk-test", user_id="alice", team_id="team-a")
+    membership = LiteLLM_TeamMembership(
+        user_id="alice",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            allowed_models=["fast-models", "mock-power"],
+        ),
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_membership",
+        return_value=membership,
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await _check_team_member_model_access(
+                model="mock-vision",
+                team_object=team,
+                valid_token=token,
+                llm_router=router,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=MagicMock(),
+            )
+        assert exc_info.value.type == ProxyErrorTypes.team_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_check_team_member_model_access_no_override_inherits_team():
+    """
+    When a member has no allowed_models (empty budget table), the function
+    should return without raising — the team-level check applies instead.
+    """
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTable,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+
+    router = _make_team_scoped_router()
+    team = LiteLLM_TeamTable(team_id="team-a")
+    token = UserAPIKeyAuth(token="sk-test", user_id="bob", team_id="team-a")
+    membership = LiteLLM_TeamMembership(
+        user_id="bob",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(),
+    )
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.get_team_membership",
+        return_value=membership,
+    ):
+        # Should return without raising — no per-member restriction
+        await _check_team_member_model_access(
+            model="mock-vision",
+            team_object=team,
+            valid_token=token,
+            llm_router=router,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+
 # Tag Budget Enforcement Tests
 
 

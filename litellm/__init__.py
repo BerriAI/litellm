@@ -414,6 +414,9 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
+prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
+prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
