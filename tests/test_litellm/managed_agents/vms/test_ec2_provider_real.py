@@ -30,7 +30,7 @@ from typing import List, Optional
 
 import pytest
 
-from litellm.proxy.agent_session_endpoints.vm_providers import (
+from litellm.managed_agents.vms import (
     AwsCreds,
     EC2Provider,
     Ec2Config,
@@ -153,7 +153,7 @@ async def test_real_boot():
 @pytest.mark.asyncio
 async def test_byoc_invalid_creds_fail_fast():
     """Validation #11: bad creds → InvalidCredentialsError within ~5s, no instance launched."""
-    from litellm.proxy.agent_session_endpoints.vm_providers import (
+    from litellm.managed_agents.vms import (
         InvalidCredentialsError,
     )
 
