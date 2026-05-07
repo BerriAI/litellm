@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+from litellm.managed_agents.vms.base import (
     AgentVMProvider,
     VMHandle,
 )
