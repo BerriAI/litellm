@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from litellm.proxy.agent_session_endpoints.vm_providers import (
+from litellm.managed_agents.vms import (
     EC2Provider,
     NoopProvider,
     SUPPORTED_PROVIDERS,
