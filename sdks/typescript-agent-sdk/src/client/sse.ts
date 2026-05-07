@@ -7,7 +7,7 @@
 
 import { createParser, type EventSourceMessage } from "eventsource-parser";
 import { LiteLLMAgentError, type RunEvent } from "../types.js";
-import { request, type ResolvedClient } from "./http.js";
+import { request, snakeToCamel, type ResolvedClient } from "./http.js";
 
 export interface StreamRunOptions {
   startingSeq?: number;
@@ -76,7 +76,17 @@ export async function* streamRunEvents(
         lastSeq = parsed.seq;
         sawProgressOnThisConnection = true;
         yield parsed;
-        if (parsed.type === "done" || parsed.type === "error") {
+        // Terminal event types — the backend emits ``run_finished``,
+        // ``run_cancelled``, and ``run_error`` to mark the end of a run.
+        // ``done``/``error`` are kept for backwards-compat with older
+        // wire shapes used in early SDK tests.
+        if (
+          parsed.type === "done" ||
+          parsed.type === "error" ||
+          parsed.type === "run_finished" ||
+          parsed.type === "run_cancelled" ||
+          parsed.type === "run_error"
+        ) {
           return;
         }
       }
@@ -108,15 +118,20 @@ export async function* streamRunEvents(
 function decodeEvent(msg: EventSourceMessage): RunEvent | null {
   if (!msg.data) return null;
   try {
-    const obj = JSON.parse(msg.data) as Partial<RunEvent>;
-    if (typeof obj.seq !== "number" || typeof obj.type !== "string") {
+    // Backend SSE wire shape is ``{seq, event_type, payload}`` (snake_case
+    // keys, ``event_type``/``payload`` instead of ``type``/``data``). Apply
+    // the same snake_to_camel transform we use for JSON responses, then
+    // also map the legacy event_type/payload field names so the public
+    // ``RunEvent`` interface stays stable.
+    const raw = JSON.parse(msg.data) as Record<string, unknown>;
+    const camel = snakeToCamel(raw) as Record<string, unknown>;
+    const seq = camel.seq;
+    const type = (camel.type ?? camel.eventType) as string | undefined;
+    const data = (camel.data ?? camel.payload) ?? null;
+    if (typeof seq !== "number" || typeof type !== "string") {
       return null;
     }
-    return {
-      seq: obj.seq,
-      type: obj.type,
-      data: obj.data ?? null,
-    };
+    return { seq, type, data };
   } catch {
     return null;
   }
