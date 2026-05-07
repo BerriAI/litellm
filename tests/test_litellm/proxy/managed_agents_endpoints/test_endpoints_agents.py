@@ -6,6 +6,8 @@ exercised end-to-end via the session tests, so this file focuses on the read
 endpoints.
 """
 
+import json
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -71,11 +73,12 @@ def _make_agent(agent_id="agt-1", created_by="u1", **kw):
     return SimpleNamespace(**base)
 
 
-def _make_prisma(agents=None, agent=None):
+def _make_prisma(agents=None, agent=None, updated=None):
     p = MagicMock()
     agent_t = MagicMock()
     agent_t.find_unique = AsyncMock(return_value=agent)
     agent_t.find_many = AsyncMock(return_value=list(agents) if agents else [])
+    agent_t.update = AsyncMock(return_value=updated if updated is not None else agent)
     p.db.litellm_managedagenttable = agent_t
     return p
 
@@ -288,3 +291,128 @@ def test_create_agent_rejects_private_template_for_non_owner(app_factory, other_
 
     assert resp.status_code == 404
     agent_t.create.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# pfp_url surfaces from metadata
+# ---------------------------------------------------------------------------
+
+
+def test_get_agent_surfaces_pfp_url_from_metadata(app_factory, user):
+    client = app_factory(user)
+    a = _make_agent(metadata={"pfp_url": "data:image/jpeg;base64,AAAA"})
+    prisma = _make_prisma(agent=a)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents/agt-1")
+    assert resp.status_code == 200
+    assert resp.json()["pfp_url"] == "data:image/jpeg;base64,AAAA"
+
+
+def test_get_agent_pfp_url_null_when_absent(app_factory, user):
+    client = app_factory(user)
+    a = _make_agent(metadata={})
+    prisma = _make_prisma(agent=a)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents/agt-1")
+    assert resp.json()["pfp_url"] is None
+
+
+def test_get_agent_metadata_as_json_string(app_factory, user):
+    """Prisma sometimes returns Json columns as string. _coerce_metadata
+    should parse it transparently."""
+    client = app_factory(user)
+    a = _make_agent(metadata='{"pfp_url": "https://x/y.png"}')
+    prisma = _make_prisma(agent=a)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents/agt-1")
+    assert resp.json()["pfp_url"] == "https://x/y.png"
+
+
+# ---------------------------------------------------------------------------
+# update_agent (PATCH)
+# ---------------------------------------------------------------------------
+
+
+def test_update_agent_sets_pfp_url(app_factory, user):
+    client = app_factory(user)
+    existing = _make_agent(metadata={"litellm_api_key": "sk-x"})
+    updated = _make_agent(
+        metadata={"litellm_api_key": "sk-x", "pfp_url": "data:image/jpeg;base64,AAAA"}
+    )
+    prisma = _make_prisma(agent=existing, updated=updated)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.patch(
+            "/v1/managed_agents/agents/agt-1",
+            json={"pfp_url": "data:image/jpeg;base64,AAAA"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["pfp_url"] == "data:image/jpeg;base64,AAAA"
+
+    # Confirm we didn't clobber existing metadata. jsonify_object serializes
+    # the metadata dict to a JSON string before it hits Prisma.
+    _, kwargs = prisma.db.litellm_managedagenttable.update.call_args
+    new_metadata = json.loads(kwargs["data"]["metadata"])
+    assert new_metadata["litellm_api_key"] == "sk-x"
+    assert new_metadata["pfp_url"] == "data:image/jpeg;base64,AAAA"
+
+
+def test_update_agent_clears_pfp_url_with_empty_string(app_factory, user):
+    client = app_factory(user)
+    existing = _make_agent(metadata={"pfp_url": "old", "litellm_api_key": "sk-x"})
+    updated = _make_agent(metadata={"litellm_api_key": "sk-x"})
+    prisma = _make_prisma(agent=existing, updated=updated)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.patch("/v1/managed_agents/agents/agt-1", json={"pfp_url": ""})
+    assert resp.status_code == 200
+    _, kwargs = prisma.db.litellm_managedagenttable.update.call_args
+    new_metadata = json.loads(kwargs["data"]["metadata"])
+    assert "pfp_url" not in new_metadata
+    # other metadata is preserved
+    assert new_metadata["litellm_api_key"] == "sk-x"
+
+
+def test_update_agent_renames_via_name_field(app_factory, user):
+    client = app_factory(user)
+    existing = _make_agent(agent_name="old")
+    updated = _make_agent(agent_name="renamed")
+    prisma = _make_prisma(agent=existing, updated=updated)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.patch("/v1/managed_agents/agents/agt-1", json={"name": "renamed"})
+    assert resp.status_code == 200
+    _, kwargs = prisma.db.litellm_managedagenttable.update.call_args
+    assert kwargs["data"]["agent_name"] == "renamed"
+
+
+def test_update_agent_404(app_factory, user):
+    client = app_factory(user)
+    prisma = _make_prisma(agent=None)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.patch(
+            "/v1/managed_agents/agents/missing",
+            json={"pfp_url": "x"},
+        )
+    assert resp.status_code == 404
+
+
+def test_update_agent_no_op_when_body_empty(app_factory, user):
+    client = app_factory(user)
+    existing = _make_agent()
+    prisma = _make_prisma(agent=existing)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.patch("/v1/managed_agents/agents/agt-1", json={})
+    assert resp.status_code == 200
+    # update was not called when nothing to update
+    prisma.db.litellm_managedagenttable.update.assert_not_called()
+
+
+def test_update_agent_rejects_unknown_field(app_factory, user):
+    client = app_factory(user)
+    existing = _make_agent()
+    prisma = _make_prisma(agent=existing)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.patch(
+            "/v1/managed_agents/agents/agt-1",
+            json={"model": "gpt-4o-mini"},
+        )
+    # AgentUpdate has extra="forbid"
+    assert resp.status_code == 422
