@@ -122,6 +122,7 @@ async def create_session(
     )
     if agent is None:
         raise HTTPException(status_code=404, detail=f"agent '{agent_id}' not found")
+    _assert_owner_or_admin(user_api_key_dict, agent.created_by, "agent", agent_id)
 
     template = getattr(agent, "template", None)
     if template is None:

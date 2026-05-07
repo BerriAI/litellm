@@ -185,3 +185,46 @@ def test_get_agent_visible_to_admin(app_factory, admin):
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         resp = client.get("/v1/managed_agents/agents/agt-9")
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# create_agent — template visibility enforcement
+# ---------------------------------------------------------------------------
+
+
+def _make_template(template_id="tmpl-1", visibility="public", created_by="u1"):
+    return SimpleNamespace(
+        template_id=template_id,
+        template_name="t",
+        dockerfile_id="opencode",
+        container_port=4096,
+        repo_url="https://github.com/x/y",
+        default_branch="main",
+        visibility=visibility,
+        git_credential_id=None,
+        created_by=created_by,
+    )
+
+
+def test_create_agent_rejects_private_template_for_non_owner(app_factory, other_user):
+    client = app_factory(other_user)
+    template = _make_template(visibility="private", created_by="u1")
+    p = MagicMock()
+    template_t = MagicMock()
+    template_t.find_unique = AsyncMock(return_value=template)
+    p.db.litellm_managedagentsandboxtemplatetable = template_t
+    agent_t = MagicMock()
+    agent_t.create = AsyncMock()
+    p.db.litellm_managedagenttable = agent_t
+
+    body = {
+        "name": "agt",
+        "model": "anthropic/claude-sonnet-4-6",
+        "template_id": "tmpl-1",
+    }
+
+    with patch("litellm.proxy.proxy_server.prisma_client", p):
+        resp = client.post("/v1/managed_agents/agents", json=body)
+
+    assert resp.status_code == 404
+    agent_t.create.assert_not_called()

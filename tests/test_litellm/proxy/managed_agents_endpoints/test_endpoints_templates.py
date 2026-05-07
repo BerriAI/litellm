@@ -314,3 +314,94 @@ def test_template_delete_with_agents_409(app_factory, admin, fake_prisma):
     with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma):
         resp = client.delete("/v1/managed_agents/sandbox-templates/t1")
     assert resp.status_code == 409
+
+
+def test_template_delete_uses_litellm_agents_cluster_default(
+    app_factory, admin, fake_prisma
+):
+    """Default cluster name on template delete must match _resolve_cluster
+    elsewhere ('litellm-agents'); a mismatch leaves orphan Fargate tasks."""
+    client = app_factory(admin)
+    fake_prisma.db.litellm_managedagentsandboxtemplatetable.find_unique = AsyncMock(
+        return_value=_template_row(template_id="t1")
+    )
+    fake_prisma.db.litellm_managedagenttable.count = AsyncMock(return_value=0)
+    stop_mock = AsyncMock(return_value=0)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", fake_prisma),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints.stop_sessions_for_template",
+            new=stop_mock,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.config_loader.MANAGED_AGENTS_CONFIG",
+            SimpleNamespace(aws_region="us-west-2", aws=SimpleNamespace(cluster=None)),
+        ),
+        patch("boto3.client", return_value=MagicMock()),
+    ):
+        resp = client.delete("/v1/managed_agents/sandbox-templates/t1")
+    assert resp.status_code == 200
+    _, kwargs = stop_mock.call_args
+    assert kwargs["cluster"] == "litellm-agents"
+
+
+def test_template_create_validate_repo_branch_runs_off_thread(
+    app_factory, admin, fake_prisma
+):
+    """validate_repo_branch must be wrapped in asyncio.to_thread to avoid
+    blocking the event loop on the 15s subprocess."""
+    import asyncio as _asyncio
+
+    client = app_factory(admin)
+    fake_prisma.db.litellm_managedagentsandboxtemplatetable.create = AsyncMock(
+        return_value=_template_row(template_id="t1", visibility="public")
+    )
+    fake_prisma.db.litellm_managedagentsandboxtemplatetable.update = AsyncMock(
+        return_value=_template_row(template_id="t1", visibility="public")
+    )
+    provisioned = SimpleNamespace(
+        image_uri="img:abc",
+        task_def_arn="arn:td",
+        image_hash="abc",
+    )
+
+    captured: dict = {"called_in_thread": None}
+
+    def fake_validate(*args, **kwargs):
+        try:
+            running_loop = _asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        captured["called_in_thread"] = running_loop is None
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", fake_prisma),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints.get_dockerfile",
+            return_value=SimpleNamespace(
+                dockerfile_id="opencode",
+                container_port=4096,
+                path="/x",
+                context_dir="/x",
+                build_platform="linux/amd64",
+            ),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints.validate_repo_branch",
+            side_effect=fake_validate,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints.provision_template",
+            AsyncMock(return_value=provisioned),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.config_loader.MANAGED_AGENTS_CONFIG",
+            SimpleNamespace(aws_region="us-west-2", aws=SimpleNamespace(cluster=None)),
+        ),
+        patch("boto3.client", return_value=MagicMock()),
+    ):
+        resp = client.post("/v1/managed_agents/sandbox-templates", json=_public_body())
+    assert resp.status_code == 200, resp.text
+    # validate_repo_branch was invoked from a worker thread (no running loop)
+    assert captured["called_in_thread"] is True

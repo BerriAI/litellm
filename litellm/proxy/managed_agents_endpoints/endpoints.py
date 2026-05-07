@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Dict, List
 
 import boto3
@@ -133,7 +134,9 @@ async def create_sandbox_template(
             detail="visibility=public must not include git_token",
         )
 
-    validate_repo_branch(body.repo_url, body.default_branch, body.git_token)
+    await asyncio.to_thread(
+        validate_repo_branch, body.repo_url, body.default_branch, body.git_token
+    )
 
     git_credential_id = None
     if body.git_token:
@@ -304,7 +307,7 @@ async def delete_sandbox_template(
 
     region = _resolve_region()
     aws_overrides = _resolve_aws_overrides()
-    cluster = aws_overrides.cluster or "litellm-managed-agents"
+    cluster = aws_overrides.cluster or "litellm-agents"
 
     try:
         await stop_sessions_for_template(

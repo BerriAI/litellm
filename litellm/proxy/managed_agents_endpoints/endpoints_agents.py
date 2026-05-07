@@ -8,6 +8,7 @@ from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_au
 from litellm.proxy.managed_agents_endpoints.endpoints import (
     _assert_owner_or_admin,
     _is_admin,
+    _template_visible_to,
     router,
 )
 from litellm.proxy.managed_agents_endpoints.git_validation import (
@@ -44,7 +45,7 @@ async def create_agent(
             where={"template_id": body.template_id}
         )
     )
-    if template is None:
+    if template is None or not _template_visible_to(template, user_api_key_dict):
         raise HTTPException(
             status_code=404, detail=f"template '{body.template_id}' not found"
         )

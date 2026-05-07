@@ -62,7 +62,7 @@ def _make_template(build_status="ready"):
     )
 
 
-def _make_agent(template):
+def _make_agent(template, created_by="u1"):
     a = SimpleNamespace(
         agent_id="agt-1",
         agent_name="a",
@@ -72,6 +72,7 @@ def _make_agent(template):
         template_id=template.template_id,
         branch="main",
         metadata={"litellm_api_key": "sk-x", "litellm_api_base": "http://x"},
+        created_by=created_by,
     )
     a.template = template
     return a
@@ -128,6 +129,19 @@ def test_create_session_404_when_agent_missing(app_factory, user):
         resp = client.post("/v1/managed_agents/agents/missing/session", json={})
     assert resp.status_code == 404
     assert "missing" in resp.json()["detail"]
+
+
+def test_create_session_404_when_caller_does_not_own_agent(app_factory):
+    other = UserAPIKeyAuth(
+        api_key="sk-other", user_id="u2", user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    client = app_factory(other)
+    template = _make_template()
+    agent = _make_agent(template, created_by="u1")
+    prisma = _make_prisma(agent=agent)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.post("/v1/managed_agents/agents/agt-1/session", json={})
+    assert resp.status_code == 404
 
 
 def test_create_session_409_when_template_not_ready(app_factory, user):
