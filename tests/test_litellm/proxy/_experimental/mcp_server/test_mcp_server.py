@@ -1228,6 +1228,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
         mcp_auth_header=None,
         extra_headers=None,
         stdio_env=None,
+        subject_token=None,
     ):
         # Capture the arguments for verification
         captured_client_args.update(
@@ -1236,6 +1237,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
                 "mcp_auth_header": mcp_auth_header,
                 "extra_headers": extra_headers,
                 "stdio_env": stdio_env,
+                "subject_token": subject_token,
             }
         )
         # Return a mock client that doesn't actually connect
