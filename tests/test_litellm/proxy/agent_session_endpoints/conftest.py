@@ -312,7 +312,7 @@ class _RecordingNoopProvider:
     name = "noop"
 
     def __init__(self) -> None:
-        from litellm.proxy.agent_session_endpoints.vm_providers import NoopProvider
+        from litellm.managed_agents.vms import NoopProvider
 
         self._inner = NoopProvider()
         self.provision_calls: list = []
@@ -342,10 +342,10 @@ class _RecordingNoopProvider:
 @pytest.fixture
 def noop_provider(monkeypatch):
     """Reset the VM provider registry to a fresh recording noop."""
-    from litellm.proxy.agent_session_endpoints.vm_providers import (
+    from litellm.managed_agents.vms import (
         register_vm_provider,
     )
-    from litellm.proxy.agent_session_endpoints.vm_providers.registry import (
+    from litellm.managed_agents.vms.registry import (
         reset_vm_provider_registry,
     )
 
