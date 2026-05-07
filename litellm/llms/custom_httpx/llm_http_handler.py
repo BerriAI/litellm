@@ -4740,6 +4740,42 @@ class BaseLLMHTTPHandler:
             **kwargs_for_followup,
         )
 
+    def _maybe_wrap_in_fake_stream(
+        self,
+        response: Any,
+        logging_obj: "LiteLLMLoggingObj",
+    ) -> Any:
+        """
+        If the original request was streaming but converted to non-streaming for
+        WebSearch interception, wrap the dict response in a FakeAnthropicMessagesStreamIterator.
+        """
+        websearch_converted_stream = (
+            logging_obj.model_call_details.get(
+                "websearch_interception_converted_stream", False
+            )
+            if logging_obj is not None
+            else False
+        )
+        if websearch_converted_stream and isinstance(response, dict):
+            from typing import cast
+
+            from litellm._logging import verbose_logger
+            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                FakeAnthropicMessagesStreamIterator,
+            )
+            from litellm.types.llms.anthropic_messages.anthropic_response import (
+                AnthropicMessagesResponse,
+            )
+
+            verbose_logger.debug(
+                "WebSearchInterception: Agentic loop completed, "
+                "converting non-streaming response to fake stream"
+            )
+            return FakeAnthropicMessagesStreamIterator(
+                response=cast(AnthropicMessagesResponse, response)
+            )
+        return response
+
     async def _call_agentic_completion_hooks(
         self,
         response: Any,
@@ -4821,7 +4857,7 @@ class BaseLLMHTTPHandler:
                     is not CustomLogger.async_build_agentic_loop_plan
                 )
                 if not build_plan_overridden:
-                    return await callback.async_run_agentic_loop(
+                    agentic_result = await callback.async_run_agentic_loop(
                         tools=tool_calls,
                         model=model,
                         messages=messages,
@@ -4831,6 +4867,9 @@ class BaseLLMHTTPHandler:
                         logging_obj=logging_obj,
                         stream=stream,
                         kwargs=kwargs_with_provider,
+                    )
+                    return self._maybe_wrap_in_fake_stream(
+                        agentic_result, logging_obj
                     )
 
                 plan = await callback.async_build_agentic_loop_plan(
@@ -4857,18 +4896,21 @@ class BaseLLMHTTPHandler:
                 if not plan.run_agentic_loop:
                     continue
 
-                return await self._execute_anthropic_agentic_plan(
-                    plan=plan,
-                    model=model,
-                    messages=messages,
-                    anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-                    logging_obj=logging_obj,
-                    kwargs=kwargs_with_provider,
-                    depth=depth,
-                    max_loops=max_loops,
-                    fingerprints=fingerprints,
-                    fingerprint=fingerprint,
-                    stream=stream,
+                return self._maybe_wrap_in_fake_stream(
+                    await self._execute_anthropic_agentic_plan(
+                        plan=plan,
+                        model=model,
+                        messages=messages,
+                        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                        logging_obj=logging_obj,
+                        kwargs=kwargs_with_provider,
+                        depth=depth,
+                        max_loops=max_loops,
+                        fingerprints=fingerprints,
+                        fingerprint=fingerprint,
+                        stream=stream,
+                    ),
+                    logging_obj,
                 )
             except Exception as e:
                 _call_id = getattr(logging_obj, "litellm_call_id", "unknown")
