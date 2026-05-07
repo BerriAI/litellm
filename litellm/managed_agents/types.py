@@ -63,6 +63,19 @@ class AgentRow(BaseModel):
     updated_at: datetime
 
 
+class AgentList(BaseModel):
+    """Paginated list response for `GET /v2/agents`.
+
+    `config.litellm_api_key` is masked on each row in `data`.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    data: List[AgentRow]
+    next_cursor: Optional[str] = None
+    has_more: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Sandbox / session
 # ---------------------------------------------------------------------------
@@ -135,6 +148,16 @@ class SessionRow(BaseModel):
     created_by: Optional[str] = None
     created_at: datetime
     terminated_at: Optional[datetime] = None
+
+
+class SessionList(BaseModel):
+    """Paginated list response for `GET /v2/agents/:id/sessions`."""
+
+    model_config = ConfigDict(extra="allow")
+
+    data: List[SessionRow]
+    next_cursor: Optional[str] = None
+    has_more: bool = False
 
 
 # ---------------------------------------------------------------------------
