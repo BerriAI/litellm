@@ -161,6 +161,11 @@ MCP_STDIO_ALLOWED_COMMANDS: frozenset = frozenset(
     | (set(_MCP_STDIO_EXTRA_COMMANDS.split(",")) - {""})
 )
 
+# MCP OAuth2 Token Exchange (OBO) Defaults
+MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE = int(
+    os.getenv("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", "500")
+)
+
 LITELLM_UI_ALLOW_HEADERS = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
