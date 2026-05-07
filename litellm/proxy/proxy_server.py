@@ -4063,7 +4063,13 @@ class ProxyConfig:
             ## URL VALIDATION SETTINGS ##
             _user_url_validation = general_settings.get("user_url_validation", None)
             if _user_url_validation is not None:
-                litellm.user_url_validation = bool(_user_url_validation)
+                if isinstance(_user_url_validation, str):
+                    litellm.user_url_validation = (
+                        _user_url_validation.strip().lower()
+                        not in ("false", "0", "no", "off")
+                    )
+                else:
+                    litellm.user_url_validation = bool(_user_url_validation)
             _user_url_allowed_hosts = general_settings.get(
                 "user_url_allowed_hosts", None
             )
