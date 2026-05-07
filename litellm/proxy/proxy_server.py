@@ -382,7 +382,7 @@ from litellm.proxy.management_endpoints.tag_management_endpoints import (
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
-from litellm.managed_agents.router import managed_agents_router
+from litellm.proxy.managed_agents_endpoints.router import managed_agents_router
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
 from litellm.proxy.management_endpoints.team_endpoints import (
     update_team,
