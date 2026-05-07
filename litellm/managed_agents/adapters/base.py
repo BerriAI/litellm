@@ -1,7 +1,7 @@
 """Sandbox adapter protocol for managed agents v2.
 
 Each sandbox provider (today: only opencode) implements this protocol. The
-endpoint handlers in `litellm/managed_agents/router.py` resolve an adapter
+endpoint handlers in `litellm/proxy/managed_agents_endpoints/router.py` resolve an adapter
 via `registry.get_adapter(sandbox_type)` and use it to translate sandbox-
 agnostic public-API calls into provider-specific HTTP requests.
 
