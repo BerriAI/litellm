@@ -3,12 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import CreateKey from "./create_key_button";
 
-const { formMock, setFieldsValueMock, radioGroupValueRef, formStateRef, mockKeyCreateCall } = vi.hoisted(() => {
+const { formMock, setFieldsValueMock, radioGroupValueRef, formStateRef, mockKeyCreateCall, mockModelAvailableCall } = vi.hoisted(() => {
   const formStateRef = { current: {} as Record<string, any> };
   const mockKeyCreateCall = vi.fn().mockResolvedValue({
     key: "test-api-key",
     soft_budget: null,
   });
+  const mockModelAvailableCall = vi.fn().mockResolvedValue({ data: [{ id: "gpt-4" }] });
   const formMock = {
     setFieldsValue: vi.fn((values: Record<string, any>) => {
       Object.assign(formStateRef.current, values);
@@ -28,6 +29,7 @@ const { formMock, setFieldsValueMock, radioGroupValueRef, formStateRef, mockKeyC
     radioGroupValueRef,
     formStateRef,
     mockKeyCreateCall,
+    mockModelAvailableCall,
   };
 });
 
@@ -176,7 +178,7 @@ vi.mock("antd", () => {
 
 vi.mock("../networking", () => ({
   keyCreateCall: mockKeyCreateCall,
-  modelAvailableCall: vi.fn().mockResolvedValue({ data: [{ id: "gpt-4" }] }),
+  modelAvailableCall: mockModelAvailableCall,
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
   getPromptsList: vi.fn().mockResolvedValue({ prompts: [] }),
@@ -329,6 +331,7 @@ describe("CreateKey", () => {
       key: "test-api-key",
       soft_budget: null,
     });
+    mockModelAvailableCall.mockResolvedValue({ data: [{ id: "gpt-4" }] });
   });
 
   it("should render the CreateKey component", () => {
@@ -468,6 +471,40 @@ describe("CreateKey", () => {
 
     await waitFor(() => {
       expect(setFieldsValueMock).toHaveBeenCalledWith({ key_type: "management" });
+    });
+  });
+
+  it("should not force team selection when no-default-models appears with other models", async () => {
+    mockModelAvailableCall.mockResolvedValue({
+      data: [{ id: "no-default-models" }, { id: "gpt-4" }],
+    });
+
+    renderWithProviders(<CreateKey {...defaultProps} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/please select a team to continue configuring your virtual key/i)).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Key Details")).toBeInTheDocument();
+  });
+
+  it("should force team selection when no-default-models is the only available model", async () => {
+    mockModelAvailableCall.mockResolvedValue({
+      data: [{ id: "no-default-models" }],
+    });
+
+    renderWithProviders(<CreateKey {...defaultProps} />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /create new key/i }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/please select a team to continue configuring your virtual key/i)).toBeInTheDocument();
     });
   });
 
