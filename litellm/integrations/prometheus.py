@@ -1416,11 +1416,19 @@ class PrometheusLogger(CustomLogger):
         )
         remaining_tokens_variable_name = f"litellm-key-remaining-tokens-{model_group}"
 
-        remaining_requests = (
-            metadata.get(remaining_requests_variable_name, sys.maxsize) or sys.maxsize
+        standard_logging_payload = kwargs.get("standard_logging_object", {}) or {}
+        hidden_params = standard_logging_payload.get("hidden_params", {}) or {}
+        additional_headers = hidden_params.get("additional_headers", {}) or {}
+
+        remaining_requests = self._get_virtual_key_rate_limit_value(
+            metadata_value=metadata.get(remaining_requests_variable_name),
+            additional_headers=additional_headers,
+            additional_header_name="x-ratelimit-model_per_key-remaining-requests",
         )
-        remaining_tokens = (
-            metadata.get(remaining_tokens_variable_name, sys.maxsize) or sys.maxsize
+        remaining_tokens = self._get_virtual_key_rate_limit_value(
+            metadata_value=metadata.get(remaining_tokens_variable_name),
+            additional_headers=additional_headers,
+            additional_header_name="x-ratelimit-model_per_key-remaining-tokens",
         )
 
         self.litellm_remaining_api_key_requests_for_model.labels(
@@ -1436,6 +1444,21 @@ class PrometheusLogger(CustomLogger):
             _sanitize_prometheus_label_value(model_group),
             _sanitize_prometheus_label_value(model_id),
         ).set(remaining_tokens)
+
+    @staticmethod
+    def _get_virtual_key_rate_limit_value(
+        metadata_value: Any,
+        additional_headers: dict,
+        additional_header_name: str,
+    ) -> Any:
+        if metadata_value is not None:
+            return metadata_value
+
+        additional_header_value = additional_headers.get(additional_header_name)
+        if additional_header_value is not None:
+            return additional_header_value
+
+        return sys.maxsize
 
     def _set_latency_metrics(
         self,
