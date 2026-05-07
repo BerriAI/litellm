@@ -19,6 +19,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+import prisma
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
 
@@ -342,20 +343,28 @@ async def create_session(
         agent_id=body.agent_id,
         expires_at_epoch=int(expires_at.timestamp()),
     )
-    payload = {
+    # Prisma create payload notes:
+    # - JSON columns (``repos``, ``env_vars``) must be wrapped in
+    #   ``prisma.Json(...)``; bare dict/list values trigger
+    #   ``MissingRequiredValueError``.
+    # - Relation fields (``agent``) must use ``{"connect": {"id": ...}}``;
+    #   bare ``agent_id`` strings are rejected by the generated client
+    #   even though the underlying SQL column is ``agent_id`` (a TEXT FK).
+    payload: Dict[str, Any] = {
         "id": session_id,
-        "agent_id": body.agent_id,
+        "agent": {"connect": {"id": body.agent_id}},
         "user_api_key_hash": user_hash,
         "team_id": user_api_key_dict.team_id,
         "vm_provider": DEFAULT_VM_PROVIDER_NAME,
-        "repos": resolved_repos,
-        "env_vars": resolved_env_vars,
+        "repos": prisma.Json(resolved_repos or []),
         "status": SESSION_STATUS_PROVISIONING,
         "daemon_token_hash": hash_daemon_token(daemon_token),
         "expires_at": expires_at,
         "idempotency_key": idempotency_key,
         "updated_at": _now(),
     }
+    if resolved_env_vars is not None:
+        payload["env_vars"] = prisma.Json(resolved_env_vars)
     row = await prisma_client.db.litellm_agentsession.create(data=payload)
 
     # Try warm-pool attach first. Per LIT-2890, this is the primary path
