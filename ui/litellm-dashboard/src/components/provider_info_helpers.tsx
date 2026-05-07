@@ -95,7 +95,7 @@ export enum Providers {
   VERCEL_AI_GATEWAY = "Vercel Ai Gateway",
   Vertex_AI = "Vertex AI (Anthropic, Gemini, etc.)",
   VERTEX_AI_BETA = "Vertex Ai Beta",
-  VLLM = "Vllm",
+  VLLM = "vLLM (deprecated, packaged installs)",
   VolcEngine = "VolcEngine",
   Voyage = "Voyage AI",
   WANDB = "Wandb",
