@@ -10,15 +10,15 @@ Public surface:
 - ``HydratePayload`` — wire format the daemon receives
 """
 
-from litellm.proxy.agent_session_endpoints.warm_pool.attach import (
+from litellm.managed_agents.vms.warm_pool.attach import (
     AttachResult,
     attach_warm_vm,
 )
-from litellm.proxy.agent_session_endpoints.warm_pool.hydrate import (
+from litellm.managed_agents.vms.warm_pool.hydrate import (
     build_hydrate_payload,
 )
-from litellm.proxy.agent_session_endpoints.warm_pool.manager import WarmPoolManager
-from litellm.proxy.agent_session_endpoints.warm_pool.types import (
+from litellm.managed_agents.vms.warm_pool.manager import WarmPoolManager
+from litellm.managed_agents.vms.warm_pool.types import (
     AgentConfig,
     HydratePayload,
     NetworkAccess,
