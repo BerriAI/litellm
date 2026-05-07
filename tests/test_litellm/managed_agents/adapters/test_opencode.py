@@ -1,22 +1,33 @@
 """Unit tests for the opencode sandbox adapter.
 
-Covers `litellm/managed_agents/adapters/opencode.py` per the v2 contract §7
-(`.claude/v2_api_contract.md`):
+Covers `litellm/managed_agents/adapters/opencode.py` per the v2 contract
+§7 (`.claude/v2_api_contract.md`) and against the REAL opencode 1.14.41
+wire shapes documented in `.claude/v2_opencode_real_responses.md`.
 
+Coverage:
   - send_message: POST <sandbox_url>/session/<oc_sid>/prompt_async with
-    body {parts: [{type:"text", text: content}], model}; 204 -> success;
+    body ``{parts:[{type:"text",text:content}], model:{providerID,modelID}}``;
+    string-form ``"<provider>/<model>"`` is split into the object form;
+    ``model`` is omitted when it has no ``/`` separator; 204 -> success;
     ConnectError -> SandboxUnreachableError; returns None.
   - list_messages: GET <sandbox_url>/session/<oc_sid>/message; normalize
-    each entry into MessageRow; empty -> [].
-  - stream_events: yields ("connected", {...}) first, then translated
-    opencode events; drops events for other opencode_session_ids;
+    each ``{info, parts}`` envelope into MessageRow; empty -> [].
+  - stream_events: yields ``("connected", ...)`` first; tracks
+    ``partID -> type`` across events so ``message.part.delta`` for text
+    is yielded as ``message.text.delta``; routes
+    ``message.part.updated`` for tools to ``message.tool.started`` /
+    ``.completed``; tracks the in-flight assistant ``message_id`` so
+    ``session.idle`` (which carries no messageID in real opencode) is
+    enriched before being yielded; auto-grants permission on
+    ``permission.asked``; drops events for other opencode_session_ids;
     ConnectError -> SandboxUnreachableError.
   - delete: DELETE <sandbox_url>/session/<oc_sid>; errors swallowed.
 
-HTTP mocking uses `respx` (already a dev dep). Tests are async and rely on
-the repo's `asyncio_mode = "auto"` setting.
+HTTP mocking uses ``respx`` (already a dev dep). Tests are async and rely
+on the repo's ``asyncio_mode = "auto"`` setting.
 """
 
+import asyncio
 import json
 from typing import Any, Dict, List
 
@@ -24,11 +35,7 @@ import httpx
 import pytest
 import respx
 
-# The adapter module is being built in parallel by the adapter agent.
-# Skip cleanly if it isn't here yet so the rest of the test suite still runs.
-opencode_module = pytest.importorskip(
-    "litellm.managed_agents.adapters.opencode"
-)
+opencode_module = pytest.importorskip("litellm.managed_agents.adapters.opencode")
 adapter_base = pytest.importorskip("litellm.managed_agents.adapters.base")
 types_module = pytest.importorskip("litellm.managed_agents.types")
 
@@ -38,22 +45,25 @@ MessageRow = types_module.MessageRow
 
 
 SANDBOX_URL = "http://127.0.0.1:1234"
-OC_SID = "oc_sid_xxx"
+OC_SID = "ses_oc_xxx"
 OUR_SID = "ses_test"
+
+_TS_CREATED_MS = 1778172682972
+_TS_COMPLETED_MS = 1778172689905
 
 
 def _make_adapter() -> Any:
     """Build a fresh adapter instance.
 
-    Adapters are stateless per the protocol docstring, so no setup is needed.
-    The builder exists so a future change in constructor signature only has
-    to be updated in one place.
+    Adapters are stateless across calls per the protocol docstring, so
+    no setup is needed. The builder exists so a future change in
+    constructor signature only has to be updated in one place.
     """
     return OpencodeAdapter()
 
 
 # ---------------------------------------------------------------------------
-# send_message
+# send_message — model object split
 # ---------------------------------------------------------------------------
 
 
@@ -61,13 +71,15 @@ class TestSendMessage:
     """POST <sandbox_url>/session/<oc_sid>/prompt_async."""
 
     @pytest.mark.asyncio
-    async def test_posts_correct_url_and_body(self) -> None:
+    async def test_posts_correct_url_and_splits_model_into_provider_object(
+        self,
+    ) -> None:
         adapter = _make_adapter()
 
         with respx.mock(assert_all_called=True) as mock:
-            route = mock.post(
-                f"{SANDBOX_URL}/session/{OC_SID}/prompt_async"
-            ).mock(return_value=httpx.Response(204))
+            route = mock.post(f"{SANDBOX_URL}/session/{OC_SID}/prompt_async").mock(
+                return_value=httpx.Response(204)
+            )
 
             result = await adapter.send_message(
                 sandbox_url=SANDBOX_URL,
@@ -78,19 +90,82 @@ class TestSendMessage:
 
             assert result is None
             assert route.called
-            assert route.call_count == 1
             request = route.calls[0].request
-            assert request.method == "POST"
-            assert (
-                str(request.url)
-                == f"{SANDBOX_URL}/session/{OC_SID}/prompt_async"
-            )
-
             body = json.loads(request.content.decode("utf-8"))
+            # Real opencode rejects string-form ``model`` — must be object.
             assert body == {
                 "parts": [{"type": "text", "text": "Hello, who are you?"}],
-                "model": "anthropic/claude-opus-4",
+                "model": {
+                    "providerID": "anthropic",
+                    "modelID": "claude-opus-4",
+                },
             }
+
+    @pytest.mark.asyncio
+    async def test_model_with_extra_slashes_keeps_modelid_intact(self) -> None:
+        """Some model identifiers contain ``/`` (e.g.
+        ``"openrouter/anthropic/claude-3"``). We split on the first slash
+        only so the rest stays as ``modelID``."""
+        adapter = _make_adapter()
+
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{SANDBOX_URL}/session/{OC_SID}/prompt_async").mock(
+                return_value=httpx.Response(204)
+            )
+
+            await adapter.send_message(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+                content="hi",
+                model="openrouter/anthropic/claude-3",
+            )
+
+            body = json.loads(route.calls[0].request.content.decode("utf-8"))
+            assert body["model"] == {
+                "providerID": "openrouter",
+                "modelID": "anthropic/claude-3",
+            }
+
+    @pytest.mark.asyncio
+    async def test_model_without_slash_is_omitted(self) -> None:
+        """opencode treats a missing ``model`` field as "use default" —
+        we omit the field entirely instead of guessing a providerID."""
+        adapter = _make_adapter()
+
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{SANDBOX_URL}/session/{OC_SID}/prompt_async").mock(
+                return_value=httpx.Response(204)
+            )
+
+            await adapter.send_message(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+                content="hi",
+                model="just-a-name",
+            )
+
+            body = json.loads(route.calls[0].request.content.decode("utf-8"))
+            assert "model" not in body
+            assert body == {"parts": [{"type": "text", "text": "hi"}]}
+
+    @pytest.mark.asyncio
+    async def test_model_none_is_omitted(self) -> None:
+        adapter = _make_adapter()
+
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{SANDBOX_URL}/session/{OC_SID}/prompt_async").mock(
+                return_value=httpx.Response(204)
+            )
+
+            await adapter.send_message(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+                content="hi",
+                model=None,
+            )
+
+            body = json.loads(route.calls[0].request.content.decode("utf-8"))
+            assert "model" not in body
 
     @pytest.mark.asyncio
     async def test_204_is_success(self) -> None:
@@ -98,11 +173,10 @@ class TestSendMessage:
         adapter = _make_adapter()
 
         with respx.mock as mock:
-            mock.post(
-                f"{SANDBOX_URL}/session/{OC_SID}/prompt_async"
-            ).mock(return_value=httpx.Response(204))
+            mock.post(f"{SANDBOX_URL}/session/{OC_SID}/prompt_async").mock(
+                return_value=httpx.Response(204)
+            )
 
-            # Should NOT raise. send_message returns None on success.
             result = await adapter.send_message(
                 sandbox_url=SANDBOX_URL,
                 opencode_session_id=OC_SID,
@@ -117,9 +191,9 @@ class TestSendMessage:
         adapter = _make_adapter()
 
         with respx.mock as mock:
-            mock.post(
-                f"{SANDBOX_URL}/session/{OC_SID}/prompt_async"
-            ).mock(side_effect=httpx.ConnectError("connection refused"))
+            mock.post(f"{SANDBOX_URL}/session/{OC_SID}/prompt_async").mock(
+                side_effect=httpx.ConnectError("connection refused")
+            )
 
             with pytest.raises(SandboxUnreachableError):
                 await adapter.send_message(
@@ -131,7 +205,7 @@ class TestSendMessage:
 
 
 # ---------------------------------------------------------------------------
-# list_messages
+# list_messages — {info, parts} envelopes
 # ---------------------------------------------------------------------------
 
 
@@ -139,33 +213,57 @@ class TestListMessages:
     """GET <sandbox_url>/session/<oc_sid>/message."""
 
     @pytest.mark.asyncio
-    async def test_normalizes_each_message_and_returns_message_rows(
+    async def test_normalizes_real_shape_messages_into_message_rows(
         self,
     ) -> None:
         adapter = _make_adapter()
 
+        # Real opencode response shape: bare array of {info, parts} envelopes.
         opencode_payload: List[Dict[str, Any]] = [
             {
-                "id": "msg_oc_1",
-                "sessionID": OC_SID,
-                "role": "user",
-                "parts": [{"type": "text", "text": "refactor src/auth.py"}],
-                "completedAt": "2026-05-07T15:04:05.123Z",
+                "info": {
+                    "id": "msg_oc_1",
+                    "sessionID": OC_SID,
+                    "role": "user",
+                    "time": {"created": _TS_CREATED_MS},
+                },
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": "refactor src/auth.py",
+                        "id": "prt_1",
+                    }
+                ],
             },
             {
-                "id": "msg_oc_2",
-                "sessionID": OC_SID,
-                "role": "assistant",
+                "info": {
+                    "id": "msg_oc_2",
+                    "sessionID": OC_SID,
+                    "role": "assistant",
+                    "providerID": "opencode",
+                    "modelID": "minimax-m2.5-free",
+                    "time": {
+                        "created": _TS_CREATED_MS,
+                        "completed": _TS_COMPLETED_MS,
+                    },
+                    "finish": "stop",
+                },
                 "parts": [
+                    {"type": "step-start", "snapshot": "..."},
+                    {"type": "reasoning", "text": "thinking..."},
                     {"type": "text", "text": "I'll start by reading."},
                     {
                         "type": "tool",
-                        "name": "read",
-                        "input": {"path": "src/auth.py"},
-                        "output": "...",
+                        "tool": "read",
+                        "callID": "call_xxx",
+                        "state": {
+                            "status": "completed",
+                            "input": {"filePath": "src/auth.py"},
+                            "output": "...",
+                        },
                     },
+                    {"type": "step-finish", "reason": "stop"},
                 ],
-                "completedAt": "2026-05-07T15:04:06.000Z",
             },
         ]
 
@@ -196,14 +294,16 @@ class TestListMessages:
 
             assert rows[1].id == "msg_oc_2"
             assert rows[1].role == "assistant"
+            # step-start, reasoning, step-finish are filtered out of content.
             assert rows[1].content == "I'll start by reading."
             assert rows[1].tools == [
                 {
                     "name": "read",
-                    "input": {"path": "src/auth.py"},
+                    "input": {"filePath": "src/auth.py"},
                     "output": "...",
                 }
             ]
+            assert rows[1].model == "opencode/minimax-m2.5-free"
 
     @pytest.mark.asyncio
     async def test_empty_array_returns_empty_list(self) -> None:
@@ -231,10 +331,8 @@ class TestListMessages:
 def _sse_payload(events: List[Dict[str, Any]]) -> bytes:
     """Build a valid SSE response body from event dicts.
 
-    opencode emits events on `<sandbox_url>/event` formatted as standard
-    SSE: each event is a `data: <json>\n\n` chunk. The adapter is expected
-    to decode each `data:` line into a dict and pass it to
-    `normalize_opencode_event` after filtering by `sessionID`.
+    opencode emits events on ``<sandbox_url>/event`` formatted as standard
+    SSE: each event is a ``data: <json>\\n\\n`` chunk.
     """
     chunks = []
     for ev in events:
@@ -250,34 +348,58 @@ class TestStreamEvents:
         adapter = _make_adapter()
 
         events_on_wire = [
+            # 1. New assistant message (no completed yet).
             {
                 "type": "message.updated",
-                "sessionID": OC_SID,
-                "properties": {
-                    "info": {"id": "msg_a4b5c6", "role": "assistant"},
-                    "sessionID": OC_SID,
-                },
-            },
-            {
-                "type": "message.part.updated",
-                "sessionID": OC_SID,
                 "properties": {
                     "sessionID": OC_SID,
-                    "part": {
-                        "type": "text",
-                        "messageID": "msg_a4b5c6",
-                        "text": "Hello",
+                    "info": {
+                        "id": "msg_a4b5c6",
+                        "sessionID": OC_SID,
+                        "role": "assistant",
+                        "time": {"created": _TS_CREATED_MS},
                     },
                 },
             },
+            # 2. Text part appears (registers partID -> "text").
             {
-                "type": "session.idle",
-                "sessionID": OC_SID,
+                "type": "message.part.updated",
+                "properties": {
+                    "sessionID": OC_SID,
+                    "part": {
+                        "id": "prt_text_1",
+                        "type": "text",
+                        "messageID": "msg_a4b5c6",
+                        "sessionID": OC_SID,
+                        "text": "",
+                    },
+                },
+            },
+            # 3. Streaming text delta — must route via partID lookup.
+            {
+                "type": "message.part.delta",
                 "properties": {
                     "sessionID": OC_SID,
                     "messageID": "msg_a4b5c6",
-                    "content": "Hello",
-                    "completedAt": "2026-05-07T15:04:05.123Z",
+                    "partID": "prt_text_1",
+                    "field": "text",
+                    "delta": "Hello",
+                },
+            },
+            # 4. Per-message completion via message.updated with time.completed.
+            {
+                "type": "message.updated",
+                "properties": {
+                    "sessionID": OC_SID,
+                    "info": {
+                        "id": "msg_a4b5c6",
+                        "sessionID": OC_SID,
+                        "role": "assistant",
+                        "time": {
+                            "created": _TS_CREATED_MS,
+                            "completed": _TS_COMPLETED_MS,
+                        },
+                    },
                 },
             },
         ]
@@ -305,34 +427,66 @@ class TestStreamEvents:
             assert first_type == "connected"
             assert first_data.get("session_id") == OUR_SID
 
-            # Subsequent translated events should appear in order.
             translated_types = [t for t, _ in collected[1:]]
             assert "message.started" in translated_types
             assert "message.text.delta" in translated_types
             assert "message.completed" in translated_types
 
+            # Verify the text delta carried the right content.
+            text_deltas = [d for t, d in collected if t == "message.text.delta"]
+            assert len(text_deltas) == 1
+            assert text_deltas[0]["delta"] == "Hello"
+            assert text_deltas[0]["message_id"] == "msg_a4b5c6"
+
     @pytest.mark.asyncio
-    async def test_drops_events_for_other_opencode_sessions(self) -> None:
+    async def test_part_types_map_persists_across_events(self) -> None:
+        """A delta arriving AFTER a tool ``message.part.updated`` must
+        still find the ``text`` part registered earlier in the stream."""
         adapter = _make_adapter()
 
-        other_sid = "oc_sid_OTHER"
         events_on_wire = [
-            # Belongs to a different opencode session — must be filtered out.
+            # Register text part.
             {
-                "type": "message.updated",
-                "sessionID": other_sid,
+                "type": "message.part.updated",
                 "properties": {
-                    "info": {"id": "msg_other", "role": "assistant"},
-                    "sessionID": other_sid,
+                    "sessionID": OC_SID,
+                    "part": {
+                        "id": "prt_text_1",
+                        "type": "text",
+                        "messageID": "msg_a4b5c6",
+                        "sessionID": OC_SID,
+                        "text": "",
+                    },
                 },
             },
-            # Belongs to our session — should be yielded.
+            # Register tool part (different partID).
             {
-                "type": "message.updated",
-                "sessionID": OC_SID,
+                "type": "message.part.updated",
                 "properties": {
-                    "info": {"id": "msg_ours", "role": "assistant"},
                     "sessionID": OC_SID,
+                    "part": {
+                        "id": "prt_tool_1",
+                        "type": "tool",
+                        "messageID": "msg_a4b5c6",
+                        "sessionID": OC_SID,
+                        "tool": "read",
+                        "callID": "call_xxx",
+                        "state": {
+                            "status": "running",
+                            "input": {"filePath": "src/auth.py"},
+                        },
+                    },
+                },
+            },
+            # Text delta should still route via the original partID.
+            {
+                "type": "message.part.delta",
+                "properties": {
+                    "sessionID": OC_SID,
+                    "messageID": "msg_a4b5c6",
+                    "partID": "prt_text_1",
+                    "field": "text",
+                    "delta": "still text",
                 },
             },
         ]
@@ -354,14 +508,173 @@ class TestStreamEvents:
             ):
                 collected.append(ev)
 
-            # We expect: [connected, message.started for msg_ours]. The
-            # `msg_other` event must NOT appear.
+            text_deltas = [d for t, d in collected if t == "message.text.delta"]
+            assert len(text_deltas) == 1
+            assert text_deltas[0]["delta"] == "still text"
+
+            tool_starts = [d for t, d in collected if t == "message.tool.started"]
+            assert len(tool_starts) == 1
+            assert tool_starts[0]["tool"] == "read"
+
+    @pytest.mark.asyncio
+    async def test_session_idle_is_enriched_with_tracked_message_id(
+        self,
+    ) -> None:
+        """Real opencode ``session.idle`` payload only carries
+        ``sessionID``. The adapter must inject the most recent assistant
+        ``message_id`` from prior ``message.updated`` events."""
+        adapter = _make_adapter()
+
+        events_on_wire = [
+            {
+                "type": "message.updated",
+                "properties": {
+                    "sessionID": OC_SID,
+                    "info": {
+                        "id": "msg_tracked",
+                        "sessionID": OC_SID,
+                        "role": "assistant",
+                        "time": {"created": _TS_CREATED_MS},
+                    },
+                },
+            },
+            {
+                "type": "session.idle",
+                "properties": {"sessionID": OC_SID},
+            },
+        ]
+
+        with respx.mock as mock:
+            mock.get(f"{SANDBOX_URL}/event").mock(
+                return_value=httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=_sse_payload(events_on_wire),
+                )
+            )
+
+            collected: List[Any] = []
+            async for ev in adapter.stream_events(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+                our_session_id=OUR_SID,
+            ):
+                collected.append(ev)
+
+            completes = [d for t, d in collected if t == "message.completed"]
+            # `session.idle` produces a ``message.completed`` enriched
+            # with the tracked ``message_id``.
+            assert any(d.get("message_id") == "msg_tracked" for d in completes)
+
+    @pytest.mark.asyncio
+    async def test_drops_events_for_other_opencode_sessions(self) -> None:
+        adapter = _make_adapter()
+
+        other_sid = "ses_oc_OTHER"
+        events_on_wire = [
+            {
+                "type": "message.updated",
+                "properties": {
+                    "sessionID": other_sid,
+                    "info": {
+                        "id": "msg_other",
+                        "sessionID": other_sid,
+                        "role": "assistant",
+                        "time": {"created": _TS_CREATED_MS},
+                    },
+                },
+            },
+            {
+                "type": "message.updated",
+                "properties": {
+                    "sessionID": OC_SID,
+                    "info": {
+                        "id": "msg_ours",
+                        "sessionID": OC_SID,
+                        "role": "assistant",
+                        "time": {"created": _TS_CREATED_MS},
+                    },
+                },
+            },
+        ]
+
+        with respx.mock as mock:
+            mock.get(f"{SANDBOX_URL}/event").mock(
+                return_value=httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=_sse_payload(events_on_wire),
+                )
+            )
+
+            collected: List[Any] = []
+            async for ev in adapter.stream_events(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+                our_session_id=OUR_SID,
+            ):
+                collected.append(ev)
+
             translated = [data for t, data in collected if t == "message.started"]
             assert len(translated) == 1
             assert translated[0].get("message_id") == "msg_ours"
 
             for _, data in collected:
                 assert data.get("message_id") != "msg_other"
+
+    @pytest.mark.asyncio
+    async def test_permission_asked_triggers_auto_grant(self) -> None:
+        """``permission.asked`` events fire a fire-and-forget POST to
+        ``/session/:sid/permissions/:per_id`` body
+        ``{"response":"once"}`` so tool calls don't hang."""
+        adapter = _make_adapter()
+
+        permission_id = "per_xxx"
+        events_on_wire = [
+            {
+                "type": "permission.asked",
+                "properties": {
+                    "id": permission_id,
+                    "sessionID": OC_SID,
+                    "permission": "external_directory",
+                    "patterns": ["/etc/*"],
+                    "metadata": {"filepath": "/etc/hostname"},
+                    "tool": {"messageID": "msg_a4b5c6", "callID": "call_xxx"},
+                },
+            },
+        ]
+
+        with respx.mock(assert_all_called=True) as mock:
+            mock.get(f"{SANDBOX_URL}/event").mock(
+                return_value=httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=_sse_payload(events_on_wire),
+                )
+            )
+            grant_route = mock.post(
+                f"{SANDBOX_URL}/session/{OC_SID}/permissions/{permission_id}"
+            ).mock(return_value=httpx.Response(200, json=True))
+
+            async for _ in adapter.stream_events(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+                our_session_id=OUR_SID,
+            ):
+                pass
+
+            # Auto-grant fires fire-and-forget via asyncio.create_task —
+            # give the loop a chance to settle outstanding tasks.
+            for _ in range(5):
+                if grant_route.called:
+                    break
+                await asyncio.sleep(0.01)
+
+            assert grant_route.called
+            grant_body = json.loads(
+                grant_route.calls[0].request.content.decode("utf-8")
+            )
+            assert grant_body == {"response": "once"}
 
     @pytest.mark.asyncio
     async def test_connect_error_raises_sandbox_unreachable(self) -> None:
