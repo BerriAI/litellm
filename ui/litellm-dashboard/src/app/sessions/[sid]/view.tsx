@@ -13,10 +13,6 @@ import remarkGfm from "remark-gfm";
 import {
   PanelLeft,
   Search,
-  SquarePen,
-  Workflow,
-  Home,
-  Bug,
   Circle,
   ChevronDown,
   ChevronRight,
@@ -27,6 +23,7 @@ import {
   ArrowUp,
   Square,
   Image as ImageIcon,
+  Loader2,
 } from "lucide-react";
 
 type MessageStatus = "in_progress" | "completed" | "failed";
@@ -172,8 +169,10 @@ export default function SessionThreadView() {
   const [agentNameById, setAgentNameById] = useState<Record<string, string>>(
     {},
   );
+  const [pendingMessageId, setPendingMessageId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const hasInProgress = useMemo(
     () => messages.some((m) => m.status === "in_progress"),
@@ -228,10 +227,11 @@ export default function SessionThreadView() {
     loadSession();
   }, [loadSession]);
 
-  // Load all sessions + agents for the rail
+  // Load all sessions + agents for the rail; poll every 5s so externally-created
+  // sessions (e.g. curl POST /v2/sessions) appear without reload.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const fetchAll = async () => {
       const proxy = getProxyBase();
       const headers = buildHeaders();
       try {
@@ -253,17 +253,21 @@ export default function SessionThreadView() {
       } catch {
         // silent
       }
-    })();
+    };
+    fetchAll();
+    const interval = setInterval(fetchAll, 5000);
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, [sessionId]);
 
-  // Poll while any message is in_progress
+  // Always poll messages (so externally-sent messages appear without reload).
+  // Faster when something is in_progress; slower when idle.
   useEffect(() => {
-    if (!sessionId || !hasInProgress) return;
+    if (!sessionId) return;
     let cancelled = false;
-    const interval = setInterval(async () => {
+    const fetchMessages = async () => {
       try {
         const res = await fetch(
           `${getProxyBase()}/v2/sessions/${sessionId}/messages`,
@@ -275,18 +279,31 @@ export default function SessionThreadView() {
       } catch {
         // silent
       }
-    }, POLL_INTERVAL_MS);
+    };
+    const intervalMs = hasInProgress ? POLL_INTERVAL_MS : 5000;
+    const interval = setInterval(fetchMessages, intervalMs);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
   }, [sessionId, hasInProgress]);
 
+  // Auto-scroll only when user is already near the bottom; don't hijack scroll
+  const lastMessageCountRef = useRef<number>(0);
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "end",
-    });
+    const c = scrollContainerRef.current;
+    if (!c) return;
+    const newCount = messages.length;
+    const grew = newCount > lastMessageCountRef.current;
+    lastMessageCountRef.current = newCount;
+    const distanceFromBottom = c.scrollHeight - c.scrollTop - c.clientHeight;
+    const nearBottom = distanceFromBottom < 200;
+    if (grew && nearBottom) {
+      messagesEndRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "end",
+      });
+    }
   }, [messages]);
 
   const handleSend = useCallback(async () => {
@@ -301,10 +318,11 @@ export default function SessionThreadView() {
       session_id: sessionId,
       role: "user",
       content,
-      status: "completed",
+      status: "in_progress", // queued — server hasn't confirmed yet
       created_at: new Date().toISOString(),
     };
     setMessages((prev) => [...prev, optimistic]);
+    setPendingMessageId(optimisticId);
     setDraft("");
 
     try {
@@ -328,9 +346,11 @@ export default function SessionThreadView() {
         const m: ListResponse<MessageRow> = await refreshed.json();
         setMessages(m.data || []);
       }
+      setPendingMessageId(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setMessages((prev) => prev.filter((x) => x.id !== optimisticId));
+      setPendingMessageId(null);
     } finally {
       setSending(false);
     }
@@ -361,13 +381,16 @@ export default function SessionThreadView() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      // Enter sends (no modifiers). Shift+Enter inserts a newline.
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
       }
     },
     [handleSend],
   );
+
+  const isQueued = pendingMessageId !== null || sending;
 
   return (
     <div className="sessions-app flex w-full h-screen bg-white text-gray-900 overflow-hidden">
@@ -385,7 +408,7 @@ export default function SessionThreadView() {
         error={error}
         sending={sending}
         aborting={aborting}
-        hasInProgress={hasInProgress}
+        hasInProgress={hasInProgress || isQueued}
         currentModel={currentModel}
         draft={draft}
         setDraft={setDraft}
@@ -393,6 +416,8 @@ export default function SessionThreadView() {
         handleAbort={handleAbort}
         handleKeyDown={handleKeyDown}
         messagesEndRef={messagesEndRef}
+        scrollContainerRef={scrollContainerRef}
+        pendingMessageId={pendingMessageId}
       />
     </div>
   );
@@ -424,20 +449,12 @@ function Sidebar({
         </button>
         <div className="flex-1 flex items-center gap-2 bg-white border border-gray-200 rounded-md px-2 py-1.5 text-gray-400 shadow-sm">
           <Search className="w-3.5 h-3.5" />
-          <span className="text-xs">Search agents ⌘K</span>
+          <span className="text-xs">Search sessions ⌘K</span>
         </div>
       </div>
 
-      {/* Main nav */}
-      <div className="px-2 space-y-0.5 mt-2">
-        <NavItem icon={<SquarePen className="w-4 h-4" />} label="New Agent" />
-        <NavItem icon={<Workflow className="w-4 h-4" />} label="Automations" />
-        <NavItem icon={<Home className="w-4 h-4" />} label="Dashboard" />
-        <NavItem icon={<Bug className="w-4 h-4" />} label="Bugbot" />
-      </div>
-
       {/* Session groups */}
-      <div className="flex-1 overflow-y-auto mt-4">
+      <div className="flex-1 overflow-y-auto mt-2">
         {groups.length === 0 && (
           <div className="px-4 text-[12px] text-gray-400">No sessions yet.</div>
         )}
@@ -481,15 +498,6 @@ function Sidebar({
           </span>
         </div>
       </div>
-    </div>
-  );
-}
-
-function NavItem({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return (
-    <div className="flex items-center gap-2.5 px-2 py-1.5 text-gray-600 hover:bg-gray-100 hover:text-gray-900 rounded-md cursor-pointer transition-colors">
-      <div className="text-gray-400">{icon}</div>
-      <span className="text-[13px]">{label}</span>
     </div>
   );
 }
@@ -550,6 +558,8 @@ interface MainPanelProps {
   handleAbort: () => void;
   handleKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
+  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
+  pendingMessageId: string | null;
 }
 
 function MainPanel({
@@ -568,13 +578,15 @@ function MainPanel({
   handleAbort,
   handleKeyDown,
   messagesEndRef,
+  scrollContainerRef,
+  pendingMessageId,
 }: MainPanelProps) {
   const repoLabel = session?.repos?.[0]?.url
     ? session.repos[0].url.replace(/^https?:\/\/github\.com\//, "")
     : "BerriAI/litellm";
 
   return (
-    <div className="flex-1 flex flex-col h-screen bg-white overflow-hidden">
+    <div className="flex-1 flex flex-col h-screen min-h-0 bg-white overflow-hidden">
       {/* Header */}
       <div className="h-12 border-b border-gray-200 flex items-center justify-between px-4 flex-shrink-0">
         <div className="flex items-center gap-2 text-[13px] text-gray-600">
@@ -597,8 +609,11 @@ function MainPanel({
         </div>
       </div>
 
-      {/* Scrollable thread */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Scrollable thread (composer is OUTSIDE this scroll) */}
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 min-h-0 overflow-y-auto"
+      >
         <div className="max-w-[720px] mx-auto w-full py-10 px-6 flex flex-col gap-6">
           {loading && messages.length === 0 && (
             <div className="text-[13px] text-gray-400">Loading…</div>
@@ -617,10 +632,18 @@ function MainPanel({
                 m.role === "user" &&
                 messages.slice(0, i).every((x) => x.role !== "user")
               }
+              isPending={m.id === pendingMessageId}
             />
           ))}
 
-          {/* Composer */}
+          <div ref={messagesEndRef} />
+          <div className="h-4" />
+        </div>
+      </div>
+
+      {/* Sticky composer */}
+      <div className="flex-shrink-0 border-t border-gray-200 bg-white">
+        <div className="max-w-[720px] mx-auto w-full px-6 py-4">
           <Composer
             draft={draft}
             setDraft={setDraft}
@@ -633,9 +656,6 @@ function MainPanel({
             handleAbort={handleAbort}
             handleKeyDown={handleKeyDown}
           />
-
-          <div ref={messagesEndRef} />
-          <div className="h-8" />
         </div>
       </div>
     </div>
@@ -645,31 +665,46 @@ function MainPanel({
 function MessageBlock({
   msg,
   isFirstUser,
+  isPending,
 }: {
   msg: MessageRow;
   isFirstUser: boolean;
+  isPending: boolean;
 }) {
   if (msg.role === "user") {
-    if (isFirstUser) {
-      return <InitialPromptBlock content={msg.content} />;
-    }
-    return <UserFollowupBlock content={msg.content} />;
+    return (
+      <UserPromptBlock
+        content={msg.content}
+        emphasized={isFirstUser}
+        pending={isPending}
+      />
+    );
   }
   return <AssistantBlock msg={msg} />;
 }
 
-function InitialPromptBlock({ content }: { content: string }) {
+function UserPromptBlock({
+  content,
+  emphasized,
+  pending,
+}: {
+  content: string;
+  emphasized: boolean;
+  pending: boolean;
+}) {
   return (
-    <div className="bg-[#f9f9f9] border border-gray-100 rounded-xl p-4 text-[14px] text-gray-700 leading-relaxed shadow-sm whitespace-pre-wrap">
+    <div
+      className={`bg-[#f9f9f9] border border-gray-100 rounded-xl p-4 text-[14px] text-gray-700 leading-relaxed whitespace-pre-wrap ${
+        emphasized ? "shadow-sm" : ""
+      }`}
+    >
       {content}
-    </div>
-  );
-}
-
-function UserFollowupBlock({ content }: { content: string }) {
-  return (
-    <div className="bg-[#f9f9f9] border border-gray-100 rounded-xl p-4 text-[14px] text-gray-700 leading-relaxed whitespace-pre-wrap">
-      {content}
+      {pending && (
+        <div className="mt-3 flex items-center gap-1.5 text-[11px] text-gray-400 font-mono">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          <span>queued</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -803,7 +838,7 @@ function Composer({
   const canSend = draft.trim().length > 0 && !sending;
 
   return (
-    <div className="mt-4 border border-gray-200 rounded-xl shadow-sm bg-white overflow-hidden focus-within:ring-1 focus-within:ring-gray-300 focus-within:border-gray-300 transition-all">
+    <div className="border border-gray-200 rounded-xl shadow-sm bg-white overflow-hidden focus-within:ring-1 focus-within:ring-gray-300 focus-within:border-gray-300 transition-all">
       <textarea
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
@@ -818,7 +853,7 @@ function Composer({
           {error ? (
             <span className="text-red-600">{error}</span>
           ) : (
-            currentModel || "⌘+↵ to send"
+            currentModel || "Enter to send · Shift+Enter for newline"
           )}
         </span>
         <div className="flex items-center gap-3">
@@ -847,7 +882,7 @@ function Composer({
               disabled={!canSend}
               className="bg-black text-white p-1.5 rounded-full hover:bg-gray-800 transition-colors disabled:opacity-30 disabled:hover:bg-black"
               aria-label="Send"
-              title="Send (⌘+↵)"
+              title="Send (Enter)"
             >
               <ArrowUp className="w-3.5 h-3.5" />
             </button>
