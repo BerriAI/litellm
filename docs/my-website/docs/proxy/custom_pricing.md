@@ -123,15 +123,11 @@ curl -X PATCH "http://0.0.0.0:4000/model/<model_id>/update" \
     }'
 ```
 
-:::caution Restart required for cost-field updates
+Updated pricing applies to **subsequent** requests immediately — `PATCH` calls `clear_cache()`, which reloads DB-stored deployments and re-invokes `Router.register_model()` with the new pricing. No proxy restart is required.
 
-`PATCH /model/{model_id}/update` writes to the database and calls `clear_cache()`, but does **not** invoke `Router.register_model()` to refresh the in-memory `litellm.model_cost[model_id]` dict. Cost calculation uses the in-memory value, so price changes take effect only on the next proxy restart (or DB reload). For runtime price changes:
+:::caution Avoid the deprecated `POST /model/update` for cost-field changes
 
-1. Send the `PATCH` request.
-2. Restart the proxy (or roll its Deployment in Kubernetes) so the Router reloads from DB and re-registers each model's pricing.
-3. Verify with a small chat-completion call → `GET /spend/logs` should report `spend > 0`.
-
-The deprecated `POST /model/update` should not be used for cost fields — it returns HTTP 200 but silently drops cost values on the current image.
+The legacy `POST /model/update` endpoint returns HTTP 200 but silently drops cost values when applied to a DB-stored model. Use the per-id `PATCH /model/{model_id}/update` form documented above.
 
 :::
 
