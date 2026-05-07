@@ -12,8 +12,8 @@ a setup hook just to use the noop.
 
 from typing import Dict
 
-from litellm.proxy.agent_session_endpoints.vm_providers.base import AgentVMProvider
-from litellm.proxy.agent_session_endpoints.vm_providers.noop import NoopProvider
+from litellm.managed_agents.vms.base import AgentVMProvider
+from litellm.managed_agents.vms.noop import NoopProvider
 
 _REGISTRY: Dict[str, AgentVMProvider] = {}
 
