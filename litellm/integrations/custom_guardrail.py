@@ -737,11 +737,19 @@ class CustomGuardrail(CustomLogger):
         (this was logged previously as an API failure - guardrail_failed_to_respond).
 
         Guardrails signal intentional blocks by raising:
+        - GuardrailRaisedException (generic guardrail API, tool permission)
+        - BlockedPiiEntityError (Presidio PII detection)
         - HTTPException with status 400 (content policy violation)
         - ModifyResponseException (passthrough mode violation)
         """
+        from litellm.exceptions import (
+            BlockedPiiEntityError,
+            GuardrailRaisedException,
+        )
 
         if isinstance(e, ModifyResponseException):
+            return True
+        if isinstance(e, (GuardrailRaisedException, BlockedPiiEntityError)):
             return True
         if (
             HTTPException is not None
