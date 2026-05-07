@@ -174,8 +174,14 @@ export default function SessionThreadView() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
+  // Only ASSISTANT messages count as "in flight". User messages from opencode
+  // have no completed_at so they normalize as in_progress, but they're not
+  // running anything — only assistant turns are.
   const hasInProgress = useMemo(
-    () => messages.some((m) => m.status === "in_progress"),
+    () =>
+      messages.some(
+        (m) => m.role === "assistant" && m.status === "in_progress",
+      ),
     [messages],
   );
 
