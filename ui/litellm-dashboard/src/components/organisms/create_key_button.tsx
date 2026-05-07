@@ -930,7 +930,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                 ]}
                 help="required"
               >
-                <Input placeholder="" />
+                <Input placeholder="" data-testid="base-input" />
               </Form.Item>
 
               <Form.Item
