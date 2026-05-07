@@ -1,18 +1,34 @@
 """Pure normalization helpers for the opencode adapter.
 
 These functions translate opencode wire shapes into our normalized
-`MessageRow` and SSE event tuples per contract §7. They have NO side
-effects, NO HTTP, NO DB calls — pure dict-in / object-out.
+`MessageRow` and SSE event tuples per contract §7.
 
-The opencode wire shapes documented in the contract are best-effort. The
-preflight agent (running in parallel) will document the real payload
-shapes; defensive `.get()` access is used everywhere so missing keys
-degrade gracefully instead of raising. Branches that depend on shape
-details we are not 100% sure of are tagged with
-`# TODO: verify against preflight findings`.
+The shapes encoded here are the REAL shapes verified against opencode
+1.14.41 in the preflight (`.claude/v2_opencode_real_responses.md`). Key
+deviations from the contract document:
+
+  - opencode messages are nested as ``{info, parts}``, NOT flat.
+  - Field naming on the wire is camelCase with capital-ID suffix
+    (``sessionID``, ``messageID``, ``partID``, ``callID``, ``providerID``,
+    ``modelID``). Our normalized output is snake_case.
+  - Timestamps are epoch milliseconds (int), not ISO 8601.
+  - Part types include ``text``, ``reasoning``, ``tool``, ``step-start``,
+    ``step-finish``. Only ``text`` parts go into ``content``; only
+    ``tool`` parts go into ``tools``. ``reasoning`` / ``step-start`` /
+    ``step-finish`` are filtered out for MVP.
+  - Tool I/O lives under ``part.state.input`` / ``part.state.output``
+    (or ``part.state.error``), not directly on ``part``.
+  - Streaming text deltas come via ``message.part.delta`` events with
+    ``{messageID, partID, field, delta}`` — the part ``type`` is NOT on
+    the delta event, so the caller must maintain a per-stream
+    ``partID -> type`` map sourced from ``message.part.updated`` events
+    (see `route_part_delta`).
+
+These helpers have NO side effects, NO HTTP, NO DB calls — pure
+dict-in / object-out.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from litellm.managed_agents.types import MessageRow
@@ -27,19 +43,32 @@ def normalize_opencode_message(
     opencode_msg: Dict[str, Any],
     our_session_id: str,
 ) -> MessageRow:
-    """Translate one opencode message dict into a MessageRow.
+    """Translate one opencode message envelope into a MessageRow.
 
-    Rules (contract §7):
-      - `id` passes through from opencode.
-      - `session_id` is OUR `ses_*` id, NEVER opencode's `oc_sid`.
-      - `content` = concat of `text` parts in order.
-      - `tools` = list of `tool` parts (omit if zero).
-      - `status` = "completed" if `completedAt` set, else "in_progress";
-        "failed" if any part has type="error".
-      - `model` from `modelID` or `model` (whichever opencode emits).
-      - timestamps: parse ISO if string, pass through if already datetime.
+    opencode returns each message as ``{info: {...}, parts: [...]}`` where
+    ``info`` carries the message metadata (id, role, model, time, finish)
+    and ``parts`` is the per-part body array.
+
+    Rules (contract §7, adjusted to the real shapes):
+      - ``id`` passes through from ``info.id``.
+      - ``session_id`` is OUR ``ses_*`` id, NEVER opencode's ``sessionID``.
+      - ``content`` = concat of ``text`` parts in order. ``reasoning``,
+        ``step-start``, ``step-finish`` are excluded.
+      - ``tools`` = list of normalized tool parts (omit field if zero).
+      - ``model`` = ``"<providerID>/<modelID>"`` if both present; falls
+        back to whichever is present, else None.
+      - ``status`` = ``"completed"`` if ``info.time.completed`` is set,
+        else ``"in_progress"``. ``"failed"`` if any tool part has
+        ``state.status == "error"`` OR any part has ``type == "error"``.
+      - timestamps come from ``info.time.created`` / ``info.time.completed``
+        (epoch ms ints).
     """
+    info = opencode_msg.get("info") or {}
+    if not isinstance(info, dict):
+        info = {}
     parts = opencode_msg.get("parts") or []
+    if not isinstance(parts, list):
+        parts = []
 
     text_chunks: List[str] = []
     tool_calls: List[Dict[str, Any]] = []
@@ -47,8 +76,6 @@ def normalize_opencode_message(
 
     for part in parts:
         if not isinstance(part, dict):
-            # TODO: verify against preflight findings — opencode SHOULD always
-            # emit dict parts, but be defensive about non-dicts in the array.
             continue
         ptype = part.get("type")
         if ptype == "text":
@@ -56,47 +83,92 @@ def normalize_opencode_message(
             if isinstance(text, str):
                 text_chunks.append(text)
         elif ptype == "tool":
-            tool_calls.append(
-                {
-                    "name": part.get("name"),
-                    "input": part.get("input"),
-                    "output": part.get("output"),
-                }
-            )
+            tool_calls.append(_normalize_tool_part(part))
+            state = part.get("state") or {}
+            if isinstance(state, dict) and state.get("status") == "error":
+                has_error_part = True
         elif ptype == "error":
+            # Defensive: opencode does not currently emit a top-level "error"
+            # part type (errors live under tool ``state.error`` or as
+            # ``session.error`` events), but we treat one as a failure if
+            # it ever appears.
             has_error_part = True
-        # All other part types (e.g. permission, lsp diagnostics) are ignored.
-        # TODO: verify against preflight findings.
+        # All other part types (``reasoning``, ``step-start``, ``step-finish``,
+        # plus any future additions) are deliberately dropped from
+        # ``content``/``tools`` for MVP.
 
     content = "".join(text_chunks)
     tools: Optional[List[Dict[str, Any]]] = tool_calls if tool_calls else None
 
-    completed_at_raw = opencode_msg.get("completedAt")
+    time_obj = info.get("time") or {}
+    if not isinstance(time_obj, dict):
+        time_obj = {}
+    completed_at_raw = time_obj.get("completed")
+    created_at_raw = time_obj.get("created")
+
     if has_error_part:
         status = "failed"
-    elif completed_at_raw:
+    elif completed_at_raw is not None:
         status = "completed"
     else:
         status = "in_progress"
 
-    # opencode field name: prefer `modelID` (camelCase, opencode convention),
-    # fall back to `model` for forward-compat.
-    # TODO: verify against preflight findings.
-    model = opencode_msg.get("modelID") or opencode_msg.get("model")
-
-    created_at_raw = opencode_msg.get("createdAt")
+    model = _format_model(info.get("providerID"), info.get("modelID"))
 
     return MessageRow(
-        id=opencode_msg.get("id", ""),
+        id=info.get("id", ""),
         session_id=our_session_id,
-        role=opencode_msg.get("role", "assistant"),
+        role=info.get("role", "assistant"),
         content=content,
         model=model,
         tools=tools,
         status=status,  # type: ignore[arg-type]
-        created_at=_parse_ts(created_at_raw) or datetime.utcnow(),
+        created_at=_parse_ts(created_at_raw) or datetime.now(timezone.utc),
         completed_at=_parse_ts(completed_at_raw),
     )
+
+
+def _normalize_tool_part(part: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract ``{name, input, output}`` from an opencode tool part.
+
+    Real opencode shape:
+        {
+          "type": "tool",
+          "tool": "read",                       # tool name (top-level)
+          "callID": "call_...",                 # opencode call id
+          "state": {
+            "status": "completed",              # pending|running|completed|error
+            "input": {...},
+            "output": "...",                    # OR
+            "error": "...",                     # for status=="error"
+          },
+          ...
+        }
+    """
+    state = part.get("state") or {}
+    if not isinstance(state, dict):
+        state = {}
+    output: Any = state.get("output")
+    if output is None and state.get("status") == "error":
+        output = state.get("error")
+    return {
+        "name": part.get("tool"),
+        "input": state.get("input"),
+        "output": output,
+    }
+
+
+def _format_model(provider_id: Any, model_id: Any) -> Optional[str]:
+    """Combine opencode's ``providerID`` + ``modelID`` into our model string.
+
+    Returns ``"<provider>/<model>"`` when both are present, else whichever
+    is present, else None.
+    """
+    p = provider_id if isinstance(provider_id, str) and provider_id else None
+    m = model_id if isinstance(model_id, str) and model_id else None
+    if p and m:
+        return f"{p}/{m}"
+    return p or m
 
 
 # ---------------------------------------------------------------------------
@@ -106,118 +178,226 @@ def normalize_opencode_message(
 
 def normalize_opencode_event(
     raw_event: Dict[str, Any],
+    part_types: Optional[Dict[str, str]] = None,
 ) -> Optional[Tuple[str, Dict[str, Any]]]:
     """Translate one opencode SSE event dict into our (type, data) tuple.
 
-    Returns None for events we drop (per contract §7 — `permission.updated`,
-    `lsp.client.diagnostics`, etc.). The caller is responsible for filtering
-    by `sessionID` BEFORE invoking this function — this helper only does
-    type-and-shape mapping.
+    The ``part_types`` argument is a mutable map of ``partID -> part_type``
+    maintained by the caller across the lifetime of one stream. It's
+    required to route ``message.part.delta`` events because those events
+    do not carry the part type — only the ``partID``.
 
-    opencode events come in shapes like:
-      {"type": "message.updated", "properties": {...}}
-      {"type": "message.part.updated", "properties": {"part": {...}, ...}}
-
-    We access `properties` defensively because the exact wrapper shape
-    differs across opencode versions.
+    Returns None for events we drop (heartbeats, unknown types,
+    reasoning deltas, etc.).
     """
     if not isinstance(raw_event, dict):
         return None
 
     event_type = raw_event.get("type")
-    if not isinstance(event_type, str):
+    if not isinstance(event_type, str) or not event_type:
         return None
 
-    # opencode wraps payload data in `properties` per its event-bus convention.
-    # TODO: verify against preflight findings — some versions may inline the
-    # payload at the top level instead.
     props = raw_event.get("properties") or {}
     if not isinstance(props, dict):
         props = {}
 
     if event_type == "message.updated":
-        message = props.get("info") or props.get("message") or {}
-        message_id = (
-            message.get("id") if isinstance(message, dict) else None
-        ) or props.get("messageID")
-        role = (
-            message.get("role") if isinstance(message, dict) else None
-        ) or props.get("role")
-        return (
-            "message.started",
-            {"message_id": message_id, "role": role},
-        )
+        return _normalize_message_updated(props)
 
     if event_type == "message.part.updated":
-        part = props.get("part") or {}
-        if not isinstance(part, dict):
-            return None
-        message_id = part.get("messageID") or props.get("messageID")
-        ptype = part.get("type")
+        return _normalize_message_part_updated(props, part_types)
 
-        if ptype == "text":
-            # TODO: verify against preflight findings — opencode may emit
-            # cumulative text or only the new delta. We pass through what
-            # the part contains; the SDK handles either case.
-            delta = part.get("text") or part.get("delta") or ""
-            return (
-                "message.text.delta",
-                {"message_id": message_id, "delta": delta},
-            )
+    if event_type == "message.part.delta":
+        return _normalize_message_part_delta(props, part_types)
 
-        if ptype == "tool":
-            tool_name = part.get("name")
-            output = part.get("output")
-            if output is not None:
-                # Tool finished (has output).
-                return (
-                    "message.tool.completed",
-                    {
-                        "message_id": message_id,
-                        "tool": tool_name,
-                        "output": output,
-                    },
-                )
-            # Tool started (no output yet).
-            # TODO: verify against preflight findings — some opencode
-            # versions use a `state`/`status` field on the tool part to
-            # distinguish start from completion instead of presence of
-            # `output`. We use presence-of-output as the default.
+    if event_type == "session.idle":
+        return _normalize_session_idle(props)
+
+    if event_type == "session.error":
+        return _normalize_session_error(props)
+
+    return None
+
+
+def _normalize_message_updated(
+    props: Dict[str, Any],
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """``message.updated`` — emit ``message.started`` (new msg) or
+    ``message.completed`` (existing msg with ``time.completed`` set)."""
+    info = props.get("info") or {}
+    if not isinstance(info, dict):
+        return None
+
+    message_id = info.get("id")
+    role = info.get("role")
+    time_obj = info.get("time") or {}
+    if not isinstance(time_obj, dict):
+        time_obj = {}
+    completed_ms = time_obj.get("completed")
+
+    if completed_ms is not None and role == "assistant":
+        # The assistant turn has finished. opencode emits this just before
+        # ``session.idle`` and it carries enough info to attach to a
+        # specific message. We prefer this over ``session.idle`` because
+        # it's per-message rather than per-session.
+        return (
+            "message.completed",
+            {
+                "message_id": message_id,
+                "completed_at": _ms_to_iso_str(completed_ms),
+            },
+        )
+
+    return (
+        "message.started",
+        {"message_id": message_id, "role": role},
+    )
+
+
+def _normalize_message_part_updated(
+    props: Dict[str, Any],
+    part_types: Optional[Dict[str, str]],
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """``message.part.updated`` — covers part lifecycle (creation, status
+    transitions for tools, finalization). Streaming text deltas do NOT come
+    through this event — see ``_normalize_message_part_delta``.
+    """
+    part = props.get("part") or {}
+    if not isinstance(part, dict):
+        return None
+
+    part_id = part.get("id")
+    ptype = part.get("type")
+    message_id = part.get("messageID")
+
+    # Track the part's type for later ``message.part.delta`` routing.
+    if part_types is not None and isinstance(part_id, str) and isinstance(ptype, str):
+        part_types[part_id] = ptype
+
+    if ptype == "tool":
+        state = part.get("state") or {}
+        if not isinstance(state, dict):
+            state = {}
+        status = state.get("status")
+        tool_name = part.get("tool")
+
+        if status == "running":
             return (
                 "message.tool.started",
                 {
                     "message_id": message_id,
                     "tool": tool_name,
-                    "input": part.get("input"),
+                    "input": state.get("input"),
                 },
             )
-
-        # Other part types (e.g. step-start, file) are dropped.
+        if status == "completed":
+            return (
+                "message.tool.completed",
+                {
+                    "message_id": message_id,
+                    "tool": tool_name,
+                    "output": state.get("output"),
+                },
+            )
+        if status == "error":
+            return (
+                "message.tool.completed",
+                {
+                    "message_id": message_id,
+                    "tool": tool_name,
+                    "output": state.get("error"),
+                    "error": True,
+                },
+            )
+        # ``pending`` or unknown statuses: drop. The ``running`` transition
+        # carries the populated ``input`` we want.
         return None
 
-    if event_type == "session.idle":
-        # Turn done — emit `message.completed`. opencode's idle payload may
-        # not always include the message id/content directly; best-effort.
-        # TODO: verify against preflight findings.
-        message_id = props.get("messageID") or props.get("message_id")
-        return (
-            "message.completed",
-            {
-                "message_id": message_id,
-                "content": props.get("content"),
-                "completed_at": props.get("completedAt") or props.get("completed_at"),
-            },
-        )
-
-    if event_type == "session.error":
-        message_id = props.get("messageID") or props.get("message_id")
-        error = props.get("error") or props.get("message")
-        return (
-            "error",
-            {"message_id": message_id, "error": error},
-        )
-
+    # Text/reasoning/step-* part lifecycle events don't translate to our
+    # event surface — only their delta chunks do. We've already updated
+    # ``part_types`` above so subsequent deltas can be routed.
     return None
+
+
+def _normalize_message_part_delta(
+    props: Dict[str, Any],
+    part_types: Optional[Dict[str, str]],
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """``message.part.delta`` — incremental chunk for a streaming part.
+
+    Real shape: ``{sessionID, messageID, partID, field, delta}``. The part
+    ``type`` is NOT on this event. We look it up in ``part_types`` (which
+    must have been populated by a prior ``message.part.updated`` event for
+    this ``partID``).
+    """
+    part_id = props.get("partID")
+    field = props.get("field")
+    delta = props.get("delta")
+    message_id = props.get("messageID")
+
+    if not isinstance(part_id, str) or not isinstance(delta, str):
+        return None
+
+    ptype = (part_types or {}).get(part_id)
+
+    if field == "text" and ptype == "text":
+        return (
+            "message.text.delta",
+            {"message_id": message_id, "delta": delta},
+        )
+
+    # Reasoning deltas are intentionally dropped for MVP. Other field
+    # values (e.g. tool ``raw``) are also dropped.
+    return None
+
+
+def _normalize_session_idle(
+    props: Dict[str, Any],
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """``session.idle`` — turn done.
+
+    The real opencode payload is ``{sessionID}`` only — it does NOT carry
+    a ``messageID`` or ``content``. The adapter is expected to track the
+    "current assistant message id" from prior ``message.updated`` events
+    and attach it before yielding to the SSE consumer (see
+    ``OpencodeAdapter.stream_events``).
+
+    We still emit a ``message.completed`` here as a safety net for cases
+    where the per-message ``message.updated`` with ``time.completed`` was
+    missed. The adapter overrides ``message_id`` if it has tracked one.
+    """
+    return (
+        "message.completed",
+        {
+            "message_id": props.get("messageID"),
+            "completed_at": None,
+        },
+    )
+
+
+def _normalize_session_error(
+    props: Dict[str, Any],
+) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """``session.error`` — opencode runtime error.
+
+    Real shape: ``{sessionID, error: {name, data: {message}}}``. We unwrap
+    to the human-readable message string when possible.
+    """
+    error_obj = props.get("error")
+    error_message: Any = error_obj
+    if isinstance(error_obj, dict):
+        data = error_obj.get("data")
+        if isinstance(data, dict) and isinstance(data.get("message"), str):
+            error_message = data["message"]
+        elif isinstance(error_obj.get("message"), str):
+            error_message = error_obj["message"]
+    return (
+        "error",
+        {
+            "message_id": props.get("messageID"),
+            "error": error_message,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -229,12 +409,15 @@ def event_matches_session(
     raw_event: Dict[str, Any],
     opencode_session_id: str,
 ) -> bool:
-    """Return True if `raw_event` references `opencode_session_id`.
+    """Return True if ``raw_event`` references ``opencode_session_id``.
 
-    opencode events include the session id under `sessionID` at the top
-    level OR nested under `properties.sessionID`. We check both. Events
-    without a session id (rare — typically global health/heartbeat) are
-    treated as non-matching.
+    opencode events carry the session id as ``properties.sessionID``
+    (camelCase) — and sometimes also at the top level. We check both, plus
+    the nested ``info.sessionID`` for ``message.updated`` events.
+
+    Events without any session id are treated as non-matching, which means
+    global heartbeats (``server.heartbeat``, ``server.connected``) are
+    correctly filtered out.
     """
     if not isinstance(raw_event, dict):
         return False
@@ -244,10 +427,11 @@ def event_matches_session(
     if isinstance(props, dict):
         if props.get("sessionID") == opencode_session_id:
             return True
-        # The session id may also live nested on a sub-object (e.g. on the
-        # `info` message for `message.updated`).
-        info = props.get("info") or props.get("message") or {}
+        info = props.get("info")
         if isinstance(info, dict) and info.get("sessionID") == opencode_session_id:
+            return True
+        part = props.get("part")
+        if isinstance(part, dict) and part.get("sessionID") == opencode_session_id:
             return True
     return False
 
@@ -258,27 +442,49 @@ def event_matches_session(
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:
-    """Parse an opencode timestamp into a datetime, or None.
+    """Parse an opencode timestamp into a tz-aware UTC datetime, or None.
 
-    opencode timestamps are sometimes ISO 8601 strings, sometimes
-    ms-since-epoch ints (per its TS codebase). Be defensive about both.
+    opencode timestamps on the wire are epoch milliseconds (int). Strings
+    are accepted defensively (e.g. for tests that still use ISO strings),
+    and existing datetime values pass through.
     """
     if value is None:
         return None
     if isinstance(value, datetime):
         return value
+    if isinstance(value, bool):
+        # ``True``/``False`` are technically ``int`` subclasses — guard explicitly.
+        return None
     if isinstance(value, (int, float)):
-        # opencode timestamps are ms-since-epoch in its TS code.
         try:
-            return datetime.utcfromtimestamp(value / 1000.0)
+            return datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
         except (OverflowError, OSError, ValueError):
             return None
     if isinstance(value, str):
-        # Accept "2026-05-07T15:04:05.123Z" by swapping trailing Z for +00:00,
-        # which fromisoformat understands on 3.10+.
         s = value.replace("Z", "+00:00") if value.endswith("Z") else value
         try:
             return datetime.fromisoformat(s)
         except ValueError:
             return None
     return None
+
+
+def _ms_to_iso(ms: Any) -> Optional[datetime]:
+    """Convert opencode ``epoch ms`` into a tz-aware UTC datetime.
+
+    Thin wrapper around ``_parse_ts`` for callers that want the explicit
+    "this is opencode-style ms" intent.
+    """
+    return _parse_ts(ms)
+
+
+def _ms_to_iso_str(ms: Any) -> Optional[str]:
+    """Convert opencode ``epoch ms`` into an ISO 8601 UTC string.
+
+    Used for SSE event payloads where the wire format is JSON (string),
+    not a Python datetime.
+    """
+    dt = _parse_ts(ms)
+    if dt is None:
+        return None
+    return dt.isoformat().replace("+00:00", "Z")
