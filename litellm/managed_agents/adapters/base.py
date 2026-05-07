@@ -75,7 +75,7 @@ class SandboxAdapter(Protocol):
         """
         ...
 
-    async def stream_events(
+    def stream_events(
         self,
         sandbox_url: str,
         opencode_session_id: str,
@@ -88,6 +88,14 @@ class SandboxAdapter(Protocol):
         normalized `(event_type, data_dict)` tuples per contract §7. Events
         not in the translation table are dropped. Raises
         `SandboxUnreachableError` on connect/timeout failures.
+
+        NOTE: this is declared as a regular ``def`` returning an
+        ``AsyncIterator`` because concrete adapters implement it as an
+        ``async def ... yield`` (async generator). An ``async def f() ->
+        AsyncIterator[T]: yield x`` is typed as ``AsyncIterator[T]``,
+        not ``Coroutine[..., AsyncIterator[T]]`` — declaring the
+        protocol method as ``async def`` would force callers to ``await``
+        it before iterating, which is the wrong runtime shape.
         """
         ...
 
