@@ -47,6 +47,34 @@ class TestCustomLogger(CustomLogger):
         self.standard_logging_object = kwargs["standard_logging_object"]
 
 
+async def _wait_for_openai_file_ready(file_id: str, max_attempts: int = 30) -> None:
+    """
+    Poll OpenAI's files API until the uploaded file is in `processed` state.
+
+    OpenAI file uploads are eventually consistent — a freshly uploaded file
+    may briefly 404 from `retrieve` and is rejected by downstream endpoints
+    (fine-tuning, batches) until processing finishes. Polling avoids the
+    propagation-lag flake.
+    """
+    last_status: Optional[str] = None
+    for _ in range(max_attempts):
+        try:
+            file_obj = await litellm.afile_retrieve(
+                file_id=file_id, custom_llm_provider="openai"
+            )
+            last_status = getattr(file_obj, "status", None)
+            if last_status == "processed":
+                return
+            if last_status == "error":
+                raise RuntimeError(f"File {file_id} failed processing (status=error)")
+        except openai.NotFoundError:
+            last_status = "not_found"
+        await asyncio.sleep(1)
+    raise TimeoutError(
+        f"File {file_id} not ready after {max_attempts}s (last_status={last_status})"
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_fine_tune_jobs_async():
     try:
@@ -63,6 +91,8 @@ async def test_create_fine_tune_jobs_async():
             custom_llm_provider="openai",
         )
         print("Response from creating file=", file_obj)
+
+        await _wait_for_openai_file_ready(file_obj.id)
 
         create_fine_tuning_response = await litellm.acreate_fine_tuning_job(
             model="gpt-3.5-turbo-0125",
