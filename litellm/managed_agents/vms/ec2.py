@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+from litellm.managed_agents.vms.base import (
     AgentVMProvider,
     AwsCreds,
     Ec2Config,
