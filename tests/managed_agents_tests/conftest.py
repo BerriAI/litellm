@@ -1,7 +1,7 @@
 """Shared fixtures for managed-agents integration tests.
 
 These tests target the REAL FastAPI router stack composed in
-``litellm/managed_agents/router.py`` against a REAL local opencode HTTP
+``litellm/proxy/managed_agents_endpoints/router.py`` against a REAL local opencode HTTP
 server. They exercise:
 
   - ``POST /v2/agents`` (real handler + a fake in-memory Prisma table)
@@ -399,10 +399,10 @@ def app_client(
     """
     from fastapi import FastAPI
 
-    from litellm.managed_agents.endpoints.agents import router as agents_router
-    from litellm.managed_agents.endpoints.events import router as events_router
-    from litellm.managed_agents.endpoints.messages import router as messages_router
-    from litellm.managed_agents.endpoints.sessions import router as sessions_router
+    from litellm.proxy.managed_agents_endpoints.agents import router as agents_router
+    from litellm.proxy.managed_agents_endpoints.events import router as events_router
+    from litellm.proxy.managed_agents_endpoints.messages import router as messages_router
+    from litellm.proxy.managed_agents_endpoints.sessions import router as sessions_router
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
