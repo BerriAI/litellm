@@ -23,7 +23,12 @@ import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
 import { KeyEditView } from "./key_edit_view";
 
-const { Text, Title } = Typography;
+const { Title } = Typography;
+
+const Text: React.FC<React.HTMLAttributes<HTMLParagraphElement>> = ({
+  style,
+  ...props
+}) => <p style={{ marginBottom: 0, ...style }} {...props} />;
 
 const Badge: React.FC<React.ComponentProps<typeof Tag> & { size?: "xs" | "sm" | "md" }> = ({
   color,
