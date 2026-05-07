@@ -4342,10 +4342,16 @@ class JWTRoutingOverride(BaseModel):
 
     A rule matches when all provided selectors match token claims.
     If matched, request is routed to the configured auth path.
+
+    Wildcard selectors use shell-style patterns (* and ?) and are matched with
+    case-sensitive semantics; use the same casing your IdP emits in JWT claims.
+    Space-delimited tokenization applies only to the ``scope`` claim (OAuth/OIDC
+    scope strings), not to ``iss``, ``aud``, or ``client_id``.
     """
 
     iss: Union[str, List[str]]
     client_id: Optional[Union[str, List[str]]] = None
+    scope: Optional[Union[str, List[str]]] = None
     aud: Optional[Union[str, List[str]]] = None
     path: Literal["oauth2"] = "oauth2"
 
