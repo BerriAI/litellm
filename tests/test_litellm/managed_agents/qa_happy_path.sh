@@ -173,19 +173,7 @@ echo "$DEATH_BODY" | jq .
 [[ "$DEATH_CODE" == "504" ]] || fail "expected 504, got $DEATH_CODE"
 ok "sandbox-unreachable correctly returns 504"
 
-# Validator smoke: prove the SandboxSpec validator catches bad inputs (this is
-# a Pydantic validation, surfaces as 422 if Krrish's POST /v2/sessions ever
-# tries to validate manually — but our POST /v2/agents does NOT take sandbox,
-# so we exercise it via Python rather than HTTP).
-log "smoke: SandboxSpec validator rejects idle > timeout"
-python3 -c "
-from litellm.managed_agents.types import SandboxSpec
-try:
-    SandboxSpec(type='opencode', timeout_minutes=10, idle_timeout_minutes=120)
-    raise SystemExit('FAIL: validator did not catch idle > timeout')
-except Exception as e:
-    print(f'  caught: {type(e).__name__}')
-" 2>&1 | tail -5
-ok "validator works"
+# Validator behavior is covered by Pydantic unit tests in tests/test_litellm/managed_agents/test_types.py.
+# Keeping this script HTTP-only so it doesn't need the PR's Python env.
 
 printf "\n\033[1;32mALL CHECKS PASSED\033[0m  (run id: %s)\n" "$RUN_ID"
