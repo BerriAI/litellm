@@ -14,7 +14,9 @@ row is removed.
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Any, Dict
 
+import prisma
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import ORJSONResponse
 
@@ -52,38 +54,54 @@ def _agent_create_payload(body: AgentCreate, user_api_key_dict: UserAPIKeyAuth) 
     """Build the Prisma create payload for an agent.
 
     Pydantic models are converted to plain dicts so Prisma can serialize them
-    into Json columns. ``model_dump(exclude_none=True)`` keeps the row tight —
-    null Json columns stay null instead of becoming the string "null".
+    into Json columns. Optional JSON columns are omitted entirely when ``None``
+    — Prisma rejects bare ``None`` for optional Json fields with
+    ``MissingRequiredValueError``; the column must either be absent (= NULL)
+    or wrapped in ``prisma.Json(...)``.
     """
-    return {
+    payload: Dict[str, Any] = {
         "id": new_agent_id(),
         "name": body.name,
         "user_api_key_hash": caller_api_key_hash(user_api_key_dict),
         "team_id": user_api_key_dict.team_id,
         "model": body.model,
-        "system_prompt": body.system_prompt,
-        "default_repos": (
-            [r.model_dump(exclude_none=True) for r in body.default_repos]
-            if body.default_repos
-            else None
-        ),
-        "default_env_vars": body.default_env_vars,
-        "tools_config": body.tools_config,
-        "metadata": body.metadata,
         "updated_at": _now(),
     }
+    if body.system_prompt is not None:
+        payload["system_prompt"] = body.system_prompt
+    if body.default_repos:
+        payload["default_repos"] = prisma.Json(
+            [r.model_dump(exclude_none=True) for r in body.default_repos]
+        )
+    if body.default_env_vars is not None:
+        payload["default_env_vars"] = prisma.Json(body.default_env_vars)
+    if body.tools_config is not None:
+        payload["tools_config"] = prisma.Json(body.tools_config)
+    if body.metadata is not None:
+        payload["metadata"] = prisma.Json(body.metadata)
+    return payload
 
 
 def _agent_update_payload(body: AgentUpdate) -> dict:
     """Build the Prisma update payload — only fields the caller actually
-    set. Pydantic ``exclude_unset=True`` is the canonical way to do this."""
+    set. Pydantic ``exclude_unset=True`` is the canonical way to do this.
+
+    Optional JSON columns are wrapped in ``prisma.Json(...)`` so Prisma
+    accepts them; bare dict/list values cause ``MissingRequiredValueError``
+    against optional Json fields.
+    """
     raw = body.model_dump(exclude_unset=True)
     if "default_repos" in raw and raw["default_repos"] is not None:
         # Re-dump nested RepoSpec models as plain dicts.
-        raw["default_repos"] = [
-            r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else r
-            for r in body.default_repos or []
-        ]
+        raw["default_repos"] = prisma.Json(
+            [
+                r.model_dump(exclude_none=True) if hasattr(r, "model_dump") else r
+                for r in body.default_repos or []
+            ]
+        )
+    for json_field in ("default_env_vars", "tools_config", "metadata"):
+        if json_field in raw and raw[json_field] is not None:
+            raw[json_field] = prisma.Json(raw[json_field])
     raw["updated_at"] = _now()
     return raw
 
