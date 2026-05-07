@@ -130,7 +130,7 @@ class TestBedrockCountTokensEndpoint:
         )
         assert (
             url
-            == "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-lite-v1:0/count-tokens"
+            == "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-lite-v1%3A0/count-tokens"
         )
 
     def test_api_base_overrides_default(self):
@@ -141,7 +141,7 @@ class TestBedrockCountTokensEndpoint:
             aws_region_name="us-east-1",
             api_base=custom_base,
         )
-        assert url == f"{custom_base}/model/amazon.nova-lite-v1:0/count-tokens"
+        assert url == f"{custom_base}/model/amazon.nova-lite-v1%3A0/count-tokens"
 
     def test_aws_bedrock_runtime_endpoint_overrides_default(self):
         handler = self._make_handler()
@@ -153,7 +153,7 @@ class TestBedrockCountTokensEndpoint:
             aws_region_name="eu-west-1",
             aws_bedrock_runtime_endpoint=custom_endpoint,
         )
-        assert url == f"{custom_endpoint}/model/amazon.nova-lite-v1:0/count-tokens"
+        assert url == f"{custom_endpoint}/model/amazon.nova-lite-v1%3A0/count-tokens"
 
     def test_api_base_takes_priority_over_aws_bedrock_runtime_endpoint(self):
         handler = self._make_handler()
@@ -165,7 +165,7 @@ class TestBedrockCountTokensEndpoint:
             api_base=api_base,
             aws_bedrock_runtime_endpoint=runtime_endpoint,
         )
-        assert url == f"{api_base}/model/amazon.nova-lite-v1:0/count-tokens"
+        assert url == f"{api_base}/model/amazon.nova-lite-v1%3A0/count-tokens"
 
     def test_env_var_overrides_default(self, monkeypatch):
         monkeypatch.setenv(

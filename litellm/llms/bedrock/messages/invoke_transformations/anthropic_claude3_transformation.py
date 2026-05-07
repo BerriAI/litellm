@@ -12,9 +12,14 @@ from typing import (
 
 import httpx
 
+import litellm
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
 from litellm.constants import BEDROCK_MIN_THINKING_BUDGET_TOKENS
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
+from litellm.llms.anthropic.chat.transformation import (
+    DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
+    AnthropicConfig,
+)
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -579,6 +584,17 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if filtered_betas:
             anthropic_messages_request["anthropic_beta"] = filtered_betas
+
+        if (
+            litellm.drop_params is True
+            and "output_config" in anthropic_messages_request
+            and not AnthropicConfig._model_supports_effort_param(model)
+        ):
+            verbose_logger.warning(
+                DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
+                model,
+            )
+            anthropic_messages_request.pop("output_config", None)
 
         # 7. Final safety net: filter top-level fields to the Bedrock Invoke allowlist.
         # Catches Anthropic-only extensions (context_management, output_config, speed,

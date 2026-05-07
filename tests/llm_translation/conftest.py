@@ -5,6 +5,7 @@
 #   - Function-scoped fixture resets litellm globals to true defaults
 #   - Module-scoped reload only in single-process mode
 
+import asyncio
 import importlib
 import os
 import sys
@@ -14,9 +15,75 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
 
-import asyncio
+import litellm  # noqa: E402
+
+from tests._vcr_conftest_common import (  # noqa: E402
+    VerboseReporterState,
+    apply_vcr_auto_marker_to_items,
+    record_vcr_outcome,
+    register_persister_if_enabled,
+    vcr_config_dict,
+)
+
+# vcrpy and respx both patch the httpx transport — applying both makes one
+# silently win, so respx-using files opt out of the auto-marker.
+_RESPX_CONFLICTING_FILES = frozenset(
+    {
+        "test_gpt4o_audio.py",
+        "test_nvidia_nim.py",
+        "test_openai.py",
+        "test_openai_o1.py",
+        "test_prompt_caching.py",
+        "test_text_completion_unit_tests.py",
+        "test_xai.py",
+    }
+)
+_VCR_AUTO_MARKER_SKIP_FILES = _RESPX_CONFLICTING_FILES | frozenset(
+    {"test_vcr_redis_persister.py"}
+)
+
+# Tests that observe live cross-call provider state (e.g. prompt-cache
+# warm-up between two consecutive calls); replay can't reproduce that state.
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES = (
+    "::test_prompt_caching",
+    "TestBedrockInvokeNovaJson::test_json_response_pydantic_obj",
+    "::test_bedrock_converse__streaming_passthrough",
+)
+
+
+_verbose_state = VerboseReporterState()
+
+
+@pytest.fixture(scope="module")
+def vcr_config():
+    return vcr_config_dict()
+
+
+def pytest_recording_configure(config, vcr):
+    register_persister_if_enabled(vcr)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
+
+
+@pytest.fixture(autouse=True)
+def _vcr_outcome_gate(request, vcr):
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+def pytest_configure(config):
+    _verbose_state.remember_pluginmanager(config)
+
+
+def pytest_runtest_logreport(report):
+    _verbose_state.maybe_emit_verdict(report)
+
 
 # ---------------------------------------------------------------------------
 # Capture TRUE defaults at conftest import time (before test modules pollute).
@@ -48,7 +115,6 @@ def event_loop():
 
 @pytest.fixture(scope="function", autouse=True)
 def setup_and_teardown(event_loop):  # Add event_loop as a dependency
-    curr_dir = os.getcwd()
     sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
@@ -97,15 +163,18 @@ def setup_and_teardown(event_loop):  # Add event_loop as a dependency
 
 
 def pytest_collection_modifyitems(config, items):
-    # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
+    apply_vcr_auto_marker_to_items(
+        items,
+        skip_files=_VCR_AUTO_MARKER_SKIP_FILES,
+        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
+    )
+
     custom_logger_tests = [
         item for item in items if "custom_logger" in item.parent.name
     ]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
-    # Sort tests based on their names
     custom_logger_tests.sort(key=lambda x: x.name)
     other_tests.sort(key=lambda x: x.name)
 
-    # Reorder the items list
     items[:] = custom_logger_tests + other_tests

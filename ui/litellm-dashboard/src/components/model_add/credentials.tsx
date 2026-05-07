@@ -26,12 +26,15 @@ import AddCredentialsTab from "./AddCredentialModal";
 import EditCredentialsModal from "./EditCredentialModal";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isProxyAdminRole } from "@/utils/roles";
 interface CredentialsPanelProps {
   uploadProps: UploadProps;
 }
 
 const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
-  const { accessToken } = useAuthorized();
+  const { accessToken, userRole } = useAuthorized();
+  // Admin Viewer follows the read-parity rule: see credentials, do not modify.
+  const canModifyCredentials = isProxyAdminRole(userRole ?? "");
   const { data: credentialsResponse, refetch: refetchCredentials } = useCredentials();
   const credentialList = credentialsResponse?.credentials || [];
 
@@ -137,7 +140,9 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
 
   return (
     <div className="w-full mx-auto flex-auto overflow-y-auto p-2">
-      <Button onClick={() => setIsAddModalOpen(true)}>Add Credential</Button>
+      {canModifyCredentials && (
+        <Button onClick={() => setIsAddModalOpen(true)}>Add Credential</Button>
+      )}
       <div className="flex justify-between items-center mt-4 mb-4">
         <Text>Configured credentials for different AI providers. Add and manage your API credentials.</Text>
       </div>
@@ -166,22 +171,26 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
                     {renderProviderBadge((credential.credential_info?.custom_llm_provider as string) || "-")}
                   </TableCell>
                   <TableCell>
-                    <Button
-                      icon={PencilAltIcon}
-                      variant="light"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedCredential(credential);
-                        setIsUpdateModalOpen(true);
-                      }}
-                    />
-                    <Button
-                      icon={TrashIcon}
-                      variant="light"
-                      size="sm"
-                      onClick={() => openDeleteModal(credential)}
-                      className="ml-2"
-                    />
+                    {canModifyCredentials ? (
+                      <>
+                        <Button
+                          icon={PencilAltIcon}
+                          variant="light"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedCredential(credential);
+                            setIsUpdateModalOpen(true);
+                          }}
+                        />
+                        <Button
+                          icon={TrashIcon}
+                          variant="light"
+                          size="sm"
+                          onClick={() => openDeleteModal(credential)}
+                          className="ml-2"
+                        />
+                      </>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))

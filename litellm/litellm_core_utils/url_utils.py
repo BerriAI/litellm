@@ -21,8 +21,8 @@ Admins can opt out via two ``litellm`` globals (wired from proxy config):
 
 import socket
 from ipaddress import ip_address, ip_network
-from typing import Any, List, Set, Tuple
-from urllib.parse import urlparse, urlunparse
+from typing import Any, List, Optional, Set, Tuple
+from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
 
@@ -44,6 +44,46 @@ class SSRFError(ValueError):
     """Raised when a URL targets a blocked network."""
 
     pass
+
+
+def encode_url_path_segment(value: Any, *, field_name: str = "path parameter") -> str:
+    """Percent-encode one user-controlled URL path segment.
+
+    ``urllib.parse.quote(..., safe="")`` intentionally leaves RFC 3986
+    unreserved characters such as ``.`` unescaped, so reject standalone dot
+    segments before they can be appended to an upstream URL and normalized by
+    the HTTP client.
+    """
+    if value is None:
+        raise ValueError(f"{field_name} is required")
+
+    value_str = str(value)
+    if value_str == "":
+        raise ValueError(f"{field_name} is required")
+    if value_str in {".", ".."}:
+        raise ValueError(f"{field_name} cannot be a dot path segment")
+
+    return quote(value_str, safe="")
+
+
+def encode_url_path_segments(value: Any, *, field_name: str = "path") -> str:
+    """Percent-encode a user-controlled URL path made of multiple segments.
+
+    Empty segments are rejected, so leading, trailing, or consecutive slashes
+    fail closed instead of being normalized by the HTTP client.
+    """
+    if value is None:
+        raise ValueError(f"{field_name} is required")
+
+    value_str = str(value)
+    if value_str == "":
+        raise ValueError(f"{field_name} is required")
+
+    encoded_segments = []
+    for segment in value_str.split("/"):
+        encoded_segments.append(encode_url_path_segment(segment, field_name=field_name))
+
+    return "/".join(encoded_segments)
 
 
 def _is_blocked_ip(addr: str) -> bool:
@@ -68,6 +108,85 @@ def _is_blocked_ip(addr: str) -> bool:
 def _normalize_host(host: str) -> str:
     """Lowercase and strip a trailing dot from a hostname."""
     return host.lower().rstrip(".")
+
+
+def _default_port_for_scheme(scheme: str) -> int:
+    return 443 if scheme == "https" else 80
+
+
+def _parse_url_destination_allowlist_entry(
+    entry: str,
+) -> Optional[Tuple[str, Optional[str], Optional[int]]]:
+    """Parse an admin allowlist entry into host, optional scheme, optional port.
+
+    Entries may be bare hosts (``api.example.com``), host+port
+    (``api.example.com:8443``), or origins (``https://api.example.com``).
+    URL paths are intentionally ignored so admins can paste an api_base value.
+    """
+    entry = entry.strip()
+    if not entry:
+        return None
+
+    has_scheme = "://" in entry
+    parsed = urlparse(entry if has_scheme else f"//{entry}")
+    if has_scheme and parsed.scheme not in _ALLOWED_SCHEMES:
+        return None
+    if parsed.username is not None or parsed.password is not None:
+        return None
+    if not parsed.hostname:
+        return None
+
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+
+    scheme: Optional[str] = parsed.scheme if has_scheme else None
+    if scheme is not None and port is None:
+        port = _default_port_for_scheme(scheme)
+
+    return _normalize_host(parsed.hostname), scheme, port
+
+
+def is_url_destination_allowed_by_host(url: str, allowed_hosts: List[str]) -> bool:
+    """Return True when a credential-bearing provider URL is admin-allowlisted.
+
+    This does not fetch, resolve, or rewrite URLs. It only answers whether the
+    destination origin is explicitly trusted by configuration. Use ``safe_get``
+    for user-controlled content fetches that require SSRF protection.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        return False
+    if parsed.username is not None or parsed.password is not None:
+        return False
+    if not parsed.hostname:
+        return False
+
+    try:
+        effective_port = parsed.port or _default_port_for_scheme(parsed.scheme)
+    except ValueError:
+        return False
+
+    normalized_host = _normalize_host(parsed.hostname)
+    configured_entries = (
+        [allowed_hosts] if isinstance(allowed_hosts, str) else allowed_hosts
+    )
+    for entry in configured_entries or []:
+        if not isinstance(entry, str):
+            continue
+        parsed_entry = _parse_url_destination_allowlist_entry(entry)
+        if parsed_entry is None:
+            continue
+        allowed_host, allowed_scheme, allowed_port = parsed_entry
+        if allowed_host != normalized_host:
+            continue
+        if allowed_scheme is not None and allowed_scheme != parsed.scheme:
+            continue
+        if allowed_port is not None and allowed_port != effective_port:
+            continue
+        return True
+    return False
 
 
 def _format_host_header(hostname: str, port: int, default_port: int) -> str:
@@ -145,7 +264,7 @@ def validate_url(url: str) -> Tuple[str, str]:
         raise SSRFError("URL has no hostname")
 
     port = parsed.port
-    default_port = 443 if parsed.scheme == "https" else 80
+    default_port = _default_port_for_scheme(parsed.scheme)
     effective_port = port if port is not None else default_port
     host_header = _format_host_header(hostname, effective_port, default_port)
 
@@ -199,13 +318,54 @@ def validate_url(url: str) -> Tuple[str, str]:
     return rewritten, host_header
 
 
+def assert_same_origin(candidate_url: str, expected_url: str) -> None:
+    """Verify ``candidate_url`` shares scheme, host, and port with ``expected_url``.
+
+    Use when an upstream API returns a URL meant for follow-up requests
+    (e.g. an async-job polling URL that will be hit with the operator's
+    API key in the headers). The upstream is trusted because the operator
+    configured ``api_base``, but the URL it hands back must actually point
+    back at the same origin or we'd be blindly forwarding credentials
+    wherever the upstream told us to.
+
+    Hostnames are compared case-insensitively. Default ports are made
+    explicit (HTTP→80, HTTPS→443) so ``https://api.example.com:443/...``
+    and ``https://api.example.com/...`` are treated as the same origin.
+
+    Error messages identify *which* component mismatched but never echo
+    the operator's ``expected`` host or the candidate's hostname back to
+    the caller — in the SSRF threat model the caller is the attacker,
+    and reflecting host info would be a secondary leak of operator
+    infrastructure details.
+    """
+    candidate = urlparse(candidate_url)
+    expected = urlparse(expected_url)
+
+    if candidate.scheme not in _ALLOWED_SCHEMES:
+        raise SSRFError("URL scheme is not allowed")
+
+    if candidate.scheme != expected.scheme:
+        raise SSRFError("Origin mismatch on scheme")
+
+    candidate_host = _normalize_host(candidate.hostname or "")
+    expected_host = _normalize_host(expected.hostname or "")
+    if not candidate_host or candidate_host != expected_host:
+        raise SSRFError("Origin mismatch on host")
+
+    default_port = 443 if candidate.scheme == "https" else 80
+    candidate_port = candidate.port if candidate.port is not None else default_port
+    expected_port = expected.port if expected.port is not None else default_port
+    if candidate_port != expected_port:
+        raise SSRFError("Origin mismatch on port")
+
+
 _MAX_REDIRECTS = 10
 
 
 def _extract_redirect_url(response: Any, request_url: str) -> str:
     """Extract and resolve the redirect target from a response's Location header."""
     location = response.headers.get("location")
-    if not location:
+    if not isinstance(location, str) or not location:
         raise SSRFError("Redirect response has no Location header")
     # Resolve relative URLs against the request URL
     return str(httpx.URL(request_url).join(location))

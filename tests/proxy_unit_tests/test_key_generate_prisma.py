@@ -2715,7 +2715,12 @@ async def test_master_key_hashing(prisma_client):
             request=request, api_key=bearer_token
         )
 
-        assert result.api_key == hash_token(master_key)
+        # Master-key auth substitutes a stable alias so the master key (or
+        # its hash) never propagates into spend logs / metrics / audit trails.
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+
+        assert result.api_key == LITELLM_PROXY_MASTER_KEY_ALIAS
+        assert result.api_key != hash_token(master_key)
 
     except Exception as e:
         print("Got Exception", e)

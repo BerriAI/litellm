@@ -133,6 +133,87 @@ class TestProxyInitializationHelpers:
             )
             assert args["timeout_worker_healthcheck"] == 15
 
+    def test_get_reload_options_no_config(self):
+        opts = ProxyInitializationHelpers._get_reload_options(None)
+        assert opts == {"reload": True}
+
+    def test_get_reload_options_with_config_in_cwd(self, tmp_path, monkeypatch):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("model_list: []\n")
+        monkeypatch.chdir(tmp_path)
+
+        opts = ProxyInitializationHelpers._get_reload_options("config.yaml")
+
+        assert opts["reload"] is True
+        assert opts["reload_dirs"] == [str(tmp_path)]
+        assert opts["reload_includes"] == ["*.py", "config.yaml"]
+
+    def test_get_reload_options_with_config_outside_cwd(self, tmp_path, monkeypatch):
+        cwd_dir = tmp_path / "work"
+        cwd_dir.mkdir()
+        elsewhere = tmp_path / "configs"
+        elsewhere.mkdir()
+        config_file = elsewhere / "proxy.yaml"
+        config_file.write_text("model_list: []\n")
+        monkeypatch.chdir(cwd_dir)
+
+        opts = ProxyInitializationHelpers._get_reload_options(str(config_file))
+
+        assert opts["reload"] is True
+        assert opts["reload_dirs"] == [str(cwd_dir), str(elsewhere)]
+        assert opts["reload_includes"] == ["*.py", "proxy.yaml"]
+
+    def test_patch_statreload_for_config_yields_yaml(self, tmp_path):
+        from pathlib import Path
+
+        from uvicorn.supervisors.statreload import StatReload
+
+        if hasattr(StatReload, "_litellm_patched_config_paths"):
+            StatReload._litellm_patched_config_paths.clear()
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("model_list: []\n")
+        py_file = tmp_path / "module.py"
+        py_file.write_text("x = 1\n")
+
+        applied = ProxyInitializationHelpers._patch_statreload_for_config(
+            str(config_file)
+        )
+        assert applied is True
+
+        fake_self = types.SimpleNamespace(
+            config=types.SimpleNamespace(reload_dirs=[tmp_path])
+        )
+        yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
+
+        assert config_file.resolve() in yielded_paths
+        assert py_file.resolve() in yielded_paths
+
+    def test_patch_statreload_for_config_is_idempotent(self, tmp_path):
+        from pathlib import Path
+
+        from uvicorn.supervisors.statreload import StatReload
+
+        if hasattr(StatReload, "_litellm_patched_config_paths"):
+            StatReload._litellm_patched_config_paths.clear()
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("model_list: []\n")
+        py_file = tmp_path / "only.py"
+        py_file.write_text("x = 1\n")
+
+        for _ in range(3):
+            ProxyInitializationHelpers._patch_statreload_for_config(str(config_file))
+
+        fake_self = types.SimpleNamespace(
+            config=types.SimpleNamespace(reload_dirs=[tmp_path])
+        )
+        yielded = list(StatReload.iter_py_files(fake_self))
+        assert len(yielded) == len(set(map(str, yielded)))
+        yielded_paths = {Path(p).resolve() for p in yielded}
+        assert config_file.resolve() in yielded_paths
+        assert py_file.resolve() in yielded_paths
+
     @patch("asyncio.run")
     @patch("builtins.print")
     def test_init_hypercorn_server(self, mock_print, mock_asyncio_run):

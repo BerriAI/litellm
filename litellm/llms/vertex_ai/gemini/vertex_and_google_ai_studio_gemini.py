@@ -979,15 +979,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     params["includeThoughts"] = False
                 else:
                     params["includeThoughts"] = True
-                    if thinking_budget >= 10000:
-                        is_gemini3flash = (
-                            "gemini-3-flash-preview" in model.lower()
-                            or "gemini-3-flash" in model.lower()
-                        )
-                        params["thinkingLevel"] = (
-                            "minimal" if is_gemini3flash else "low"
-                        )
-                    else:
+                    # Follow provider defaults unless explicitly opted into legacy behavior.
+                    if litellm.enable_gemini_default_thinking_level_low is True:
                         is_gemini3flash = (
                             "gemini-3-flash-preview" in model.lower()
                             or "gemini-3-flash" in model.lower()
@@ -2395,8 +2388,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_response = GenerateContentResponseBody(**raw_response.json())  # type: ignore
         except Exception as e:
             raise VertexAIError(
-                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
-                    raw_response.text, str(e)
+                message="Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
+                    str(e)
                 ),
                 status_code=422,
                 headers=raw_response.headers,
@@ -2530,8 +2523,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         except Exception as e:
             raise VertexAIError(
-                message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
-                    completion_response, str(e)
+                message="Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
+                    str(e)
                 ),
                 status_code=422,
                 headers=raw_response.headers,

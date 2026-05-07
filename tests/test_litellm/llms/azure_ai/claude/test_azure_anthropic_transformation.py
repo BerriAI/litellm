@@ -291,6 +291,100 @@ class TestAzureAnthropicConfig:
         assert "anthropic-beta" in headers
         assert "compact-2026-01-12" in headers["anthropic-beta"]
 
+    def test_output_config_promoted_from_extra_body(self):
+        """Anthropic ``output_config`` routed via ``extra_body`` reaches the request body."""
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+            "extra_body": {"output_config": {"effort": "low"}},
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        result = config.transform_request(
+            model="claude-opus-4-6",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert result["output_config"] == {"effort": "low"}
+        assert "extra_body" not in result
+
+    def test_invalid_output_config_effort_raises_via_extra_body(self):
+        """Invalid ``effort`` via ``extra_body`` raises BadRequestError."""
+        import litellm
+
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+            "extra_body": {"output_config": {"effort": "invalid"}},
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+            config.transform_request(
+                model="claude-opus-4-6",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        assert "Invalid effort value" in str(exc_info.value)
+
+    def test_unsupported_effort_xhigh_raises_via_extra_body(self):
+        """Unsupported ``effort='xhigh'`` via ``extra_body`` raises BadRequestError."""
+        import litellm
+
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+            "extra_body": {"output_config": {"effort": "xhigh"}},
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+            config.transform_request(
+                model="claude-sonnet-4-6",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        assert "xhigh" in str(exc_info.value)
+
+    def test_extra_body_promotion_does_not_clobber_top_level(self):
+        """Top-level ``optional_params`` wins over duplicates in ``extra_body``."""
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+            "output_config": {"effort": "low"},
+            "extra_body": {"output_config": {"effort": "high"}},
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        result = config.transform_request(
+            model="claude-opus-4-6",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert result["output_config"] == {"effort": "low"}
+
     def test_context_management_mixed_edits_beta_headers(self):
         """Test that context_management with both compact and other edits adds both beta headers"""
         config = AzureAnthropicConfig()
