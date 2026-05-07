@@ -81,6 +81,28 @@ async def get_agent_by_name(
     return _row_to_dict(row) if row else None
 
 
+async def list_agents(
+    prisma_client: PrismaClient,
+    *,
+    created_by: Optional[str],
+    limit: int,
+    skip: int,
+) -> List[Dict[str, Any]]:
+    """List agents scoped to `created_by`, newest first.
+
+    Simple offset-based pagination — `skip` is the offset, `limit` is the
+    page size. Returns a list of plain dicts; the caller is responsible for
+    masking secrets and reshaping into the response model.
+    """
+    rows = await prisma_client.db.litellm_managedagent.find_many(
+        where={"created_by": created_by},
+        take=limit,
+        skip=skip,
+        order={"created_at": "desc"},
+    )
+    return [_row_to_dict(r) for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Session helpers
 # ---------------------------------------------------------------------------
@@ -97,6 +119,35 @@ async def get_session(
         where={"id": session_id, "created_by": created_by}
     )
     return _row_to_dict(row) if row else None
+
+
+async def list_sessions_for_agent(
+    prisma_client: PrismaClient,
+    *,
+    agent_id: str,
+    created_by: Optional[str],
+    limit: int,
+    skip: int,
+    status: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """List sessions for a given `agent_id`, scoped to `created_by`, newest first.
+
+    Optional `status` filter narrows by `SessionStatus`. Simple offset-based
+    pagination — `skip` is the offset, `limit` is the page size. Returns a
+    list of plain dicts; the caller maps each to the public response shape
+    (stripping `sandbox_url` / `sandbox_metadata`).
+    """
+    where: Dict[str, Any] = {"agent_id": agent_id, "created_by": created_by}
+    if status is not None:
+        where["status"] = status
+
+    rows = await prisma_client.db.litellm_managedagentsession.find_many(
+        where=where,
+        take=limit,
+        skip=skip,
+        order={"created_at": "desc"},
+    )
+    return [_row_to_dict(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
