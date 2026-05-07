@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Literal
 
-from litellm.proxy._types import CallInfo
+from litellm.proxy._types import CallInfo, Litellm_EntityType
 
 
 class BaseBudgetAlertType(ABC):
@@ -31,6 +31,11 @@ class SoftBudgetAlert(BaseBudgetAlertType):
         return "Soft Budget Crossed: "
 
     def get_id(self, user_info: CallInfo) -> str:
+        # For team-level soft-budget alerts, dedupe by team_id so a single team
+        # crossing the soft budget produces one alert per budget_alert_ttl
+        # (instead of one alert per active key/token under that team). See #27398.
+        if user_info.event_group == Litellm_EntityType.TEAM and user_info.team_id:
+            return user_info.team_id
         return user_info.token or "default_id"
 
 
