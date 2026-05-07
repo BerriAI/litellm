@@ -40,3 +40,9 @@ CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedAgentSession_created_by_idx" ON "Lite
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedAgentSession_status_idx" ON "LiteLLM_ManagedAgentSession"("status");
+
+-- CreateIndex
+-- Backstop for the application-level (name, created_by) duplicate check —
+-- catches the read-then-write race when two concurrent POST /v2/agents
+-- requests both pass the pre-query and try to insert at the same time.
+CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_ManagedAgent_name_created_by_key" ON "LiteLLM_ManagedAgent"("name", "created_by");
