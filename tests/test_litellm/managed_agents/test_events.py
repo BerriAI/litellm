@@ -14,8 +14,8 @@ Covers contract §6.6 + §7:
 The handler depends on:
 - `user_api_key_auth` (FastAPI dep) — overridden via `app.dependency_overrides`.
 - `litellm.proxy.proxy_server.prisma_client` — patched to a sentinel.
-- `litellm.managed_agents.endpoints.events.get_session` — patched per test.
-- `litellm.managed_agents.endpoints.events.get_adapter` — patched per test.
+- `litellm.proxy.managed_agents_endpoints.events.get_session` — patched per test.
+- `litellm.proxy.managed_agents_endpoints.events.get_adapter` — patched per test.
 """
 
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
@@ -26,7 +26,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.managed_agents.adapters.base import SandboxUnreachableError
-from litellm.managed_agents.endpoints.events import router as events_router
+from litellm.proxy.managed_agents_endpoints.events import router as events_router
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
@@ -131,11 +131,11 @@ def test_stream_events_happy_path_format_and_headers() -> None:
 
     with (
         patch(
-            "litellm.managed_agents.endpoints.events.get_session",
+            "litellm.proxy.managed_agents_endpoints.events.get_session",
             side_effect=_fake_get_session,
         ),
         patch(
-            "litellm.managed_agents.endpoints.events.get_adapter",
+            "litellm.proxy.managed_agents_endpoints.events.get_adapter",
             return_value=fake_adapter,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", object()),
@@ -174,7 +174,7 @@ def test_stream_events_404_when_session_missing() -> None:
 
     with (
         patch(
-            "litellm.managed_agents.endpoints.events.get_session",
+            "litellm.proxy.managed_agents_endpoints.events.get_session",
             side_effect=_fake_get_session,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", object()),
@@ -203,7 +203,7 @@ def test_stream_events_503_when_session_provisioning() -> None:
 
     with (
         patch(
-            "litellm.managed_agents.endpoints.events.get_session",
+            "litellm.proxy.managed_agents_endpoints.events.get_session",
             side_effect=_fake_get_session,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", object()),
@@ -233,7 +233,7 @@ def test_stream_events_404_when_session_terminated() -> None:
 
     with (
         patch(
-            "litellm.managed_agents.endpoints.events.get_session",
+            "litellm.proxy.managed_agents_endpoints.events.get_session",
             side_effect=_fake_get_session,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", object()),
@@ -265,11 +265,11 @@ def test_stream_events_unreachable_after_stream_started_emits_error_event() -> N
 
     with (
         patch(
-            "litellm.managed_agents.endpoints.events.get_session",
+            "litellm.proxy.managed_agents_endpoints.events.get_session",
             side_effect=_fake_get_session,
         ),
         patch(
-            "litellm.managed_agents.endpoints.events.get_adapter",
+            "litellm.proxy.managed_agents_endpoints.events.get_adapter",
             return_value=fake_adapter,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", object()),
@@ -303,11 +303,11 @@ def test_stream_events_unreachable_on_first_iteration_emits_error_only() -> None
 
     with (
         patch(
-            "litellm.managed_agents.endpoints.events.get_session",
+            "litellm.proxy.managed_agents_endpoints.events.get_session",
             side_effect=_fake_get_session,
         ),
         patch(
-            "litellm.managed_agents.endpoints.events.get_adapter",
+            "litellm.proxy.managed_agents_endpoints.events.get_adapter",
             return_value=fake_adapter,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", object()),
@@ -338,7 +338,7 @@ def test_stream_events_500_when_session_row_missing_sandbox_state() -> None:
 
     with (
         patch(
-            "litellm.managed_agents.endpoints.events.get_session",
+            "litellm.proxy.managed_agents_endpoints.events.get_session",
             side_effect=_fake_get_session,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", object()),
@@ -368,11 +368,11 @@ def test_stream_events_handles_json_string_sandbox_metadata() -> None:
 
     with (
         patch(
-            "litellm.managed_agents.endpoints.events.get_session",
+            "litellm.proxy.managed_agents_endpoints.events.get_session",
             side_effect=_fake_get_session,
         ),
         patch(
-            "litellm.managed_agents.endpoints.events.get_adapter",
+            "litellm.proxy.managed_agents_endpoints.events.get_adapter",
             return_value=fake_adapter,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", object()),
@@ -422,7 +422,7 @@ async def test_stream_events_scopes_by_caller_user_id() -> None:
 
     with (
         patch(
-            "litellm.managed_agents.endpoints.events.get_session",
+            "litellm.proxy.managed_agents_endpoints.events.get_session",
             side_effect=_fake_get_session,
         ),
         patch("litellm.proxy.proxy_server.prisma_client", object()),
