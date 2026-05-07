@@ -90,12 +90,13 @@ class DriverResult:
 
 def run_claude(
     *,
-    prompt: str,
+    prompt: Optional[str],
     model: str,
     base_url: str,
     api_key: str,
     extra_env: Optional[Mapping[str, str]] = None,
     extra_args: Optional[Sequence[str]] = None,
+    stdin_input: Optional[str] = None,
     cli_path: str = CLAUDE_CLI_DEFAULT,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     runner: Optional[Any] = None,
@@ -118,8 +119,10 @@ def run_claude(
     process-wide singleton; unit tests pass a no-op limiter or one
     backed by a tmp dir to keep tests hermetic.
     """
-    if not prompt:
-        raise ValueError("prompt must be a non-empty string")
+    if prompt is None and stdin_input is None:
+        raise ValueError("must supply either `prompt` or `stdin_input`")
+    if prompt is not None and not prompt:
+        raise ValueError("prompt must be a non-empty string when provided")
     if not model:
         raise ValueError("model must be a non-empty string")
     if not base_url:
@@ -132,6 +135,14 @@ def run_claude(
     # prompt (or silently dropped, depending on the CLI version) and the
     # tool_use / vision cells fail with confusing "no tool_use observed"
     # errors. Build the flag list first, then append the prompt last.
+    #
+    # When `extra_args` contains a *variadic* flag like `--allowed-tools
+    # WebSearch` (commander.js's `<tools...>`), the parser greedily
+    # consumes every subsequent token as part of the variadic list — so
+    # the prompt would be eaten as a tool name. Inserting `--` before
+    # the prompt terminates option parsing and leaves the prompt as a
+    # plain positional, which works for variadic and non-variadic flags
+    # alike.
     cmd: List[str] = [
         cli_path,
         "--print",
@@ -143,7 +154,9 @@ def run_claude(
     ]
     if extra_args:
         cmd.extend(extra_args)
-    cmd.append(prompt)
+    if prompt is not None:
+        cmd.append("--")
+        cmd.append(prompt)
 
     # Build a minimal env for the CLI subprocess: only the allowlisted
     # process-runtime vars from os.environ, plus the explicit proxy
@@ -171,6 +184,7 @@ def run_claude(
         completed = run_fn(
             cmd,
             env=env,
+            input=stdin_input,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -202,11 +216,12 @@ ModelResult = Union[DriverResult, ClaudeCLIError]
 def run_claude_models_parallel(
     *,
     models: Sequence[str],
-    prompt: str,
+    prompt: Optional[str],
     base_url: str,
     api_key: str,
     extra_env: Optional[Mapping[str, str]] = None,
     extra_args: Optional[Sequence[str]] = None,
+    stdin_input: Optional[str] = None,
     cli_path: str = CLAUDE_CLI_DEFAULT,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     runner: Optional[Callable[..., Any]] = None,
@@ -247,6 +262,7 @@ def run_claude_models_parallel(
                 api_key=api_key,
                 extra_env=extra_env,
                 extra_args=extra_args,
+                stdin_input=stdin_input,
                 cli_path=cli_path,
                 timeout=timeout,
                 runner=runner,

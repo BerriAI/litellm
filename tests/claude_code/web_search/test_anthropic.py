@@ -3,19 +3,19 @@
 Drive the real `claude` CLI against a running LiteLLM proxy that routes
 to Anthropic, allow the built-in `WebSearch` tool, ask a question that
 requires fresh web data, and assert that the upstream emitted a
-`server_tool_use` or `web_search_tool_result` content block — proving
-the proxy preserves Anthropic's server-side web search end-to-end.
+`tool_use` block calling `WebSearch` — proving the proxy preserves
+Claude Code's tool definitions and the upstream's tool-use response
+end-to-end.
 
-Web search is a *server tool*: unlike `Bash`/`Read`/etc., the upstream
-executes the search itself and embeds the results inline in the
-response. The wire shape is distinctive:
-
-  - `server_tool_use` block with `name: "web_search"`
-  - `web_search_tool_result` block carrying the encrypted result content
-
-A regression where the proxy strips the `web_search_20250305` tool
-from the request, drops the result block from the response, or fails
-to forward the required beta header collapses both signals.
+Note: Claude Code's `WebSearch` is a *client-side* tool (the CLI
+executes the search itself and feeds the result back as a `tool_result`
+block), so the wire shape is `tool_use` with `name="WebSearch"` rather
+than the Anthropic-managed `server_tool_use` / `web_search_tool_result`
+blocks (which only appear when the request includes the
+`web_search_20250305` server tool definition — something the CLI does
+not currently inject). A regression where the proxy strips the
+`WebSearch` tool from the request or drops the `tool_use` block from
+the response will break this assertion.
 
 The (feature, provider) for this cell is inferred from the file path by
 `tests/claude_code/conftest.py`:
@@ -61,14 +61,13 @@ WEB_SEARCH_PROMPT = (
 # answering from training data via a different tool.
 WEB_SEARCH_ARGS = ["--allowed-tools", "WebSearch"]
 
-# Block types that prove the server tool actually executed end-to-end.
-SERVER_TOOL_BLOCK_TYPES = {"server_tool_use", "web_search_tool_result"}
+# The CLI tool name surfaced as `tool_use.name` when WebSearch fires.
+WEB_SEARCH_TOOL_NAME = "WebSearch"
 
 
-def _has_server_tool_block(events: Sequence[Mapping[str, Any]]) -> bool:
+def _has_web_search_tool_use(events: Sequence[Mapping[str, Any]]) -> bool:
     """Walk the stream-json events and return True if any assistant
-    message included a server-tool block (server_tool_use or
-    web_search_tool_result)."""
+    message included a `tool_use` block calling `WebSearch`."""
     for event in events:
         if event.get("type") != "assistant":
             continue
@@ -79,14 +78,19 @@ def _has_server_tool_block(events: Sequence[Mapping[str, Any]]) -> bool:
         for block in content:
             if not isinstance(block, dict):
                 continue
-            if block.get("type") in SERVER_TOOL_BLOCK_TYPES:
+            if (
+                block.get("type") == "tool_use"
+                and block.get("name") == WEB_SEARCH_TOOL_NAME
+            ):
                 return True
     return False
 
 
 def test_web_search_anthropic(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
-    upstream emitted a server-tool block proving web search ran."""
+    upstream emitted a `tool_use` block calling `WebSearch`, proving
+    the proxy preserved both the request-side tool definition and the
+    response-side tool_use block."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
     api_key = os.environ.get(PROXY_API_KEY_ENV)
     if not base_url or not api_key:
@@ -126,11 +130,11 @@ def test_web_search_anthropic(compat_result):
             failures.append(error)
             continue
 
-        if not _has_server_tool_block(outcome.events):
+        if not _has_web_search_tool_use(outcome.events):
             error = (
-                f"[{model}] no server_tool_use / web_search_tool_result block "
-                "observed; the proxy may have stripped the WebSearch server tool "
-                "or its result block"
+                f"[{model}] no `tool_use` block with name=WebSearch observed; "
+                "the proxy may have stripped the WebSearch tool definition from "
+                "the request or the tool_use block from the response"
             )
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)

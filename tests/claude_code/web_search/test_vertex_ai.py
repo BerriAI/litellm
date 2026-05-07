@@ -1,15 +1,21 @@
 """web_search x Vertex AI.
 
 Drive the real `claude` CLI against a running LiteLLM proxy that routes
-Claude requests to GCP Vertex AI, allow the built-in `WebSearch` tool,
-ask a question that requires fresh web data, and assert that the
-upstream emitted a `server_tool_use` or `web_search_tool_result`
-content block.
+to Vertex AI, allow the built-in `WebSearch` tool, ask a question that
+requires fresh web data, and assert that the upstream emitted a
+`tool_use` block calling `WebSearch` — proving the proxy preserves
+Claude Code's tool definitions and the upstream's tool-use response
+end-to-end.
 
-Per the changelog (1.0.110, 2.1.79+), Vertex has had inconsistent
-support for the Anthropic web_search server tool — the cell will fail
-loudly when the upstream rejects the tool, which is the diagnostic we
-want for a compat matrix.
+Note: Claude Code's `WebSearch` is a *client-side* tool (the CLI
+executes the search itself and feeds the result back as a `tool_result`
+block), so the wire shape is `tool_use` with `name="WebSearch"` rather
+than the Anthropic-managed `server_tool_use` / `web_search_tool_result`
+blocks (which only appear when the request includes the
+`web_search_20250305` server tool definition — something the CLI does
+not currently inject). A regression where the proxy strips the
+`WebSearch` tool from the request or drops the `tool_use` block from
+the response will break this assertion.
 
 The (feature, provider) for this cell is inferred from the file path by
 `tests/claude_code/conftest.py`:
@@ -41,15 +47,27 @@ VERTEX_AI_MODELS = [
     "claude-opus-4-7-vertex",
 ]
 
+# A prompt the model cannot answer from training data alone — it forces
+# the model to actually hit the web_search server tool rather than
+# replying from memory. We pick "this week" as the freshness anchor
+# because it's stable across long-running test schedules without
+# pinning to a specific date that would go stale.
 WEB_SEARCH_PROMPT = (
     "Use web search to find a news headline published this week about "
     "Anthropic. Reply with one sentence summarizing what you found."
 )
+# Allow only WebSearch so the model has no fallback path: if the proxy
+# strips the server tool, the run will fail loudly rather than silently
+# answering from training data via a different tool.
 WEB_SEARCH_ARGS = ["--allowed-tools", "WebSearch"]
-SERVER_TOOL_BLOCK_TYPES = {"server_tool_use", "web_search_tool_result"}
+
+# The CLI tool name surfaced as `tool_use.name` when WebSearch fires.
+WEB_SEARCH_TOOL_NAME = "WebSearch"
 
 
-def _has_server_tool_block(events: Sequence[Mapping[str, Any]]) -> bool:
+def _has_web_search_tool_use(events: Sequence[Mapping[str, Any]]) -> bool:
+    """Walk the stream-json events and return True if any assistant
+    message included a `tool_use` block calling `WebSearch`."""
     for event in events:
         if event.get("type") != "assistant":
             continue
@@ -60,12 +78,19 @@ def _has_server_tool_block(events: Sequence[Mapping[str, Any]]) -> bool:
         for block in content:
             if not isinstance(block, dict):
                 continue
-            if block.get("type") in SERVER_TOOL_BLOCK_TYPES:
+            if (
+                block.get("type") == "tool_use"
+                and block.get("name") == WEB_SEARCH_TOOL_NAME
+            ):
                 return True
     return False
 
 
 def test_web_search_vertex_ai(compat_result):
+    """Drive the `claude` CLI against the LiteLLM proxy and assert the
+    upstream emitted a `tool_use` block calling `WebSearch`, proving
+    the proxy preserved both the request-side tool definition and the
+    response-side tool_use block."""
     base_url = os.environ.get(PROXY_BASE_URL_ENV)
     api_key = os.environ.get(PROXY_API_KEY_ENV)
     if not base_url or not api_key:
@@ -105,10 +130,11 @@ def test_web_search_vertex_ai(compat_result):
             failures.append(error)
             continue
 
-        if not _has_server_tool_block(outcome.events):
+        if not _has_web_search_tool_use(outcome.events):
             error = (
-                f"[{model}] no server_tool_use / web_search_tool_result block "
-                "observed"
+                f"[{model}] no `tool_use` block with name=WebSearch observed; "
+                "the proxy may have stripped the WebSearch tool definition from "
+                "the request or the tool_use block from the response"
             )
             compat_result.add({"status": "fail", "error": error})
             failures.append(error)
