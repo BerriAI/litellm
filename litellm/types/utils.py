@@ -3298,6 +3298,7 @@ class LlmProviders(str, Enum):
     CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
+    HERMESTOKEN = "hermestoken"
     GRADIENT_AI = "gradient_ai"
     LLAMA = "meta_llama"
     NSCALE = "nscale"
