@@ -122,25 +122,17 @@ async def test_semantic_filter_basic_filtering():
     )
 
     # Assertions - validate filtering mechanics work
-    assert (
-        len(filtered) <= 3
-    ), f"Should return at most 3 tools (top_k), got {len(filtered)}"
+    assert len(filtered) <= 3, f"Should return at most 3 tools (top_k), got {len(filtered)}"
     assert len(filtered) > 0, "Should return at least some tools"
-    assert len(filtered) < len(
-        tools
-    ), f"Should filter down from {len(tools)} tools, got {len(filtered)}"
+    assert len(filtered) < len(tools), f"Should filter down from {len(tools)} tools, got {len(filtered)}"
 
     # Validate tools are actual MCPTool objects
     for tool in filtered:
         assert hasattr(tool, "name"), "Filtered result should be MCPTool with name"
-        assert hasattr(
-            tool, "description"
-        ), "Filtered result should be MCPTool with description"
+        assert hasattr(tool, "description"), "Filtered result should be MCPTool with description"
 
     filtered_names = [t.name for t in filtered]
-    print(
-        f"✅ Successfully filtered {len(tools)} tools down to top {len(filtered)}: {filtered_names}"
-    )
+    print(f"✅ Successfully filtered {len(tools)} tools down to top {len(filtered)}: {filtered_names}")
     print(f"   Filter respects top_k parameter correctly")
 
 
@@ -218,12 +210,7 @@ async def test_semantic_filter_disabled():
         SemanticMCPToolFilter,
     )
 
-    tools = [
-        MCPTool(
-            name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"}
-        )
-        for i in range(10)
-    ]
+    tools = [MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"}) for i in range(10)]
 
     mock_router = Mock()
 
@@ -243,9 +230,7 @@ async def test_semantic_filter_disabled():
     )
 
     # Should return all tools when disabled
-    assert len(filtered) == len(
-        tools
-    ), f"Expected all {len(tools)} tools, got {len(filtered)}"
+    assert len(filtered) == len(tools), f"Expected all {len(tools)} tools, got {len(filtered)}"
 
 
 @pytest.mark.asyncio
@@ -364,12 +349,7 @@ async def test_semantic_filter_hook_triggers_on_completion():
     )
 
     # Prepare data - completion request with tools
-    tools = [
-        MCPTool(
-            name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"}
-        )
-        for i in range(10)
-    ]
+    tools = [MCPTool(name=f"tool_{i}", description=f"Tool {i}", inputSchema={"type": "object"}) for i in range(10)]
 
     # Build router with the tools before filtering
     filter_instance._build_router(tools)
@@ -399,9 +379,7 @@ async def test_semantic_filter_hook_triggers_on_completion():
     # Assertions
     assert result is not None, "Hook should return modified data"
     assert "tools" in result, "Result should contain tools"
-    assert len(result["tools"]) < len(
-        tools
-    ), f"Hook should filter tools, got {len(result['tools'])}/{len(tools)}"
+    assert len(result["tools"]) < len(tools), f"Hook should filter tools, got {len(result['tools'])}/{len(tools)}"
 
     print(f"✅ Hook triggered correctly: {len(tools)} -> {len(result['tools'])} tools")
 
@@ -489,9 +467,7 @@ class TestGetToolsByNames:
             {"name": "send_email", "description": "send mail"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            ["send_email"], available_tools
-        )
+        matched = filter_instance._get_tools_by_names(["send_email"], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "send_email"
@@ -503,9 +479,7 @@ class TestGetToolsByNames:
         client_name = "litellm_" + canonical
         available_tools = [{"name": client_name, "description": "scrape"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         # Must return the incoming tool unchanged so the client-facing
@@ -516,13 +490,9 @@ class TestGetToolsByNames:
         """Some clients use dash as alias separator; accept that too."""
         filter_instance = self._make_filter()
         canonical = "weather_svc-get_weather"
-        available_tools = [
-            {"name": "mcp-" + canonical, "description": "weather"}
-        ]
+        available_tools = [{"name": "mcp-" + canonical, "description": "weather"}]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "mcp-" + canonical
@@ -552,9 +522,7 @@ class TestGetToolsByNames:
             {"name": "litellm_" + canonical, "description": "wrapped"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == canonical
@@ -567,13 +535,9 @@ class TestGetToolsByNames:
         separator-anchored suffixes of ``litellm_api-fs-read_file``.
         """
         filter_instance = self._make_filter()
-        available_tools = [
-            {"name": "litellm_api-fs-read_file", "description": "read"}
-        ]
+        available_tools = [{"name": "litellm_api-fs-read_file", "description": "read"}]
 
-        matched = filter_instance._get_tools_by_names(
-            ["fs-read_file", "api-fs-read_file"], available_tools
-        )
+        matched = filter_instance._get_tools_by_names(["fs-read_file", "api-fs-read_file"], available_tools)
 
         assert len(matched) == 1
 
@@ -590,9 +554,7 @@ class TestGetToolsByNames:
             {"name": "my_" + canonical, "description": "plain search"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            [canonical], available_tools
-        )
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
 
         assert len(matched) == 1
         assert matched[0]["name"] == "my_" + canonical
@@ -606,9 +568,7 @@ class TestGetToolsByNames:
             {"name": "litellm_fs-delete", "description": "delete"},
         ]
 
-        matched = filter_instance._get_tools_by_names(
-            ["fs-write", "fs-delete", "fs-read"], available_tools
-        )
+        matched = filter_instance._get_tools_by_names(["fs-write", "fs-delete", "fs-read"], available_tools)
 
         names = [t["name"] for t in matched]
         assert names == [
@@ -640,3 +600,95 @@ class TestGetToolsByNames:
         )
 
         assert matched == []
+
+    def test_client_suffix_with_underscore_separator(self):
+        """
+        Issue #26507 -- LibreChat appends a per-tool unique ID after
+        the canonical name to disambiguate tools across multiple
+        connected MCP servers, so the incoming name is
+        ``<canonical>_<uid>``. Symmetric with opencode's prefix
+        wrapping.
+        """
+        filter_instance = self._make_filter()
+        canonical = "fc_web_search-firecrawl_scrape"
+        client_name = canonical + "_a1b2c3d4"
+        available_tools = [{"name": client_name, "description": "scrape"}]
+
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
+
+        assert len(matched) == 1
+        # Must return the incoming tool unchanged so the client-facing
+        # name (with the unique-ID suffix) survives, otherwise tool-call
+        # round-trips break client-side.
+        assert matched[0]["name"] == client_name
+
+    def test_client_suffix_with_dash_separator(self):
+        """Some clients may use dash for the suffix separator too."""
+        filter_instance = self._make_filter()
+        canonical = "weather_svc-get_weather"
+        client_name = canonical + "-9f8a"
+        available_tools = [{"name": client_name, "description": "weather"}]
+
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
+
+        assert len(matched) == 1
+        assert matched[0]["name"] == client_name
+
+    def test_prefix_without_separator_does_not_match(self):
+        """
+        A bare-substring prefix must not match -- ``earthquake_alert``
+        is not a UID-suffixed version of canonical ``ear`` and would
+        surprise the user if selected.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [{"name": "earthquake_alert", "description": "alert"}]
+
+        matched = filter_instance._get_tools_by_names(["ear"], available_tools)
+
+        assert matched == []
+
+    def test_suffix_does_not_match_unprefixed_canonical(self):
+        """
+        Symmetric with the opencode-prefix guard: if the canonical is
+        not server-prefixed, suffix wrapping (LibreChat-style) must
+        also NOT kick in, since an unrelated local function name
+        starting with the canonical substring would be spuriously
+        selected.
+        """
+        filter_instance = self._make_filter()
+        available_tools = [
+            {
+                "name": "firecrawl_scrape_v2_helper",
+                "description": "unrelated local function",
+            }
+        ]
+
+        matched = filter_instance._get_tools_by_names(
+            ["firecrawl_scrape"],  # no MCP_TOOL_PREFIX_SEPARATOR in canonical
+            available_tools,
+        )
+
+        assert matched == []
+
+    def test_prefix_and_suffix_wrappers_can_coexist(self):
+        """
+        If two clients connect through the same proxy and one wraps
+        with a prefix while the other wraps with a suffix, both
+        incoming tool names must resolve to the same canonical.
+        """
+        filter_instance = self._make_filter()
+        canonical = "svc-do_thing"
+        prefix_wrapped = "alpha_" + canonical  # opencode-style
+        suffix_wrapped = canonical + "_uid42"  # LibreChat-style
+        available_tools = [
+            {"name": prefix_wrapped, "description": "alpha"},
+            {"name": suffix_wrapped, "description": "beta"},
+        ]
+
+        matched = filter_instance._get_tools_by_names([canonical], available_tools)
+
+        # Tie on length is broken by dict-iteration order; what matters
+        # is that exactly one of the two wrapped tools is returned, the
+        # other is left out, and no exception fires.
+        assert len(matched) == 1
+        assert matched[0]["name"] in (prefix_wrapped, suffix_wrapped)
