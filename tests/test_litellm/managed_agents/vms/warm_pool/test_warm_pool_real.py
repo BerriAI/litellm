@@ -28,7 +28,7 @@ How to run::
     LITELLM_TEST_WARMPOOL_SUBNET_ID=subnet-... \\
     LITELLM_TEST_WARMPOOL_SECURITY_GROUP=sg-... \\
     LITELLM_TEST_WARMPOOL_IAM_PROFILE=AmazonSSMManagedInstanceProfile \\
-    pytest tests/test_litellm/proxy/agent_session_endpoints/warm_pool/test_warm_pool_real.py -v -m slow
+    pytest tests/test_litellm/managed_agents/vms/warm_pool/test_warm_pool_real.py -v -m slow
 
 If ``LITELLM_TEST_WARMPOOL_AMI_ID`` is unset, the test falls back to the
 latest Amazon Linux 2023 AMI (which already has the SSM agent installed)
@@ -319,7 +319,7 @@ def prisma_with_warm_pool(warm_instance_ids):
 
 @pytest.fixture
 def real_aws_creds():
-    from litellm.proxy.agent_session_endpoints.vm_providers.base import AwsCreds
+    from litellm.managed_agents.vms.base import AwsCreds
 
     # boto3 picks up creds from the default chain; we just need to ensure the
     # AwsCreds type carries something. The SSMHydrateTransport reaches into
@@ -336,8 +336,8 @@ def real_aws_creds():
 @pytest.fixture
 def stub_team_creds(monkeypatch, real_aws_creds):
     """Monkeypatch ``get_team_vm_config`` so we don't need an encrypted DB row."""
-    from litellm.proxy.agent_session_endpoints.vm_providers.base import Ec2Config
-    from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+    from litellm.managed_agents.vms.base import Ec2Config
+    from litellm.managed_agents.vms.team_config import (
         TeamVMConfig,
     )
 
@@ -348,7 +348,7 @@ def stub_team_creds(monkeypatch, real_aws_creds):
         )
 
     monkeypatch.setattr(
-        "litellm.proxy.agent_session_endpoints.warm_pool.attach.get_team_vm_config",
+        "litellm.managed_agents.vms.warm_pool.attach.get_team_vm_config",
         fake,
     )
 
@@ -388,10 +388,10 @@ async def test_attach_latency_p95(
     constant ~5ms operations measured separately; the variable cost — and the
     cost B0 measured at 1700ms — is the SSM round-trip.
     """
-    from litellm.proxy.agent_session_endpoints.warm_pool.attach import (
+    from litellm.managed_agents.vms.warm_pool.attach import (
         attach_warm_vm,
     )
-    from litellm.proxy.agent_session_endpoints.warm_pool.transports.ssm import (
+    from litellm.managed_agents.vms.warm_pool.transports.ssm import (
         SSMHydrateTransport,
     )
 
@@ -448,10 +448,10 @@ async def test_concurrent_attach_no_double_claim_real(
     prisma_with_warm_pool, stub_team_creds, real_aws_creds
 ):
     """5 concurrent attaches against pool size 5 -> all 5 succeed, no double-claim."""
-    from litellm.proxy.agent_session_endpoints.warm_pool.attach import (
+    from litellm.managed_agents.vms.warm_pool.attach import (
         attach_warm_vm,
     )
-    from litellm.proxy.agent_session_endpoints.warm_pool.transports.ssm import (
+    from litellm.managed_agents.vms.warm_pool.transports.ssm import (
         SSMHydrateTransport,
     )
 
