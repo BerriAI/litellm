@@ -12806,7 +12806,7 @@ async def get_config_list(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
         raise HTTPException(
             status_code=400,
             detail={

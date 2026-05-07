@@ -573,6 +573,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/calculate",
         "/spend/logs",
         "/spend/logs/ui",
+        "/spend/logs/ui/{id}",
         "/spend/logs/session/ui",
         "/cost/estimate",
     ]
@@ -702,6 +703,9 @@ class LiteLLMRoutes(enum.Enum):
 
     # Routes accessible by Admin Viewer (read-only admin access)
     admin_viewer_routes = [
+        "/config/list",
+        "/customer/list",
+        "/guardrails/usage/*",
         "/user/list",
         "/user/available_users",
         "/user/available_roles",
@@ -714,7 +718,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/activity",
         "/global/activity/model",
         "/global/activity/cache_hits",
-    ] + info_routes
+    ] + info_routes + spend_tracking_routes + global_spend_tracking_routes
 
     # All routes accesible by an Org Admin
     org_admin_allowed_routes = (
