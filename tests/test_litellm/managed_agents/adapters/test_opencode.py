@@ -756,3 +756,101 @@ class TestDelete:
             )
 
             assert result is None
+
+
+# ---------------------------------------------------------------------------
+# abort — POST <sandbox_url>/session/<oc_sid>/abort
+# ---------------------------------------------------------------------------
+
+
+class TestAbort:
+    """POST <sandbox_url>/session/<oc_sid>/abort."""
+
+    @pytest.mark.asyncio
+    async def test_posts_to_correct_url_with_empty_body(self) -> None:
+        adapter = _make_adapter()
+
+        with respx.mock(assert_all_called=True) as mock:
+            route = mock.post(f"{SANDBOX_URL}/session/{OC_SID}/abort").mock(
+                return_value=httpx.Response(200)
+            )
+
+            result = await adapter.abort(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+            )
+
+            assert result is None
+            assert route.called
+            request = route.calls[0].request
+            assert request.method == "POST"
+            assert str(request.url) == f"{SANDBOX_URL}/session/{OC_SID}/abort"
+            # Body is empty JSON object (`{}`) per opencode contract.
+            assert json.loads(request.content.decode("utf-8")) == {}
+
+    @pytest.mark.asyncio
+    async def test_204_is_success(self) -> None:
+        adapter = _make_adapter()
+
+        with respx.mock(assert_all_called=True) as mock:
+            mock.post(f"{SANDBOX_URL}/session/{OC_SID}/abort").mock(
+                return_value=httpx.Response(204)
+            )
+
+            result = await adapter.abort(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+            )
+
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_connect_error_raises_sandbox_unreachable(self) -> None:
+        adapter = _make_adapter()
+
+        with respx.mock as mock:
+            mock.post(f"{SANDBOX_URL}/session/{OC_SID}/abort").mock(
+                side_effect=httpx.ConnectError("connection refused")
+            )
+
+            with pytest.raises(SandboxUnreachableError):
+                await adapter.abort(
+                    sandbox_url=SANDBOX_URL,
+                    opencode_session_id=OC_SID,
+                )
+
+    @pytest.mark.asyncio
+    async def test_swallows_404_response(self) -> None:
+        """Best-effort: a 404 from opencode (session already gone) is NOT an error."""
+        adapter = _make_adapter()
+
+        with respx.mock as mock:
+            mock.post(f"{SANDBOX_URL}/session/{OC_SID}/abort").mock(
+                return_value=httpx.Response(404, text="not found")
+            )
+
+            # Must NOT raise — opencode 404 is treated as best-effort success.
+            result = await adapter.abort(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+            )
+
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_swallows_non_2xx_response(self) -> None:
+        """Best-effort: a 500 from opencode is also swallowed."""
+        adapter = _make_adapter()
+
+        with respx.mock as mock:
+            mock.post(f"{SANDBOX_URL}/session/{OC_SID}/abort").mock(
+                return_value=httpx.Response(500, text="boom")
+            )
+
+            # Must NOT raise.
+            result = await adapter.abort(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+            )
+
+            assert result is None
