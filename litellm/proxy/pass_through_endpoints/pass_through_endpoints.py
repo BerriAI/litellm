@@ -2559,6 +2559,7 @@ async def _filter_endpoints_by_team_allowed_routes(
         )
 
     allowed_passthrough_routes: List[str] = []
+    has_passthrough_route_constraints = False
 
     # retrieve team metadata
     team_metadata = team.metadata
@@ -2566,18 +2567,23 @@ async def _filter_endpoints_by_team_allowed_routes(
         team_metadata is not None
         and team_metadata.get("allowed_passthrough_routes") is not None
     ):
+        has_passthrough_route_constraints = True
         allowed_passthrough_routes.extend(
             team_metadata.get("allowed_passthrough_routes") or []
         )
 
-    if team.access_group_ids:
+    team_access_group_ids = getattr(team, "access_group_ids", None) or []
+    if not isinstance(team_access_group_ids, list):
+        team_access_group_ids = []
+    if team_access_group_ids:
+        has_passthrough_route_constraints = True
         allowed_passthrough_routes.extend(
             await _get_pass_through_routes_from_access_groups(
-                access_group_ids=team.access_group_ids,
+                access_group_ids=team_access_group_ids,
             )
         )
 
-    if allowed_passthrough_routes:
+    if has_passthrough_route_constraints:
         ## FILTER pass_through_endpoints by allowed_passthrough_routes
         pass_through_endpoints = [
             endpoint
