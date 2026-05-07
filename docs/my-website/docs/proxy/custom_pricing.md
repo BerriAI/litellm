@@ -68,6 +68,84 @@ model_list:
       output_cost_per_token: 0.000520 # 👈 ONLY to track cost per token
 ```
 
+## Database-Stored Models (`/model/new` + `STORE_MODEL_IN_DB=True`)
+
+:::warning Different placement for DB-stored models
+
+When models are added at runtime via [`POST /model/new`](./model_management.md#add-a-new-model) and persisted to Postgres (with `general_settings.store_model_in_db: true`), custom-pricing fields must be placed in **`litellm_params`**, not in `model_info`.
+
+The `model_info` JSONB column is **not** mirrored into per-request metadata for DB-loaded deployments, so `_response_cost_calculator` never sees pricing placed there and falls back to the static catalog. The result is `response_cost: 0.0` in spend logs even though the value is visible in `GET /model/info`.
+
+This differs from the config.yaml flow (above), where pricing in `model_info` works because the YAML loader wires `model_info` into request metadata at startup.
+
+:::
+
+### Working `/model/new` example
+
+```bash
+curl -X POST "http://0.0.0.0:4000/model/new" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model_name": "my-custom-llm",
+      "litellm_params": {
+        "model": "openai/some-openai-compatible-model",
+        "api_base": "https://api.example.com/v1",
+        "api_key": "os.environ/SOME_API_KEY",
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003
+      },
+      "model_info": {
+        "input_cost_per_token": 0.000001,
+        "output_cost_per_token": 0.000003,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 4096
+      }
+    }'
+```
+
+The duplicate copy under `model_info` is **optional** — it is only used for `GET /model/info` UI/inspection responses. The copy under `litellm_params` is what actually drives cost calculation in spend logs.
+
+### Updating prices on an existing DB-stored model
+
+For partial updates, use `PATCH /model/{model_id}/update`. Place the cost fields under `litellm_params`:
+
+```bash
+curl -X PATCH "http://0.0.0.0:4000/model/<model_id>/update" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "model_info": {"id": "<model_id>"},
+      "litellm_params": {
+        "input_cost_per_token": 0.0000014,
+        "output_cost_per_token": 0.0000044
+      }
+    }'
+```
+
+:::caution Restart required for cost-field updates
+
+`PATCH /model/{model_id}/update` writes to the database and calls `clear_cache()`, but does **not** invoke `Router.register_model()` to refresh the in-memory `litellm.model_cost[model_id]` dict. Cost calculation uses the in-memory value, so price changes take effect only on the next proxy restart (or DB reload). For runtime price changes:
+
+1. Send the `PATCH` request.
+2. Restart the proxy (or roll its Deployment in Kubernetes) so the Router reloads from DB and re-registers each model's pricing.
+3. Verify with a small chat-completion call → `GET /spend/logs` should report `spend > 0`.
+
+The deprecated `POST /model/update` should not be used for cost fields — it returns HTTP 200 but silently drops cost values on the current image.
+
+:::
+
+### Why custom_pricing only flows from `litellm_params` for DB models
+
+The pricing-detection helper `use_custom_pricing_for_model` (in `litellm/litellm_core_utils/litellm_logging.py`) inspects:
+
+1. `litellm_params.<cost_field>` directly, **or**
+2. `litellm_params.metadata.model_info.<cost_field>` / `litellm_params.litellm_metadata.model_info.<cost_field>`.
+
+Config-yaml deployments populate (2) when the YAML loader builds Deployment objects. DB-loaded deployments do not — `model_info` from the JSONB column is exposed via `/model/info` for UI but is not propagated into request metadata. As a result, only (1) — pricing in `litellm_params` — is observed by the cost calculator for DB models.
+
+Tracking issue: [BerriAI/litellm#15135](https://github.com/BerriAI/litellm/issues/15135) (closed as "not planned"; documenting the canonical placement here so users do not hit silent `$0.00` spend tracking).
+
 ## Override Model Cost Map
 
 You can override [our model cost map](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) with your own custom pricing for a mapped model.
