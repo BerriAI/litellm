@@ -20,7 +20,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     resolve_mcp_auth,
 )
-from litellm.proxy._types import MCPTransport
+from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -206,6 +206,43 @@ async def test_exchange_token_http_error():
 
 
 @pytest.mark.asyncio
+async def test_exchange_token_http_error_does_not_log_response_body():
+    """Raw IDP error bodies are not logged because they can contain credentials."""
+    handler = TokenExchangeHandler()
+    server = _obo_server()
+    raw_response_body = "client_secret=do-not-log"
+    mock_response = MagicMock()
+    mock_response.status_code = 401
+    mock_response.text = raw_response_body
+    mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "Unauthorized",
+        request=MagicMock(),
+        response=mock_response,
+    )
+    mock_client = AsyncMock()
+    mock_client.post.return_value = mock_response
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.token_exchange.get_async_httpx_client",
+            return_value=mock_client,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.auth.token_exchange.verbose_logger.debug"
+        ) as mock_debug,
+        pytest.raises(ValueError, match="failed with status 401"),
+    ):
+        await handler.exchange_token("bad-jwt", server)
+
+    logged_values = " ".join(
+        str(value)
+        for call in mock_debug.call_args_list
+        for value in [*call.args, *call.kwargs.values()]
+    )
+    assert raw_response_body not in logged_values
+
+
+@pytest.mark.asyncio
 async def test_exchange_token_missing_access_token():
     """Response without access_token raises ValueError."""
     handler = TokenExchangeHandler()
@@ -284,6 +321,27 @@ async def test_resolve_mcp_auth_obo_without_subject_token_falls_through():
     # Falls through to client_credentials since subject_token is None
     # The server has client_id/client_secret/token_url so has_client_credentials is True
     assert result == "cc-token"
+
+
+@pytest.mark.asyncio
+async def test_resolve_mcp_auth_obo_without_subject_token_uses_cached_client_credentials():
+    """The M2M fallback for OBO servers reuses the client_credentials cache."""
+    server = _obo_server(
+        server_id="srv-obo-m2m-cache",
+        token_url="https://auth.example.com/token",
+    )
+    mock_client = AsyncMock()
+    mock_client.post.return_value = _exchange_response("cached-cc-token")
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.oauth2_token_cache.get_async_httpx_client",
+        return_value=mock_client,
+    ):
+        first = await resolve_mcp_auth(server, subject_token=None)
+        second = await resolve_mcp_auth(server, subject_token=None)
+
+    assert first == second == "cached-cc-token"
+    mock_client.post.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -419,3 +477,35 @@ async def test_config_loading_default_subject_token_type():
 
     server = list(manager.config_mcp_servers.values())[0]
     assert server.subject_token_type == "urn:ietf:params:oauth:token-type:access_token"
+
+
+@pytest.mark.asyncio
+async def test_database_loading_token_exchange_scopes_from_credentials():
+    """DB-loaded OBO server credentials retain configured scopes."""
+    manager = MCPServerManager()
+    db_server = LiteLLM_MCPServerTable(
+        server_id="srv-obo-db",
+        server_name="obo_db_server",
+        url="https://mcp.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2_token_exchange,
+        credentials={
+            "client_id": "db-client",
+            "client_secret": "db-secret",
+            "token_exchange_endpoint": "https://idp.example.com/oauth2/token",
+            "audience": "api://db-mcp",
+            "scopes": ["db.read", "db.write"],
+        },
+    )
+
+    server = await manager.build_mcp_server_from_table(
+        db_server,
+        credentials_are_encrypted=False,
+    )
+
+    assert server.auth_type == MCPAuth.oauth2_token_exchange
+    assert server.client_id == "db-client"
+    assert server.client_secret == "db-secret"
+    assert server.token_exchange_endpoint == "https://idp.example.com/oauth2/token"
+    assert server.audience == "api://db-mcp"
+    assert server.scopes == ["db.read", "db.write"]

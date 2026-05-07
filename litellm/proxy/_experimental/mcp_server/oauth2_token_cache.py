@@ -51,12 +51,23 @@ class MCPOAuth2TokenCache(InMemoryCache):
     def _get_lock(self, server_id: str) -> asyncio.Lock:
         return self._locks.setdefault(server_id, asyncio.Lock())
 
-    async def async_get_token(self, server: "MCPServer") -> Optional[str]:
+    @staticmethod
+    def _has_client_credentials_config(server: "MCPServer") -> bool:
+        return bool(server.client_id and server.client_secret and server.token_url)
+
+    async def async_get_token(
+        self,
+        server: "MCPServer",
+        *,
+        require_client_credentials_flow: bool = True,
+    ) -> Optional[str]:
         """Return a valid access token, fetching or refreshing as needed.
 
         Returns ``None`` when the server lacks client credentials config.
         """
-        if not server.has_client_credentials:
+        if require_client_credentials_flow and not server.has_client_credentials:
+            return None
+        if not self._has_client_credentials_config(server):
             return None
 
         server_id = server.server_id
@@ -284,8 +295,10 @@ async def resolve_mcp_auth(
         # No subject_token — fall back to client_credentials using the same client
         # credentials and token_url so M2M scenarios still work.
         if server.client_id and server.client_secret and server.token_url:
-            token, _ = await mcp_oauth2_token_cache._fetch_token(server)
-            return token
+            return await mcp_oauth2_token_cache.async_get_token(
+                server,
+                require_client_credentials_flow=False,
+            )
         # OBO configured but no subject_token and missing client credentials — warn
         # rather than silently proceeding unauthenticated.
         verbose_logger.warning(
