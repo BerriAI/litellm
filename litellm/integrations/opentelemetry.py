@@ -329,6 +329,7 @@ class OpenTelemetry(CustomLogger):
         ``self.message_logging`` flag is consulted dynamically per request).
 
         ``"true"``/``"1"`` map to ``EVENT_ONLY`` per the contrib convention.
+        ``"false"``/``"0"`` map to ``NO_CONTENT``.
         Unknown values are ignored.
         """
         explicit = self.config.capture_message_content or os.getenv(
@@ -339,6 +340,8 @@ class OpenTelemetry(CustomLogger):
         normalized = explicit.upper()
         if normalized in ("TRUE", "1"):
             return CAPTURE_MODE_EVENT_ONLY
+        if normalized in ("FALSE", "0"):
+            return CAPTURE_MODE_NO_CONTENT
         if normalized in _VALID_CAPTURE_MODES:
             return normalized
         return None

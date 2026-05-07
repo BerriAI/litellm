@@ -491,6 +491,12 @@ class TestOpenTelemetryCaptureMessageContent(unittest.TestCase):
         _, mode = self._make(env="true")
         self.assertEqual(mode, "EVENT_ONLY")
 
+    def test_env_var_legacy_false_maps_to_no_content(self):
+        for env in ("false", "0"):
+            with self.subTest(env=env):
+                _, mode = self._make(env=env)
+                self.assertEqual(mode, "NO_CONTENT")
+
     def test_env_var_unknown_value_falls_through_to_legacy(self):
         _, mode = self._make(env="garbage", message_logging=True)
         self.assertEqual(mode, "SPAN_AND_EVENT")
