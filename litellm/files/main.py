@@ -230,9 +230,16 @@ def create_file(
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
             )
+            api_base = openai_creds.api_base
+            if custom_llm_provider == "pg_vector" and api_base:
+                if not api_base.endswith("/v1/"):
+                    if api_base.endswith("/v1"):
+                        api_base += "/"
+                    else:
+                        api_base = api_base.rstrip("/") + "/v1/"
             response = openai_files_instance.create_file(
                 _is_async=_is_async,
-                api_base=openai_creds.api_base,
+                api_base=api_base,
                 api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
@@ -353,10 +360,17 @@ def file_retrieve(
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
             )
+            api_base = openai_creds.api_base
+            if custom_llm_provider == "pg_vector" and api_base:
+                if not api_base.endswith("/v1/"):
+                    if api_base.endswith("/v1"):
+                        api_base += "/"
+                    else:
+                        api_base = api_base.rstrip("/") + "/v1/"
             response = openai_files_instance.retrieve_file(
                 file_id=file_id,
                 _is_async=_is_async,
-                api_base=openai_creds.api_base,
+                api_base=api_base,
                 api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
@@ -540,10 +554,17 @@ def file_delete(
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
             )
+            api_base = openai_creds.api_base
+            if custom_llm_provider == "pg_vector" and api_base:
+                if not api_base.endswith("/v1/"):
+                    if api_base.endswith("/v1"):
+                        api_base += "/"
+                    else:
+                        api_base = api_base.rstrip("/") + "/v1/"
             response = openai_files_instance.delete_file(
                 file_id=file_id,
                 _is_async=_is_async,
-                api_base=openai_creds.api_base,
+                api_base=api_base,
                 api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
@@ -753,10 +774,17 @@ def file_list(
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
             )
+            api_base = openai_creds.api_base
+            if custom_llm_provider == "pg_vector" and api_base:
+                if not api_base.endswith("/v1/"):
+                    if api_base.endswith("/v1"):
+                        api_base += "/"
+                    else:
+                        api_base = api_base.rstrip("/") + "/v1/"
             response = openai_files_instance.list_files(
                 purpose=purpose,
                 _is_async=_is_async,
-                api_base=openai_creds.api_base,
+                api_base=api_base,
                 api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
@@ -966,10 +994,17 @@ def file_content(
                 api_key=optional_params.api_key,
                 organization=optional_params.organization,
             )
+            api_base = openai_creds.api_base
+            if custom_llm_provider == "pg_vector" and api_base:
+                if not api_base.endswith("/v1/"):
+                    if api_base.endswith("/v1"):
+                        api_base += "/"
+                    else:
+                        api_base = api_base.rstrip("/") + "/v1/"
             response = openai_files_instance.file_content(
                 _is_async=_is_async,
                 file_content_request=_file_content_request,
-                api_base=openai_creds.api_base,
+                api_base=api_base,
                 api_key=openai_creds.api_key,
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
@@ -1093,6 +1128,13 @@ def file_content_streaming(
             api_key=optional_params.api_key,
             organization=optional_params.organization,
         )
+        api_base = openai_creds.api_base
+        if custom_llm_provider == "pg_vector" and api_base:
+            if not api_base.endswith("/v1/"):
+                if api_base.endswith("/v1"):
+                    api_base += "/"
+                else:
+                    api_base = api_base.rstrip("/") + "/v1/"
         response = openai_files_instance.file_content_streaming(
             _is_async=_is_async,
             file_content_request=FileContentRequest(
@@ -1100,7 +1142,7 @@ def file_content_streaming(
                 extra_headers=extra_headers,
                 extra_body=extra_body,
             ),
-            api_base=openai_creds.api_base,
+            api_base=api_base,
             api_key=openai_creds.api_key,
             timeout=timeout,
             max_retries=optional_params.max_retries,
