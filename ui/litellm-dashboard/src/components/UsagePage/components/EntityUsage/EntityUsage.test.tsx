@@ -621,6 +621,95 @@ describe("EntityUsage", () => {
     expect(screen.getByText("Top Agents Driving Spend")).toBeInTheDocument();
   });
 
+  it("should label capacity allocation spend for team usage", async () => {
+    const teamSpendWithCapacityAllocation = {
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          breakdown: {
+            ...mockSpendData.results[0].breakdown,
+            providers: {
+              capacity_allocation: {
+                metrics: {
+                  spend: 733.33,
+                  api_requests: 0,
+                  successful_requests: 0,
+                  failed_requests: 0,
+                  total_tokens: 0,
+                  prompt_tokens: 0,
+                  completion_tokens: 0,
+                  cache_read_input_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                },
+                metadata: {},
+                api_key_breakdown: {},
+              },
+            },
+            entities: {
+              "team-a": {
+                metrics: {
+                  spend: 733.33,
+                  api_requests: 0,
+                  successful_requests: 0,
+                  failed_requests: 0,
+                  total_tokens: 0,
+                  prompt_tokens: 0,
+                  completion_tokens: 0,
+                  cache_read_input_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                },
+                metadata: {
+                  team_alias: "Team A",
+                },
+                api_key_breakdown: {
+                  "capacity_allocation:alloc-123:team-a": {
+                    metrics: {
+                      spend: 733.33,
+                      api_requests: 0,
+                      successful_requests: 0,
+                      failed_requests: 0,
+                      total_tokens: 0,
+                      prompt_tokens: 0,
+                      completion_tokens: 0,
+                      cache_read_input_tokens: 0,
+                      cache_creation_input_tokens: 0,
+                    },
+                    metadata: {
+                      key_alias: null,
+                      team_id: "team-a",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      ],
+      metadata: {
+        ...mockSpendData.metadata,
+        total_spend: 733.33,
+        total_api_requests: 0,
+        total_successful_requests: 0,
+        total_failed_requests: 0,
+        total_tokens: 0,
+      },
+    };
+    mockTeamDailyActivityCall.mockResolvedValue(teamSpendWithCapacityAllocation);
+
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByText("Capacity Allocations")).toBeInTheDocument();
+    expect(screen.getByText("Fixed PTU cost")).toBeInTheDocument();
+    expect(screen.getAllByText("Team A").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("$733.33").length).toBeGreaterThan(0);
+    expect(screen.getByText("Capacity Allocation")).toBeInTheDocument();
+  });
+
   it("should not display Top Agents Driving Spend card for non-team entity types", async () => {
     render(<EntityUsage {...defaultProps} entityType="tag" />);
 

@@ -23,7 +23,7 @@ import {
   Title,
 } from "@tremor/react";
 import { ExportOutlined, LoadingOutlined } from "@ant-design/icons";
-import { Alert, Button } from "antd";
+import { Alert, Button, Tag } from "antd";
 import React, { useMemo, useState } from "react";
 import TeamMultiSelect from "../../../common_components/team_multi_select";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
@@ -45,6 +45,9 @@ import EndpointUsage from "../EndpointUsage/EndpointUsage";
 import TopKeyView from "./TopKeyView";
 import TopModelView from "./TopModelView";
 
+const CAPACITY_ALLOCATION_PROVIDER = "capacity_allocation";
+const CAPACITY_ALLOCATION_LABEL = "Capacity Allocation";
+
 interface EntityMetrics {
   metrics: {
     spend: number;
@@ -58,6 +61,7 @@ interface EntityMetrics {
     api_requests: number;
   };
   metadata: Record<string, any>;
+  api_key_breakdown?: { [key: string]: KeyMetricWithMetadata };
 }
 
 interface ExtendedDailyData extends DailyData {
@@ -309,6 +313,41 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
     return Object.values(providerSpend)
       .filter((provider) => provider.spend > 0)
       .sort((a, b) => b.spend - a.spend);
+  };
+
+  const getCapacityAllocationSpend = () => {
+    const allocationSpend: { [key: string]: any } = {};
+    spendData.results.forEach((day) => {
+      const capacityProvider = day.breakdown.providers?.[CAPACITY_ALLOCATION_PROVIDER];
+      if (!capacityProvider) return;
+
+      Object.entries(day.breakdown.entities || {}).forEach(([entity, data]) => {
+        const entityMetric = data as EntityMetrics;
+        const allocationKeys = Object.entries(entityMetric.api_key_breakdown || {}).filter(([apiKey]) =>
+          apiKey.startsWith(`${CAPACITY_ALLOCATION_PROVIDER}:`),
+        );
+        const spend = allocationKeys.reduce((sum, [, metrics]) => sum + metrics.metrics.spend, 0);
+        if (spend <= 0) return;
+
+        if (!allocationSpend[entity]) {
+          allocationSpend[entity] = {
+            entity,
+            alias: getEntityLabel(entity, entityMetric.metadata),
+            spend: 0,
+          };
+        }
+        allocationSpend[entity].spend += spend;
+      });
+    });
+
+    return Object.values(allocationSpend).sort((a, b) => b.spend - a.spend);
+  };
+
+  const getProviderDisplayName = (provider: string) => {
+    if (provider === CAPACITY_ALLOCATION_PROVIDER) {
+      return CAPACITY_ALLOCATION_LABEL;
+    }
+    return provider;
   };
 
   const getAllTags = () => {
@@ -723,6 +762,39 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                 </Col>
               )}
 
+              {entityType === "team" && getCapacityAllocationSpend().length > 0 && (
+                <Col numColSpan={2}>
+                  <Card>
+                    <div className="flex flex-col space-y-4">
+                      <div className="flex items-center gap-2">
+                        <Title>Capacity Allocations</Title>
+                        <Tag color="gold">Fixed PTU cost</Tag>
+                      </div>
+                      <Text>
+                        Fixed capacity costs are reported separately from request volume and included in team usage
+                        exports.
+                      </Text>
+                      <Table>
+                        <TableHead>
+                          <TableRow>
+                            <TableHeaderCell>Team</TableHeaderCell>
+                            <TableHeaderCell>Allocated Spend</TableHeaderCell>
+                          </TableRow>
+                        </TableHead>
+                        <TableBody>
+                          {getCapacityAllocationSpend().map((allocation) => (
+                            <TableRow key={allocation.entity}>
+                              <TableCell>{allocation.alias}</TableCell>
+                              <TableCell>${formatNumberWithCommas(allocation.spend, 2)}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+                </Col>
+              )}
+
               {/* Spend by Provider */}
               <Col numColSpan={2}>
                 <Card>
@@ -773,7 +845,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
                                         }}
                                       />
                                     )}
-                                    <span>{provider.provider}</span>
+                                    <span>{getProviderDisplayName(provider.provider)}</span>
                                   </div>
                                 </TableCell>
                                 <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
