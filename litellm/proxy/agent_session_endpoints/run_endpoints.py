@@ -13,6 +13,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import prisma
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from fastapi.responses import ORJSONResponse, StreamingResponse
 
@@ -146,11 +147,17 @@ async def create_run(
     # the actual safety net for racing duplicates — if two requests with
     # the same key collide on insert, one gets the IntegrityError, retries
     # the find_first, and returns the winner's row.
+    #
+    # Prisma payload notes:
+    # - ``prompt`` is a Json column; bare dicts trigger
+    #   ``MissingRequiredValueError``. Wrap with ``prisma.Json(...)``.
+    # - ``session`` is a relation; the generated client requires
+    #   ``{"connect": {"id": ...}}`` instead of a bare ``session_id`` FK.
     payload: Dict[str, Any] = {
         "id": new_run_id(),
-        "session_id": session_id,
+        "session": {"connect": {"id": session_id}},
         "status": RUN_STATUS_QUEUED,
-        "prompt": body.prompt,
+        "prompt": prisma.Json(body.prompt),
         "idempotency_key": idempotency_key,
         "updated_at": _now(),
     }
@@ -274,12 +281,14 @@ async def cancel_run(
     )
     next_seq = await _next_event_seq(prisma_client, run_id)
     try:
+        # ``run`` is a relation; use ``connect`` instead of bare run_id FK.
+        # ``payload`` is a Json column; wrap with prisma.Json.
         await prisma_client.db.litellm_agentrunevent.create(
             data={
-                "run_id": run_id,
+                "run": {"connect": {"id": run_id}},
                 "seq": next_seq,
                 "event_type": EVENT_TYPE_RUN_CANCELLED,
-                "payload": {"reason": "user_cancel"},
+                "payload": prisma.Json({"reason": "user_cancel"}),
             }
         )
     except Exception as exc:
