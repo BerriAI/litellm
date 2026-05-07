@@ -23,16 +23,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+from litellm.managed_agents.vms.base import (
     AwsCreds,
     Ec2Config,
     ProvisionContext,
     Repo,
 )
-from litellm.proxy.agent_session_endpoints.vm_providers.factory import (
+from litellm.managed_agents.vms.factory import (
     build_vm_provider,
 )
-from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+from litellm.managed_agents.vms.team_config import (
     get_team_vm_config,
 )
 
@@ -330,7 +330,7 @@ class WarmPoolManager:
                 provider = build_vm_provider(
                     {"vm_provider": "ec2", "ec2": self._provider_settings}
                 )
-                from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+                from litellm.managed_agents.vms.base import (
                     VMHandle,
                 )
 
