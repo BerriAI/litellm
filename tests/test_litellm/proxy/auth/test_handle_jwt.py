@@ -494,8 +494,7 @@ async def test_sync_user_role_and_teams_no_cache_write_when_nothing_changes():
     mock_cache.async_set_cache.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_get_all_jwt_team_ids_unions_singular_and_plural():
+def test_get_all_jwt_team_ids_unions_singular_and_plural():
     """get_all_jwt_team_ids must include the singular team_id_jwt_field claim
     in addition to the plural team_ids_jwt_field, deduplicated."""
     jwt_handler = JWTHandler()
@@ -527,6 +526,41 @@ async def test_get_all_jwt_team_ids_unions_singular_and_plural():
 
     # neither populated
     assert jwt_handler.get_all_jwt_team_ids({}) == []
+
+
+def test_get_all_jwt_team_ids_does_not_use_team_id_default():
+    """team_id_default is a JWT-bearer-flow auth-builder fallback, not a token
+    claim. It must NOT leak into get_all_jwt_team_ids — otherwise SSO logins
+    would silently start adding users to the default team for any tenant that
+    has team_id_default configured."""
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_id_jwt_field="team_id",
+            team_ids_jwt_field="teams",
+            team_id_default="default-team",
+        ),
+    )
+
+    # team_id claim missing — must not fall back to default-team
+    assert jwt_handler.get_all_jwt_team_ids({"teams": []}) == []
+    assert jwt_handler.get_all_jwt_team_ids({}) == []
+
+    # only the plural is populated — default still must not be added
+    assert jwt_handler.get_all_jwt_team_ids({"teams": ["a"]}) == ["a"]
+
+    # team_id_jwt_field unset entirely + only default configured: still no default
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_ids_jwt_field="teams",
+            team_id_default="default-team",
+        ),
+    )
+    assert jwt_handler.get_all_jwt_team_ids({"teams": []}) == []
 
 
 @pytest.mark.asyncio

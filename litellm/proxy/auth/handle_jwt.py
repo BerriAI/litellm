@@ -235,11 +235,23 @@ class JWTHandler:
         callers historically did — silently dropped users whose IdP populates
         the singular field, which is what Okta and Auth0 default to when a
         user has a single primary team.
+
+        This intentionally does NOT consult ``team_id_default``: that fallback
+        is a property of how the JWT-bearer auth flow resolves a single
+        request-bound team, not of the token's claims. Callers that want the
+        default-team behavior should still go through ``get_team_id``.
         """
         team_ids: List[str] = list(self.get_team_ids_from_jwt(token))
-        singular = self.get_team_id(token, default_value=None)
-        if singular and singular not in team_ids:
-            team_ids.append(singular)
+        if self.litellm_jwtauth.team_id_jwt_field is not None:
+            singular = get_nested_value(
+                data=token,
+                key_path=self.litellm_jwtauth.team_id_jwt_field,
+                default=None,
+            )
+            if isinstance(singular, list):
+                singular = singular[0] if singular else None
+            if singular and singular not in team_ids:
+                team_ids.append(singular)
         return team_ids
 
     def get_end_user_id(
