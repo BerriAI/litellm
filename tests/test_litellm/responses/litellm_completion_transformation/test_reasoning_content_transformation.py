@@ -263,6 +263,67 @@ class TestReasoningContentFinalResponse:
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
         assert reasoning_items[0].content[0].text == "Reasoning for first answer"
 
+    def test_cached_tool_call_reconstruction_preserves_reasoning_content(self):
+        """Tool output reconstruction keeps reasoning_content from the tool-call turn."""
+        tool_call_id = "call_cached_reasoning"
+        response = ModelResponse(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        reasoning_content="I need to call get_weather first.",
+                        tool_calls=[
+                            {
+                                "id": tool_call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"location":"Boston"}',
+                                },
+                            }
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        try:
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Weather in Boston?",
+                responses_api_request={},
+                chat_completion_response=response,
+            )
+            messages = LiteLLMCompletionResponsesConfig._transform_responses_api_tool_call_output_to_chat_completion_message(
+                {
+                    "type": "function_call_output",
+                    "call_id": tool_call_id,
+                    "output": '{"temperature":"42F"}',
+                }
+            )
+        finally:
+            from litellm.responses.litellm_completion_transformation.transformation import (
+                TOOL_CALLS_CACHE,
+            )
+
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        assistant_message = messages[0]
+        assert assistant_message.get("role") == "assistant"
+        assert (
+            assistant_message.get("reasoning_content")
+            == "I need to call get_weather first."
+        )
+        tool_calls = assistant_message.get("tool_calls") or []
+        assert len(tool_calls) == 1
+        assert tool_calls[0].get("id") == tool_call_id
+
 
 def test_streaming_chunk_id_raw():
     """Test that streaming chunk IDs are raw (not encoded) to match OpenAI format"""

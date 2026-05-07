@@ -17,6 +17,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    ChatCompletionAssistantContentValue,
     ChatCompletionImageObject,
     ChatCompletionImageUrlObject,
     ChatCompletionResponseMessage,
@@ -357,6 +358,182 @@ class LiteLLMCompletionResponsesConfig:
         return litellm_completion_request
 
     @staticmethod
+    def _capture_pending_reasoning_item(
+        input_item: Any, pending_reasoning_parts: List[str]
+    ) -> bool:
+        if not isinstance(input_item, dict) or input_item.get("type") != "reasoning":
+            return False
+        reasoning_content = LiteLLMCompletionResponsesConfig._extract_reasoning_content_from_response_item(
+            input_item
+        )
+        if reasoning_content:
+            pending_reasoning_parts.append(reasoning_content)
+        return True
+
+    @staticmethod
+    def _apply_pending_reasoning_to_assistant_messages(
+        chat_completion_messages: List[Any],
+        pending_reasoning_parts: List[str],
+    ) -> None:
+        pending_reasoning = "\n".join(pending_reasoning_parts) or None
+        if not pending_reasoning:
+            return
+        for chat_completion_message in chat_completion_messages:
+            message_role = (
+                chat_completion_message.get("role")
+                if isinstance(chat_completion_message, dict)
+                else getattr(chat_completion_message, "role", None)
+            )
+            if message_role == "assistant":
+                LiteLLMCompletionResponsesConfig._set_assistant_reasoning_content(
+                    chat_completion_message,
+                    pending_reasoning,
+                )
+                pending_reasoning_parts.clear()
+                return
+
+    @staticmethod
+    def _merge_consecutive_function_call_messages(
+        messages: List[Any],
+        chat_completion_messages: List[Any],
+        input_item: Any,
+        existing_tool_call_ids: Set[str],
+    ) -> bool:
+        call_id_raw = input_item.get("call_id") or input_item.get("id") or ""
+        if call_id_raw:
+            existing_tool_call_ids.add(str(call_id_raw))
+        if not messages:
+            return False
+        last_msg = messages[-1]
+        last_role = (
+            last_msg.get("role")
+            if isinstance(last_msg, dict)
+            else getattr(last_msg, "role", None)
+        )
+        if last_role != "assistant":
+            return False
+        for new_msg in chat_completion_messages:
+            new_role = (
+                new_msg.get("role")
+                if isinstance(new_msg, dict)
+                else getattr(new_msg, "role", None)
+            )
+            if new_role != "assistant":
+                continue
+            for tool_call in LiteLLMCompletionResponsesConfig._get_tool_calls_list(
+                new_msg
+            ):
+                LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
+                    last_msg, tool_call
+                )
+        return True
+
+    @staticmethod
+    def _tool_call_id_from_assistant_message(message: Any) -> str:
+        tool_calls: Any = (
+            message.get("tool_calls")
+            if isinstance(message, dict)
+            else getattr(message, "tool_calls", None)
+        )
+        if (
+            not isinstance(tool_calls, Sequence)
+            or isinstance(tool_calls, (str, bytes))
+            or not tool_calls
+        ):
+            return ""
+        first_call = tool_calls[0]
+        call_id_raw = (
+            first_call.get("id")
+            if isinstance(first_call, dict)
+            else getattr(first_call, "id", None)
+        )
+        return str(call_id_raw) if call_id_raw else ""
+
+    @staticmethod
+    def _dedupe_tool_call_output_messages(
+        chat_completion_messages: List[Any],
+        existing_tool_call_ids: Set[str],
+    ) -> List[Any]:
+        deduped_messages: List[Any] = []
+        for message in chat_completion_messages:
+            role = (
+                str(message.get("role") or "")
+                if isinstance(message, dict)
+                else str(getattr(message, "role", "") or "")
+            )
+            if role != "assistant":
+                deduped_messages.append(message)
+                continue
+            call_id = (
+                LiteLLMCompletionResponsesConfig._tool_call_id_from_assistant_message(
+                    message
+                )
+            )
+            if call_id and call_id in existing_tool_call_ids:
+                continue
+            if call_id:
+                existing_tool_call_ids.add(call_id)
+            deduped_messages.append(message)
+        return deduped_messages
+
+    @staticmethod
+    def _append_pending_reasoning_message(
+        messages: List[Any], pending_reasoning_parts: List[str]
+    ) -> None:
+        pending_reasoning = "\n".join(pending_reasoning_parts)
+        if pending_reasoning:
+            messages.append(
+                ChatCompletionResponseMessage(
+                    role="assistant",
+                    content=None,
+                    reasoning_content=pending_reasoning,
+                )
+            )
+
+    @staticmethod
+    def _transform_response_input_list_to_chat_completion_messages(
+        input_items: List[Any],
+    ) -> List[Any]:
+        messages: List[Any] = []
+        existing_tool_call_ids: Set[str] = set()
+        pending_reasoning_parts: List[str] = []
+        for input_item in input_items:
+            if LiteLLMCompletionResponsesConfig._capture_pending_reasoning_item(
+                input_item, pending_reasoning_parts
+            ):
+                continue
+            chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
+                input_item=input_item
+            )
+            LiteLLMCompletionResponsesConfig._apply_pending_reasoning_to_assistant_messages(
+                chat_completion_messages, pending_reasoning_parts
+            )
+            if LiteLLMCompletionResponsesConfig._is_input_item_function_call(
+                input_item=input_item
+            ) and LiteLLMCompletionResponsesConfig._merge_consecutive_function_call_messages(
+                messages,
+                chat_completion_messages,
+                input_item,
+                existing_tool_call_ids,
+            ):
+                continue
+            if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
+                input_item=input_item
+            ):
+                messages.extend(
+                    LiteLLMCompletionResponsesConfig._dedupe_tool_call_output_messages(
+                        chat_completion_messages,
+                        existing_tool_call_ids,
+                    )
+                )
+                continue
+            messages.extend(chat_completion_messages)
+        LiteLLMCompletionResponsesConfig._append_pending_reasoning_message(
+            messages, pending_reasoning_parts
+        )
+        return messages
+
+    @staticmethod
     def _transform_response_input_param_to_chat_completion_message(
         input: Union[str, ResponseInputParam],
     ) -> List[
@@ -382,108 +559,11 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(input, str):
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
-            existing_tool_call_ids: Set[str] = set()
-            for _input in input:
-                chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
-                    input_item=_input
+            messages.extend(
+                LiteLLMCompletionResponsesConfig._transform_response_input_list_to_chat_completion_messages(
+                    input
                 )
-
-                if LiteLLMCompletionResponsesConfig._is_input_item_function_call(
-                    input_item=_input
-                ):
-                    call_id_raw = _input.get("call_id") or _input.get("id") or ""
-                    if call_id_raw:
-                        existing_tool_call_ids.add(str(call_id_raw))
-
-                    #########################################################
-                    # Merge consecutive function_call items into a single assistant
-                    # message. Anthropic requires that all tool_use blocks appear in
-                    # ONE assistant message immediately followed by the tool_result
-                    # blocks. Without this merging, each function_call creates its own
-                    # assistant message, producing back-to-back assistant messages that
-                    # Anthropic rejects with "tool_use ids were found without
-                    # tool_result blocks immediately after".
-                    #########################################################
-                    if messages:
-                        last_msg = messages[-1]
-                        last_role = (
-                            last_msg.get("role")
-                            if isinstance(last_msg, dict)
-                            else getattr(last_msg, "role", None)
-                        )
-                        if last_role == "assistant":
-                            for new_msg in chat_completion_messages:
-                                new_role = (
-                                    new_msg.get("role")
-                                    if isinstance(new_msg, dict)
-                                    else getattr(new_msg, "role", None)
-                                )
-                                if new_role == "assistant":
-                                    _raw_tcs = (
-                                        new_msg.get("tool_calls")
-                                        if isinstance(new_msg, dict)
-                                        else getattr(new_msg, "tool_calls", None)
-                                    )
-                                    new_tcs: list = (
-                                        _raw_tcs if isinstance(_raw_tcs, list) else []
-                                    )
-                                    for tc in new_tcs:
-                                        LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
-                                            last_msg, tc
-                                        )
-                            continue
-
-                #########################################################
-                # If Input Item is a Tool Call Output, add it to the tool_call_output_messages list
-                # preserving the ordering of tool call outputs. Some models require the tool
-                # result to immediately follow the assistant tool call.
-                #########################################################
-                if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
-                    input_item=_input
-                ):
-                    if not chat_completion_messages:
-                        continue
-
-                    deduped_in_place: List[Any] = []
-                    for m in chat_completion_messages:
-                        role = ""
-                        if isinstance(m, dict):
-                            role = str(m.get("role") or "")
-                        else:
-                            role = str(getattr(m, "role", "") or "")
-
-                        # Drop assistant tool_calls wrappers if we already have this call_id
-                        if role == "assistant":
-                            tool_calls: Any = (
-                                m.get("tool_calls")
-                                if isinstance(m, dict)
-                                else getattr(m, "tool_calls", None)
-                            )
-                            call_id = ""
-                            if (
-                                isinstance(tool_calls, Sequence)
-                                and not isinstance(tool_calls, (str, bytes))
-                                and len(tool_calls) > 0
-                            ):
-                                first_call = tool_calls[0]
-                                call_id_raw = (
-                                    first_call.get("id")
-                                    if isinstance(first_call, dict)
-                                    else getattr(first_call, "id", None)
-                                )
-                                if call_id_raw:
-                                    call_id = str(call_id_raw)
-                            if call_id and call_id in existing_tool_call_ids:
-                                continue
-                            if call_id:
-                                existing_tool_call_ids.add(call_id)
-
-                        deduped_in_place.append(m)
-
-                    messages.extend(deduped_in_place)
-                    continue
-
-                messages.extend(chat_completion_messages)
+            )
         return messages
 
     @staticmethod
@@ -799,6 +879,314 @@ class LiteLLMCompletionResponsesConfig:
                 assistant_message.tool_calls.append(tool_call_chunk)
 
     @staticmethod
+    def _get_chat_message_reasoning_content(message: Any) -> Optional[str]:
+        """Read reasoning_content from a chat message dict/object."""
+        reasoning_content = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            message, "reasoning_content"
+        )
+        if isinstance(reasoning_content, str) and reasoning_content:
+            return reasoning_content
+
+        provider_specific_fields = (
+            LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                message, "provider_specific_fields"
+            )
+        )
+        if isinstance(provider_specific_fields, dict):
+            stored_reasoning = provider_specific_fields.get("reasoning_content")
+            if isinstance(stored_reasoning, str) and stored_reasoning:
+                return stored_reasoning
+        return None
+
+    @staticmethod
+    def _get_cached_tool_call_reasoning_content(
+        tool_use_definition: Any,
+    ) -> Optional[str]:
+        """Read reasoning_content stored with a cached tool call definition."""
+        reasoning_content = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            tool_use_definition, "reasoning_content"
+        )
+        if isinstance(reasoning_content, str) and reasoning_content:
+            return reasoning_content
+
+        provider_specific_fields = (
+            LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                tool_use_definition, "provider_specific_fields"
+            )
+        )
+        if isinstance(provider_specific_fields, dict):
+            stored_reasoning = provider_specific_fields.get("reasoning_content")
+            if isinstance(stored_reasoning, str) and stored_reasoning:
+                return stored_reasoning
+        return None
+
+    @staticmethod
+    def _set_assistant_reasoning_content(
+        assistant_message: Any, reasoning_content: Optional[str]
+    ) -> None:
+        """Attach reasoning_content to an assistant message without overwriting it."""
+        if not reasoning_content:
+            return
+        existing = LiteLLMCompletionResponsesConfig._get_chat_message_reasoning_content(
+            assistant_message
+        )
+        if existing:
+            return
+        if isinstance(assistant_message, dict):
+            assistant_message["reasoning_content"] = reasoning_content
+        elif hasattr(assistant_message, "reasoning_content"):
+            setattr(assistant_message, "reasoning_content", reasoning_content)
+
+    @staticmethod
+    def _chat_tool_call_cache_value(
+        tool_call: Any, reasoning_content: Optional[str]
+    ) -> Dict[str, Any]:
+        """Serialize a chat tool call for cache/session reconstruction."""
+        function_raw = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            tool_call, "function"
+        )
+        function_name = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            function_raw, "name"
+        )
+        function_arguments = (
+            LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                function_raw, "arguments"
+            )
+        )
+        tool_call_id = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            tool_call, "id"
+        )
+        tool_call_type = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            tool_call, "type", "function"
+        )
+        provider_specific_fields = (
+            LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+                tool_call, "provider_specific_fields"
+            )
+        )
+        cache_value: Dict[str, Any] = {
+            "id": tool_call_id or "",
+            "type": tool_call_type or "function",
+            "function": {
+                "name": function_name or "",
+                "arguments": function_arguments or "",
+            },
+        }
+        if provider_specific_fields:
+            cache_value["provider_specific_fields"] = provider_specific_fields
+        if reasoning_content:
+            cache_value["reasoning_content"] = reasoning_content
+        return cache_value
+
+    @staticmethod
+    def _response_item_to_dict(item: Any) -> Dict[str, Any]:
+        """Normalize a Responses output item object/dict to a plain dict."""
+        if isinstance(item, dict):
+            return dict(item)
+        model_dump = getattr(item, "model_dump", None)
+        if callable(model_dump):
+            return cast(Dict[str, Any], model_dump(exclude_none=True))
+        if hasattr(item, "dict") and callable(item.dict):
+            return cast(Dict[str, Any], item.dict(exclude_none=True))
+        if hasattr(item, "__dict__"):
+            return dict(item.__dict__)
+        return {}
+
+    @staticmethod
+    def _extract_text_from_responses_content(content: Any) -> str:
+        """Extract text from Responses content/summary arrays."""
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts: List[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    text_parts.append(part)
+                    continue
+                part_dict = LiteLLMCompletionResponsesConfig._response_item_to_dict(
+                    part
+                )
+                text = part_dict.get("text") or part_dict.get("content")
+                if isinstance(text, str):
+                    text_parts.append(text)
+            return "".join(text_parts)
+        return ""
+
+    @staticmethod
+    def _extract_reasoning_content_from_response_item(item: Any) -> Optional[str]:
+        """Extract reasoning text from a Responses reasoning output item."""
+        item_dict = LiteLLMCompletionResponsesConfig._response_item_to_dict(item)
+        if item_dict.get("type") != "reasoning":
+            return None
+
+        reasoning_content = item_dict.get("reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content:
+            return reasoning_content
+
+        content_text = (
+            LiteLLMCompletionResponsesConfig._extract_text_from_responses_content(
+                item_dict.get("content")
+            )
+        )
+        if content_text:
+            return content_text
+
+        summary_text = (
+            LiteLLMCompletionResponsesConfig._extract_text_from_responses_content(
+                item_dict.get("summary")
+            )
+        )
+        if summary_text:
+            return summary_text
+        return None
+
+    @staticmethod
+    def _merge_assistant_message(messages: List[Any], assistant_message: Any) -> None:
+        """Merge consecutive assistant tool-call messages where possible."""
+        if not messages:
+            messages.append(assistant_message)
+            return
+        last_message = messages[-1]
+        last_role = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            last_message, "role"
+        )
+        new_role = LiteLLMCompletionResponsesConfig._get_mapping_or_attr_value(
+            assistant_message, "role"
+        )
+        if last_role != "assistant" or new_role != "assistant":
+            messages.append(assistant_message)
+            return
+
+        new_tool_calls = LiteLLMCompletionResponsesConfig._get_tool_calls_list(
+            assistant_message
+        )
+        if not new_tool_calls:
+            messages.append(assistant_message)
+            return
+
+        reasoning_content = (
+            LiteLLMCompletionResponsesConfig._get_chat_message_reasoning_content(
+                assistant_message
+            )
+        )
+        LiteLLMCompletionResponsesConfig._set_assistant_reasoning_content(
+            last_message, reasoning_content
+        )
+        for tool_call in new_tool_calls:
+            LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
+                last_message, tool_call
+            )
+
+    @staticmethod
+    def transform_responses_api_output_to_chat_completion_messages(
+        output: Any,
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionResponseMessage,
+            ChatCompletionMessageToolCall,
+            Message,
+        ]
+    ]:
+        """Transform Responses API output history into chat completion messages.
+
+        This is used when reconstructing a /v1/responses session for providers
+        that are served through chat completions. Reasoning items must be
+        replayed as assistant reasoning_content, especially for thinking models
+        that reject tool continuations without the prior reasoning payload.
+        """
+        if not isinstance(output, list):
+            return []
+
+        messages: List[Any] = []
+        pending_reasoning_parts: List[str] = []
+
+        for item in output:
+            item_dict = LiteLLMCompletionResponsesConfig._response_item_to_dict(item)
+            item_type = item_dict.get("type")
+            if item_type == "reasoning":
+                reasoning_content = LiteLLMCompletionResponsesConfig._extract_reasoning_content_from_response_item(
+                    item_dict
+                )
+                if reasoning_content:
+                    pending_reasoning_parts.append(reasoning_content)
+                continue
+
+            pending_reasoning = "\n".join(pending_reasoning_parts) or None
+
+            if item_type == "function_call":
+                chat_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+                    function_call=item_dict
+                )
+                for chat_message in chat_messages:
+                    LiteLLMCompletionResponsesConfig._set_assistant_reasoning_content(
+                        chat_message, pending_reasoning
+                    )
+                    LiteLLMCompletionResponsesConfig._merge_assistant_message(
+                        messages, chat_message
+                    )
+                pending_reasoning_parts = []
+                continue
+
+            if item_type == "message":
+                content = item_dict.get("content")
+                if content is None:
+                    continue
+                role = item_dict.get("role") or "assistant"
+                if role == "assistant":
+                    chat_message = ChatCompletionResponseMessage(
+                        role="assistant",
+                        content=cast(
+                            Optional[ChatCompletionAssistantContentValue],
+                            LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                                content
+                            ),
+                        ),
+                    )
+                    LiteLLMCompletionResponsesConfig._set_assistant_reasoning_content(
+                        chat_message, pending_reasoning
+                    )
+                    LiteLLMCompletionResponsesConfig._merge_assistant_message(
+                        messages, chat_message
+                    )
+                else:
+                    messages.append(
+                        GenericChatCompletionMessage(
+                            role=role,
+                            content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                                content
+                            ),
+                        )
+                    )
+                pending_reasoning_parts = []
+
+        pending_reasoning = "\n".join(pending_reasoning_parts)
+        if pending_reasoning:
+            messages.append(
+                ChatCompletionResponseMessage(
+                    role="assistant",
+                    content=None,
+                    reasoning_content=pending_reasoning,
+                )
+            )
+
+        return cast(
+            List[
+                Union[
+                    AllMessageValues,
+                    GenericChatCompletionMessage,
+                    ChatCompletionResponseMessage,
+                    ChatCompletionMessageToolCall,
+                    Message,
+                ]
+            ],
+            messages,
+        )
+
+    @staticmethod
     def _ensure_tool_results_have_corresponding_tool_calls(
         messages: Sequence[
             Union[
@@ -939,6 +1327,12 @@ class LiteLLMCompletionResponsesConfig:
                         )
                         LiteLLMCompletionResponsesConfig._add_tool_call_to_assistant(
                             prev_assistant, tool_call_chunk
+                        )
+                        LiteLLMCompletionResponsesConfig._set_assistant_reasoning_content(
+                            prev_assistant,
+                            LiteLLMCompletionResponsesConfig._get_cached_tool_call_reasoning_content(
+                                normalized_tool_use_definition
+                            ),
                         )
 
         # Remove messages with empty tool_call_id that couldn't be fixed
@@ -1159,6 +1553,12 @@ class LiteLLMCompletionResponsesConfig:
             chat_completion_response_message = ChatCompletionResponseMessage(
                 tool_calls=[tool_call_chunk],
                 role="assistant",
+            )
+            LiteLLMCompletionResponsesConfig._set_assistant_reasoning_content(
+                chat_completion_response_message,
+                LiteLLMCompletionResponsesConfig._get_cached_tool_call_reasoning_content(
+                    _tool_use_definition
+                ),
             )
             return [chat_completion_response_message, tool_output_message]
 
@@ -1469,11 +1869,17 @@ class LiteLLMCompletionResponsesConfig:
         for choice in chat_completion_response.choices:
             if isinstance(choice, Choices):
                 if choice.message.tool_calls:
+                    message_reasoning_content = LiteLLMCompletionResponsesConfig._get_chat_message_reasoning_content(
+                        choice.message
+                    )
                     all_chat_completion_tools.extend(choice.message.tool_calls)
                     for tool_call in choice.message.tool_calls:
                         TOOL_CALLS_CACHE.set_cache(
                             key=tool_call.id,
-                            value=tool_call,
+                            value=LiteLLMCompletionResponsesConfig._chat_tool_call_cache_value(
+                                tool_call=tool_call,
+                                reasoning_content=message_reasoning_content,
+                            ),
                         )
 
         responses_tools: List[ResponseFunctionToolCall] = []

@@ -142,11 +142,27 @@ class ResponsesSessionHandler:
         # Add Output messages for this Spend Log
         ############################################################
         _response_output = spend_log.get("response", "{}")
+        if isinstance(_response_output, str):
+            try:
+                _response_output = json.loads(_response_output)
+            except json.JSONDecodeError:
+                _response_output = {}
         if (
             isinstance(_response_output, dict)
             and _response_output
             and _response_output != {}
         ):
+            if (
+                _response_output.get("object") == "response"
+                or "output" in _response_output
+            ):
+                chat_completion_message_history.extend(
+                    LiteLLMCompletionResponsesConfig.transform_responses_api_output_to_chat_completion_messages(
+                        output=_response_output.get("output") or []
+                    )
+                )
+                return chat_completion_message_history
+
             # transform `ChatCompletion Response` to `ResponsesAPIResponse`
             model_response = ModelResponse(**_response_output)
             for choice in model_response.choices:
