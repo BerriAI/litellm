@@ -142,7 +142,7 @@ class TestMCPServerManager:
             url=None,
             transport=MCPTransport.stdio,
             command="npx",
-            args=["-y", "@modelcontextprotocol/server-everything"],
+            args=["-y", "@modelcontextprotocol/server-everything@1.0.0"],
             env={},
         )
         client = await manager._create_mcp_client(server_no_cache)
@@ -155,11 +155,89 @@ class TestMCPServerManager:
             url=None,
             transport=MCPTransport.stdio,
             command="npx",
-            args=["-y", "@modelcontextprotocol/server-everything"],
+            args=["-y", "@modelcontextprotocol/server-everything@1.0.0"],
             env={"NPM_CONFIG_CACHE": "/custom/cache"},
         )
         client2 = await manager._create_mcp_client(server_with_cache)
         assert client2.stdio_config["env"]["NPM_CONFIG_CACHE"] == "/custom/cache"
+
+    def test_validate_pinned_version_rejects_latest(self):
+        """npx pkg@latest must be rejected — not a pinned semver."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="s1",
+            name="s1",
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@scope/pkg@latest"],
+        )
+        with pytest.raises(Exception) as exc_info:
+            manager._validate_pinned_version(server)
+        assert "pinned version" in str(exc_info.value).lower() or "403" in str(exc_info.value)
+
+    def test_validate_pinned_version_rejects_bare_package(self):
+        """npx @scope/pkg with no version must be rejected."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="s2",
+            name="s2",
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@scope/pkg"],
+        )
+        with pytest.raises(Exception):
+            manager._validate_pinned_version(server)
+
+    def test_validate_pinned_version_accepts_exact_semver(self):
+        """npx pkg@1.2.3 must pass validation without raising."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="s3",
+            name="s3",
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-everything@1.2.3"],
+        )
+        manager._validate_pinned_version(server)  # must not raise
+
+    def test_validate_pinned_version_skips_non_npx_uvx(self):
+        """python / node commands are exempt from the version-pinning check."""
+        manager = MCPServerManager()
+        for cmd in ("python", "python3", "node"):
+            server = MCPServer(
+                server_id="s4",
+                name="s4",
+                transport=MCPTransport.stdio,
+                command=cmd,
+                args=["server.py"],
+            )
+            manager._validate_pinned_version(server)  # must not raise
+
+    def test_inject_ignore_scripts_prepends_flag(self):
+        """--ignore-scripts must be prepended when absent."""
+        manager = MCPServerManager()
+        result = manager._inject_ignore_scripts(["-y", "pkg@1.0.0"])
+        assert result == ["--ignore-scripts", "-y", "pkg@1.0.0"]
+
+    def test_inject_ignore_scripts_idempotent(self):
+        """--ignore-scripts must not be duplicated if already present."""
+        manager = MCPServerManager()
+        args = ["--ignore-scripts", "-y", "pkg@1.0.0"]
+        assert manager._inject_ignore_scripts(args) == args
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_npx_injects_ignore_scripts(self):
+        """_create_mcp_client must inject --ignore-scripts for npx commands."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="npx-scripts",
+            name="npx_scripts",
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["-y", "@modelcontextprotocol/server-everything@1.0.0"],
+        )
+        client = await manager._create_mcp_client(server)
+        assert "--ignore-scripts" in client.stdio_config["args"]
 
     def test_build_stdio_env_only_accepts_x_prefixed_placeholders(self):
         """Ensure only ${X-*} placeholders are substituted from headers."""
@@ -207,6 +285,90 @@ class TestMCPServerManager:
 
         # When the header isn't provided, the key is omitted entirely
         assert env == {}
+
+    @pytest.mark.asyncio
+    async def test_stdio_tools_cache_prevents_repeated_subprocess_spawn(self):
+        """
+        After the first successful fetch the cached tools must be returned on
+        subsequent calls — the subprocess must NOT be re-spawned.
+
+        Proof: on the second call we swap the mock to return a *different* tool
+        list.  If the response still matches the first result, the cache was
+        used and the subprocess was not re-invoked.
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-cache-server",
+            name="cache_test_server",
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["--ignore-scripts", "@modelcontextprotocol/server-test@1.0.0"],
+            env={},
+        )
+
+        first_tools = [
+            MCPTool(name="tool_a", description="Tool A", inputSchema={"type": "object"}),
+            MCPTool(name="tool_b", description="Tool B", inputSchema={"type": "object"}),
+        ]
+        second_tools = [
+            MCPTool(name="different_tool", description="Different", inputSchema={"type": "object"}),
+        ]
+
+        fetch_call_count = 0
+
+        async def fake_fetch(client, server_name):
+            nonlocal fetch_call_count
+            fetch_call_count += 1
+            return first_tools if fetch_call_count == 1 else second_tools
+
+        manager._create_mcp_client = AsyncMock(return_value=MagicMock())
+        manager._fetch_tools_with_timeout = fake_fetch
+
+        # First call — subprocess spawned, tools cached
+        result1 = await manager._get_tools_from_server(server, add_prefix=False)
+        assert fetch_call_count == 1
+        assert {t.name for t in result1} == {"tool_a", "tool_b"}
+
+        # Second call — if cache is used, we still get tool_a/tool_b, not different_tool
+        result2 = await manager._get_tools_from_server(server, add_prefix=False)
+        assert fetch_call_count == 1, "subprocess was re-spawned; cache was not used"
+        assert {t.name for t in result2} == {"tool_a", "tool_b"}, (
+            "got different tools on second call — cache was bypassed"
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_server_invalidates_stdio_tools_cache(self):
+        """
+        Updating a stdio server must evict its cache entry so the next
+        _get_tools_from_server re-spawns the subprocess with the new config.
+        """
+        manager = MCPServerManager()
+
+        stdio_server = LiteLLM_MCPServerTable(
+            server_id="stdio-update-cache",
+            alias="update_cache_server",
+            description="",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="npx",
+            args=["--ignore-scripts", "@modelcontextprotocol/server-test@1.0.0"],
+            env={},
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+        # Seed the cache as if startup already fetched tools for this server
+        manager._cache_stdio_tools(
+            "stdio-update-cache",
+            [MCPTool(name="old_tool", description="", inputSchema={"type": "object"})],
+        )
+        assert "stdio-update-cache" in manager._stdio_tools_cache
+
+        await manager.add_server(stdio_server)
+        assert "stdio-update-cache" in manager._stdio_tools_cache  # add doesn't evict
+
+        await manager.update_server(stdio_server)
+        assert "stdio-update-cache" not in manager._stdio_tools_cache
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_warns_on_invalid_alias(self, caplog):
