@@ -2,6 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
+import uuid
 from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
@@ -1657,7 +1658,7 @@ class LiteLLMCompletionResponsesConfig:
             finish_reason = choices[0].finish_reason
 
         responses_api_response: ResponsesAPIResponse = ResponsesAPIResponse(
-            id=chat_completion_response.id,
+            id=f"resp_{uuid.uuid4()}",
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
             object="response",
@@ -1874,7 +1875,7 @@ class LiteLLMCompletionResponsesConfig:
                 image_generation_items.append(
                     OutputImageGenerationCall(
                         type="image_generation_call",
-                        id=f"{chat_completion_response.id}_img_{idx}",
+                        id=f"img_{uuid.uuid4()}",
                         status=LiteLLMCompletionResponsesConfig._map_finish_reason_to_image_generation_status(
                             choice.finish_reason
                         ),
@@ -1950,7 +1951,7 @@ class LiteLLMCompletionResponsesConfig:
                 message_output_items.append(
                     GenericResponseOutputItem(
                         type="message",
-                        id=chat_completion_response.id,
+                        id=f"msg_{uuid.uuid4()}",
                         status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                             choice.finish_reason
                         ),

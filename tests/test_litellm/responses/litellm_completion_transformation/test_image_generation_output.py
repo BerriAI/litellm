@@ -89,8 +89,8 @@ class TestExtractImageGenerationOutputItems:
         assert result[0].type == "image_generation_call"
         assert result[0].result == "IMG1"
         assert result[1].result == "IMG2"
-        assert result[0].id == "test_123_img_0"
-        assert result[1].id == "test_123_img_1"
+        assert result[0].id.startswith("img_")
+        assert result[1].id.startswith("img_")
         assert result[0].status == "completed"
 
     def test_returns_empty_for_no_images(self):
