@@ -91,9 +91,7 @@ def cost_per_token(model: str, usage: Usage) -> Tuple[float, float]:
         )
 
     ## ADJUST FOR CACHE CREATION TOKENS
-    cache_creation_input_tokens = (
-        usage.get("cache_creation_input_tokens", None) or 0
-    )
+    cache_creation_input_tokens = usage.get("cache_creation_input_tokens", None) or 0
     cache_creation_cost = model_info.get("cache_creation_input_token_cost", None)
     if cache_creation_input_tokens > 0 and cache_creation_cost is not None:
         prompt_cost += cache_creation_input_tokens * (
