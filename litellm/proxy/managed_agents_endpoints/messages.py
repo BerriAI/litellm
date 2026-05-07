@@ -41,6 +41,12 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 
+# Mirrors `agents.py` — fallback owner when no user_id is attached to the
+# verification token (master-key call, etc.). Without this, master-key
+# callers cannot read back sessions they created (the row stores
+# "default_user" but the lookup would pass None).
+_DEFAULT_CREATED_BY = "default_user"
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -188,7 +194,7 @@ async def send_message(
     """
     session = await _load_ready_session(
         session_id=session_id,
-        created_by=user_api_key_dict.user_id,
+        created_by=user_api_key_dict.user_id or _DEFAULT_CREATED_BY,
     )
     sandbox = _resolve_sandbox(session)
 
@@ -200,7 +206,7 @@ async def send_message(
     model_to_use = await _resolve_model(
         session=session,
         request_model=request.model,
-        created_by=user_api_key_dict.user_id,
+        created_by=user_api_key_dict.user_id or _DEFAULT_CREATED_BY,
     )
 
     try:
@@ -262,7 +268,7 @@ async def list_messages(
 
     session = await _load_ready_session(
         session_id=session_id,
-        created_by=user_api_key_dict.user_id,
+        created_by=user_api_key_dict.user_id or _DEFAULT_CREATED_BY,
     )
     sandbox = _resolve_sandbox(session)
 
@@ -321,7 +327,7 @@ async def abort_session(
     """
     session = await _load_ready_session(
         session_id=session_id,
-        created_by=user_api_key_dict.user_id,
+        created_by=user_api_key_dict.user_id or _DEFAULT_CREATED_BY,
     )
     sandbox = _resolve_sandbox(session)
 
