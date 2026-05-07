@@ -10,7 +10,7 @@ forward-compatibility with proxy-side enrichment.
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Status / sandbox enums
@@ -73,7 +73,7 @@ class SandboxSpec(BaseModel):
 
     `image` is optional and falls back to a pinned built-in.
     `timeout_minutes` is bounded to [1, 1440].
-    `idle_timeout_minutes` must be in [1, timeout_minutes] (enforced by handler).
+    `idle_timeout_minutes` must be in [1, timeout_minutes].
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -83,6 +83,16 @@ class SandboxSpec(BaseModel):
     timeout_minutes: int = Field(default=60, ge=1, le=1440)
     idle_timeout_minutes: int = Field(default=10, ge=1)
     image: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_idle_timeout_within_timeout(self) -> "SandboxSpec":
+        """Enforce contract §6.2: `idle_timeout_minutes` ∈ [1, `timeout_minutes`]."""
+        if self.idle_timeout_minutes > self.timeout_minutes:
+            raise ValueError(
+                f"idle_timeout_minutes ({self.idle_timeout_minutes}) must be "
+                f"<= timeout_minutes ({self.timeout_minutes})"
+            )
+        return self
 
 
 class Repo(BaseModel):
