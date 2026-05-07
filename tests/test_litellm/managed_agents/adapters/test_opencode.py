@@ -677,6 +677,59 @@ class TestStreamEvents:
             assert grant_body == {"response": "once"}
 
     @pytest.mark.asyncio
+    async def test_permission_asked_for_other_session_is_ignored(self) -> None:
+        """``permission.asked`` events for OTHER opencode sessions on the
+        same server must NOT trigger auto-grant — otherwise a caller
+        streaming /events on session A could approve permissions for
+        session B.
+        """
+        adapter = _make_adapter()
+
+        other_sid = "other_oc_sid"
+        permission_id = "per_xxx"
+        events_on_wire = [
+            {
+                "type": "permission.asked",
+                "properties": {
+                    "id": permission_id,
+                    "sessionID": other_sid,  # NOT our session
+                    "permission": "external_directory",
+                    "patterns": ["/etc/*"],
+                    "metadata": {"filepath": "/etc/hostname"},
+                    "tool": {"messageID": "msg_zzz", "callID": "call_zzz"},
+                },
+            },
+        ]
+
+        with respx.mock(assert_all_called=False) as mock:
+            mock.get(f"{SANDBOX_URL}/event").mock(
+                return_value=httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=_sse_payload(events_on_wire),
+                )
+            )
+            # If the bug were present, the adapter would POST here.
+            other_grant_route = mock.post(
+                f"{SANDBOX_URL}/session/{other_sid}/permissions/{permission_id}"
+            ).mock(return_value=httpx.Response(200, json=True))
+
+            async for _ in adapter.stream_events(
+                sandbox_url=SANDBOX_URL,
+                opencode_session_id=OC_SID,
+                our_session_id=OUR_SID,
+            ):
+                pass
+
+            # Give any (incorrect) fire-and-forget task time to land.
+            for _ in range(5):
+                await asyncio.sleep(0.01)
+
+            assert not other_grant_route.called, (
+                "auto-grant must not fire for permissions on other sessions"
+            )
+
+    @pytest.mark.asyncio
     async def test_connect_error_raises_sandbox_unreachable(self) -> None:
         adapter = _make_adapter()
 
