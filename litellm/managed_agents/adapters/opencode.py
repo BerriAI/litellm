@@ -1,18 +1,36 @@
 """opencode adapter for managed agents v2.
 
 Translates the sandbox-agnostic public API into opencode-specific HTTP
-calls per contract §7. Stateless — the handler passes `sandbox_url` and
-the opencode session id on every call.
+calls per contract §7. Stateless across calls — the handler passes
+``sandbox_url`` and the opencode session id on every invocation.
 
-HTTP via `httpx.AsyncClient`. SSE in `stream_events` parsed manually from
-the chunked HTTP body — opencode emits standard `event:` / `data:` /
-blank-line frames over `text/event-stream`.
+Real-shape compatibility: this adapter is written against the actual
+opencode 1.14.41 wire shapes documented in
+``.claude/v2_opencode_real_responses.md``. Notable behaviors:
 
-All connection errors bubble up as `SandboxUnreachableError`; malformed
-upstream responses bubble up as `SandboxBadGatewayError`. The endpoint
-handlers translate these to 504 / 502 respectively.
+  - ``send_message`` splits our ``"<provider>/<model>"`` string into
+    opencode's ``{providerID, modelID}`` object form.
+  - ``stream_events`` maintains a per-stream ``partID -> type`` map
+    populated from ``message.part.updated`` so streaming
+    ``message.part.delta`` events can be routed to text/reasoning.
+  - The stream loop also tracks the most recent assistant ``message_id``
+    so ``session.idle`` (which doesn't carry one in opencode payloads)
+    can be enriched before being yielded as ``message.completed``.
+  - On ``permission.asked`` events the adapter fires a fire-and-forget
+    auto-grant request so tool calls don't hang waiting for approval.
+    This is MVP behavior — once we expose permission gating to v2
+    callers we'll surface these as real events instead.
+
+HTTP via ``httpx.AsyncClient``. SSE in ``stream_events`` parsed manually
+from the chunked body — opencode emits standard ``data:`` lines + blank
+separator over ``text/event-stream``.
+
+All connection errors bubble up as ``SandboxUnreachableError``;
+malformed upstream responses bubble up as ``SandboxBadGatewayError``.
+The endpoint handlers translate these to 504 / 502 respectively.
 """
 
+import asyncio
 import json
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
@@ -34,14 +52,16 @@ from litellm.managed_agents.types import MessageRow
 # The streaming endpoint uses an unbounded read because SSE is long-lived.
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 _STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0)
+_PERMISSION_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
 
 
 class OpencodeAdapter:
     """Adapter for opencode HTTP servers.
 
-    The class is stateless. We instantiate one per process (via
-    `registry.get_adapter`) but it carries no per-call state — every
-    method takes the `sandbox_url` and `opencode_session_id` it needs.
+    The class itself is stateless — every method takes the
+    ``sandbox_url`` and ``opencode_session_id`` it needs. Per-stream
+    state for ``stream_events`` (e.g. the ``partID -> type`` map) lives
+    inside the generator's local frame, not on the class.
     """
 
     async def send_message(
@@ -53,15 +73,23 @@ class OpencodeAdapter:
     ) -> None:
         """POST <sandbox_url>/session/<oc_sid>/prompt_async.
 
-        opencode returns 204 — we do not parse a body. The caller (handler)
-        synthesizes our `msg_*` id and writes the user MessageRow.
+        opencode 1.14.41 validates the body's ``model`` field as an
+        OBJECT, not a string. We split our ``"<provider>/<model>"`` form
+        on the first ``/`` into ``{providerID, modelID}``. If the input
+        has no ``/`` we omit the field entirely and let opencode fall
+        back to its default agent/model.
+
+        opencode returns 204 No Content on success — we do not parse a
+        body. The caller (handler) synthesizes our ``msg_*`` id and
+        writes the user MessageRow.
         """
         url = self._url(sandbox_url, f"/session/{opencode_session_id}/prompt_async")
         body: Dict[str, Any] = {
             "parts": [{"type": "text", "text": content}],
         }
-        if model:
-            body["model"] = model
+        model_obj = self._build_model_object(model)
+        if model_obj is not None:
+            body["model"] = model_obj
 
         try:
             async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
@@ -88,9 +116,10 @@ class OpencodeAdapter:
     ) -> List[MessageRow]:
         """GET <sandbox_url>/session/<oc_sid>/message → normalize → list.
 
-        opencode returns a JSON array. The `limit` parameter is honored
-        client-side; opencode's API does not currently support pagination
-        on this endpoint (TODO: verify against preflight findings).
+        opencode returns a bare JSON array of ``{info, parts}`` envelopes.
+        opencode does not support server-side ``limit`` / ``cursor`` query
+        params on this endpoint, so we honor ``limit`` client-side after
+        normalization.
         """
         url = self._url(sandbox_url, f"/session/{opencode_session_id}/message")
 
@@ -139,15 +168,36 @@ class OpencodeAdapter:
     ) -> AsyncIterator[Tuple[str, dict]]:
         """GET <sandbox_url>/event (SSE) → yield normalized events.
 
-        First yield is the synthesized `("connected", {"session_id": ...})`.
+        First yield is the synthesized ``("connected", {"session_id": ...})``.
         After that, only events whose payload references
-        `opencode_session_id` are yielded. Events not in the translation
-        table (per contract §7) are dropped.
+        ``opencode_session_id`` are yielded, normalized via
+        ``normalize_opencode_event``.
+
+        Per-stream state:
+          - ``part_types``: maps each ``partID`` to its part type
+            (``text`` / ``reasoning`` / ``tool`` / ...). Populated from
+            ``message.part.updated`` events; consulted by
+            ``message.part.delta`` events to route deltas correctly.
+          - ``current_assistant_message_id``: the most recent assistant
+            ``msg_*`` we've seen in a ``message.updated`` event. Used to
+            attach a ``message_id`` to ``session.idle`` events that don't
+            carry one (per real opencode payloads).
+
+        Permission gating: ``permission.asked`` events trigger a
+        fire-and-forget auto-grant via
+        ``POST /session/:sid/permissions/:per_id`` with
+        ``{"response": "once"}``. Without this, gated tool calls hang
+        forever.
         """
         # Synthesized first event — see contract §6.6.
         yield ("connected", {"session_id": our_session_id})
 
         url = self._url(sandbox_url, "/event")
+
+        # Per-stream state — scoped to one generator invocation so
+        # multiple concurrent streams do not interfere.
+        part_types: Dict[str, str] = {}
+        current_assistant_message_id: Optional[str] = None
 
         try:
             async with httpx.AsyncClient(timeout=_STREAM_TIMEOUT) as client:
@@ -157,12 +207,36 @@ class OpencodeAdapter:
                             f"opencode /event returned {response.status_code}"
                         )
                     async for parsed in self._iter_sse(response):
+                        # Permission auto-grant runs regardless of session
+                        # filter — tool blocks block opencode itself, so
+                        # we want to clear them ASAP whenever we see one.
+                        if parsed.get("type") == "permission.asked":
+                            self._auto_grant_permission(sandbox_url, parsed)
+                            continue
+
                         if not event_matches_session(parsed, opencode_session_id):
                             continue
-                        normalized = normalize_opencode_event(parsed)
+
+                        # Track the in-flight assistant message id BEFORE
+                        # routing — so ``session.idle`` (which has no
+                        # messageID) can be enriched.
+                        current_assistant_message_id = self._track_assistant_message_id(
+                            parsed, current_assistant_message_id
+                        )
+
+                        normalized = normalize_opencode_event(parsed, part_types)
                         if normalized is None:
                             continue
-                        yield normalized
+
+                        event_type, data = normalized
+                        if (
+                            event_type == "message.completed"
+                            and not data.get("message_id")
+                            and current_assistant_message_id
+                        ):
+                            data = {**data, "message_id": current_assistant_message_id}
+
+                        yield (event_type, data)
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             raise SandboxUnreachableError(
                 f"opencode unreachable at {sandbox_url}: {e}"
@@ -204,11 +278,12 @@ class OpencodeAdapter:
 
     @staticmethod
     def _url(sandbox_url: str, path: str) -> str:
-        """Join `sandbox_url` and `path` into a full URL.
+        """Join ``sandbox_url`` and ``path`` into a full URL.
 
-        We intentionally avoid `urljoin` here because opencode's base URL
-        usually has no trailing slash and an `urljoin` against an absolute
-        path would drop unrelated path components. Simple concat is fine.
+        We intentionally avoid ``urljoin`` here because opencode's base
+        URL usually has no trailing slash and ``urljoin`` against an
+        absolute path would drop unrelated path components. Simple concat
+        is fine.
         """
         base = sandbox_url.rstrip("/")
         if not path.startswith("/"):
@@ -216,22 +291,121 @@ class OpencodeAdapter:
         return base + path
 
     @staticmethod
+    def _build_model_object(model: Optional[str]) -> Optional[Dict[str, str]]:
+        """Convert our ``"<provider>/<model>"`` string into opencode's
+        ``{providerID, modelID}`` object form.
+
+        Returns None when ``model`` is falsy or has no ``/`` separator —
+        the caller omits the field entirely so opencode falls back to its
+        default agent/model.
+        """
+        if not model or not isinstance(model, str):
+            return None
+        if "/" not in model:
+            return None
+        provider_id, model_id = model.split("/", 1)
+        if not provider_id or not model_id:
+            return None
+        return {"providerID": provider_id, "modelID": model_id}
+
+    @staticmethod
+    def _track_assistant_message_id(
+        parsed: Dict[str, Any],
+        current: Optional[str],
+    ) -> Optional[str]:
+        """Update the cached "current assistant message id" based on a
+        ``message.updated`` event. Returns the new value (or the existing
+        one if the event is for something else)."""
+        if parsed.get("type") != "message.updated":
+            return current
+        props = parsed.get("properties") or {}
+        if not isinstance(props, dict):
+            return current
+        info = props.get("info") or {}
+        if not isinstance(info, dict):
+            return current
+        if info.get("role") != "assistant":
+            return current
+        msg_id = info.get("id")
+        if isinstance(msg_id, str) and msg_id:
+            return msg_id
+        return current
+
+    @staticmethod
+    def _auto_grant_permission(
+        sandbox_url: str,
+        parsed: Dict[str, Any],
+    ) -> None:
+        """Fire-and-forget auto-grant for ``permission.asked`` events.
+
+        opencode emits ``permission.asked`` for tool calls that need user
+        approval (external directory reads, network calls, etc.). Until
+        we expose permission gating to v2 callers, we auto-grant via
+        ``POST /session/:sid/permissions/:per_id`` body
+        ``{"response":"once"}`` so tool calls don't hang.
+
+        Uses ``asyncio.create_task`` so the SSE consumer doesn't block on
+        the round-trip. Any failures are logged at debug level only —
+        opencode will time out the tool itself if approval never arrives.
+        """
+        props = parsed.get("properties") or {}
+        if not isinstance(props, dict):
+            return
+        permission_id = props.get("id")
+        session_id = props.get("sessionID")
+        if not isinstance(permission_id, str) or not isinstance(session_id, str):
+            return
+        if not permission_id or not session_id:
+            return
+
+        url = OpencodeAdapter._url(
+            sandbox_url, f"/session/{session_id}/permissions/{permission_id}"
+        )
+
+        async def _grant() -> None:
+            try:
+                async with httpx.AsyncClient(timeout=_PERMISSION_TIMEOUT) as client:
+                    response = await client.post(url, json={"response": "once"})
+                if response.status_code not in (200, 204):
+                    verbose_logger.debug(
+                        "opencode permission grant returned %d for %s",
+                        response.status_code,
+                        url,
+                    )
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError) as e:
+                verbose_logger.debug(
+                    "opencode permission grant failed (non-fatal) for %s: %s",
+                    url,
+                    e,
+                )
+
+        try:
+            asyncio.create_task(_grant())
+        except RuntimeError:
+            # No running loop — extremely unlikely in our async context,
+            # but better to log than to crash the SSE pipeline.
+            verbose_logger.debug(
+                "opencode permission grant skipped (no running loop) for %s",
+                url,
+            )
+
+    @staticmethod
     async def _iter_sse(
         response: httpx.Response,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Parse a server-sent-events stream from an httpx Response.
 
-        opencode emits standard SSE: `event:` / `data:` lines terminated by
-        a blank line. We accumulate `data:` lines per frame, JSON-decode
-        the payload, and merge `event:` (when present) into the dict under
-        a `type` key — opencode's event payloads already carry their own
-        `type`, so the merge is mostly a backstop for events that omit it.
+        opencode emits standard SSE: ``data:`` lines terminated by a
+        blank line. (No ``event:`` line — the type lives inside the
+        JSON.) We accumulate ``data:`` lines per frame, JSON-decode the
+        payload, and merge ``event:`` (when present) into the dict under
+        a ``type`` key as a backstop.
         """
         data_lines: List[str] = []
         sse_event_name: Optional[str] = None
 
         async for raw_line in response.aiter_lines():
-            # SSE frames: `event: <name>\n`, `data: <payload>\n`, blank line.
+            # SSE frames: ``event: <name>\n``, ``data: <payload>\n``, blank line.
             line = raw_line.rstrip("\r")
 
             if line == "":
@@ -286,8 +460,8 @@ class OpencodeAdapter:
             return None
         if not isinstance(obj, dict):
             return None
-        # opencode includes `type` inside the JSON payload itself, but if a
-        # frame uses the SSE `event:` field instead, fall it back to that.
+        # opencode includes ``type`` inside the JSON payload itself, but if
+        # a frame uses the SSE ``event:`` field instead, fall back to that.
         if "type" not in obj and sse_event_name:
             obj["type"] = sse_event_name
         return obj
