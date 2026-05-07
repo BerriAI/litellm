@@ -85,9 +85,7 @@ def _stream_events(
             try:
                 for raw_line in resp.iter_lines():
                     line = (
-                        raw_line.rstrip("\r")
-                        if isinstance(raw_line, str)
-                        else raw_line
+                        raw_line.rstrip("\r") if isinstance(raw_line, str) else raw_line
                     )
                     if line == "":
                         if data_lines:
@@ -201,9 +199,9 @@ def test_flow_1_first_time_use(
         timeout_s=8.0,
     )
     event_types = [evt for evt, _ in events]
-    assert "connected" in event_types, (
-        f"expected at least 'connected', got {event_types}"
-    )
+    assert (
+        "connected" in event_types
+    ), f"expected at least 'connected', got {event_types}"
     connected_payload = next(data for evt, data in events if evt == "connected")
     assert connected_payload.get("session_id") == fake_db_session
 
@@ -274,9 +272,9 @@ def test_flow_2_followup(
     # on roles here because the adapter's role normalization is exercised
     # in unit tests, and the LLM-provider auth needed to produce real
     # assistant replies is not configured in CI.
-    assert len(messages) >= 2, (
-        f"expected ≥2 messages after two turns, got {len(messages)}"
-    )
+    assert (
+        len(messages) >= 2
+    ), f"expected ≥2 messages after two turns, got {len(messages)}"
 
     # All messages must reference our session id, never the underlying
     # opencode session id. Per-message field correctness (id passthrough,
