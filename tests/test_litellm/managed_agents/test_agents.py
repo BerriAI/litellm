@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import litellm.proxy.proxy_server as ps
-from litellm.managed_agents.endpoints.agents import router as agents_router
+from litellm.proxy.managed_agents_endpoints.agents import router as agents_router
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
 
@@ -132,7 +132,12 @@ def client_and_mocks(monkeypatch):
     fake_prisma_module.Json = _Json  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "prisma", fake_prisma_module)
 
-    # 3. Override the auth dependency with a fixed user.
+    # 3. ``encrypt_value_helper`` uses ``master_key`` (or ``LITELLM_SALT_KEY``)
+    # as the signing key for the secretbox. Tests run without either set,
+    # so set a deterministic salt key here so encryption/decryption round-trips.
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key-for-managed-agents")
+
+    # 4. Override the auth dependency with a fixed user.
     fake_user = UserAPIKeyAuth(
         user_id="user_xyz",
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -198,9 +203,15 @@ def test_create_agent_success(client_and_mocks):
     fake_table.create.assert_awaited_once()
     create_kwargs = fake_table.create.await_args.kwargs
     inserted = create_kwargs["data"]
-    # The raw key is what gets persisted (masking is on-read only).
+    # The persisted ``litellm_api_key`` MUST be encrypted — never the
+    # caller's plaintext. Decrypting it must recover the original.
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_value_helper,
+    )
+    persisted_key = inserted["config"].data["litellm_api_key"]
+    assert persisted_key != payload["config"]["litellm_api_key"]
     assert (
-        inserted["config"].data["litellm_api_key"]
+        decrypt_value_helper(value=persisted_key, key="litellm_api_key")
         == payload["config"]["litellm_api_key"]
     )
     assert inserted["created_by"] == fake_user.user_id
