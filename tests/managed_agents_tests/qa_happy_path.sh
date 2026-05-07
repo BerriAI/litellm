@@ -6,7 +6,7 @@
 # hand-INSERT a sessions row pointing at local opencode.
 #
 # Usage:
-#   bash tests/test_litellm/managed_agents/qa_happy_path.sh
+#   bash tests/managed_agents_tests/qa_happy_path.sh
 #
 # Required on PATH: opencode, jq, psql, curl
 # Optional env:
