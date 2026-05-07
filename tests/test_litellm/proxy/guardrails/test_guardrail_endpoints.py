@@ -106,9 +106,11 @@ def mock_in_memory_handler(mocker):
     mock_handler = mocker.Mock(spec=InMemoryGuardrailHandler)
     mock_handler.list_in_memory_guardrails.return_value = [MOCK_CONFIG_GUARDRAIL]
     mock_handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
+    mock_handler.get_source.return_value = "config"
     mock_handler.initialize_guardrail = mocker.Mock()
     mock_handler.update_in_memory_guardrail = mocker.Mock()
     mock_handler.delete_in_memory_guardrail = mocker.Mock()
+    mock_handler.reconcile_db_guardrails = mocker.Mock(return_value=[])
     return mock_handler
 
 
@@ -1160,6 +1162,7 @@ async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
     # Mock IN_MEMORY_GUARDRAIL_HANDLER at its source to return config guardrail
     mock_in_memory_handler = mocker.Mock()
     mock_in_memory_handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
+    mock_in_memory_handler.get_source.return_value = "config"
     mocker.patch(
         "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
         mock_in_memory_handler,
