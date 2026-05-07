@@ -3582,9 +3582,7 @@ class Router:
                 request_kwargs=kwargs,
             )
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            self._update_kwargs_with_deployment(
-                deployment=deployment, kwargs=kwargs
-            )
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data = deployment["litellm_params"].copy()
             data["model"]
             for k, v in self.default_litellm_params.items():
