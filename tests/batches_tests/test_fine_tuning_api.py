@@ -97,7 +97,7 @@ async def test_create_fine_tune_jobs_async():
 
         create_fine_tuning_response = (
             await _acreate_fine_tuning_job_with_propagation_retry(
-                model="gpt-3.5-turbo-0125",
+                model="gpt-4o-mini-2024-07-18",
                 training_file=file_obj.id,
             )
         )
@@ -107,7 +107,7 @@ async def test_create_fine_tune_jobs_async():
         )
 
         assert create_fine_tuning_response.id is not None
-        assert create_fine_tuning_response.model == "gpt-3.5-turbo-0125"
+        assert create_fine_tuning_response.model == "gpt-4o-mini-2024-07-18"
 
         await asyncio.sleep(2)
         _logged_standard_logging_object = custom_logger.standard_logging_object
@@ -116,7 +116,7 @@ async def test_create_fine_tune_jobs_async():
             "custom_logger.standard_logging_object=",
             json.dumps(_logged_standard_logging_object, indent=4),
         )
-        assert _logged_standard_logging_object["model"] == "gpt-3.5-turbo-0125"
+        assert _logged_standard_logging_object["model"] == "gpt-4o-mini-2024-07-18"
         assert _logged_standard_logging_object["id"] == create_fine_tuning_response.id
 
         # list fine tuning jobs
@@ -460,10 +460,10 @@ async def test_mock_openai_create_fine_tune_job():
     with patch.object(client.fine_tuning.jobs, "create") as mock_create:
         mock_create.return_value = FineTuningJob(
             id="ft-123",
-            model="gpt-3.5-turbo-0125",
+            model="gpt-4o-mini-2024-07-18",
             created_at=1677610602,
             status="validating_files",
-            fine_tuned_model="ft:gpt-3.5-turbo-0125:org:custom_suffix:id",
+            fine_tuned_model="ft:gpt-4o-mini-2024-07-18:org:custom_suffix:id",
             object="fine_tuning.job",
             hyperparameters=Hyperparameters(
                 n_epochs=3,
@@ -475,7 +475,7 @@ async def test_mock_openai_create_fine_tune_job():
         )
 
         response = await litellm.acreate_fine_tuning_job(
-            model="gpt-3.5-turbo-0125",
+            model="gpt-4o-mini-2024-07-18",
             training_file="file-123",
             hyperparameters={"n_epochs": 3},
             suffix="custom_suffix",
@@ -486,16 +486,19 @@ async def test_mock_openai_create_fine_tune_job():
         mock_create.assert_called_once()
         request_params = mock_create.call_args.kwargs
 
-        assert request_params["model"] == "gpt-3.5-turbo-0125"
+        assert request_params["model"] == "gpt-4o-mini-2024-07-18"
         assert request_params["training_file"] == "file-123"
         assert request_params["hyperparameters"] == {"n_epochs": 3}
         assert request_params["suffix"] == "custom_suffix"
 
         # Verify the response
         assert response.id == "ft-123"
-        assert response.model == "gpt-3.5-turbo-0125"
+        assert response.model == "gpt-4o-mini-2024-07-18"
         assert response.status == "validating_files"
-        assert response.fine_tuned_model == "ft:gpt-3.5-turbo-0125:org:custom_suffix:id"
+        assert (
+            response.fine_tuned_model
+            == "ft:gpt-4o-mini-2024-07-18:org:custom_suffix:id"
+        )
 
 
 @pytest.mark.asyncio
