@@ -165,6 +165,67 @@ async def test_list_guardrails_v2_with_db_and_config(
 
 
 @pytest.mark.asyncio
+async def test_list_guardrails_v2_skips_stale_db_backed_in_memory_entries(mocker):
+    """
+    A guardrail that's still in this pod's memory tagged source='db' but is no
+    longer in the DB result (deleted on another pod, awaiting reconcile) must
+    NOT surface in the list response — pre-fix it leaked as 'config'.
+    """
+    stale_guardrail = {
+        "guardrail_id": "stale-db-id",
+        "guardrail_name": "Stale DB Guardrail",
+        "litellm_params": {"guardrail": "bedrock", "mode": "pre_call"},
+        "guardrail_info": {},
+    }
+    mock_prisma_client = mocker.Mock()
+    mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
+
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = [stale_guardrail]
+    mock_in_memory_handler.get_source.return_value = "db"
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    admin_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    response = await list_guardrails_v2(user_api_key_dict=admin_auth)
+
+    assert response.guardrails == []
+    mock_in_memory_handler.get_source.assert_called_with("stale-db-id")
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_404s_stale_db_backed_entry(
+    mocker, mock_prisma_client, mock_in_memory_handler
+):
+    """
+    Stale DB-backed entry (in-memory but not in DB) must 404 instead of being
+    returned as if it were a config-loaded guardrail.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
+        return_value=None
+    )
+    # In-memory still has it, but it's tagged as 'db' (stale, awaiting reconcile)
+    mock_in_memory_handler.get_source.return_value = "db"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_guardrail_info("stale-db-id")
+
+    assert exc_info.value.status_code == 404
+    assert "not found" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_list_guardrails_v2_masks_sensitive_data_in_db_guardrails(mocker):
     """Test that sensitive litellm_params are masked for DB guardrails in list response"""
     db_guardrail_with_secrets = {

@@ -135,6 +135,37 @@ def test_delete_in_memory_guardrail_clears_source_marker():
     assert handler.get_source("a") is None
 
 
+def test_initialize_guardrail_early_return_updates_source_marker():
+    """
+    When initialize_guardrail is called for a guardrail that already exists
+    in memory, the early-return path must still honor the caller's source.
+    Otherwise a racing polling tick that placed a DB entry in memory first
+    would leave a later config-init call wrongly marked as 'db' (or vice
+    versa), and the entry would be reconciled with the wrong classification.
+    """
+    handler = InMemoryGuardrailHandler()
+    # Simulate a polling tick already placing the entry as DB-backed.
+    handler.IN_MEMORY_GUARDRAILS["collide"] = _make_guardrail("collide", name="bedrock")
+    handler._sources["collide"] = "db"
+
+    # Config init re-visits the same id (e.g., hot-reload, or UUID collision).
+    g = Guardrail(
+        guardrail_id="collide",
+        guardrail_name="bedrock",
+        litellm_params=LitellmParams(
+            guardrail="bedrock", mode="pre_call", default_on=False
+        ),
+    )
+    handler.initialize_guardrail(guardrail=g, source="config")
+
+    assert handler.get_source("collide") == "config"
+
+    # And the symmetric direction: db sync should override an entry left
+    # marked as 'config' from a stale init path.
+    handler.initialize_guardrail(guardrail=g, source="db")
+    assert handler.get_source("collide") == "db"
+
+
 def test_sync_guardrail_from_db_marks_source_db_when_unchanged():
     """
     sync_guardrail_from_db must enforce source='db' even when params are

@@ -428,6 +428,10 @@ class InMemoryGuardrailHandler:
             verbose_proxy_logger.debug(
                 "guardrail_id already exists in IN_MEMORY_GUARDRAILS"
             )
+            # Honor the caller's source even on the early-return path so a
+            # racing polling tick or a hot-reload of config can correct an
+            # entry's provenance.
+            self._sources[guardrail_id] = source
             return self.IN_MEMORY_GUARDRAILS[guardrail_id]
 
         custom_guardrail_callback: Optional[CustomGuardrail] = None
