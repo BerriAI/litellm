@@ -26,8 +26,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Protocol
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.agent_session_endpoints.vm_providers.base import AwsCreds
-from litellm.proxy.agent_session_endpoints.warm_pool.types import HydratePayload
+from litellm.managed_agents.vms.base import AwsCreds
+from litellm.managed_agents.vms.warm_pool.types import HydratePayload
 
 # Silence boto3 debug logging (same defensive measure as ec2.py).
 for _name in ("boto3", "botocore", "urllib3.connectionpool"):
