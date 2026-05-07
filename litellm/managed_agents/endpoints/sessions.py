@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from litellm.managed_agents.db import (
     get_agent,
     get_session,
+    list_sessions,
     list_sessions_for_agent,
 )
 from litellm.managed_agents.types import Repo, SandboxSpec, SessionList, SessionRow
@@ -54,6 +55,67 @@ def _row_to_session_response(row: Dict[str, Any]) -> SessionRow:
         created_by=row.get("created_by"),
         created_at=row["created_at"],
         terminated_at=row.get("terminated_at"),
+    )
+
+
+@router.get(
+    "/v2/sessions",
+    response_model=SessionList,
+    tags=["managed-agents-v2"],
+)
+async def list_sessions_endpoint(
+    agent_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+    cursor: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> SessionList:
+    """List ALL sessions for the caller, optionally filtered by `agent_id`
+    and/or `status`.
+
+    This is the global counterpart to `GET /v2/agents/:agent_id/sessions` —
+    used by the UI's top-level Sessions view so the caller doesn't have to
+    pre-pick an agent. Scoped to `created_by` (same no-leak rule). Public
+    response rows mirror `GET /v2/sessions/:id`; `sandbox_url` and
+    `sandbox_metadata` are stripped.
+
+    Pagination: simple offset-based, same shape as `GET /v2/agents`.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    created_by = user_api_key_dict.user_id or _DEFAULT_CREATED_BY
+
+    if cursor is None or cursor == "":
+        skip = 0
+    else:
+        try:
+            skip = int(cursor)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=f"Invalid cursor: {cursor!r}")
+
+    rows = await list_sessions(
+        prisma_client,
+        created_by=created_by,
+        limit=limit + 1,
+        skip=skip,
+        agent_id=agent_id,
+        status=status,
+    )
+    has_more = len(rows) > limit
+    page_rows = rows[:limit]
+
+    next_cursor = str(skip + limit) if has_more else None
+
+    return SessionList(
+        data=[_row_to_session_response(r) for r in page_rows],
+        next_cursor=next_cursor,
+        has_more=has_more,
     )
 
 
