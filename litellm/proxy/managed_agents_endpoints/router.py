@@ -3,6 +3,7 @@
 Aggregates the endpoint sub-routers and exposes a single managed_agents_router
 for inclusion in the main FastAPI app.
 """
+
 from fastapi import APIRouter
 
 from litellm.proxy.managed_agents_endpoints.agents import router as agents_router
