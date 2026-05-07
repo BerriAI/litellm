@@ -27,17 +27,17 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.agent_session_endpoints.vm_providers.team_config import (
+from litellm.managed_agents.vms.team_config import (
     get_team_vm_config,
 )
-from litellm.proxy.agent_session_endpoints.warm_pool.hydrate import (
+from litellm.managed_agents.vms.warm_pool.hydrate import (
     build_hydrate_payload,
 )
-from litellm.proxy.agent_session_endpoints.warm_pool.transports.ssm import (
+from litellm.managed_agents.vms.warm_pool.transports.ssm import (
     HydrateTransportError,
     get_default_transport,
 )
-from litellm.proxy.agent_session_endpoints.warm_pool.types import HydratePayload
+from litellm.managed_agents.vms.warm_pool.types import HydratePayload
 
 # How many candidate rows we'll try before giving up and falling back to
 # cold-boot. Higher values trade attach latency for pool-empty resilience —
