@@ -41,6 +41,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.managed_agents.adapters.base import (
     SandboxBadGatewayError,
     SandboxUnreachableError,
@@ -51,12 +52,30 @@ from litellm.managed_agents.adapters.normalization import (
     normalize_opencode_message,
 )
 from litellm.managed_agents.types import MessageRow
+from litellm.types.llms.custom_http import httpxSpecialProvider
 
 # Reasonable default timeouts — these match the proxy's general HTTP defaults.
 # The streaming endpoint uses an unbounded read because SSE is long-lived.
 _DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
 _STREAM_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0)
 _PERMISSION_TIMEOUT = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
+
+
+def _get_async_client(timeout: httpx.Timeout) -> httpx.AsyncClient:
+    """Return a cached ``httpx.AsyncClient`` from the proxy's shared pool.
+
+    Creating a fresh ``httpx.AsyncClient`` per request adds ~500 ms of
+    setup overhead and prevents connection reuse — the proxy's
+    ``get_async_httpx_client`` caches one client per (provider, params)
+    tuple so we share connections across calls. We pass the timeout into
+    the cache key so the three distinct timeout profiles
+    (default / stream / permission) each get their own pooled client.
+    """
+    handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.ManagedAgents,
+        params={"timeout": timeout},
+    )
+    return handler.client
 
 
 class OpencodeAdapter:
@@ -96,8 +115,8 @@ class OpencodeAdapter:
             body["model"] = model_obj
 
         try:
-            async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
-                response = await client.post(url, json=body)
+            client = _get_async_client(_DEFAULT_TIMEOUT)
+            response = await client.post(url, json=body)
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             raise SandboxUnreachableError(
                 f"opencode unreachable at {sandbox_url}: {e}"
@@ -128,8 +147,8 @@ class OpencodeAdapter:
         url = self._url(sandbox_url, f"/session/{opencode_session_id}/message")
 
         try:
-            async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
-                response = await client.get(url)
+            client = _get_async_client(_DEFAULT_TIMEOUT)
+            response = await client.get(url)
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             raise SandboxUnreachableError(
                 f"opencode unreachable at {sandbox_url}: {e}"
@@ -204,45 +223,45 @@ class OpencodeAdapter:
         current_assistant_message_id: Optional[str] = None
 
         try:
-            async with httpx.AsyncClient(timeout=_STREAM_TIMEOUT) as client:
-                async with client.stream("GET", url) as response:
-                    if response.status_code != 200:
-                        raise SandboxBadGatewayError(
-                            f"opencode /event returned {response.status_code}"
-                        )
-                    async for parsed in self._iter_sse(response):
-                        # Drop events for other sessions FIRST. Without this,
-                        # any caller streaming /events on session A could
-                        # auto-grant permissions for session B on the same
-                        # opencode server.
-                        if not event_matches_session(parsed, opencode_session_id):
-                            continue
+            client = _get_async_client(_STREAM_TIMEOUT)
+            async with client.stream("GET", url) as response:
+                if response.status_code != 200:
+                    raise SandboxBadGatewayError(
+                        f"opencode /event returned {response.status_code}"
+                    )
+                async for parsed in self._iter_sse(response):
+                    # Drop events for other sessions FIRST. Without this,
+                    # any caller streaming /events on session A could
+                    # auto-grant permissions for session B on the same
+                    # opencode server.
+                    if not event_matches_session(parsed, opencode_session_id):
+                        continue
 
-                        # Auto-grant permission for OUR session only.
-                        if parsed.get("type") == "permission.asked":
-                            self._auto_grant_permission(sandbox_url, parsed)
-                            continue
+                    # Auto-grant permission for OUR session only.
+                    if parsed.get("type") == "permission.asked":
+                        self._auto_grant_permission(sandbox_url, parsed)
+                        continue
 
-                        # Track the in-flight assistant message id BEFORE
-                        # routing — so ``session.idle`` (which has no
-                        # messageID) can be enriched.
-                        current_assistant_message_id = self._track_assistant_message_id(
-                            parsed, current_assistant_message_id
-                        )
+                    # Track the in-flight assistant message id BEFORE
+                    # routing — so ``session.idle`` (which has no
+                    # messageID) can be enriched.
+                    current_assistant_message_id = self._track_assistant_message_id(
+                        parsed, current_assistant_message_id
+                    )
 
-                        normalized = normalize_opencode_event(parsed, part_types)
-                        if normalized is None:
-                            continue
+                    normalized = normalize_opencode_event(parsed, part_types)
+                    if normalized is None:
+                        continue
 
-                        event_type, data = normalized
-                        if (
-                            event_type == "message.completed"
-                            and not data.get("message_id")
-                            and current_assistant_message_id
-                        ):
-                            data = {**data, "message_id": current_assistant_message_id}
+                    event_type, data = normalized
+                    if (
+                        event_type == "message.completed"
+                        and not data.get("message_id")
+                        and current_assistant_message_id
+                    ):
+                        data = {**data, "message_id": current_assistant_message_id}
 
-                        yield (event_type, data)
+                    yield (event_type, data)
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             raise SandboxUnreachableError(
                 f"opencode unreachable at {sandbox_url}: {e}"
@@ -260,8 +279,8 @@ class OpencodeAdapter:
         """
         url = self._url(sandbox_url, f"/session/{opencode_session_id}")
         try:
-            async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
-                response = await client.delete(url)
+            client = _get_async_client(_DEFAULT_TIMEOUT)
+            response = await client.delete(url)
             if response.status_code not in (200, 202, 204, 404):
                 verbose_logger.debug(
                     "opencode delete returned %d for %s/%s",
@@ -293,8 +312,8 @@ class OpencodeAdapter:
         """
         url = self._url(sandbox_url, f"/session/{opencode_session_id}/abort")
         try:
-            async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
-                response = await client.post(url, json={})
+            client = _get_async_client(_DEFAULT_TIMEOUT)
+            response = await client.post(url, json={})
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             raise SandboxUnreachableError(
                 f"opencode unreachable at {sandbox_url}: {e}"
@@ -400,8 +419,8 @@ class OpencodeAdapter:
 
         async def _grant() -> None:
             try:
-                async with httpx.AsyncClient(timeout=_PERMISSION_TIMEOUT) as client:
-                    response = await client.post(url, json={"response": "once"})
+                client = _get_async_client(_PERMISSION_TIMEOUT)
+                response = await client.post(url, json={"response": "once"})
                 if response.status_code not in (200, 204):
                     verbose_logger.debug(
                         "opencode permission grant returned %d for %s",
