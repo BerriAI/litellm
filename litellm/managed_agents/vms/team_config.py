@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.agent_session_endpoints.vm_providers.base import (
+from litellm.managed_agents.vms.base import (
     AwsCreds,
     Ec2Config,
     InvalidCredentialsError,
