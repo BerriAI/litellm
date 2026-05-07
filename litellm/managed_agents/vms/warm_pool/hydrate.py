@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.agent_session_endpoints.warm_pool.types import (
+from litellm.managed_agents.vms.warm_pool.types import (
     AgentConfig,
     HydratePayload,
     NetworkAccess,
