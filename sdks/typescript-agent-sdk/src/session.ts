@@ -41,13 +41,17 @@ export class SessionHandle {
     return this._status;
   }
 
-  /** Start a new run with `input`. Throws 409 if a run is already in flight. */
+  /** Start a new run with `input`. Throws 409 if a run is already in flight.
+   *
+   * Backend ``RunCreate`` schema expects ``{prompt: {...}}`` — wrap the
+   * normalized text/images payload accordingly so requests don't 422.
+   */
   async send(input: string | SendInput): Promise<Run> {
-    const body = normalizeSendInput(input);
+    const normalized = normalizeSendInput(input);
     const info = await requestJson<RunInfo>(this._client, {
       method: "POST",
       path: `/v2/sessions/${encodeURIComponent(this.id)}/runs`,
-      body,
+      body: { prompt: normalized },
     });
     return new Run(info, this._client);
   }
