@@ -266,3 +266,41 @@ def test_should_preserve_builtin_pricing_regardless_of_deployment_order():
         f"Order should not matter. Expected {builtin_output_cost}, "
         f"got {info_std_2['output_cost_per_token']}"
     )
+
+
+def test_should_preserve_shared_chatgpt_backend_mode_for_aliases():
+    backend_model = "chatgpt/gpt-5.4"
+    builtin_info = litellm.get_model_info(model=backend_model)
+    builtin_mode = builtin_info.get("mode")
+
+    assert builtin_mode == "responses"
+
+    Router(
+        model_list=[
+            {
+                "model_name": "chatgpt-alias-a",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_key": "fake-key-chatgpt-a",
+                },
+                "model_info": {
+                    "id": "chatgpt-alias-a-id",
+                },
+            },
+            {
+                "model_name": "chatgpt-alias-b",
+                "litellm_params": {
+                    "model": backend_model,
+                    "api_key": "fake-key-chatgpt-b",
+                },
+                "model_info": {
+                    "id": "chatgpt-alias-b-id",
+                    "mode": "chat",
+                },
+            },
+        ],
+    )
+
+    shared_info = litellm.model_cost.get(backend_model)
+    assert shared_info is not None
+    assert shared_info.get("mode") == "responses"

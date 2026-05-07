@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
@@ -201,3 +202,74 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert parsed.output_text == "Hello!"
+
+    @pytest.mark.parametrize(
+        ("model_name", "response_model"),
+        [
+            ("chatgpt/gpt-5.2-codex", "gpt-5.2-codex"),
+            ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
+        ],
+    )
+    def test_chatgpt_non_stream_sse_response_recovers_output_items(
+        self, model_name: str, response_model: str
+    ):
+        config = ChatGPTResponsesAPIConfig()
+        output_item = {
+            "type": "message",
+            "id": "msg_test",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "Hello from output item"}],
+        }
+        sse_body = "\n".join(
+            [
+                f"data: {json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': output_item})}",
+                f"data: {json.dumps({'type': 'response.completed', 'response': {'id': 'resp_test', 'object': 'response', 'created_at': 1700000000, 'status': 'completed', 'model': response_model, 'output': []}})}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+        logging_obj = MagicMock()
+
+        parsed = config.transform_response_api_response(
+            model=model_name,
+            raw_response=raw_response,
+            logging_obj=logging_obj,
+        )
+
+        assert parsed.output == [output_item]
+        assert parsed.output_text == "Hello from output item"
+
+    @pytest.mark.parametrize(
+        ("model_name", "response_model"),
+        [
+            ("chatgpt/gpt-5.2-codex", "gpt-5.2-codex"),
+            ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
+        ],
+    )
+    def test_chatgpt_non_stream_sse_response_raises_without_completed_response(
+        self, model_name: str, response_model: str
+    ):
+        config = ChatGPTResponsesAPIConfig()
+        sse_body = "\n".join(
+            [
+                f"data: {json.dumps({'type': 'response.output_item.done', 'output_index': 0, 'item': {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'Hello'}]}})}",
+                f"data: {json.dumps({'type': 'response.failed', 'response': {'error': {'message': f'{response_model} failed'}}})}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            500, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+        logging_obj = MagicMock()
+
+        with pytest.raises(OpenAIError, match=f"{response_model} failed"):
+            config.transform_response_api_response(
+                model=model_name,
+                raw_response=raw_response,
+                logging_obj=logging_obj,
+            )
