@@ -101,6 +101,7 @@ _SCALAR_ATTRS = (
     "redact_messages_in_exceptions",
     "redact_user_api_key_info",
     "s3_callback_params",
+    "s3_audit_callback_params",
     "datadog_params",
     "vector_store_registry",
 )
@@ -128,6 +129,7 @@ def isolate_litellm_state():
     leaking across tests within the same xdist worker.
     """
     from litellm.litellm_core_utils import litellm_logging as ll_logging
+    from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
 
     # Flush cache and clear internal logger instances before test
     if hasattr(litellm, "in_memory_llm_clients_cache"):
@@ -135,6 +137,7 @@ def isolate_litellm_state():
 
     # Clear cached logger instances (LangsmithLogger, SlackAlerting, etc.)
     ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
 
     # Reset ALL attrs to their true defaults before the test runs.
     # This undoes any module-level mutations from test file imports.
@@ -156,6 +159,7 @@ def isolate_litellm_state():
         litellm.in_memory_llm_clients_cache.flush_cache()
 
     ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
 
     for attr in _LIST_ATTRS:
         if attr in _DEFAULTS:

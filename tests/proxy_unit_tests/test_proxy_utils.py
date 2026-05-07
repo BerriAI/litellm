@@ -501,19 +501,28 @@ def test_is_request_body_safe_model_enabled(
     assert expect_error == error_raised
 
 
-@pytest.mark.parametrize(
-    "api_key_value, expect_complete",
-    [
-        ("sk-real-key", True),
-        ("", False),
-        (None, False),
-        ("   ", False),
-    ],
-)
-def test_check_complete_credentials_api_key_values(api_key_value, expect_complete):
+def _assert_check_complete_credentials(api_key_value, expect_complete):
     request_body = {"model": "gpt-3.5-turbo", "api_key": api_key_value}
     result = check_complete_credentials(request_body=request_body)
     assert result == expect_complete
+
+
+def test_check_complete_credentials_with_real_key():
+    _assert_check_complete_credentials(
+        api_key_value="sk-" + "x" * 8, expect_complete=True
+    )
+
+
+def test_check_complete_credentials_with_empty_string():
+    _assert_check_complete_credentials(api_key_value="", expect_complete=False)
+
+
+def test_check_complete_credentials_with_none():
+    _assert_check_complete_credentials(api_key_value=None, expect_complete=False)
+
+
+def test_check_complete_credentials_with_whitespace():
+    _assert_check_complete_credentials(api_key_value="   ", expect_complete=False)
 
 
 def test_reading_openai_org_id_from_headers():

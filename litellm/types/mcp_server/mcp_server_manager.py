@@ -57,6 +57,10 @@ class MCPServer(BaseModel):
     aws_service_name: Optional[str] = None  # defaults to "bedrock-agentcore"
     aws_role_name: Optional[str] = None  # IAM role ARN for STS AssumeRole
     aws_session_name: Optional[str] = None  # session name for CloudTrail auditing
+    # Token Exchange (OBO) fields — RFC 8693
+    token_exchange_endpoint: Optional[str] = None
+    audience: Optional[str] = None
+    subject_token_type: str = "urn:ietf:params:oauth:token-type:access_token"
     # Stdio-specific fields
     command: Optional[str] = None
     args: Optional[List[str]] = None
@@ -127,3 +131,12 @@ class MCPServer(BaseModel):
             return any(h.lower() in auth_header_names for h in self.extra_headers)
 
         return False
+
+    @property
+    def has_token_exchange_config(self) -> bool:
+        """True if this server is configured for OAuth2 token exchange (OBO / RFC 8693)."""
+        return (
+            self.auth_type == MCPAuth.oauth2_token_exchange
+            and bool(self.client_id and self.client_secret)
+            and bool(self.token_exchange_endpoint or self.token_url)
+        )

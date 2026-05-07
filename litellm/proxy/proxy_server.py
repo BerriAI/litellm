@@ -403,6 +403,9 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.request_size_limit_middleware import (
+    RequestSizeLimitMiddleware,
+)
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -3818,6 +3821,11 @@ class ProxyConfig:
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
                 elif key == "audit_log_callbacks":
+                    from litellm.proxy.management_helpers.audit_logs import (
+                        reset_audit_log_callback_cache,
+                    )
+
+                    reset_audit_log_callback_cache()
                     litellm.audit_log_callbacks = []
 
                     for callback in value:
@@ -3899,6 +3907,21 @@ class ProxyConfig:
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
                     )
                     setattr(litellm, key, value)
+                    if key in {"s3_audit_callback_params", "s3_callback_params"}:
+                        from litellm.proxy.management_helpers.audit_logs import (
+                            reset_audit_log_callback_cache,
+                        )
+                        from litellm.litellm_core_utils.litellm_logging import (
+                            _in_memory_loggers,
+                        )
+                        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+
+                        reset_audit_log_callback_cache()
+                        _in_memory_loggers[:] = [
+                            cb
+                            for cb in _in_memory_loggers
+                            if not isinstance(cb, S3V2Logger)
+                        ]
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})
@@ -14879,6 +14902,11 @@ app.include_router(ui_discovery_endpoints_router)
 app.include_router(google_router)
 
 attach_lazy_features(app)
+app.add_middleware(
+    RequestSizeLimitMiddleware,
+    get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
+    is_request_size_limit_enabled=lambda: premium_user is True,
+)
 
 
 async def _stream_mcp_asgi_response(

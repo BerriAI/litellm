@@ -857,6 +857,7 @@ if MCP_AVAILABLE:
     ########################################################
     from litellm.proxy.management_endpoints.mcp_management_endpoints import (
         NewMCPServerRequest,
+        _inherit_credentials_from_existing_server,
     )
 
     def _extract_credentials(
@@ -975,9 +976,11 @@ if MCP_AVAILABLE:
     async def _preview_openapi_tools(spec_path: str) -> dict:
         """Generate tool previews from an OpenAPI spec without creating a server."""
         from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
+            _OPENAPI_TOOL_NAME_MAX_LEN,
             build_input_schema,
             load_openapi_spec_async,
             resolve_operation_params,
+            sanitize_openapi_tool_name,
         )
 
         try:
@@ -985,8 +988,9 @@ if MCP_AVAILABLE:
             paths = spec.get("paths", {})
             components = spec.get("components", {})
             tools: List[dict] = []
+            used_names: set = set()
             for path, path_item in paths.items():
-                for method in ("get", "post", "put", "patch", "delete"):
+                for method in ("get", "post", "put", "delete", "patch"):
                     operation = path_item.get(method)
                     if operation is None:
                         continue
@@ -995,7 +999,23 @@ if MCP_AVAILABLE:
                         operation, path_item, components
                     )
 
-                    op_id = operation.get("operationId", f"{method}_{path}")
+                    raw_op_id = operation.get("operationId", f"{method}_{path}")
+                    # Match what register_tools_from_openapi does so the preview
+                    # the user sees in the dashboard equals the names that get
+                    # registered (and shipped to LLM providers, which enforce
+                    # ^[a-zA-Z0-9_-]+$). See sanitize_openapi_tool_name docstring.
+                    op_id = sanitize_openapi_tool_name(raw_op_id)
+
+                    unique = op_id
+                    n = 1
+                    while unique in used_names:
+                        n += 1
+                        suffix = f"_{n}"
+                        unique = (
+                            op_id[: _OPENAPI_TOOL_NAME_MAX_LEN - len(suffix)] + suffix
+                        )
+                    op_id = unique
+                    used_names.add(op_id)
                     summary = operation.get("summary", "")
                     description = operation.get("description", summary)
                     input_schema = build_input_schema(resolved_op)
@@ -1067,6 +1087,10 @@ if MCP_AVAILABLE:
                     "error": "User does not have permission to test MCP server tools. Only PROXY_ADMIN users can perform this action."
                 },
             )
+
+        new_mcp_server_request = _inherit_credentials_from_existing_server(
+            new_mcp_server_request
+        )
 
         # For OpenAPI spec servers, generate tools from the spec directly
         if new_mcp_server_request.spec_path:

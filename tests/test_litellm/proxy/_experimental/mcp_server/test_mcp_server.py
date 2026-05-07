@@ -1228,6 +1228,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
         mcp_auth_header=None,
         extra_headers=None,
         stdio_env=None,
+        subject_token=None,
     ):
         # Capture the arguments for verification
         captured_client_args.update(
@@ -1236,6 +1237,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
                 "mcp_auth_header": mcp_auth_header,
                 "extra_headers": extra_headers,
                 "stdio_env": stdio_env,
+                "subject_token": subject_token,
             }
         )
         # Return a mock client that doesn't actually connect
@@ -2281,6 +2283,144 @@ class TestMCPServerManagerReload:
 
         mock_build.assert_awaited_once_with(db_row)
         assert manager.registry["server-1"] is rebuilt_server
+
+    @pytest.mark.asyncio
+    async def test_skips_server_when_build_from_database_fails(self, caplog):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        timestamp = datetime.utcnow()
+        healthy_row = _make_db_mcp_server("healthy-server", timestamp)
+        bad_row = _make_db_mcp_server("bad-server", timestamp)
+        another_healthy_row = _make_db_mcp_server("another-healthy-server", timestamp)
+
+        healthy_server = MCPServer(
+            server_id="healthy-server",
+            name="healthy",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        another_healthy_server = MCPServer(
+            server_id="another-healthy-server",
+            name="another-healthy",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+
+        async def build_server(db_row):
+            if db_row.server_id == "bad-server":
+                raise RuntimeError("transient build failure")
+            if db_row.server_id == "healthy-server":
+                return healthy_server
+            return another_healthy_server
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[healthy_row, bad_row, another_healthy_row]
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma,
+            ),
+            patch.object(
+                manager,
+                "build_mcp_server_from_table",
+                AsyncMock(side_effect=build_server),
+            ),
+            patch.object(manager, "_maybe_register_openapi_tools", AsyncMock()),
+            caplog.at_level("ERROR", logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        assert set(manager.registry) == {"healthy-server", "another-healthy-server"}
+        assert manager.registry["healthy-server"] is healthy_server
+        assert manager.registry["another-healthy-server"] is another_healthy_server
+        assert "Skipping MCP server bad-server" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_skips_server_when_openapi_registration_fails(self, caplog):
+        try:
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                MCPServerManager,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        manager = MCPServerManager()
+        timestamp = datetime.utcnow()
+        healthy_row = _make_db_mcp_server("healthy-server", timestamp)
+        bad_openapi_row = _make_db_mcp_server("bad-openapi-server", timestamp)
+        existing_server = MCPServer(
+            server_id="existing-server",
+            name="existing",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        manager.registry = {existing_server.server_id: existing_server}
+
+        healthy_server = MCPServer(
+            server_id="healthy-server",
+            name="healthy",
+            transport=MCPTransport.http,
+            updated_at=timestamp,
+        )
+        bad_openapi_server = MCPServer(
+            server_id="bad-openapi-server",
+            name="bad-openapi",
+            transport=MCPTransport.http,
+            spec_path="https://example.invalid/openapi.json",
+            updated_at=timestamp,
+        )
+
+        async def build_server(db_row):
+            if db_row.server_id == "healthy-server":
+                return healthy_server
+            return bad_openapi_server
+
+        observed_registries = []
+
+        async def register_openapi_tools(server, **kwargs):
+            observed_registries.append(set(manager.registry))
+            assert kwargs == {"initialize_mapping": False}
+            if server.server_id == "bad-openapi-server":
+                raise RuntimeError("blocked address")
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+            return_value=[healthy_row, bad_openapi_row]
+        )
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma,
+            ),
+            patch.object(
+                manager,
+                "build_mcp_server_from_table",
+                AsyncMock(side_effect=build_server),
+            ),
+            patch.object(
+                manager,
+                "_maybe_register_openapi_tools",
+                AsyncMock(side_effect=register_openapi_tools),
+            ),
+            caplog.at_level("ERROR", logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        assert set(manager.registry) == {"healthy-server"}
+        assert manager.registry["healthy-server"] is healthy_server
+        assert observed_registries == [
+            {"existing-server"},
+            {"existing-server"},
+        ]
+        assert "Skipping MCP server bad-openapi-server" in caplog.text
 
 
 @pytest.mark.asyncio

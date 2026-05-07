@@ -656,6 +656,13 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
     ] + info_routes
 
+    # Stateless validators on caller-supplied log data; source logs are
+    # already accessible via spend_tracking_routes, so no scope expansion.
+    compliance_check_routes = [
+        "/compliance/eu-ai-act",
+        "/compliance/gdpr",
+    ]
+
     # Routes in `global_spend_tracking_routes` return proxy-wide spend across
     # every team, customer, and api_key. They are intentionally NOT included
     # here — non-admin roles must not see other tenants' spend. Admin roles go
@@ -675,6 +682,7 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + spend_tracking_routes
         + key_management_routes
+        + compliance_check_routes
     )
 
     internal_user_view_only_routes = spend_tracking_routes
@@ -3345,6 +3353,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
+        ],
+    )
+
+    azure_sentinel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="azure_sentinel",
+        ui_callback_name="Azure Sentinel",
+        litellm_callback_params=[
+            "AZURE_SENTINEL_DCR_IMMUTABLE_ID",
+            "AZURE_SENTINEL_ENDPOINT",
+            "AZURE_SENTINEL_TENANT_ID",
+            "AZURE_SENTINEL_CLIENT_ID",
+            "AZURE_SENTINEL_CLIENT_SECRET",
+            "AZURE_SENTINEL_STREAM_NAME",
         ],
     )
 
