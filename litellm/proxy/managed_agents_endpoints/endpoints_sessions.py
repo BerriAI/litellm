@@ -57,6 +57,20 @@ def _resolve_region() -> str:
     return "us-east-1"
 
 
+def _region_from_arn(arn: Optional[str]) -> Optional[str]:
+    """Extract region from an AWS ARN.
+
+    ARN format: arn:<partition>:<service>:<region>:<account>:<resource>
+    Returns None for malformed input so callers can fall back to global config.
+    """
+    if not arn:
+        return None
+    parts = arn.split(":", 5)
+    if len(parts) < 4 or not parts[3]:
+        return None
+    return parts[3]
+
+
 def _resolve_aws_overrides() -> AwsOverrides:
     cfg = _config_loader.MANAGED_AGENTS_CONFIG
     if cfg is not None:
@@ -147,9 +161,12 @@ async def create_session(
             detail=f"template '{template.template_id}' has no task_def_arn",
         )
 
-    region = _resolve_region()
     aws_overrides = _resolve_aws_overrides()
     cluster = _resolve_cluster(aws_overrides)
+    # Region must match the template's task-def ARN. Falling back to global
+    # config produces "Invalid Region in ARN" when a template was built in a
+    # different region than the proxy's current default.
+    region = _region_from_arn(template.task_def_arn) or _resolve_region()
 
     metadata = _coerce_metadata(getattr(agent, "metadata", None))
 
@@ -351,9 +368,16 @@ async def delete_session(
         raise HTTPException(status_code=404, detail=f"session '{session_id}' not found")
     _assert_owner_or_admin(user_api_key_dict, row.created_by, "session", session_id)
 
-    region = _resolve_region()
     aws_overrides = _resolve_aws_overrides()
     cluster = row.fargate_cluster or _resolve_cluster(aws_overrides)
+    # Stop the task in the same region it runs in — the session's task ARN
+    # encodes that region. The template's task-def ARN is the next-best fallback
+    # for sessions created before task_arn was persisted.
+    region = (
+        _region_from_arn(row.task_arn)
+        or _region_from_arn(getattr(row, "fargate_task_def_arn", None))
+        or _resolve_region()
+    )
 
     if row.task_arn:
         await stop_session_task(

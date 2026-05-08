@@ -32,27 +32,16 @@ from litellm.proxy.managed_agents_endpoints.git_validation import (
 # ---------------------------------------------------------------------------
 
 
-def test_authed_repo_url_https_with_token_injects_netloc():
-    url = authed_repo_url("https://github.com/org/repo.git", "secret-token")
-    assert "x-access-token:secret-token@github.com" in url
-    assert url.endswith("/org/repo.git")
-
-
-def test_authed_repo_url_https_no_token_returns_input_unchanged():
+def test_authed_repo_url_returns_input_unchanged():
+    """authed_repo_url no longer rewrites the URL — auth is now passed via
+    GIT_CONFIG_VALUE_0 env var to keep the token out of argv."""
     original = "https://github.com/org/repo.git"
+    assert authed_repo_url(original, "secret-token") == original
     assert authed_repo_url(original, None) == original
     assert authed_repo_url(original, "") == original
-
-
-def test_authed_repo_url_ssh_returns_input_unchanged():
-    original = "git@github.com:org/repo.git"
-    assert authed_repo_url(original, "secret-token") == original
-
-
-def test_authed_repo_url_malformed_returns_input_unchanged():
-    # No scheme/host → not https, returned untouched.
-    original = "not-a-real-url"
-    assert authed_repo_url(original, "secret-token") == original
+    assert authed_repo_url("git@github.com:org/repo.git", "secret-token") == (
+        "git@github.com:org/repo.git"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -88,27 +77,26 @@ def test_validate_repo_branch_empty_stdout_raises_400_branch_not_found():
     assert "not found" in exc_info.value.detail
 
 
-def test_validate_repo_branch_nonzero_exit_raises_400_and_scrubs_token():
+def test_validate_repo_branch_token_not_in_argv():
+    """The git token must not appear as a subprocess argument — it should
+    flow through the GIT_CONFIG_* env vars instead."""
     repo_url = "https://github.com/org/repo.git"
     token = "super-secret-token"
-    stderr = (
-        "remote: Repository not found.\n"
-        "fatal: repository 'https://x-access-token:super-secret-token@github.com/org/repo.git/' not found"
-    )
     with patch(
         "litellm.proxy.managed_agents_endpoints.git_validation.subprocess.run",
-        return_value=_completed(128, stdout="", stderr=stderr),
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            validate_repo_branch(repo_url, "main", git_token=token)
+        return_value=_completed(0, stdout="abc\trefs/heads/main\n"),
+    ) as run_mock:
+        validate_repo_branch(repo_url, "main", git_token=token)
 
-    assert exc_info.value.status_code == 400
-    detail = exc_info.value.detail
-    # Plain repo URL should appear in the error.
-    assert repo_url in detail
-    # Authed URL (with token) must NOT leak.
-    assert token not in detail
-    assert "x-access-token" not in detail
+    args, kwargs = run_mock.call_args
+    cmd = args[0]
+    assert token not in " ".join(cmd)
+    env = kwargs["env"]
+    assert env["GIT_CONFIG_COUNT"] == "1"
+    assert env["GIT_CONFIG_KEY_0"] == "http.extraheader"
+    # value is `Authorization: Basic <b64(x-access-token:<token>)>`
+    assert env["GIT_CONFIG_VALUE_0"].startswith("Authorization: Basic ")
+    assert token not in env["GIT_CONFIG_VALUE_0"]
 
 
 def test_validate_repo_branch_file_not_found_raises_500():

@@ -1,10 +1,10 @@
 """Git repo + branch validation utilities for managed-agent template create."""
 
+import base64
 import os
 import subprocess
 import uuid
 from typing import Any, Optional
-from urllib.parse import urlparse, urlunparse
 
 from fastapi import HTTPException
 
@@ -16,36 +16,43 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 
 
 def authed_repo_url(repo_url: str, git_token: Optional[str]) -> str:
+    """Return the URL unchanged. The git token is now injected via
+    `http.extraheader` (passed through GIT_CONFIG_* env vars) rather than
+    embedded in the URL netloc — embedding in argv leaks the token to
+    `/proc/<PID>/cmdline` and `ps aux`."""
+    return repo_url
+
+
+def _git_auth_env(git_token: Optional[str]) -> dict:
+    """Build the environment for a `git ls-remote` call.
+
+    When a token is provided we set `http.extraheader = AUTHORIZATION: Basic
+    <b64>` via GIT_CONFIG_COUNT/KEY_*/VALUE_*, which keeps the credential
+    out of argv. Falls back to no auth when no token is provided.
+    """
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     if not git_token:
-        return repo_url
-    parsed = urlparse(repo_url)
-    if parsed.scheme != "https":
-        return repo_url
-    if not parsed.hostname:
-        return repo_url
-    netloc = f"x-access-token:{git_token}@{parsed.hostname}"
-    if parsed.port:
-        netloc += f":{parsed.port}"
-    return urlunparse(
-        (
-            parsed.scheme,
-            netloc,
-            parsed.path,
-            parsed.params,
-            parsed.query,
-            parsed.fragment,
-        )
+        return env
+    auth_value = base64.b64encode(f"x-access-token:{git_token}".encode("utf-8")).decode(
+        "ascii"
     )
+    env.update(
+        {
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.extraheader",
+            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {auth_value}",
+        }
+    )
+    return env
 
 
 def validate_repo_branch(
     repo_url: str, branch: str, git_token: Optional[str] = None
 ) -> None:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    url = authed_repo_url(repo_url, git_token)
+    env = _git_auth_env(git_token)
     try:
         result = subprocess.run(
-            ["git", "ls-remote", "--heads", "--tags", url, branch],
+            ["git", "ls-remote", "--heads", "--tags", repo_url, branch],
             capture_output=True,
             text=True,
             timeout=15,
@@ -62,8 +69,6 @@ def validate_repo_branch(
     if result.returncode != 0:
         msg_lines = (result.stderr or result.stdout).strip().splitlines()
         tail = msg_lines[-1] if msg_lines else "unknown error"
-        # Scrub authed URL so token is not echoed back to clients/logs.
-        tail = tail.replace(url, repo_url)
         raise HTTPException(
             status_code=400,
             detail=f"git ls-remote failed for {repo_url}: {tail}",

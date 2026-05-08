@@ -59,6 +59,12 @@ def _resolve_aws_overrides() -> AwsOverrides:
     return AwsOverrides()
 
 
+def _deregister_task_def_sync(region: str, task_def_arn: str) -> None:
+    """Synchronous boto3 wrapper, intended to be called via asyncio.to_thread."""
+    ecs = boto3.client("ecs", region_name=region)
+    ecs.deregister_task_definition(taskDefinition=task_def_arn)
+
+
 def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(status_code=403, detail="admin role required")
@@ -325,8 +331,7 @@ async def delete_sandbox_template(
 
     if row.task_def_arn:
         try:
-            ecs = boto3.client("ecs", region_name=region)
-            ecs.deregister_task_definition(taskDefinition=row.task_def_arn)
+            await asyncio.to_thread(_deregister_task_def_sync, region, row.task_def_arn)
         except Exception as e:
             verbose_proxy_logger.warning(
                 "managed_agents: deregister_task_definition failed for arn=%s: %s",

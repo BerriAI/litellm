@@ -622,3 +622,193 @@ def test_delete_session_returns_404_for_non_owner(app_factory, other_user):
         resp = client.delete("/v1/managed_agents/sessions/sess-9")
     assert resp.status_code == 404
     stop_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# region resolution: ARN-derived per-template instead of global config
+# ---------------------------------------------------------------------------
+
+
+def test_region_from_arn_extracts_region_segment():
+    from litellm.proxy.managed_agents_endpoints.endpoints_sessions import (
+        _region_from_arn,
+    )
+
+    assert (
+        _region_from_arn("arn:aws:ecs:us-west-2:888602223428:task-definition/litellm:3")
+        == "us-west-2"
+    )
+    assert (
+        _region_from_arn("arn:aws:ecs:eu-central-1:1:task/litellm-agents/abc")
+        == "eu-central-1"
+    )
+
+
+def test_region_from_arn_returns_none_for_malformed():
+    from litellm.proxy.managed_agents_endpoints.endpoints_sessions import (
+        _region_from_arn,
+    )
+
+    assert _region_from_arn(None) is None
+    assert _region_from_arn("") is None
+    assert _region_from_arn("arn:td") is None
+    assert _region_from_arn("arn:aws:ecs::1:task-definition/x") is None
+
+
+def test_create_session_uses_region_from_template_arn(app_factory, user):
+    """Region must be derived from template.task_def_arn, not global config.
+
+    Reproduces the production bug where a template built in us-west-2 plus a
+    proxy defaulting to us-east-1 raised "Invalid Region in ARN" on RunTask.
+    """
+    client = app_factory(user)
+    template = _make_template()
+    template.task_def_arn = (
+        "arn:aws:ecs:us-west-2:888602223428:task-definition/litellm-x:1"
+    )
+    agent = _make_agent(template)
+    prisma = _make_prisma(agent=agent, session=_make_session())
+    infra = SimpleNamespace(
+        cluster_arn="arn:cluster",
+        task_exec_role_arn="arn:role",
+        security_group_id="sg-1",
+        log_group_name="/ecs/x",
+        vpc_id="vpc-1",
+        subnet_ids=["subnet-1"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.bootstrap_shared_infra",
+            return_value=infra,
+        ) as mock_boot,
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.run_task_sync",
+            return_value="arn:aws:ecs:us-west-2:1:task/litellm-agents/abc",
+        ) as mock_run,
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.wait_running_get_ip_sync",
+            return_value="1.2.3.4",
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.wait_http_ready",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.harness_create_session",
+            new=AsyncMock(return_value="harness-sess-1"),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_value_helper",
+            return_value="sk-x",
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_git_token",
+            new=AsyncMock(return_value=None),
+        ),
+        # Global config says us-east-1 — should be ignored in favor of ARN.
+        patch(
+            "litellm.proxy.managed_agents_endpoints.config_loader.MANAGED_AGENTS_CONFIG",
+            SimpleNamespace(
+                aws_region="us-east-1",
+                aws=SimpleNamespace(cluster=None),
+            ),
+        ),
+    ):
+        resp = client.post("/v1/managed_agents/agents/agt-1/session", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert mock_boot.call_args.args[0] == "us-west-2"
+    assert mock_run.call_args.kwargs["region"] == "us-west-2"
+
+
+def test_create_session_falls_back_to_config_when_arn_malformed(app_factory, user):
+    client = app_factory(user)
+    template = _make_template()
+    template.task_def_arn = "garbage"
+    agent = _make_agent(template)
+    prisma = _make_prisma(agent=agent, session=_make_session())
+    infra = SimpleNamespace(
+        cluster_arn="arn:cluster",
+        task_exec_role_arn="arn:role",
+        security_group_id="sg-1",
+        log_group_name="/ecs/x",
+        vpc_id="vpc-1",
+        subnet_ids=["subnet-1"],
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.bootstrap_shared_infra",
+            return_value=infra,
+        ) as mock_boot,
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.run_task_sync",
+            return_value="arn:task/abc",
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.wait_running_get_ip_sync",
+            return_value="1.2.3.4",
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.wait_http_ready",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.harness_create_session",
+            new=AsyncMock(return_value="harness-sess-1"),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_value_helper",
+            return_value="sk-x",
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_git_token",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.config_loader.MANAGED_AGENTS_CONFIG",
+            SimpleNamespace(
+                aws_region="ap-south-1",
+                aws=SimpleNamespace(cluster=None),
+            ),
+        ),
+    ):
+        resp = client.post("/v1/managed_agents/agents/agt-1/session", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert mock_boot.call_args.args[0] == "ap-south-1"
+
+
+def test_delete_session_uses_region_from_task_arn(app_factory, user):
+    """stop_task must run in the region the task was created in."""
+    client = app_factory(user)
+    sess = _make_session(
+        session_id="sess-9",
+        status="ready",
+        task_arn="arn:aws:ecs:us-west-2:1:task/litellm-agents/xyz",
+        fargate_cluster="my-cluster",
+    )
+    prisma = _make_prisma(session=sess)
+    stop_mock = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.stop_session_task",
+            new=stop_mock,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.config_loader.MANAGED_AGENTS_CONFIG",
+            SimpleNamespace(
+                aws_region="us-east-1",
+                aws=SimpleNamespace(cluster=None),
+            ),
+        ),
+    ):
+        resp = client.delete("/v1/managed_agents/sessions/sess-9")
+
+    assert resp.status_code == 200
+    stop_mock.assert_awaited_once()
+    assert stop_mock.call_args.kwargs["region"] == "us-west-2"
