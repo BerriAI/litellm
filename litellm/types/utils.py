@@ -3247,6 +3247,7 @@ class LlmProviders(str, Enum):
     A2A = "a2a"
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
+    NVIDIA_RIVA = "nvidia_riva"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"

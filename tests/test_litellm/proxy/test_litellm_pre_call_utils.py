@@ -450,6 +450,71 @@ async def test_add_litellm_data_to_request_proxy_server_request_body_is_post_str
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_body_snapshot_excludes_secret_fields():
+    """Security: proxy_server_request['body'] must never contain secret_fields
+    because that dict holds raw HTTP headers including Authorization Bearer
+    tokens. The body snapshot is persisted in spend logs and other audit trails,
+    so leaking secret_fields there exposes user credentials.
+
+    secret_fields must still be available on the live ``data`` dict for
+    downstream consumers (MCP, Responses API) that legitimately need raw headers.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer sk-super-secret-token",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        user_id="test-user",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    # secret_fields must exist on the live data dict
+    assert (
+        "secret_fields" in updated
+    ), "secret_fields must still be present on the live data dict"
+    assert "raw_headers" in updated["secret_fields"]
+
+    # But the body snapshot must NOT contain secret_fields
+    snapshot_body = updated["proxy_server_request"]["body"]
+    assert "secret_fields" not in snapshot_body, (
+        "secret_fields must be excluded from proxy_server_request['body'] "
+        "to prevent Authorization tokens from leaking into spend logs"
+    )
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_strips_string_encoded_admin_injection():
     """Regression: metadata arriving as a JSON string (multipart/form-data or
     extra_body) must not bypass the admin-injection strip. The parse happens
@@ -1076,6 +1141,155 @@ async def test_add_litellm_data_to_request_preserves_user_tags_when_team_opts_in
     )
 
     assert updated["metadata"].get("tags") == ["team-allowed"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_unions_caller_header_tags_with_static_key_tags():
+    """Caller-supplied `x-litellm-tags` must union with static key-level
+    tags, not overwrite them, when `allow_client_tags=True`."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "tenant:1681",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {"model": "gpt-3.5-turbo"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "allow_client_tags": True,
+            "tags": ["team:platform", "env:prod"],
+        },
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    final_tags = updated["metadata"].get("tags") or []
+    assert "team:platform" in final_tags
+    assert "env:prod" in final_tags
+    assert "tenant:1681" in final_tags
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_unions_caller_header_tags_with_static_team_tags():
+    """Same union behavior must hold for team-level static tags."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "tenant:42",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {"model": "gpt-3.5-turbo"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={
+            "allow_client_tags": True,
+            "tags": ["team:eng", "owner:platform"],
+        },
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    final_tags = updated["metadata"].get("tags") or []
+    assert "team:eng" in final_tags
+    assert "owner:platform" in final_tags
+    assert "tenant:42" in final_tags
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_unions_dedups_overlapping_caller_and_static_tags():
+    """A tag that appears in both the static set and the caller header
+    must show up exactly once in the merged list."""
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "env:prod,tenant:7",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    data = {"model": "gpt-3.5-turbo"}
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={
+            "allow_client_tags": True,
+            "tags": ["env:prod", "team:platform"],
+        },
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    final_tags = updated["metadata"].get("tags") or []
+    assert final_tags.count("env:prod") == 1
+    assert "team:platform" in final_tags
+    assert "tenant:7" in final_tags
 
 
 @pytest.mark.asyncio

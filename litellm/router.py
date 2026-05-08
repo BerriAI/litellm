@@ -1052,11 +1052,17 @@ class Router:
             strategy = self._normalize_strategy(self.routing_strategy)
             attr = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy or "")
             selector = getattr(self, attr, None) if attr is not None else None
+            verbose_router_logger.debug(
+                "routing_group=default model=%s strategy=%s", model, strategy
+            )
             return strategy, selector
 
         group = self._routing_groups[group_name]
         strategy = self._normalize_strategy(group.routing_strategy)
         selector = self._group_selectors.get(group_name, {}).get(strategy or "")
+        verbose_router_logger.debug(
+            "routing_group=%s model=%s strategy=%s", group_name, model, strategy
+        )
         return strategy, selector
 
     async def _select_deployment_async(

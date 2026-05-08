@@ -656,6 +656,13 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
     ] + info_routes
 
+    # Stateless validators on caller-supplied log data; source logs are
+    # already accessible via spend_tracking_routes, so no scope expansion.
+    compliance_check_routes = [
+        "/compliance/eu-ai-act",
+        "/compliance/gdpr",
+    ]
+
     # Routes in `global_spend_tracking_routes` return proxy-wide spend across
     # every team, customer, and api_key. They are intentionally NOT included
     # here — non-admin roles must not see other tenants' spend. Admin roles go
@@ -675,6 +682,7 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + spend_tracking_routes
         + key_management_routes
+        + compliance_check_routes
     )
 
     internal_user_view_only_routes = spend_tracking_routes
@@ -2735,6 +2743,19 @@ class UserAPIKeyAuth(
         )
 
 
+def user_api_key_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    """Return True if the caller's role grants unscoped read access to all
+    tenant resources (managed files, batches, vector stores, spend rows, etc).
+
+    Lives on _types.py so leaf modules (e.g. litellm.llms.base_llm.managed_resources)
+    can use it without pulling in litellm.proxy.utils via management_endpoints.
+    """
+    return user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+
+
 class UserInfoResponse(LiteLLMPydanticObjectBase):
     user_id: Optional[str]
     user_info: Optional[Union[dict, BaseModel]]
@@ -3332,6 +3353,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "AWS_REGION_NAME",
+        ],
+    )
+
+    azure_sentinel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="azure_sentinel",
+        ui_callback_name="Azure Sentinel",
+        litellm_callback_params=[
+            "AZURE_SENTINEL_DCR_IMMUTABLE_ID",
+            "AZURE_SENTINEL_ENDPOINT",
+            "AZURE_SENTINEL_TENANT_ID",
+            "AZURE_SENTINEL_CLIENT_ID",
+            "AZURE_SENTINEL_CLIENT_SECRET",
+            "AZURE_SENTINEL_STREAM_NAME",
         ],
     )
 
@@ -4603,6 +4637,7 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
     model_mappings: Dict[str, str]
     flat_model_file_ids: List[str]
     created_by: Optional[str] = None
+    team_id: Optional[str] = None
     updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None
@@ -4611,8 +4646,10 @@ class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
 class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
     unified_object_id: str
     model_object_id: str
-    file_purpose: Literal["batch", "fine-tune", "response"]
+    file_purpose: Literal["batch", "fine-tune", "response", "container"]
     file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
+    created_by: Optional[str] = None
+    team_id: Optional[str] = None
 
 
 class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
@@ -4623,6 +4660,7 @@ class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
     model_mappings: Dict[str, str]
     flat_model_resource_ids: List[str]
     created_by: Optional[str] = None
+    team_id: Optional[str] = None
     updated_by: Optional[str] = None
     storage_backend: Optional[str] = None
     storage_url: Optional[str] = None

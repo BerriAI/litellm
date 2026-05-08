@@ -61,6 +61,7 @@ from litellm.secret_managers.main import get_secret_bool
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
+    CustomPricingLiteLLMParams,
     LlmProviders,
     ProviderSpecificHeader,
     StandardLoggingUserAPIKeyMetadata,
@@ -168,6 +169,20 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY = (
     "allow_client_message_redaction_opt_out"
 )
 
+# Per-request pricing parameters mutate cost-tracking output and (via
+# ``litellm.completion`` → ``register_model``) the process-wide
+# ``litellm.model_cost`` map. Both effects belong to deployment configuration,
+# not to user-supplied request bodies, so the proxy strips them before they
+# reach the call path. Built from the Pydantic model so newly-added pricing
+# fields are covered automatically.
+_CLIENT_PRICING_CONTROL_FIELDS = frozenset(
+    CustomPricingLiteLLMParams.model_fields.keys()
+)
+# ``model_info`` carries the same pricing fields when read by
+# ``use_custom_pricing_for_model``; strip from metadata for the same reason.
+_CLIENT_PRICING_METADATA_FIELDS = frozenset({"model_info"})
+_ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY = "allow_client_pricing_override"
+
 # Request fields whose value, when URL-valued, becomes the outbound destination
 # for a provider call. Letting a proxy caller pin the destination is an SSRF
 # primitive (HuggingFace/Oobabooga `model`, Gemini files `file_id`); guard
@@ -263,6 +278,46 @@ def _key_or_team_allows_client_message_redaction_opt_out(
         user_api_key_dict=user_api_key_dict,
         metadata_key=_ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY,
     )
+
+
+def _key_or_team_allows_client_pricing_override(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    return _key_or_team_metadata_flag_is_true(
+        user_api_key_dict=user_api_key_dict,
+        metadata_key=_ALLOW_CLIENT_PRICING_OVERRIDE_METADATA_KEY,
+    )
+
+
+def _strip_client_pricing_overrides(data: Dict[str, Any]) -> None:
+    """Drop pricing overrides from the request body and any metadata variant.
+
+    Skipped only when the calling key/team carries
+    ``allow_client_pricing_override: True`` in its metadata. Emits a
+    ``debug``-level log line naming the dropped fields so operators can
+    trace why a client-supplied pricing override stopped being applied
+    (otherwise the strip is invisible from the caller's perspective).
+    """
+    stripped: List[str] = []
+    for field in _CLIENT_PRICING_CONTROL_FIELDS:
+        if field in data:
+            stripped.append(field)
+            data.pop(field, None)
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = data.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        for field in _CLIENT_PRICING_METADATA_FIELDS:
+            if field in metadata:
+                stripped.append(f"{metadata_key}.{field}")
+                metadata.pop(field, None)
+    if stripped:
+        verbose_proxy_logger.debug(
+            "Stripped client-supplied pricing fields from request body: %s. "
+            "Set `allow_client_pricing_override: true` on the key or team "
+            "metadata to keep these values.",
+            ", ".join(stripped),
+        )
 
 
 def _get_metadata_variable_name(request: Request) -> str:
@@ -1364,6 +1419,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             ]:
                 _user_meta.pop(_k, None)
 
+    # Strip pricing overrides AFTER the litellm_metadata string-to-dict parse
+    # above, for the same reason as the user_api_key_* strip — JSON-string
+    # metadata (sent via multipart/form-data or extra_body) wouldn't be a
+    # dict yet at the earlier strip point and the isinstance(dict) guard
+    # would silently skip the field.
+    if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
+        _strip_client_pricing_overrides(data)
+
     # Strip caller-supplied routing/budget tags unless the admin has opted
     # this key or team in via metadata.allow_client_tags=True. Tags drive
     # tag-based routing and tag budget attribution — accepting them from
@@ -1406,7 +1469,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # been parsed and stripped. Consumers (standard_logging_payload, lago,
     # spend_tracking_utils, streaming_iterator) read `body` to audit the
     # request; taking the snapshot here ensures they see cleaned metadata.
-    data["proxy_server_request"]["body"] = copy.copy(data)
+    #
+    # Exclude secret_fields (which contains raw_headers with Authorization
+    # tokens) from the snapshot — they must never be persisted in spend logs
+    # or any other audit trail.
+    _body_snapshot = {k: v for k, v in data.items() if k != "secret_fields"}
+    data["proxy_server_request"]["body"] = _body_snapshot
 
     # Snapshot the (now-cleaned) requester-supplied metadata for downstream
     # consumers. Taking the deepcopy AFTER the strip prevents attacker-
@@ -1599,7 +1667,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
 
     if tags is not None and _admin_allow_client_tags:
-        data[_metadata_variable_name]["tags"] = tags
+        data[_metadata_variable_name]["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=data[_metadata_variable_name].get("tags"),
+            tags_to_add=tags,
+        )
     elif tags is not None:
         verbose_proxy_logger.warning(
             "Ignored caller-supplied tags from header/root body: this "
