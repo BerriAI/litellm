@@ -47,28 +47,40 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         thinking_value = optional_params.pop("thinking", None)
         reasoning_effort = optional_params.pop("reasoning_effort", None)
 
+        # Normalize reasoning_effort values per DeepSeek V4 compatibility
+        # mappings: low/medium→high, xhigh→max
+        if reasoning_effort is not None and reasoning_effort != "none":
+            if reasoning_effort in ("low", "medium"):
+                reasoning_effort = "high"
+            elif reasoning_effort == "xhigh":
+                reasoning_effort = "max"
+
         # Handle thinking parameter - only accept {"type": "enabled"}
         if thinking_value is not None:
             if (
                 isinstance(thinking_value, dict)
                 and thinking_value.get("type") == "enabled"
             ):
-                # DeepSeek only accepts {"type": "enabled"}, ignore budget_tokens
                 optional_params["thinking"] = {"type": "enabled"}
+                # Forward reasoning_effort alongside thinking for V4 models
+                if reasoning_effort is not None and reasoning_effort != "none":
+                    if self._is_v4_model(model):
+                        optional_params["reasoning_effort"] = reasoning_effort
 
-        # Handle reasoning_effort - enable thinking and pass effort level
-        # DeepSeek V4 Pro/Flash support reasoning_effort as a native param
-        # with values "high" and "max". Older models ignore it gracefully.
+        # Handle reasoning_effort alone (without explicit thinking dict)
         elif reasoning_effort is not None and reasoning_effort != "none":
             optional_params["thinking"] = {"type": "enabled"}
-            # Normalize per DeepSeek V4 compatibility mappings
-            if reasoning_effort in ("low", "medium"):
-                reasoning_effort = "high"
-            elif reasoning_effort == "xhigh":
-                reasoning_effort = "max"
-            optional_params["reasoning_effort"] = reasoning_effort
+            # Only V4 models support reasoning_effort as a native parameter
+            if self._is_v4_model(model):
+                optional_params["reasoning_effort"] = reasoning_effort
 
         return optional_params
+
+    @staticmethod
+    def _is_v4_model(model: str) -> bool:
+        """Check if the model is a DeepSeek V4 variant that supports
+        reasoning_effort as a native parameter."""
+        return "v4" in model.lower()
 
     @overload
     def _transform_messages(
