@@ -9,6 +9,8 @@ from litellm.llms.gigachat.chat.streaming import GigaChatModelResponseIterator
 from litellm.llms.gigachat.utils import get_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import EmbeddingResponse
+
 
 if TYPE_CHECKING:
     from httpx import URL, Response
@@ -80,32 +82,56 @@ class GigaChatPassthroughConfig(BasePassthroughConfig):
         from litellm.types.utils import LlmProviders, ModelResponse
         from litellm.utils import ProviderConfigManager
 
-        # cost tracking only for completions 
-        if "completions" not in endpoint:
-            return None
+        # cost tracking only for completions and embeddings
+        if "completions" in endpoint:
 
-        provider_chat_config = ProviderConfigManager.get_provider_chat_config(
-            provider=LlmProviders(custom_llm_provider),
-            model=model,
-        )
+            provider_chat_config = ProviderConfigManager.get_provider_chat_config(
+                provider=LlmProviders(custom_llm_provider),
+                model=model,
+            )
 
-        if provider_chat_config is None:
-            raise ValueError(f"No provider config found for model: {model}")
+            if provider_chat_config is None:
+                raise ValueError(f"No provider config found for model: {model}")
 
-        litellm_model_response: ModelResponse = provider_chat_config.transform_response(
-            model=model,
-            messages=request_data.get("messages", []),
-            raw_response=httpx_response,
-            model_response=ModelResponse(),
-            logging_obj=logging_obj,
-            optional_params={},
-            litellm_params={},
-            api_key="",
-            request_data=request_data,
-            encoding=encoding,
-        )
+            litellm_model_response: ModelResponse = provider_chat_config.transform_response(
+                model=model,
+                messages=request_data.get("messages", []),
+                raw_response=httpx_response,
+                model_response=ModelResponse(),
+                logging_obj=logging_obj,
+                optional_params={},
+                litellm_params={},
+                api_key="",
+                request_data=request_data,
+                encoding=encoding,
+            )
 
-        return litellm_model_response
+            return litellm_model_response
+    
+        if "embeddings" in endpoint:
+            
+            provider_embedding_config = ProviderConfigManager.get_provider_embedding_config(
+                provider=LlmProviders(custom_llm_provider),
+                model=model,
+            )
+
+            if provider_embedding_config is None:
+                raise ValueError(f"No provider config found for model: {model}")
+
+            litellm_embedding_response: EmbeddingResponse = provider_embedding_config.transform_embedding_response(
+                model=model,
+                raw_response=httpx_response,
+                model_response=EmbeddingResponse(),
+                logging_obj=logging_obj,
+                optional_params={},
+                api_key="",
+                request_data=request_data,
+                litellm_params={},
+            )
+
+            return litellm_embedding_response
+        
+        return None
 
     def handle_logging_collected_chunks(
         self,
