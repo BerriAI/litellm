@@ -33,6 +33,7 @@ from litellm.proxy.health_check import (
     perform_health_check,
     run_with_timeout,
 )
+from litellm.proxy.middleware.event_loop_metrics import get_event_loop_queue_depth
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
@@ -1324,7 +1325,10 @@ async def health_backlog():
     for the event loop to get to them, adding latency before LiteLLM even starts
     its own timer.
     """
-    return {"in_flight_requests": get_in_flight_requests()}
+    return {
+        "in_flight_requests": get_in_flight_requests(),
+        "event_loop_queue_depth": get_event_loop_queue_depth(),
+    }
 
 
 @router.get(

@@ -239,6 +239,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_failed_requests_metric",
     "litellm_callback_logging_failures_metric",
     "litellm_in_flight_requests",
+    "litellm_event_loop_queue_depth",
     # Managed batch metrics
     "litellm_managed_batch_created_total",
     "litellm_managed_file_size_bytes",

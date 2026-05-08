@@ -438,6 +438,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.middleware.event_loop_metrics import start_event_loop_metrics_task
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
@@ -952,6 +953,8 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         asyncio.create_task(
             _run_background_health_check()
         )  # start the background health check coroutine.
+
+    start_event_loop_metrics_task()
 
     ## [Optional] Initialize dd tracer
     ProxyStartupEvent._init_dd_tracer()
