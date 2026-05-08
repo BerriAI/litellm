@@ -154,9 +154,27 @@ vi.mock("antd", () => {
 
   const Button = ({ children, htmlType, ...props }: { children?: any; htmlType?: string }) =>
     React.createElement("button", { ...props, type: htmlType ?? props.type }, children);
+  const Collapse = ({ items, className }: { items?: Array<{ label?: any; children?: any }>; className?: string }) =>
+    React.createElement(
+      "div",
+      { className },
+      items?.map((item, index) =>
+        React.createElement(
+          "section",
+          { key: index },
+          React.createElement("div", null, item.label),
+          React.createElement("div", null, item.children),
+        ),
+      ),
+    );
+  const Typography = {
+    Text: ({ children, ...props }: { children?: any }) => React.createElement("span", props, children),
+    Title: ({ children, ...props }: { children?: any }) => React.createElement("h2", props, children),
+  };
 
   return {
     Button,
+    Collapse,
     Form,
     Input,
     message: {
@@ -171,6 +189,7 @@ vi.mock("antd", () => {
     Switch,
     Tag,
     Tooltip,
+    Typography,
   };
 });
 

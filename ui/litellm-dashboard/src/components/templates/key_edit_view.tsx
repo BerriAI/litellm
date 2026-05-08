@@ -4,8 +4,7 @@ import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import PolicySelector from "@/components/policies/PolicySelector";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { TextInput, Button as TremorButton } from "@tremor/react";
-import { Form, Input, Select, Switch, Tooltip } from "antd";
+import { Button, Form, Input, Select, Switch, Tooltip } from "antd";
 import { useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
@@ -292,7 +291,7 @@ export function KeyEditView({
   return (
     <Form form={form} onFinish={handleSubmit} initialValues={initialValues} layout="vertical">
       <Form.Item label="Key Alias" name="key_alias">
-        <TextInput />
+        <Input />
       </Form.Item>
 
       <Form.Item label="Models" name="models">
@@ -760,12 +759,12 @@ export function KeyEditView({
 
       <div className="sticky z-10 bg-white p-4 border-t border-gray-200 bottom-[-1.5rem] inset-x-[-1.5rem]">
         <div className="flex justify-end items-center gap-2">
-          <TremorButton variant="secondary" onClick={onCancel} disabled={isKeySaving}>
+          <Button onClick={onCancel} disabled={isKeySaving}>
             Cancel
-          </TremorButton>
-          <TremorButton type="submit" loading={isKeySaving}>
+          </Button>
+          <Button type="primary" htmlType="submit" loading={isKeySaving}>
             Save Changes
-          </TremorButton>
+          </Button>
         </div>
       </div>
     </Form>

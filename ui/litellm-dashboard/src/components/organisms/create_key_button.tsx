@@ -8,8 +8,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { useQueryClient } from "@tanstack/react-query";
-import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
-import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip } from "antd";
+import { Button, Collapse, Form, Input, Modal, Radio, Select, Switch, Tag, Tooltip, Typography } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 import { rolesWithWriteAccess } from "../../utils/roles";
@@ -52,6 +51,29 @@ import VectorStoreSelector from "../vector_store_management/VectorStoreSelector"
 import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
+const { Text, Title } = Typography;
+
+const AccordionHeader: React.FC<{ children: React.ReactNode }> = ({ children }) => <>{children}</>;
+const AccordionBody: React.FC<{ children: React.ReactNode }> = ({ children }) => <>{children}</>;
+
+const Accordion: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className }) => {
+  const accordionChildren = React.Children.toArray(children);
+  const header = accordionChildren.find((child) => React.isValidElement(child) && child.type === AccordionHeader);
+  const body = accordionChildren.find((child) => React.isValidElement(child) && child.type === AccordionBody);
+
+  return (
+    <Collapse
+      className={className}
+      items={[
+        {
+          key: "1",
+          label: React.isValidElement(header) ? header.props.children : null,
+          children: React.isValidElement(body) ? body.props.children : null,
+        },
+      ]}
+    />
+  );
+};
 
 /**
  * Interface for pre-filling the create key form from URL parameters
@@ -741,9 +763,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       style={{ width: "100%" }}
                       notFoundContent={userSearchLoading ? "Searching..." : "No users found"}
                     />
-                    <Button2 onClick={() => setIsCreateUserModalVisible(true)} style={{ marginLeft: "8px" }}>
+                    <Button onClick={() => setIsCreateUserModalVisible(true)} style={{ marginLeft: "8px" }}>
                       Create User
-                    </Button2>
+                    </Button>
                   </div>
                   <div className="text-xs text-gray-500">Search by email to find users</div>
                 </div>
@@ -908,7 +930,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                 ]}
                 help="required"
               >
-                <TextInput placeholder="" />
+                <Input placeholder="" data-testid="base-input" />
               </Form.Item>
 
               <Form.Item
@@ -1623,9 +1645,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
           )}
 
           <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button2 htmlType="submit" disabled={isFormDisabled} style={{ opacity: isFormDisabled ? 0.5 : 1 }}>
+            <Button htmlType="submit" disabled={isFormDisabled} style={{ opacity: isFormDisabled ? 0.5 : 1 }}>
               Create Key
-            </Button2>
+            </Button>
           </div>
         </Form>
       </Modal>
@@ -1652,16 +1674,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
 
       {apiKey && (
         <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
-          <Grid numItems={1} className="gap-2 w-full">
+          <div className="grid grid-cols-1 gap-2 w-full">
             <Title>Save your Key</Title>
-            <Col numColSpan={1}>
+            <div>
               {apiKey != null ? (
                 <CreatedKeyDisplay apiKey={apiKey} />
               ) : (
                 <Text>Key being created, this might take 30s</Text>
               )}
-            </Col>
-          </Grid>
+            </div>
+          </div>
         </Modal>
       )}
     </div>
