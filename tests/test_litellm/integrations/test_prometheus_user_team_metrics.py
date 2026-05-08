@@ -653,32 +653,30 @@ def test_user_budget_metrics_emit_user_email_label(prometheus_logger):
     )
 
 
-async def test_set_user_budget_metrics_after_api_request_uses_db_user_email(
+async def test_set_user_budget_metrics_after_api_request_uses_metadata_without_lookup(
     prometheus_logger,
 ):
-    """The request path should populate user_email from user lookup when needed."""
+    """Complete request metadata should emit budget labels without user lookup."""
     prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
     prometheus_logger.litellm_user_max_budget_metric = MagicMock()
     prometheus_logger.litellm_user_budget_remaining_hours_metric = MagicMock()
 
-    db_user = MagicMock()
-    db_user.max_budget = 500.0
-    db_user.budget_reset_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
-    db_user.user_email = "db-user@example.com"
-
     with patch("litellm.proxy.auth.auth_checks.get_user_object") as mock_get_user:
-        mock_get_user.return_value = db_user
         await prometheus_logger._set_user_budget_metrics_after_api_request(
             user_id="user-abc-123",
-            user_email=None,
+            user_email="metadata-user@example.com",
             user_spend=120.0,
-            user_max_budget=None,
+            user_max_budget=500.0,
             response_cost=0.5,
         )
+        mock_get_user.assert_not_called()
 
     prometheus_logger.litellm_remaining_user_budget_metric.labels.assert_called_once_with(
         user="user-abc-123",
-        user_email="db-user@example.com",
+        user_email="metadata-user@example.com",
+    )
+    prometheus_logger.litellm_remaining_user_budget_metric.labels().set.assert_called_once_with(
+        379.5
     )
 
 

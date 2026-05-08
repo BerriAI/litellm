@@ -3503,6 +3503,17 @@ class PrometheusLogger(CustomLogger):
         - Set user budget metrics
         """
         if user_id:
+            if user_spend is not None and user_max_budget is not None:
+                self._set_user_budget_metrics(
+                    LiteLLM_UserTable(
+                        user_id=user_id,
+                        user_email=user_email,
+                        spend=user_spend + response_cost,
+                        max_budget=user_max_budget,
+                    )
+                )
+                return
+
             user_object = await self._assemble_user_object(
                 user_id=user_id,
                 user_email=user_email,
@@ -3556,9 +3567,6 @@ class PrometheusLogger(CustomLogger):
 
         if user_info:
             user_object.budget_reset_at = user_info.budget_reset_at
-            user_info_email = getattr(user_info, "user_email", None)
-            if user_object.user_email is None and isinstance(user_info_email, str):
-                user_object.user_email = user_info_email
             if user_object.max_budget is None and user_info.max_budget is not None:
                 user_object.max_budget = user_info.max_budget
 
