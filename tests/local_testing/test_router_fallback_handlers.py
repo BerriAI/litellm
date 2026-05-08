@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy
 from typing import Any, Dict, List
 
 from litellm.router_utils.fallback_event_handlers import (
@@ -329,10 +330,6 @@ async def test_fallback_kwargs_not_mutated():
     `safe_deep_copy` call is removed, only a shallow reference is passed and
     `safe_deep_copy` is never called — causing this test to fail.
     """
-    from litellm.litellm_core_utils.core_helpers import (
-        safe_deep_copy as _real_safe_deep_copy,
-    )
-
     router = Router(
         model_list=[
             {
@@ -396,7 +393,7 @@ async def test_fallback_kwargs_not_mutated():
 
     with patch(
         "litellm.router_utils.fallback_event_handlers.safe_deep_copy",
-        wraps=_real_safe_deep_copy,
+        wraps=safe_deep_copy,
     ) as mock_sdc:
         with pytest.raises(Exception):
             await run_async_fallback(
