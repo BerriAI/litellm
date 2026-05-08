@@ -1102,10 +1102,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 toolNameToDescription={toolNameToDescription}
                 onToolNameToDisplayNameChange={setToolNameToDisplayName}
                 onToolNameToDescriptionChange={setToolNameToDescription}
-                externalTools={tools}
-                externalIsLoading={isLoadingTools}
-                externalError={toolsError}
-                externalCanFetch={!!mcpServer.server_id}
               />
             </div>
 

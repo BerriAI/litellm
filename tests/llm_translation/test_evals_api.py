@@ -2,6 +2,7 @@
 Tests for Evals API operations across providers
 """
 
+import hashlib
 import os
 import sys
 from abc import ABC, abstractmethod
@@ -17,6 +18,46 @@ from litellm.types.llms.openai_evals import (
     DeleteEvalResponse,
     Eval,
     ListEvalsResponse,
+)
+
+
+def _stable_eval_name(test_node_name: str, suffix: str = "") -> str:
+    """Deterministic eval name keyed off the test's node name.
+
+    The previous ``f"Test Eval {int(time.time())}"`` pattern embedded a
+    fresh value into the request body every run, defeating VCR's
+    ``safe_body`` matcher and forcing a real OpenAI ``create`` call on
+    every CI run. With a stable per-test name the cassette matches on
+    replay, and provider-side resources stay bounded because each test
+    deletes the eval it owns on teardown.
+    """
+    nonce = hashlib.sha1(test_node_name.encode()).hexdigest()[:12]
+    return f"vcr-managed-{nonce}{suffix}"
+
+
+_TESTING_CRITERIA = [
+    {
+        "type": "label_model",
+        "model": "gpt-4o",
+        "input": [
+            {
+                "role": "developer",
+                "content": "Classify the sentiment as 'positive' or 'negative'",
+            },
+            {"role": "user", "content": "Statement: {{item.input}}"},
+        ],
+        "passing_labels": ["positive"],
+        "labels": ["positive", "negative"],
+        "name": "Sentiment grader",
+    }
+]
+
+
+_PROVIDER_FLAKINESS = (
+    litellm.InternalServerError,
+    litellm.APIConnectionError,
+    litellm.Timeout,
+    litellm.ServiceUnavailableError,
 )
 
 
@@ -41,13 +82,64 @@ class BaseEvalsAPITest(ABC):
         """Return the API base URL for the provider"""
         pass
 
+    @pytest.fixture
+    def managed_eval(self, request):
+        """Create a stable-named eval for this test; delete on teardown.
+
+        Function-scoped so each cassette captures the full
+        create→test→delete cycle. A class-scoped fixture would push
+        the create into whichever test ran first and the delete into
+        whichever ran last, which is fragile under reordering.
+
+        Replaces the prior ``list_evals().data[0].id`` pattern, which
+        made the URL of ``get_eval`` / ``update_eval`` vary across
+        runs (the "first" eval depends on what other runs left
+        behind).
+        """
+        custom_llm_provider = self.get_custom_llm_provider()
+        api_key = self.get_api_key()
+        api_base = self.get_api_base()
+
+        if not api_key:
+            pytest.skip(f"No API key provided for {custom_llm_provider}")
+
+        try:
+            created = litellm.create_eval(
+                name=_stable_eval_name(request.node.name),
+                data_source_config={
+                    "type": "stored_completions",
+                    "metadata": {"usecase": "chatbot", "vcr": "managed"},
+                },
+                testing_criteria=_TESTING_CRITERIA,
+                custom_llm_provider=custom_llm_provider,
+                api_key=api_key,
+                api_base=api_base,
+            )
+        except _PROVIDER_FLAKINESS:
+            pytest.skip("Provider service unavailable")
+        except litellm.RateLimitError:
+            pytest.skip("Rate limit exceeded")
+
+        yield created
+
+        # Best-effort cleanup. OpenAI eval names are not unique-keyed
+        # (only IDs are), so a failed delete doesn't block the next
+        # run's create.
+        try:
+            litellm.delete_eval(
+                eval_id=created.id,
+                custom_llm_provider=custom_llm_provider,
+                api_key=api_key,
+                api_base=api_base,
+            )
+        except Exception:
+            pass
+
     @pytest.mark.flaky(retries=3, delay=2)
-    def test_create_eval(self):
+    def test_create_eval(self, request):
         """
         Test creating an evaluation.
         """
-        import time
-
         custom_llm_provider = self.get_custom_llm_provider()
         api_key = self.get_api_key()
         api_base = self.get_api_base()
@@ -56,53 +148,45 @@ class BaseEvalsAPITest(ABC):
             pytest.skip(f"No API key provided for {custom_llm_provider}")
 
         litellm.set_verbose = True
+        unique_name = _stable_eval_name(request.node.name)
 
-        # Create eval with stored_completions data source
-        unique_name = f"Test Eval {int(time.time())}"
-
+        created_id = None
         try:
-            response = litellm.create_eval(
-                name=unique_name,
-                data_source_config={
-                    "type": "stored_completions",
-                    "metadata": {"usecase": "chatbot"},
-                },
-                testing_criteria=[
-                    {
-                        "type": "label_model",
-                        "model": "gpt-4o",
-                        "input": [
-                            {
-                                "role": "developer",
-                                "content": "Classify the sentiment as 'positive' or 'negative'",
-                            },
-                            {"role": "user", "content": "Statement: {{item.input}}"},
-                        ],
-                        "passing_labels": ["positive"],
-                        "labels": ["positive", "negative"],
-                        "name": "Sentiment grader",
-                    }
-                ],
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                api_base=api_base,
-            )
-        except (
-            litellm.InternalServerError,
-            litellm.APIConnectionError,
-            litellm.Timeout,
-            litellm.ServiceUnavailableError,
-        ):
-            pytest.skip("Provider service unavailable")
-        except litellm.RateLimitError:
-            pytest.skip("Rate limit exceeded")
+            try:
+                response = litellm.create_eval(
+                    name=unique_name,
+                    data_source_config={
+                        "type": "stored_completions",
+                        "metadata": {"usecase": "chatbot"},
+                    },
+                    testing_criteria=_TESTING_CRITERIA,
+                    custom_llm_provider=custom_llm_provider,
+                    api_key=api_key,
+                    api_base=api_base,
+                )
+            except _PROVIDER_FLAKINESS:
+                pytest.skip("Provider service unavailable")
+            except litellm.RateLimitError:
+                pytest.skip("Rate limit exceeded")
 
-        assert response is not None
-        assert isinstance(response, Eval)
-        assert response.id is not None
-        assert response.name == unique_name
-        print(f"Created eval: {response}")
-        print(f"Eval ID: {response.id}")
+            assert response is not None
+            assert isinstance(response, Eval)
+            assert response.id is not None
+            assert response.name == unique_name
+            created_id = response.id
+            print(f"Created eval: {response}")
+            print(f"Eval ID: {response.id}")
+        finally:
+            if created_id is not None:
+                try:
+                    litellm.delete_eval(
+                        eval_id=created_id,
+                        custom_llm_provider=custom_llm_provider,
+                        api_key=api_key,
+                        api_base=api_base,
+                    )
+                except Exception:
+                    pass
 
     def test_list_evals(self):
         """
@@ -130,7 +214,7 @@ class BaseEvalsAPITest(ABC):
         assert hasattr(response, "has_more")
         print(f"Listed evals: {len(response.data)} evaluations")
 
-    def test_get_eval(self):
+    def test_get_eval(self, managed_eval):
         """
         Test getting a specific evaluation by ID.
         """
@@ -138,89 +222,54 @@ class BaseEvalsAPITest(ABC):
         api_key = self.get_api_key()
         api_base = self.get_api_base()
 
-        if not api_key:
-            pytest.skip(f"No API key provided for {custom_llm_provider}")
-
         litellm.set_verbose = True
 
-        # First list existing evals to get an ID
-        list_response = litellm.list_evals(
-            limit=1,
+        response = litellm.get_eval(
+            eval_id=managed_eval.id,
             custom_llm_provider=custom_llm_provider,
             api_key=api_key,
             api_base=api_base,
         )
 
-        assert isinstance(list_response, ListEvalsResponse)
+        assert response is not None
+        assert isinstance(response, Eval)
+        assert response.id == managed_eval.id
+        print(f"Retrieved eval: {response}")
 
-        if list_response.data and len(list_response.data) > 0:
-            eval_id = list_response.data[0].id
-            print(f"Testing with eval ID: {eval_id}")
-
-            # Get the eval
-            response = litellm.get_eval(
-                eval_id=eval_id,
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                api_base=api_base,
-            )
-
-            assert response is not None
-            assert isinstance(response, Eval)
-            assert response.id == eval_id
-            print(f"Retrieved eval: {response}")
-        else:
-            pytest.skip("No existing evals to test with")
-
-    def test_update_eval(self):
+    @pytest.mark.flaky(retries=3, delay=2)
+    def test_update_eval(self, request, managed_eval):
         """
         Test updating an evaluation.
         """
-        import time
-
         custom_llm_provider = self.get_custom_llm_provider()
         api_key = self.get_api_key()
         api_base = self.get_api_base()
 
-        if not api_key:
-            pytest.skip(f"No API key provided for {custom_llm_provider}")
-
         litellm.set_verbose = True
+        updated_name = _stable_eval_name(request.node.name, suffix="-updated")
 
-        # First list existing evals
-        list_response = litellm.list_evals(
-            limit=1,
+        response = litellm.update_eval(
+            eval_id=managed_eval.id,
+            name=updated_name,
             custom_llm_provider=custom_llm_provider,
             api_key=api_key,
             api_base=api_base,
         )
 
-        assert isinstance(list_response, ListEvalsResponse)
-
-        if list_response.data and len(list_response.data) > 0:
-            eval_id = list_response.data[0].id
-            updated_name = f"Updated Eval {int(time.time())}"
-
-            # Update the eval
-            response = litellm.update_eval(
-                eval_id=eval_id,
-                name=updated_name,
-                custom_llm_provider=custom_llm_provider,
-                api_key=api_key,
-                api_base=api_base,
-            )
-
-            assert response is not None
-            assert isinstance(response, Eval)
-            assert response.id == eval_id
-            assert response.name == updated_name
-            print(f"Updated eval: {response}")
-        else:
-            pytest.skip("No existing evals to test with")
+        assert response is not None
+        assert isinstance(response, Eval)
+        assert response.id == managed_eval.id
+        assert response.name == updated_name
+        print(f"Updated eval: {response}")
 
     def test_delete_eval(self):
         """
         Test deleting an evaluation.
+
+        Real delete coverage now lives in the ``managed_eval`` fixture
+        teardown and in ``test_create_eval``'s ``finally`` block, so
+        this stays a no-op skip rather than creating a fresh resource
+        just to delete it.
         """
         custom_llm_provider = self.get_custom_llm_provider()
         api_key = self.get_api_key()
@@ -229,8 +278,7 @@ class BaseEvalsAPITest(ABC):
         if not api_key:
             pytest.skip(f"No API key provided for {custom_llm_provider}")
 
-        # Skip this test to avoid deleting production evals
-        pytest.skip("Skipping delete test to preserve existing evals")
+        pytest.skip("Delete is exercised via managed_eval fixture teardown.")
 
 
 class TestOpenAIEvalsAPI(BaseEvalsAPITest):

@@ -89,9 +89,10 @@ class AzureOpenAIRealtime(AzureChatCompletion):
 
         if api_base is None:
             raise ValueError("api_base is required for Azure OpenAI calls")
-        if api_version is None and (
+        backend_uses_beta_protocol = (
             realtime_protocol is None or realtime_protocol.upper() not in ("GA", "V1")
-        ):
+        )
+        if api_version is None and backend_uses_beta_protocol:
             raise ValueError("api_version is required for Azure OpenAI calls")
 
         url = self._construct_url(
@@ -114,6 +115,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     logging_obj,
                     user_api_key_dict=user_api_key_dict,
                     request_data={"litellm_metadata": litellm_metadata or {}},
+                    backend_uses_beta_protocol=backend_uses_beta_protocol,
                 )
                 await realtime_streaming.bidirectional_forward()
 
