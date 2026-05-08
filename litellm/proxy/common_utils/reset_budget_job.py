@@ -161,6 +161,20 @@ class ResetBudgetJob:
             extra_where={"spend": {"gt": 0}},
         )
 
+    async def reset_budget_for_tags_linked_to_budgets(
+        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
+    ):
+        """
+        Resets the spend for tags linked to budget tiers that are being reset.
+        """
+        return await self._cascade_reset_spend_for_budget_link(
+            budgets_to_reset=budgets_to_reset,
+            table=self.prisma_client.db.litellm_tagtable,
+            counter_key_fn=lambda t: f"spend:tag:{t.tag_name}",
+            log_subject="tags",
+            extra_where={"spend": {"gt": 0}},
+        )
+
     async def reset_budget_for_litellm_budget_table(self):
         """
         Resets the budget for all LiteLLM End-Users (Customers), and Team Members if their budget has expired
@@ -228,6 +242,10 @@ class ResetBudgetJob:
                 )
 
                 await self.reset_budget_for_orgs_linked_to_budgets(
+                    budgets_to_reset=budgets_to_reset
+                )
+
+                await self.reset_budget_for_tags_linked_to_budgets(
                     budgets_to_reset=budgets_to_reset
                 )
 
