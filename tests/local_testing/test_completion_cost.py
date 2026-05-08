@@ -4,9 +4,7 @@ import traceback
 
 import litellm.cost_calculator
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import asyncio
 import os
 import time
@@ -215,23 +213,17 @@ def test_cost_ft_gpt_35():
             usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
         )
 
-        cost = litellm.completion_cost(
-            completion_response=resp, custom_llm_provider="openai"
-        )
+        cost = litellm.completion_cost(completion_response=resp, custom_llm_provider="openai")
         print("\n Calculated Cost for ft:gpt-3.5", cost)
         input_cost = model_cost["ft:gpt-3.5-turbo"]["input_cost_per_token"]
         output_cost = model_cost["ft:gpt-3.5-turbo"]["output_cost_per_token"]
         print(input_cost, output_cost)
-        expected_cost = (input_cost * resp.usage.prompt_tokens) + (
-            output_cost * resp.usage.completion_tokens
-        )
+        expected_cost = (input_cost * resp.usage.prompt_tokens) + (output_cost * resp.usage.completion_tokens)
         print("\n Excpected cost", expected_cost)
         assert cost == expected_cost
     except Exception as e:
         print(f"Error: {e}")
-        pytest.fail(
-            f"Cost Calc failed for ft:gpt-3.5. Expected {expected_cost}, Calculated cost {cost}"
-        )
+        pytest.fail(f"Cost Calc failed for ft:gpt-3.5. Expected {expected_cost}, Calculated cost {cost}")
 
 
 # test_cost_ft_gpt_35()
@@ -260,15 +252,11 @@ def test_cost_azure_gpt_35():
             usage=Usage(prompt_tokens=21, completion_tokens=17, total_tokens=38),
         )
 
-        cost = litellm.completion_cost(
-            completion_response=resp, model="azure/chatgpt-deployment-2"
-        )
+        cost = litellm.completion_cost(completion_response=resp, model="azure/chatgpt-deployment-2")
         print("\n Calculated Cost for azure/gpt-3.5-turbo", cost)
         input_cost = model_cost["azure/gpt-35-turbo"]["input_cost_per_token"]
         output_cost = model_cost["azure/gpt-35-turbo"]["output_cost_per_token"]
-        expected_cost = (input_cost * resp.usage.prompt_tokens) + (
-            output_cost * resp.usage.completion_tokens
-        )
+        expected_cost = (input_cost * resp.usage.prompt_tokens) + (output_cost * resp.usage.completion_tokens)
         print("\n Excpected cost", expected_cost)
         assert cost == expected_cost
     except Exception as e:
@@ -303,9 +291,7 @@ def test_cost_azure_embedding():
         assert cost == expected_cost
 
     except Exception as e:
-        pytest.fail(
-            f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}"
-        )
+        pytest.fail(f"Cost Calc failed for azure/gpt-3.5-turbo. Expected {expected_cost}, Calculated cost {cost}")
 
 
 # test_cost_azure_embedding()
@@ -315,9 +301,7 @@ def test_cost_bedrock_pricing_actual_calls():
     litellm.set_verbose = True
     model = "anthropic.claude-3-5-sonnet-20240620-v1:0"
     messages = [{"role": "user", "content": "Hey, how's it going?"}]
-    response = litellm.completion(
-        model=model, messages=messages, mock_response="hello cool one"
-    )
+    response = litellm.completion(model=model, messages=messages, mock_response="hello cool one")
 
     print("response", response)
     cost = litellm.completion_cost(
@@ -348,8 +332,7 @@ def test_whisper_openai():
     print(f"cost: {cost}")
     print(f"whisper dict: {litellm.model_cost['whisper-1']}")
     expected_cost = round(
-        litellm.model_cost["whisper-1"]["output_cost_per_second"]
-        * _total_time_in_seconds,
+        litellm.model_cost["whisper-1"]["output_cost_per_second"] * _total_time_in_seconds,
         5,
     )
     assert round(cost, 5) == round(expected_cost, 5)
@@ -369,15 +352,12 @@ def test_whisper_azure():
     _total_time_in_seconds = 3
     setattr(transcription, "duration", _total_time_in_seconds)
 
-    cost = litellm.completion_cost(
-        model="azure/azure-whisper", completion_response=transcription
-    )
+    cost = litellm.completion_cost(model="azure/azure-whisper", completion_response=transcription)
 
     print(f"cost: {cost}")
     print(f"whisper dict: {litellm.model_cost['whisper-1']}")
     expected_cost = round(
-        litellm.model_cost["whisper-1"]["output_cost_per_second"]
-        * _total_time_in_seconds,
+        litellm.model_cost["whisper-1"]["output_cost_per_second"] * _total_time_in_seconds,
         5,
     )
     assert round(cost, 5) == round(expected_cost, 5)
@@ -408,9 +388,7 @@ def test_dalle_3_azure_cost_tracking():
     response.usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     response._hidden_params = {"model": "dall-e-3", "model_id": None}
     print(f"response hidden params: {response._hidden_params}")
-    cost = litellm.completion_cost(
-        completion_response=response, call_type="image_generation"
-    )
+    cost = litellm.completion_cost(completion_response=response, call_type="image_generation")
     assert cost > 0
 
 
@@ -442,9 +420,7 @@ def test_replicate_llama3_cost_tracking():
         model="replicate/meta/meta-llama-3-8b-instruct",
         object="chat.completion",
         system_fingerprint=None,
-        usage=litellm.utils.Usage(
-            prompt_tokens=48, completion_tokens=31, total_tokens=79
-        ),
+        usage=litellm.utils.Usage(prompt_tokens=48, completion_tokens=31, total_tokens=79),
     )
     cost = litellm.completion_cost(
         completion_response=response,
@@ -454,14 +430,8 @@ def test_replicate_llama3_cost_tracking():
     print(f"cost: {cost}")
     cost = round(cost, 5)
     expected_cost = round(
-        litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"][
-            "input_cost_per_token"
-        ]
-        * 48
-        + litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"][
-            "output_cost_per_token"
-        ]
-        * 31,
+        litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"]["input_cost_per_token"] * 48
+        + litellm.model_cost["replicate/meta/meta-llama-3-8b-instruct"]["output_cost_per_token"] * 31,
         5,
     )
     assert cost == expected_cost
@@ -632,18 +602,14 @@ def test_vertex_ai_medlm_completion_cost():
     with pytest.raises(Exception) as e:
         model = "vertex_ai/medlm-medium"
         messages = [{"role": "user", "content": "Test MedLM completion cost."}]
-        predictive_cost = completion_cost(
-            model=model, messages=messages, custom_llm_provider="vertex_ai"
-        )
+        predictive_cost = completion_cost(model=model, messages=messages, custom_llm_provider="vertex_ai")
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     model = "vertex_ai/medlm-medium"
     messages = [{"role": "user", "content": "Test MedLM completion cost."}]
-    predictive_cost = completion_cost(
-        model=model, messages=messages, custom_llm_provider="vertex_ai"
-    )
+    predictive_cost = completion_cost(model=model, messages=messages, custom_llm_provider="vertex_ai")
     assert predictive_cost > 0
 
     model = "vertex_ai/medlm-large"
@@ -710,9 +676,7 @@ def test_vertex_ai_embedding_completion_cost(caplog):
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     text = "The quick brown fox jumps over the lazy dog."
-    input_tokens = litellm.token_counter(
-        model="vertex_ai/text-embedding-004", text=text
-    )
+    input_tokens = litellm.token_counter(model="vertex_ai/text-embedding-004", text=text)
 
     model_info = litellm.get_model_info(model="vertex_ai/text-embedding-004")
 
@@ -735,10 +699,7 @@ def test_vertex_ai_embedding_completion_cost(caplog):
     captured_logs = [rec.message for rec in caplog.records]
     for item in captured_logs:
         print("\nitem:{}\n".format(item))
-        if (
-            "litellm.litellm_core_utils.llm_cost_calc.google.cost_per_character(): Exception occured "
-            in item
-        ):
+        if "litellm.litellm_core_utils.llm_cost_calc.google.cost_per_character(): Exception occured " in item:
             raise Exception("Error log raised for calculating embedding cost")
 
 
@@ -808,9 +769,7 @@ def test_vertex_ai_llama_predict_cost():
     model = "meta/llama3-405b-instruct-maas"
     messages = [{"role": "user", "content": "Hey, hows it going???"}]
     custom_llm_provider = "vertex_ai"
-    predictive_cost = completion_cost(
-        model=model, messages=messages, custom_llm_provider=custom_llm_provider
-    )
+    predictive_cost = completion_cost(model=model, messages=messages, custom_llm_provider=custom_llm_provider)
 
     assert predictive_cost == 0
 
@@ -824,9 +783,7 @@ def test_vertex_ai_mistral_predict_cost(usage):
     else:
         from openai.types.completion_usage import CompletionUsage
 
-        response_usage = CompletionUsage(
-            prompt_tokens=32, completion_tokens=55, total_tokens=87
-        )
+        response_usage = CompletionUsage(prompt_tokens=32, completion_tokens=55, total_tokens=87)
     response_object = ModelResponse(
         id="26c0ef045020429d9c5c9b078c01e564",
         choices=[
@@ -860,9 +817,7 @@ def test_vertex_ai_mistral_predict_cost(usage):
     assert predictive_cost > 0
 
 
-@pytest.mark.parametrize(
-    "model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"]
-)
+@pytest.mark.parametrize("model", ["openai/tts-1", "azure/tts-1", "openai/gpt-4o-mini-tts"])
 def test_completion_cost_tts(model):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -964,9 +919,7 @@ def test_completion_cost_azure_common_deployment_name():
     response._hidden_params["custom_llm_provider"] = "azure"
     print(response)
 
-    with patch.object(
-        litellm.cost_calculator, "completion_cost", new=MagicMock()
-    ) as mock_client:
+    with patch.object(litellm.cost_calculator, "completion_cost", new=MagicMock()) as mock_client:
         _ = litellm.response_cost_calculator(
             response_object=response,
             model="gpt-4-0314",
@@ -1026,9 +979,7 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
 
     cost_1 = completion_cost(model=model, completion_response=response_1)
 
-    _model_info = litellm.get_model_info(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
+    _model_info = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     expected_cost = (
         (
             response_1.usage.prompt_tokens
@@ -1036,12 +987,9 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
             - response_1.usage.prompt_tokens_details.cache_creation_tokens
         )
         * _model_info["input_cost_per_token"]
-        + (response_1.usage.prompt_tokens_details.cached_tokens or 0)
-        * _model_info["cache_read_input_token_cost"]
-        + (response_1.usage.cache_creation_input_tokens or 0)
-        * _model_info["cache_creation_input_token_cost"]
-        + (response_1.usage.completion_tokens or 0)
-        * _model_info["output_cost_per_token"]
+        + (response_1.usage.prompt_tokens_details.cached_tokens or 0) * _model_info["cache_read_input_token_cost"]
+        + (response_1.usage.cache_creation_input_tokens or 0) * _model_info["cache_creation_input_token_cost"]
+        + (response_1.usage.completion_tokens or 0) * _model_info["output_cost_per_token"]
     )  # Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
 
     assert round(expected_cost, 5) == round(cost_1, 5)
@@ -1157,9 +1105,7 @@ def test_completion_cost_databricks_embedding(model, monkeypatch):
     sync_handler = HTTPHandler()
 
     with patch.object(HTTPHandler, "post", return_value=mock_response):
-        resp = litellm.embedding(
-            model=model, input=["hey, how's it going?"], client=sync_handler
-        )
+        resp = litellm.embedding(model=model, input=["hey, how's it going?"], client=sync_handler)
 
         print(resp)
         cost = completion_cost(completion_response=resp)
@@ -1222,9 +1168,7 @@ def test_fireworks_ai_cache_token_pricing():
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     # Use kimi-k2p5 which has cache_read_input_token_cost in the pricing config
-    prompt_cost_cached, completion_cost_cached = cost_per_token(
-        model="fireworks_ai/kimi-k2p5", usage=usage_with_cache
-    )
+    prompt_cost_cached, completion_cost_cached = cost_per_token(model="fireworks_ai/kimi-k2p5", usage=usage_with_cache)
     prompt_cost_no_cache, completion_cost_no_cache = cost_per_token(
         model="fireworks_ai/kimi-k2p5", usage=usage_no_cache
     )
@@ -1235,9 +1179,111 @@ def test_fireworks_ai_cache_token_pricing():
     # kimi-k2p5 has cache_read_input_token_cost (1e-07) < input_cost_per_token (6e-07),
     # so prompt cost with 800 cache-read tokens must be cheaper
     assert prompt_cost_cached < prompt_cost_no_cache, (
-        "Prompt cost with 800 cache-read tokens should be less than "
-        "full-price for the same total prompt tokens"
+        "Prompt cost with 800 cache-read tokens should be less than full-price for the same total prompt tokens"
     )
+
+
+def test_fireworks_ai_cache_read_token_pricing():
+    """Deterministic branch-coverage test for the cache_read_input_tokens adjustment path.
+
+    Exercises lines 86-91 of litellm/llms/fireworks_ai/cost_calculator.py.
+
+    kimi-k2p5 pricing (from model_cost map):
+      input_cost_per_token          = 6e-7
+      cache_read_input_token_cost   = 1e-7   (cheaper — cache hit discount)
+      output_cost_per_token         = 3e-6
+
+    With prompt_tokens=1000 and cache_read_input_tokens=100:
+      base                = 1000 * 6e-7 = 6e-4
+      cache adjustment    = 100 * (1e-7 - 6e-7) = -5e-5
+      expected prompt_cost = 5.5e-4
+    """
+    from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
+    from litellm.types.utils import Usage
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    INPUT_COST = 6e-7
+    CACHE_READ_COST = 1e-7
+    PROMPT_TOKENS = 1000
+    CACHE_READ_TOKENS = 100
+    COMPLETION_TOKENS = 50
+
+    usage = Usage(
+        prompt_tokens=PROMPT_TOKENS,
+        completion_tokens=COMPLETION_TOKENS,
+        cache_read_input_tokens=CACHE_READ_TOKENS,
+    )
+
+    prompt_cost, completion_cost_val = cost_per_token(model="fireworks_ai/kimi-k2p5", usage=usage)
+
+    expected_prompt_cost = PROMPT_TOKENS * INPUT_COST + CACHE_READ_TOKENS * (CACHE_READ_COST - INPUT_COST)
+    expected_completion_cost = COMPLETION_TOKENS * 3e-6
+
+    assert abs(prompt_cost - expected_prompt_cost) < 1e-12, (
+        f"Cache-read prompt cost {prompt_cost} != expected {expected_prompt_cost}"
+    )
+    assert abs(completion_cost_val - expected_completion_cost) < 1e-12, (
+        f"Completion cost {completion_cost_val} != expected {expected_completion_cost}"
+    )
+    # Sanity: cheaper than paying full rate for all 1000 tokens
+    assert prompt_cost < PROMPT_TOKENS * INPUT_COST, "Cache-read should reduce prompt cost below full input rate"
+
+
+def test_fireworks_ai_cache_creation_token_pricing():
+    """Deterministic branch-coverage test for the cache_creation_input_tokens adjustment path.
+
+    Exercises lines 94-99 of litellm/llms/fireworks_ai/cost_calculator.py.
+
+    No live fireworks model currently has cache_creation_input_token_cost set, so this
+    test injects a synthetic value (8e-7) directly into litellm.model_cost to isolate
+    the branch.  The injection is scoped to the local model_cost copy created by
+    get_model_cost_map and does not persist beyond this test.
+
+    Injected pricing for fireworks_ai/kimi-k2p5:
+      input_cost_per_token              = 6e-7
+      cache_creation_input_token_cost   = 8e-7  (premium — first-write penalty)
+
+    With prompt_tokens=1000 and cache_creation_input_tokens=100:
+      base                   = 1000 * 6e-7 = 6e-4
+      creation adjustment    = 100 * (8e-7 - 6e-7) = +2e-5
+      expected prompt_cost   = 6.2e-4
+    """
+    from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
+    from litellm.types.utils import Usage
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    INPUT_COST = 6e-7
+    CACHE_CREATION_COST = 8e-7
+    PROMPT_TOKENS = 1000
+    CACHE_CREATION_TOKENS = 100
+    COMPLETION_TOKENS = 50
+
+    # Inject cache_creation_input_token_cost into the local model_cost copy
+    litellm.model_cost["fireworks_ai/kimi-k2p5"]["cache_creation_input_token_cost"] = CACHE_CREATION_COST
+
+    usage = Usage(
+        prompt_tokens=PROMPT_TOKENS,
+        completion_tokens=COMPLETION_TOKENS,
+        cache_creation_input_tokens=CACHE_CREATION_TOKENS,
+    )
+
+    prompt_cost, completion_cost_val = cost_per_token(model="fireworks_ai/kimi-k2p5", usage=usage)
+
+    expected_prompt_cost = PROMPT_TOKENS * INPUT_COST + CACHE_CREATION_TOKENS * (CACHE_CREATION_COST - INPUT_COST)
+    expected_completion_cost = COMPLETION_TOKENS * 3e-6
+
+    assert abs(prompt_cost - expected_prompt_cost) < 1e-12, (
+        f"Cache-creation prompt cost {prompt_cost} != expected {expected_prompt_cost}"
+    )
+    assert abs(completion_cost_val - expected_completion_cost) < 1e-12, (
+        f"Completion cost {completion_cost_val} != expected {expected_completion_cost}"
+    )
+    # Sanity: more expensive than paying the plain input rate for all 1000 tokens
+    assert prompt_cost > PROMPT_TOKENS * INPUT_COST, "Cache-creation should increase prompt cost above full input rate"
 
 
 def test_cost_azure_openai_prompt_caching():
@@ -1276,9 +1322,7 @@ def test_cost_azure_openai_prompt_caching():
             completion_tokens=10,
             prompt_tokens=14,
             total_tokens=24,
-            completion_tokens_details=CompletionTokensDetailsWrapper(
-                reasoning_tokens=2
-            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=2),
         ),
     )
 
@@ -1308,9 +1352,7 @@ def test_cost_azure_openai_prompt_caching():
             prompt_tokens_details=PromptTokensDetailsWrapper(
                 cached_tokens=14,
             ),
-            completion_tokens_details=CompletionTokensDetailsWrapper(
-                reasoning_tokens=2
-            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=2),
         ),
     )
 
@@ -1322,21 +1364,15 @@ def test_cost_azure_openai_prompt_caching():
     usage = response_2.usage
 
     _expected_cost2 = (
-        (usage.prompt_tokens - usage.prompt_tokens_details.cached_tokens)
-        * model_info["input_cost_per_token"]
+        (usage.prompt_tokens - usage.prompt_tokens_details.cached_tokens) * model_info["input_cost_per_token"]
         + (usage.completion_tokens * model_info["output_cost_per_token"])
-        + (
-            usage.prompt_tokens_details.cached_tokens
-            * model_info["cache_read_input_token_cost"]
-        )
+        + (usage.prompt_tokens_details.cached_tokens * model_info["cache_read_input_token_cost"])
     )
 
     print("_expected_cost2", _expected_cost2)
     print("cost_2", cost_2)
 
-    assert (
-        abs(cost_2 - _expected_cost2) < 1e-5
-    )  # Allow for small floating-point differences
+    assert abs(cost_2 - _expected_cost2) < 1e-5  # Allow for small floating-point differences
 
 
 def test_completion_cost_vertex_llama3():
@@ -1449,11 +1485,9 @@ def test_cost_openai_prompt_caching():
     usage = response_2.usage
 
     _expected_cost2 = (
-        (usage.prompt_tokens - usage.prompt_tokens_details.cached_tokens)
-        * model_info["input_cost_per_token"]
+        (usage.prompt_tokens - usage.prompt_tokens_details.cached_tokens) * model_info["input_cost_per_token"]
         + usage.completion_tokens * model_info["output_cost_per_token"]
-        + usage.prompt_tokens_details.cached_tokens
-        * model_info["cache_read_input_token_cost"]
+        + usage.prompt_tokens_details.cached_tokens * model_info["cache_read_input_token_cost"]
     )
 
     print("_expected_cost2", _expected_cost2)
@@ -1495,9 +1529,7 @@ def test_completion_cost_azure_ai_rerank(model):
     )
     print("response", response)
     model = model
-    cost = completion_cost(
-        model=model, completion_response=response, call_type="arerank"
-    )
+    cost = completion_cost(model=model, completion_response=response, call_type="arerank")
     assert cost > 0
 
 
@@ -2450,9 +2482,7 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
         completion_tokens=34,
         prompt_tokens=16,
         total_tokens=50,
-        completion_tokens_details=CompletionTokensDetailsWrapper(
-            audio_tokens=28, reasoning_tokens=0, text_tokens=6
-        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(audio_tokens=28, reasoning_tokens=0, text_tokens=6),
         prompt_tokens_details=PromptTokensDetailsWrapper(
             audio_tokens=0, cached_tokens=0, text_tokens=16, image_tokens=0
         ),
@@ -2491,27 +2521,15 @@ async def test_test_completion_cost_gpt4o_audio_output_from_model(stream):
     print(f"model_info: {model_info}")
     ## input cost
 
-    input_audio_cost = (
-        model_info["input_cost_per_audio_token"]
-        * usage_object.prompt_tokens_details.audio_tokens
-    )
-    input_text_cost = (
-        model_info["input_cost_per_token"]
-        * usage_object.prompt_tokens_details.text_tokens
-    )
+    input_audio_cost = model_info["input_cost_per_audio_token"] * usage_object.prompt_tokens_details.audio_tokens
+    input_text_cost = model_info["input_cost_per_token"] * usage_object.prompt_tokens_details.text_tokens
 
     total_input_cost = input_audio_cost + input_text_cost
 
     ## output cost
 
-    output_audio_cost = (
-        model_info["output_cost_per_audio_token"]
-        * usage_object.completion_tokens_details.audio_tokens
-    )
-    output_text_cost = (
-        model_info["output_cost_per_token"]
-        * usage_object.completion_tokens_details.text_tokens
-    )
+    output_audio_cost = model_info["output_cost_per_audio_token"] * usage_object.completion_tokens_details.audio_tokens
+    output_text_cost = model_info["output_cost_per_token"] * usage_object.completion_tokens_details.text_tokens
 
     total_output_cost = output_audio_cost + output_text_cost
 
@@ -2637,9 +2655,7 @@ def test_moderations():
     litellm.add_known_models()
 
     assert "omni-moderation-latest" in litellm.model_cost
-    print(
-        f"litellm.model_cost['omni-moderation-latest']: {litellm.model_cost['omni-moderation-latest']}"
-    )
+    print(f"litellm.model_cost['omni-moderation-latest']: {litellm.model_cost['omni-moderation-latest']}")
     assert "omni-moderation-latest" in litellm.open_ai_chat_completion_models
 
     response = moderation("I am a bad person", model="omni-moderation-latest")
@@ -2676,9 +2692,7 @@ def test_cost_calculator_azure_embedding():
 
 def test_add_known_models():
     litellm.add_known_models()
-    assert (
-        "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0" not in litellm.bedrock_models
-    )
+    assert "bedrock/us-west-1/meta.llama3-70b-instruct-v1:0" not in litellm.bedrock_models
 
 
 @pytest.mark.skip(reason="flaky test")
@@ -2794,9 +2808,7 @@ def test_cost_calculator_with_base_model_with_router(base_model_arg):
     }
 
     if base_model_arg == "litellm_param":
-        model_item["litellm_params"][
-            "base_model"
-        ] = "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+        model_item["litellm_params"]["base_model"] = "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
     elif base_model_arg == "model_info":
         model_item["model_info"] = {
             "base_model": "bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
