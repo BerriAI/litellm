@@ -80,6 +80,28 @@ def test_compliance_routes_open_to_internal_user(route):
     )
 
 
+def test_health_test_connection_route_delegates_internal_user_auth_to_endpoint():
+    """Team model test-connection requests are authorized by the endpoint."""
+    role = LitellmUserRoles.INTERNAL_USER.value
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role,
+        route="/health/test_connection",
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 @pytest.mark.parametrize(
     "route",
     ["/compliance/eu-ai-act", "/compliance/gdpr"],
