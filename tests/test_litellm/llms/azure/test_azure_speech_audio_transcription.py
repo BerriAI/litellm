@@ -1,16 +1,19 @@
 import io
+import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 import litellm
+from litellm.llms.azure.audio_transcription.transformation import (
+    AzureSpeechAudioTranscriptionConfig,
+    AzureSpeechAudioTranscriptionException,
+)
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
-)
-from litellm.llms.azure.audio_transcription.transformation import (
-    AzureSpeechAudioTranscriptionConfig,
 )
 from litellm.types.utils import TranscriptionResponse
 from litellm.utils import ProviderConfigManager
@@ -60,6 +63,48 @@ def test_azure_speech_audio_transcription_accepts_stt_endpoint_base():
     )
 
 
+def test_azure_speech_audio_transcription_uses_dedicated_api_base_env(monkeypatch):
+    config = AzureSpeechAudioTranscriptionConfig()
+
+    monkeypatch.setattr(
+        "litellm.llms.azure.audio_transcription.transformation.get_secret_str",
+        lambda key: (
+            "https://centralus.api.cognitive.microsoft.com"
+            if key == "AZURE_SPEECH_API_BASE"
+            else None
+        ),
+    )
+
+    url = config.get_complete_url(
+        api_base=None,
+        api_key="test-key",
+        model="speech/azure-stt",
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert (
+        url
+        == "https://centralus.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=simple"
+    )
+
+
+def test_azure_speech_audio_transcription_rejects_azure_openai_endpoint():
+    config = AzureSpeechAudioTranscriptionConfig()
+
+    with pytest.raises(
+        AzureSpeechAudioTranscriptionException,
+        match="not an Azure OpenAI endpoint",
+    ):
+        config.get_complete_url(
+            api_base="https://example.openai.azure.com",
+            api_key="test-key",
+            model="speech/azure-stt",
+            optional_params={},
+            litellm_params={},
+        )
+
+
 def test_azure_speech_audio_transcription_validate_environment():
     config = AzureSpeechAudioTranscriptionConfig()
 
@@ -75,6 +120,26 @@ def test_azure_speech_audio_transcription_validate_environment():
     assert headers["Ocp-Apim-Subscription-Key"] == "test-key"
     assert headers["Content-Type"] == "audio/wav"
     assert headers["Accept"] == "application/json"
+
+
+def test_azure_speech_audio_transcription_uses_dedicated_api_key_env(monkeypatch):
+    config = AzureSpeechAudioTranscriptionConfig()
+
+    monkeypatch.setattr(
+        "litellm.llms.azure.audio_transcription.transformation.get_secret_str",
+        lambda key: "speech-key" if key == "AZURE_SPEECH_API_KEY" else None,
+    )
+
+    headers = config.validate_environment(
+        headers={},
+        model="speech/azure-stt",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+    )
+
+    assert headers["Ocp-Apim-Subscription-Key"] == "speech-key"
 
 
 def test_azure_speech_audio_transcription_request_transform():
@@ -143,3 +208,10 @@ def test_azure_speech_transcription_routes_through_provider_config(monkeypatch):
         AzureSpeechAudioTranscriptionConfig,
     )
     assert audio_handler.call_args.kwargs["custom_llm_provider"] == "azure"
+
+
+def test_azure_speech_stt_has_non_zero_input_pricing():
+    pricing_path = Path(__file__).parents[4] / "model_prices_and_context_window.json"
+    pricing = json.loads(pricing_path.read_text())
+
+    assert pricing["azure/speech/azure-stt"]["input_cost_per_second"] > 0

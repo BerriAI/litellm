@@ -20,6 +20,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import FileTypes, TranscriptionResponse
 
 
@@ -68,6 +69,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        api_key = api_key or get_secret_str("AZURE_SPEECH_API_KEY")
         if not api_key:
             raise AzureSpeechAudioTranscriptionException(
                 message="api_key is required for Azure AI Speech transcription.",
@@ -91,6 +93,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
+        api_base = api_base or get_secret_str("AZURE_SPEECH_API_BASE")
         if api_base is None:
             raise AzureSpeechAudioTranscriptionException(
                 message=(
@@ -158,6 +161,15 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if self._is_stt_endpoint(hostname=hostname):
             return f"{parsed_url.scheme}://{hostname}"
 
+        if self._is_azure_openai_endpoint(hostname=hostname):
+            raise AzureSpeechAudioTranscriptionException(
+                message=(
+                    "Azure AI Speech transcription requires a Cognitive Services "
+                    "or STT Speech endpoint, not an Azure OpenAI endpoint."
+                ),
+                status_code=400,
+            )
+
         return api_base
 
     def _is_cognitive_services_endpoint(self, hostname: str) -> bool:
@@ -169,6 +181,9 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         return hostname == self.STT_SPEECH_DOMAIN or hostname.endswith(
             f".{self.STT_SPEECH_DOMAIN}"
         )
+
+    def _is_azure_openai_endpoint(self, hostname: str) -> bool:
+        return hostname.endswith(".openai.azure.com")
 
     def _extract_region_from_hostname(self, hostname: str, domain: str) -> str:
         if hostname.endswith(f".{domain}"):
