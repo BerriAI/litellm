@@ -28,12 +28,44 @@ class MockLiteLLMTeamMembership:
 class MockLiteLLMVerificationToken:
     def __init__(self):
         self.update_many_calls: List[Dict[str, Any]] = []
+        self._find_many_results: List[Any] = []
+        self.find_many_calls: List[Dict[str, Any]] = []
+        self.update_calls: List[Dict[str, Any]] = []
+
+    def set_find_many_results(self, results: List[Any]):
+        self._find_many_results = results
+
+    async def find_many(self, where: Dict[str, Any] = None, **kwargs) -> List[Any]:
+        self.find_many_calls.append({"where": where, **kwargs})
+        return self._find_many_results
+
+    async def update(self, where: Dict[str, Any], data: Dict[str, Any], **kwargs):
+        self.update_calls.append({"where": where, "data": data})
+        return None
 
     async def update_many(
         self, where: Dict[str, Any], data: Dict[str, Any]
     ) -> Dict[str, Any]:
         self.update_many_calls.append({"where": where, "data": data})
         return {"count": 1}
+
+
+class MockLiteLLMTeamTable:
+    def __init__(self):
+        self._find_many_results: List[Any] = []
+        self.find_many_calls: List[Dict[str, Any]] = []
+        self.update_calls: List[Dict[str, Any]] = []
+
+    def set_find_many_results(self, results: List[Any]):
+        self._find_many_results = results
+
+    async def find_many(self, where: Dict[str, Any] = None, **kwargs) -> List[Any]:
+        self.find_many_calls.append({"where": where, **kwargs})
+        return self._find_many_results
+
+    async def update(self, where: Dict[str, Any], data: Dict[str, Any], **kwargs):
+        self.update_calls.append({"where": where, "data": data})
+        return None
 
 
 class MockLiteLLMEndUserTable:
@@ -53,6 +85,7 @@ class MockDB:
     def __init__(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
         self.litellm_verificationtoken = MockLiteLLMVerificationToken()
+        self.litellm_teamtable = MockLiteLLMTeamTable()
         self.litellm_endusertable = MockLiteLLMEndUserTable()
 
 
@@ -784,3 +817,245 @@ def test_reset_budget_skips_null_budget_id_endusers_when_default_not_in_reset_li
     assert len(find_many_calls) == 0
 
     litellm.max_end_user_budget_id = None
+
+
+class TestResetBudgetWindows:
+    """Tests for reset_budget_windows which resets expired per-window budget limits."""
+
+    @pytest.fixture
+    def mock_spend_counter_cache(self):
+        class MockInMemoryCache:
+            def __init__(self):
+                self.cache: Dict[str, Any] = {}
+
+            def set_cache(self, key: str, value: Any):
+                self.cache[key] = value
+
+        class MockCache:
+            def __init__(self):
+                self.in_memory_cache = MockInMemoryCache()
+                self.redis_cache = None
+
+        return MockCache()
+
+    def test_reset_budget_windows_keys_expired_window(
+        self, reset_budget_job, mock_prisma_client, mock_spend_counter_cache
+    ):
+        """
+        Test that expired budget windows on keys are reset and the DB is updated.
+        """
+        from unittest.mock import patch
+
+        now = datetime.utcnow()
+        expired_reset_at = (now - timedelta(hours=1)).isoformat()
+        future_reset_at = (now + timedelta(hours=1)).isoformat()
+
+        key_obj = type(
+            "VerificationToken",
+            (),
+            {
+                "token": "sk-test-key-1",
+                "budget_limits": [
+                    {
+                        "budget_duration": "1d",
+                        "max_budget": 10.0,
+                        "reset_at": expired_reset_at,
+                    },
+                    {
+                        "budget_duration": "7d",
+                        "max_budget": 50.0,
+                        "reset_at": future_reset_at,
+                    },
+                ],
+            },
+        )()
+
+        mock_prisma_client.db.litellm_verificationtoken.set_find_many_results([key_obj])
+
+        with patch(
+            "litellm.proxy.proxy_server.spend_counter_cache",
+            mock_spend_counter_cache,
+        ):
+            asyncio.run(reset_budget_job.reset_budget_windows())
+
+        # Verify find_many was called with NOT filter for non-null budget_limits
+        find_calls = mock_prisma_client.db.litellm_verificationtoken.find_many_calls
+        assert len(find_calls) == 1
+        assert find_calls[0]["where"] == {"NOT": [{"budget_limits": None}]}
+
+        # Verify the key was updated (expired window was reset)
+        update_calls = mock_prisma_client.db.litellm_verificationtoken.update_calls
+        assert len(update_calls) == 1
+        assert update_calls[0]["where"] == {"token": "sk-test-key-1"}
+
+        # Verify the spend counter was reset for expired window only
+        assert (
+            "spend:key:sk-test-key-1:window:1d"
+            in mock_spend_counter_cache.in_memory_cache.cache
+        )
+        assert (
+            mock_spend_counter_cache.in_memory_cache.cache[
+                "spend:key:sk-test-key-1:window:1d"
+            ]
+            == 0.0
+        )
+        # The non-expired window should NOT have been reset
+        assert (
+            "spend:key:sk-test-key-1:window:7d"
+            not in mock_spend_counter_cache.in_memory_cache.cache
+        )
+
+    def test_reset_budget_windows_teams_expired_window(
+        self, reset_budget_job, mock_prisma_client, mock_spend_counter_cache
+    ):
+        """
+        Test that expired budget windows on teams are reset and the DB is updated.
+        """
+        from unittest.mock import patch
+
+        now = datetime.utcnow()
+        expired_reset_at = (now - timedelta(hours=2)).isoformat()
+
+        team_obj = type(
+            "TeamTable",
+            (),
+            {
+                "team_id": "team-abc",
+                "budget_limits": [
+                    {
+                        "budget_duration": "30d",
+                        "max_budget": 100.0,
+                        "reset_at": expired_reset_at,
+                    },
+                ],
+            },
+        )()
+
+        mock_prisma_client.db.litellm_teamtable.set_find_many_results([team_obj])
+
+        with patch(
+            "litellm.proxy.proxy_server.spend_counter_cache",
+            mock_spend_counter_cache,
+        ):
+            asyncio.run(reset_budget_job.reset_budget_windows())
+
+        # Verify find_many was called with NOT filter
+        find_calls = mock_prisma_client.db.litellm_teamtable.find_many_calls
+        assert len(find_calls) == 1
+        assert find_calls[0]["where"] == {"NOT": [{"budget_limits": None}]}
+
+        # Verify the team was updated
+        update_calls = mock_prisma_client.db.litellm_teamtable.update_calls
+        assert len(update_calls) == 1
+        assert update_calls[0]["where"] == {"team_id": "team-abc"}
+
+        # Verify spend counter was reset
+        assert (
+            mock_spend_counter_cache.in_memory_cache.cache[
+                "spend:team:team-abc:window:30d"
+            ]
+            == 0.0
+        )
+
+    def test_reset_budget_windows_no_update_when_no_expired_windows(
+        self, reset_budget_job, mock_prisma_client, mock_spend_counter_cache
+    ):
+        """
+        Test that no DB update happens when all windows are still active (not expired).
+        """
+        from unittest.mock import patch
+
+        future_reset_at = (datetime.utcnow() + timedelta(days=5)).isoformat()
+
+        key_obj = type(
+            "VerificationToken",
+            (),
+            {
+                "token": "sk-active-key",
+                "budget_limits": [
+                    {
+                        "budget_duration": "7d",
+                        "max_budget": 50.0,
+                        "reset_at": future_reset_at,
+                    },
+                ],
+            },
+        )()
+
+        mock_prisma_client.db.litellm_verificationtoken.set_find_many_results([key_obj])
+
+        with patch(
+            "litellm.proxy.proxy_server.spend_counter_cache",
+            mock_spend_counter_cache,
+        ):
+            asyncio.run(reset_budget_job.reset_budget_windows())
+
+        # No update should have been made
+        update_calls = mock_prisma_client.db.litellm_verificationtoken.update_calls
+        assert len(update_calls) == 0
+
+    def test_reset_budget_windows_skips_null_budget_limits(
+        self, reset_budget_job, mock_prisma_client, mock_spend_counter_cache
+    ):
+        """
+        Test that keys/teams with budget_limits=None (returned despite filter) are skipped.
+        """
+        from unittest.mock import patch
+
+        key_obj = type(
+            "VerificationToken",
+            (),
+            {
+                "token": "sk-null-key",
+                "budget_limits": None,
+            },
+        )()
+
+        mock_prisma_client.db.litellm_verificationtoken.set_find_many_results([key_obj])
+
+        with patch(
+            "litellm.proxy.proxy_server.spend_counter_cache",
+            mock_spend_counter_cache,
+        ):
+            asyncio.run(reset_budget_job.reset_budget_windows())
+
+        # No update should have been made
+        update_calls = mock_prisma_client.db.litellm_verificationtoken.update_calls
+        assert len(update_calls) == 0
+
+    def test_reset_budget_windows_handles_json_string_budget_limits(
+        self, reset_budget_job, mock_prisma_client, mock_spend_counter_cache
+    ):
+        """
+        Test that budget_limits stored as a JSON string (not a list) are handled.
+        """
+        import json as json_mod
+        from unittest.mock import patch
+
+        expired_reset_at = (datetime.utcnow() - timedelta(hours=1)).isoformat()
+
+        budget_limits_json = json_mod.dumps(
+            [{"budget_duration": "1d", "max_budget": 10.0, "reset_at": expired_reset_at}]
+        )
+
+        key_obj = type(
+            "VerificationToken",
+            (),
+            {
+                "token": "sk-json-string-key",
+                "budget_limits": budget_limits_json,
+            },
+        )()
+
+        mock_prisma_client.db.litellm_verificationtoken.set_find_many_results([key_obj])
+
+        with patch(
+            "litellm.proxy.proxy_server.spend_counter_cache",
+            mock_spend_counter_cache,
+        ):
+            asyncio.run(reset_budget_job.reset_budget_windows())
+
+        # Should have been updated
+        update_calls = mock_prisma_client.db.litellm_verificationtoken.update_calls
+        assert len(update_calls) == 1
+        assert update_calls[0]["where"] == {"token": "sk-json-string-key"}
