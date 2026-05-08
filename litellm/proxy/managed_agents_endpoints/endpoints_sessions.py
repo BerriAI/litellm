@@ -1,5 +1,8 @@
 import asyncio
 import json
+import os
+import secrets
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -31,6 +34,10 @@ from litellm.proxy.managed_agents_endpoints.git_validation import decrypt_git_to
 from litellm.proxy.managed_agents_endpoints.harness_client import (
     harness_create_session,
     harness_send_message,
+)
+from litellm.proxy.managed_agents_endpoints.endpoints_passthrough import (
+    _SESSION_META_CACHE,
+    invalidate_session_meta_cache,
 )
 from litellm.proxy.managed_agents_endpoints.lifecycle import stop_session_task
 from litellm.proxy.managed_agents_endpoints.types import (
@@ -174,10 +181,17 @@ async def create_session(
         raise HTTPException(status_code=500, detail="prisma client not available")
 
     body = body or SessionCreateIn()
+    _t0 = time.monotonic()
+
+    def _ckpt(label: str) -> None:
+        verbose_proxy_logger.warning(
+            f"PERF create_session agent={agent_id} {label} t+{time.monotonic() - _t0:.2f}s"
+        )
 
     agent = await prisma_client.db.litellm_managedagenttable.find_unique(
         where={"agent_id": agent_id}, include={"template": True}
     )
+    _ckpt("agent_fetched")
     if agent is None:
         raise HTTPException(status_code=404, detail=f"agent '{agent_id}' not found")
     _assert_owner_or_admin(user_api_key_dict, agent.created_by, "agent", agent_id)
@@ -228,6 +242,7 @@ async def create_session(
         data=session_create_data
     )
     session_id = row.session_id
+    _ckpt(f"session_row_created session={session_id}")
 
     client = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10, read=None, write=None, pool=10)
@@ -247,18 +262,27 @@ async def create_session(
             agent_model=agent.model,
             session_id=session_id,
         )
+        _ckpt("session_key_minted")
         await prisma_client.db.litellm_managedagentsessiontable.update(
             where={"session_id": session_id},
             data={"virtual_key_hash": session_key_hash},
         )
+        _ckpt("virtual_key_hash_persisted")
 
         env: Dict[str, str] = {
             "LITELLM_API_KEY": session_key,
-            "LITELLM_API_BASE": metadata.get("litellm_api_base", "") or "",
+            "LITELLM_API_BASE": (
+                metadata.get("litellm_api_base")
+                or os.environ.get("LITELLM_API_BASE")
+                or ""
+            ),
             "LITELLM_DEFAULT_MODEL": agent.model,
-            "REPO_URL": template.repo_url,
-            "BRANCH": agent.branch or template.default_branch,
         }
+        if template.repo_url:
+            env["REPO_URL"] = template.repo_url
+            branch = agent.branch or template.default_branch
+            if branch:
+                env["BRANCH"] = branch
         git_token = await decrypt_git_token(prisma_client, template.git_credential_id)
         if git_token:
             env["GIT_TOKEN"] = git_token
@@ -275,6 +299,10 @@ async def create_session(
         pool_min_warm = int(getattr(cfg, "pool_min_warm", 1)) if cfg else 1
         if pool_enabled:
             slot = await _warm_pool_try_claim(template.template_id)
+            _ckpt(
+                f"warm_pool_claim slot={'hit' if slot else 'miss'} "
+                f"template={template.template_id}"
+            )
             if slot is not None:
                 claimed_arn, claimed_ip, claimed_port, claimed_secret = slot
                 try:
@@ -283,14 +311,12 @@ async def create_session(
                         container_port=claimed_port,
                         secret=claimed_secret,
                         env=env,
-                        timeout=120.0,
+                        timeout=240.0,
+                        client=client,
                     )
+                    _ckpt(f"warm_pool_post_claim_done ip={claimed_ip}")
                     task_arn = claimed_arn
                     public_ip = claimed_ip
-                    await prisma_client.db.litellm_managedagentsessiontable.update(
-                        where={"session_id": session_id},
-                        data={"task_arn": task_arn},
-                    )
                     verbose_proxy_logger.info(
                         f"managed_agents: warm-pool hit template={template.template_id} "
                         f"session={session_id} ip={public_ip}"
@@ -322,11 +348,13 @@ async def create_session(
             infra = await asyncio.to_thread(
                 bootstrap_shared_infra, region, aws_overrides, template.container_port
             )
+            _ckpt("bootstrap_done")
             if not infra.subnet_ids:
                 raise RuntimeError("bootstrap_shared_infra returned no subnets")
             subnet = infra.subnet_ids[0]
             security_group = infra.security_group_id
 
+            shim_secret = secrets.token_urlsafe(32)
             task_arn = await asyncio.to_thread(
                 run_task_sync,
                 region=region,
@@ -335,18 +363,30 @@ async def create_session(
                 container_name="harness",
                 subnet=subnet,
                 security_group=security_group,
-                env=env,
+                env={"SHIM_SECRET": shim_secret},
                 session_id=session_id,
                 agent_id=agent_id,
             )
-            await prisma_client.db.litellm_managedagentsessiontable.update(
-                where={"session_id": session_id},
-                data={"task_arn": task_arn},
-            )
+            _ckpt(f"run_task_done arn={task_arn}")
 
             public_ip = await asyncio.to_thread(
                 wait_running_get_ip_sync, region, cluster, task_arn, 300
             )
+            _ckpt(f"wait_running_done ip={public_ip}")
+
+            shim_port = template.container_port + 1
+            shim_health = f"http://{public_ip}:{shim_port}/healthz"
+            await wait_http_ready(shim_health, client, timeout=180)
+            _ckpt("shim_ready")
+            await _warm_pool_post_claim(
+                public_ip=public_ip,
+                container_port=template.container_port,
+                secret=shim_secret,
+                env=env,
+                timeout=240.0,
+                client=client,
+            )
+            _ckpt("cold_post_claim_done")
         # NOTE (v1): proxy↔sandbox traffic is plain HTTP over the task's public IP.
         # Tracked for follow-up: route through PrivateLink/VPC-internal addressing
         # or terminate TLS on the harness so prompts/responses and the env-injected
@@ -354,21 +394,33 @@ async def create_session(
         sandbox_url = f"http://{public_ip}:{template.container_port}"
 
         await wait_http_ready(sandbox_url, client, timeout=600)
+        _ckpt("sandbox_http_ready")
 
         title = (body.title if body else None) or agent.agent_name or "default"
         harness_session_id = await harness_create_session(
             sandbox_url, client, title=title
         )
+        _ckpt(f"harness_session_created hsid={harness_session_id}")
 
         await prisma_client.db.litellm_managedagentsessiontable.update(
             where={"session_id": session_id},
             data={
+                "task_arn": task_arn,
                 "sandbox_url": sandbox_url,
                 "harness_session_id": harness_session_id,
                 "status": "ready",
                 "last_seen_at": _now_utc(),
             },
         )
+        _ckpt("session_marked_ready")
+        _SESSION_META_CACHE[session_id] = {
+            "status": "ready",
+            "sandbox_url": sandbox_url,
+            "harness_session_id": harness_session_id,
+            "created_by": user_api_key_dict.user_id,
+            "model": agent.model,
+            "_cacheable": True,
+        }
 
         response_body: Optional[Dict[str, Any]] = None
         if body and body.initial_prompt:
@@ -510,6 +562,7 @@ async def delete_session(
         where={"session_id": session_id},
         data={"status": "dead", "stopped_at": _now_utc()},
     )
+    invalidate_session_meta_cache(session_id)
 
     return {"id": session_id, "status": "dead"}
 
