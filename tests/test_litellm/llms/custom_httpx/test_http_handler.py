@@ -684,27 +684,29 @@ def test_sync_http_handler_skips_custom_transport_when_proxy_set(monkeypatch):
     httpx ignores proxy env vars when an explicit transport is provided,
     which breaks sync-path providers (e.g. ChatGPT authenticator) behind
     a proxy. See GitHub issue #24562.
+
+    We check _mounts: a custom transport produces an empty dict,
+    while httpx's default mount system produces a non-empty dict.
     """
     original_force_ipv4 = litellm.force_ipv4
     litellm.force_ipv4 = True
 
     try:
-        # With proxy: custom transport should be dropped
+        # With proxy: custom transport should be dropped, so httpx
+        # builds its default mount system (non-empty _mounts).
         monkeypatch.setenv("HTTPS_PROXY", "http://proxy:8080")
         handler = HTTPHandler()
         try:
-            transport = handler.client._transport
-            assert not isinstance(transport, httpx.HTTPTransport)
+            assert len(handler.client._mounts) > 0
         finally:
             handler.close()
 
-        # Without proxy: custom transport should be applied (force_ipv4)
+        # Without proxy: custom transport is used (empty _mounts).
         monkeypatch.delenv("HTTPS_PROXY", raising=False)
         monkeypatch.delenv("HTTP_PROXY", raising=False)
         handler2 = HTTPHandler()
         try:
-            transport2 = handler2.client._transport
-            assert isinstance(transport2, httpx.HTTPTransport)
+            assert len(handler2.client._mounts) == 0
         finally:
             handler2.close()
     finally:
@@ -725,8 +727,7 @@ def test_sync_http_handler_prefers_https_proxy_over_http_proxy(monkeypatch):
         handler = HTTPHandler()
         try:
             # Should not have custom transport (proxy takes priority)
-            transport = handler.client._transport
-            assert not isinstance(transport, httpx.HTTPTransport)
+            assert len(handler.client._mounts) > 0
         finally:
             handler.close()
     finally:
