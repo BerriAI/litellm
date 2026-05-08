@@ -34,6 +34,9 @@ from .guardrail_initializers import (
     initialize_presidio,
     initialize_tool_permission,
 )
+from .guardrail_hooks.llm_as_a_judge import (
+    initialize_guardrail as initialize_llm_as_a_judge,
+)
 
 guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
@@ -43,6 +46,7 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
     SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_grayswan,
+    SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: initialize_llm_as_a_judge,
 }
 
 guardrail_class_registry: Dict[str, Type[CustomGuardrail]] = {

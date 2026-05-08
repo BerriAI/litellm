@@ -130,10 +130,15 @@ class ProxyInitializationHelpers:
         port: int,
         log_config: Optional[str] = None,
         keepalive_timeout: Optional[int] = None,
+        timeout_worker_healthcheck: Optional[int] = None,
     ) -> dict:
         """
         Get the arguments for `uvicorn` worker
         """
+        import inspect
+
+        import uvicorn
+
         import litellm
         from litellm._logging import _get_uvicorn_json_log_config
 
@@ -150,7 +155,79 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
+        if timeout_worker_healthcheck is not None:
+            if (
+                "timeout_worker_healthcheck"
+                in inspect.signature(uvicorn.Config.__init__).parameters
+            ):
+                uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
+            else:
+                print(  # noqa
+                    f"\033[1;33mLiteLLM Proxy: --timeout_worker_healthcheck "
+                    f"requires uvicorn>=0.37.0, but installed uvicorn=={uvicorn.__version__}. "
+                    f"Ignoring the flag.\033[0m"
+                )
         return uvicorn_args
+
+    @staticmethod
+    def _get_reload_options(config_path: Optional[str]) -> dict:
+        """Build uvicorn reload kwargs so --reload also reacts to YAML edits."""
+        options: dict = {"reload": True}
+        if not config_path:
+            return options
+        config_abs = os.path.abspath(config_path)
+        config_dir = os.path.dirname(config_abs)
+        cwd = os.path.abspath(os.getcwd())
+        reload_dirs = [cwd]
+        if config_dir and config_dir != cwd:
+            reload_dirs.append(config_dir)
+        options["reload_dirs"] = reload_dirs
+        # Must be a basename, not an absolute path: uvicorn's
+        # resolve_reload_patterns() calls pathlib.Path.glob(), which raises
+        # NotImplementedError on absolute patterns (uvicorn discussion #2156).
+        options["reload_includes"] = ["*.py", os.path.basename(config_abs)]
+        return options
+
+    @staticmethod
+    def _patch_statreload_for_config(config_path: str) -> bool:
+        """Make uvicorn's StatReload reloader notice YAML config changes.
+
+        Uvicorn uses WatchFilesReload when the optional `watchfiles` package
+        is installed, otherwise StatReload. StatReload hard-codes `*.py` in
+        `iter_py_files()` and silently ignores `reload_includes`, so the
+        kwargs from `_get_reload_options` alone don't trigger reloads on YAML
+        edits. We monkey-patch `iter_py_files` to also yield the config path.
+
+        Idempotent across calls and a no-op for the WatchFilesReload path.
+        """
+        try:
+            from uvicorn.supervisors.statreload import StatReload
+        except ImportError:  # pragma: no cover - uvicorn is a hard dep
+            return False
+
+        if not config_path:
+            return False
+
+        from pathlib import Path
+
+        config_abs = Path(config_path).resolve()
+
+        patched_paths = getattr(StatReload, "_litellm_patched_config_paths", None)
+        if patched_paths is None:
+            original_iter = StatReload.iter_py_files
+            patched_paths = set()
+
+            def _iter_with_config(self):  # type: ignore[no-untyped-def]
+                yield from original_iter(self)
+                for path in StatReload._litellm_patched_config_paths:
+                    if path.exists():
+                        yield path
+
+            StatReload.iter_py_files = _iter_with_config  # type: ignore[assignment]
+            StatReload._litellm_patched_config_paths = patched_paths  # type: ignore[attr-defined]
+
+        patched_paths.add(config_abs)
+        return True
 
     @staticmethod
     def _init_hypercorn_server(
@@ -564,6 +641,17 @@ class ProxyInitializationHelpers:
     envvar="KEEPALIVE_TIMEOUT",
 )
 @click.option(
+    "--timeout_worker_healthcheck",
+    default=None,
+    type=int,
+    help=(
+        "Set the uvicorn worker health-check timeout in seconds (uvicorn timeout_worker_healthcheck parameter). "
+        "Requires uvicorn>=0.37.0. Only applies when running uvicorn directly with --num_workers>1; "
+        "ignored under --run_gunicorn / --run_hypercorn."
+    ),
+    envvar="TIMEOUT_WORKER_HEALTHCHECK",
+)
+@click.option(
     "--max_requests_before_restart",
     default=None,
     type=int,
@@ -591,7 +679,7 @@ class ProxyInitializationHelpers:
     "--reload",
     is_flag=True,
     default=False,
-    help="Enable uvicorn hot reload (dev only). Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
+    help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
 def run_server(  # noqa: PLR0915
     host,
@@ -632,6 +720,7 @@ def run_server(  # noqa: PLR0915
     use_prisma_db_push: bool,
     skip_server_startup,
     keepalive_timeout,
+    timeout_worker_healthcheck,
     max_requests_before_restart,
     enforce_prisma_migration_check: bool,
     use_v2_migration_resolver: bool,
@@ -961,11 +1050,6 @@ def run_server(  # noqa: PLR0915
             litellm_settings=litellm_settings if config else None,  # type: ignore[possibly-unbound]
         )
 
-        # --- SEPARATE HEALTH APP LOGIC ---
-        # To run the health app separately, use:
-        #   uvicorn litellm.proxy.health_app_factory:build_health_app --factory --host 0.0.0.0 --port=4001
-        # This is compatible with the SEPARATE_HEALTH_APP Docker/supervisord pattern.
-        # --- END SEPARATE HEALTH APP LOGIC ---
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print(  # noqa
@@ -973,11 +1057,15 @@ def run_server(  # noqa: PLR0915
             )
             return
 
+        running_uvicorn = run_gunicorn is False and run_hypercorn is False
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,
             port=port,
             log_config=log_config,
             keepalive_timeout=keepalive_timeout,
+            timeout_worker_healthcheck=(
+                timeout_worker_healthcheck if running_uvicorn else None
+            ),
         )
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:
@@ -995,7 +1083,11 @@ def run_server(  # noqa: PLR0915
                 uvicorn_args["loop"] = loop_type
 
             if reload:
-                uvicorn_args["reload"] = True
+                uvicorn_args.update(
+                    ProxyInitializationHelpers._get_reload_options(config)
+                )
+                if config:
+                    ProxyInitializationHelpers._patch_statreload_for_config(config)
 
             uvicorn.run(
                 **uvicorn_args,

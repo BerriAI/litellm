@@ -369,6 +369,7 @@ class TestLiteLLMCompletionResponsesConfig:
         ]
         assert len(message_items) == 1, "Should have exactly one message item"
         assert message_items[0].content[0].text == "Just a regular answer."
+        assert responses_api_response.object == "response"
 
     def test_transform_chat_completion_response_multiple_choices_with_reasoning(self):
         """Test that only reasoning from first choice is included when multiple choices exist"""

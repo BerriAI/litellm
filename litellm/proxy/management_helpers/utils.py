@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
     BudgetNewRequest,
     DeleteCustomerRequest,
@@ -191,6 +192,13 @@ async def _clone_team_default_budget_for_member(
         if isinstance(value, list) and len(value) == 0:
             continue
         cloned_data[field] = value
+
+    # Start the member's budget window at clone time, not the pool's reset
+    # timestamp — otherwise a member joining mid-cycle inherits a stale reset.
+    if cloned_data.get("budget_duration"):
+        cloned_data["budget_reset_at"] = get_budget_reset_time(
+            cloned_data["budget_duration"]
+        )
 
     new_budget = await prisma_client.db.litellm_budgettable.create(data=cloned_data)
     return new_budget.budget_id
