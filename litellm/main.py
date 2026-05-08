@@ -94,7 +94,11 @@ from litellm.litellm_core_utils.mock_functions import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_content_from_model_response,
 )
-from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
+from litellm.llms.base_llm import (
+    BaseAudioTranscriptionConfig,
+    BaseConfig,
+    BaseImageGenerationConfig,
+)
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
@@ -6438,6 +6442,65 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         )
 
 
+def _azure_speech_audio_transcriptions(
+    model: str,
+    file: FileTypes,
+    optional_params: dict,
+    litellm_params_dict: dict,
+    model_response: TranscriptionResponse,
+    atranscription: bool,
+    client: Optional[
+        Union[
+            openai.AsyncOpenAI,
+            openai.OpenAI,
+            openai.AzureOpenAI,
+            openai.AsyncAzureOpenAI,
+        ]
+    ],
+    timeout: float,
+    max_retries: int,
+    litellm_logging_obj: LiteLLMLoggingObj,
+    api_base: Optional[str],
+    api_key: Optional[str],
+    custom_llm_provider: str,
+    provider_config: BaseAudioTranscriptionConfig,
+    shared_session: Optional["ClientSession"],
+) -> Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]:
+    api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
+    api_key = (
+        api_key
+        or litellm.api_key
+        or litellm.azure_key
+        or get_secret_str("AZURE_API_KEY")
+    )
+
+    return base_llm_http_handler.audio_transcriptions(
+        model=model,
+        audio_file=file,
+        optional_params=optional_params,
+        litellm_params=litellm_params_dict,
+        model_response=model_response,
+        atranscription=atranscription,
+        client=(
+            client
+            if client is not None
+            and (
+                isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler)
+            )
+            else None
+        ),
+        timeout=timeout,
+        max_retries=max_retries,
+        logging_obj=litellm_logging_obj,
+        api_base=api_base,
+        api_key=api_key,
+        custom_llm_provider=custom_llm_provider,
+        headers={},
+        provider_config=provider_config,
+        shared_session=shared_session,
+    )
+
+
 @client
 def transcription(
     model: str,
@@ -6500,8 +6563,7 @@ def transcription(
         api_key=api_key,
     )  # type: ignore
 
-    if dynamic_api_key is not None:
-        api_key = dynamic_api_key
+    api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
     optional_params = get_optional_params_transcription(
         model=model,
@@ -6541,7 +6603,29 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
-    if custom_llm_provider == "azure":
+    if (
+        custom_llm_provider == "azure"
+        and provider_config is not None
+        and model.startswith("speech/")
+    ):
+        response = _azure_speech_audio_transcriptions(
+            model=model,
+            file=file,
+            optional_params=optional_params,
+            litellm_params_dict=litellm_params_dict,
+            model_response=model_response,
+            atranscription=atranscription,
+            client=client,
+            timeout=timeout,
+            max_retries=max_retries,
+            litellm_logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            custom_llm_provider=custom_llm_provider,
+            provider_config=provider_config,
+            shared_session=shared_session,
+        )
+    elif custom_llm_provider == "azure":
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 

@@ -8500,6 +8500,12 @@ class ProviderConfigManager:
         model: str,
         provider: LlmProviders,
     ) -> Optional[BaseAudioTranscriptionConfig]:
+        if litellm.LlmProviders.AZURE == provider and model.startswith("speech/"):
+            from litellm.llms.azure.audio_transcription.transformation import (
+                AzureSpeechAudioTranscriptionConfig,
+            )
+
+            return AzureSpeechAudioTranscriptionConfig()
         if litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
