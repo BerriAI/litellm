@@ -364,6 +364,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrail_returned_tool_calls = "tool_calls" in guardrailed_inputs
+            guardrailed_tool_calls = guardrailed_inputs.get("tool_calls", [])
 
             # Step 3: Map guardrail responses back to original response structure
             if guardrailed_texts and texts_to_check:
@@ -372,12 +374,17 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     responses=guardrailed_texts,
                     task_mappings=text_task_mappings,
                 )
+            elif guardrailed_texts:
+                self._replace_output_with_guardrail_text(
+                    response=response,
+                    guardrailed_texts=guardrailed_texts,
+                )
 
             # Step 4: Apply guardrailed tool calls back to response
-            if tool_calls_to_check:
+            if guardrail_returned_tool_calls and tool_calls_to_check:
                 await self._apply_guardrail_responses_to_output_tool_calls(
                     response=response,
-                    tool_calls=tool_calls_to_check,
+                    tool_calls=guardrailed_tool_calls,  # type: ignore[arg-type]
                     task_mappings=tool_call_task_mappings,
                 )
 
@@ -743,6 +750,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         Override this method to customize how tool call responses are applied.
         """
+        if not tool_calls:
+            for choice_idx, _ in task_mappings:
+                choice = cast(Choices, response.choices[choice_idx])
+                choice.message.tool_calls = None
+                if choice.finish_reason == "tool_calls" and choice.message.content:
+                    choice.finish_reason = "stop"
+            return
+
         for task_idx, (choice_idx, tool_call_idx) in enumerate(task_mappings):
             if task_idx < len(tool_calls):
                 guardrailed_tool_call = tool_calls[task_idx]
@@ -764,6 +779,25 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 ]
                             if "name" in func_dict:
                                 existing_tool_call.function.name = func_dict["name"]
+
+    def _replace_output_with_guardrail_text(
+        self,
+        response: "ModelResponse",
+        guardrailed_texts: List[str],
+    ) -> None:
+        """
+        Apply guardrail text when the original response had no text slots.
+
+        Tool-call-only responses have no text mappings, but response guardrails can
+        still intentionally replace the output with a block/mask message.
+        """
+        if not response.choices or not guardrailed_texts:
+            return
+
+        choice = cast(Choices, response.choices[0])
+        choice.message.content = guardrailed_texts[0]
+        if choice.finish_reason == "tool_calls":
+            choice.finish_reason = "stop"
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,

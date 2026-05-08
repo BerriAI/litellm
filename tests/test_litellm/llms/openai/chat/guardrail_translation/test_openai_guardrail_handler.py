@@ -8,8 +8,7 @@ with guardrail transformations, including tool calls.
 import json
 import os
 import sys
-from typing import Any, List, Literal, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock
+from typing import Any, Literal, Optional
 
 import pytest
 
@@ -510,6 +509,60 @@ class TestOpenAIChatCompletionsHandlerToolCallsOutput:
     """Test output processing with tool calls"""
 
     @pytest.mark.asyncio
+    async def test_response_guardrail_can_replace_tool_call_only_output(self):
+        """Test a response guardrail can replace tool-call-only output with text."""
+        handler = OpenAIChatCompletionsHandler()
+
+        class BlockingGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                assert input_type == "response"
+                assert len(inputs.get("tool_calls", [])) == 1
+                return {
+                    "texts": ["guardrail blocked the request"],
+                    "tool_calls": [],
+                }
+
+        response = ModelResponse(
+            id="chatcmpl-tool-call-blocked",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id="call_789",
+                                type="function",
+                                function=Function(
+                                    name="get_weather",
+                                    arguments=json.dumps({"location": "Paris"}),
+                                ),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, BlockingGuardrail())
+
+        choice = response.choices[0]
+        assert choice.message.content == "guardrail blocked the request"
+        assert choice.message.tool_calls is None
+        assert choice.finish_reason == "stop"
+
+    @pytest.mark.asyncio
     async def test_extract_tool_calls_from_output_response(self):
         """Test that tool calls are extracted from output responses"""
         handler = OpenAIChatCompletionsHandler()
@@ -765,7 +818,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         This test verifies the fix for the bug where accessing chunk.choices[0]
         would raise IndexError when a streaming chunk has an empty choices list.
         """
-        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+        from litellm.types.utils import ModelResponseStream
 
         handler = OpenAIChatCompletionsHandler()
         guardrail = MockPassThroughGuardrail(guardrail_name="test")
