@@ -2965,6 +2965,11 @@ if MCP_AVAILABLE:
                 _sse_client_ip,
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
+        except HTTPException:
+            # Re-raise HTTP exceptions to preserve status codes and details
+            # (e.g. the 401 + WWW-Authenticate challenge raised by
+            # _maybe_raise_oauth_bootstrap_challenge for OAuth cold-starts).
+            raise
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response

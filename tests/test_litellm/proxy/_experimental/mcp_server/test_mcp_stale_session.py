@@ -819,3 +819,65 @@ async def test_oauth_bootstrap_skips_for_non_oauth_server():
         global_mcp_server_manager.registry.clear()
 
     assert sentinel_extract.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_oauth_bootstrap_returns_401_via_sse_handler():
+    """
+    Regression: the SSE handler must propagate the 401 raised by the pre-check
+    helper instead of swallowing it via its bare `except Exception`. Mirror
+    of the StreamableHTTP test against handle_sse_mcp.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    global_mcp_server_manager.registry.clear()
+    public_server = MCPServer(
+        server_id="bootstrap_sse_server",
+        name="bootstrap_sse_server",
+        server_name="bootstrap_sse_server",
+        alias="bootstrap_sse_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-client-id",
+        client_secret=None,
+        authorization_url="https://idp.example/authorize",
+        token_url="https://idp.example/token",
+    )
+    global_mcp_server_manager.registry[public_server.server_id] = public_server
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/bootstrap_sse_server",
+        "headers": [
+            (b"content-type", b"application/json"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.IPAddressUtils.get_mcp_client_ip",
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await handle_sse_mcp(scope, receive, send)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert "www-authenticate" in exc.headers
+    assert (
+        "/.well-known/oauth-authorization-server/bootstrap_sse_server"
+        in exc.headers["www-authenticate"]
+    )
