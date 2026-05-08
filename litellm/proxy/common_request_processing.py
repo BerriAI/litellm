@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import litellm
 from litellm._logging import _redact_string, verbose_proxy_logger
+from litellm.litellm_core_utils.logging_utils import _truncate_base64_in_string
 from litellm._uuid import uuid
 from litellm.constants import (
     DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE,
@@ -253,7 +254,8 @@ async def create_response(
     except Exception as e:
         # Unexpected error consuming first chunk.
         verbose_proxy_logger.exception(
-            f"Error consuming first chunk from generator: {e}"
+            "Error consuming first chunk from generator: %s",
+            _truncate_base64_in_string(str(e)),
         )
 
         # Preserve status code from HTTPException (e.g., guardrail blocks)
@@ -619,7 +621,10 @@ class ProxyBaseLLMRequestProcessing:
                 if value not in exclude_values
             }
         except Exception as e:
-            verbose_proxy_logger.error(f"Error setting custom headers: {e}")
+            verbose_proxy_logger.error(
+                "Error setting custom headers: %s",
+                _truncate_base64_in_string(str(e)),
+            )
             return {}
 
     async def common_processing_pre_call_logic(
@@ -1579,7 +1584,8 @@ class ProxyBaseLLMRequestProcessing:
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
         verbose_proxy_logger.exception(
-            f"litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - {str(e)}"
+            "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s",
+            _truncate_base64_in_string(str(e)),
         )
         # Allow callbacks to transform the error response
         transformed_exception = await proxy_logging_obj.post_call_failure_hook(
@@ -1781,9 +1787,8 @@ class ProxyBaseLLMRequestProcessing:
                 yield serialize_chunk(chunk)
         except Exception as e:
             verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
-                    str(e)
-                )
+                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s",
+                _truncate_base64_in_string(str(e)),
             )
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
