@@ -1190,6 +1190,483 @@ async def test_bedrock_guardrail_blocked_content_with_masking_enabled():
         print("✅ BLOCKED content with masking enabled raises exception correctly")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Null-safety tests for Bedrock guardrail responses
+#
+# The Bedrock ApplyGuardrail API can return explicit null/None for list fields
+# such as "regexes", "piiEntities", "topics", "filters", "customWords", and
+# "managedWordLists" when a particular policy category is present in the
+# assessment but has no matches.
+#
+# Python's dict.get("key", []) returns None (NOT []) when the key exists with
+# a None value.  The `or []` fallback ensures we always iterate over a list.
+#
+# Without the fix, iterating over None raises:
+#   TypeError: 'NoneType' object is not iterable
+# which surfaces to callers as:
+#   openai.InternalServerError: Error code: 500
+#   {'error': {'message': "Bedrock guardrail failed: 'NoneType' object is not iterable", ...}}
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class TestRedactPiiMatchesNullSafety:
+    """Tests for _redact_pii_matches handling of null/None list fields from Bedrock API."""
+
+    @pytest.mark.asyncio
+    async def test_should_handle_null_regexes_in_sensitive_info_policy(self):
+        """Bedrock can return regexes: null while piiEntities has data.
+
+        Real-world scenario: guardrail detects PII (e.g. EMAIL) but has no
+        custom regex patterns configured, so the API returns regexes: null.
+        """
+        response = {
+            "action": "NONE",
+            "actionReason": "No action.",
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": [
+                            {
+                                "action": "NONE",
+                                "detected": True,
+                                "match": "joebloggs@gmail.com",
+                                "type": "EMAIL",
+                            }
+                        ],
+                        "regexes": None,  # Explicit null from Bedrock API
+                    },
+                }
+            ],
+        }
+
+        # Should not raise TypeError: 'NoneType' object is not iterable
+        redacted = _redact_pii_matches(response)
+
+        # PII match should be redacted
+        pii = redacted["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"]
+        assert pii[0]["match"] == "[REDACTED]"
+        assert pii[0]["type"] == "EMAIL"
+
+    @pytest.mark.asyncio
+    async def test_should_handle_null_pii_entities_in_sensitive_info_policy(self):
+        """Bedrock can return piiEntities: null while regexes has data."""
+        response = {
+            "action": "NONE",
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": None,  # null from Bedrock API
+                        "regexes": [
+                            {
+                                "name": "CUSTOM_PATTERN",
+                                "match": "secret-abc-123",
+                                "action": "BLOCKED",
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+
+        redacted = _redact_pii_matches(response)
+
+        regexes = redacted["assessments"][0]["sensitiveInformationPolicy"]["regexes"]
+        assert regexes[0]["match"] == "[REDACTED]"
+
+    @pytest.mark.asyncio
+    async def test_should_handle_null_custom_words_and_managed_words(self):
+        """Bedrock can return null for customWords and managedWordLists in wordPolicy."""
+        response = {
+            "action": "NONE",
+            "assessments": [
+                {
+                    "wordPolicy": {
+                        "customWords": None,       # null from Bedrock API
+                        "managedWordLists": None,   # null from Bedrock API
+                    },
+                }
+            ],
+        }
+
+        # Should not raise TypeError
+        redacted = _redact_pii_matches(response)
+
+        # Values should remain None (no crash)
+        assert redacted["assessments"][0]["wordPolicy"]["customWords"] is None
+        assert redacted["assessments"][0]["wordPolicy"]["managedWordLists"] is None
+
+    @pytest.mark.asyncio
+    async def test_should_handle_null_assessments_list(self):
+        """Bedrock can return assessments: null."""
+        response = {
+            "action": "NONE",
+            "assessments": None,  # null from Bedrock API
+        }
+
+        # Should not raise TypeError
+        redacted = _redact_pii_matches(response)
+        assert redacted["assessments"] is None
+
+    @pytest.mark.asyncio
+    async def test_should_handle_all_null_policy_sub_lists_together(self):
+        """All sub-list fields are null at the same time — worst-case scenario."""
+        response = {
+            "action": "GUARDRAIL_INTERVENED",
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": None,
+                        "regexes": None,
+                    },
+                    "wordPolicy": {
+                        "customWords": None,
+                        "managedWordLists": None,
+                    },
+                    "topicPolicy": None,
+                    "contentPolicy": None,
+                    "contextualGroundingPolicy": None,
+                }
+            ],
+        }
+
+        # Should not raise any exception
+        redacted = _redact_pii_matches(response)
+        assert redacted is not None
+
+
+class TestShouldRaiseGuardrailBlockedExceptionNullSafety:
+    """Tests for _should_raise_guardrail_blocked_exception handling of null list fields."""
+
+    def _create_guardrail(self) -> BedrockGuardrail:
+        return BedrockGuardrail(
+            guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+        )
+
+    @pytest.mark.asyncio
+    async def test_should_handle_all_null_policy_sub_lists(self):
+        """All policy sub-lists are null — should not crash, should return False."""
+        guardrail = self._create_guardrail()
+
+        response = {
+            "action": "GUARDRAIL_INTERVENED",
+            "assessments": [
+                {
+                    "topicPolicy": {
+                        "topics": None,           # null from Bedrock API
+                    },
+                    "contentPolicy": {
+                        "filters": None,          # null
+                    },
+                    "wordPolicy": {
+                        "customWords": None,      # null
+                        "managedWordLists": None,  # null
+                    },
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": None,      # null
+                        "regexes": None,           # null
+                    },
+                    "contextualGroundingPolicy": {
+                        "filters": None,          # null
+                    },
+                }
+            ],
+        }
+
+        # No BLOCKED actions found (all lists null) → should return False
+        result = guardrail._should_raise_guardrail_blocked_exception(response)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_should_detect_blocked_despite_other_null_lists(self):
+        """A mix of null lists and a real BLOCKED action — should still detect it."""
+        guardrail = self._create_guardrail()
+
+        response = {
+            "action": "GUARDRAIL_INTERVENED",
+            "assessments": [
+                {
+                    "topicPolicy": {
+                        "topics": None,            # null — should not crash
+                    },
+                    "contentPolicy": {
+                        "filters": [
+                            {
+                                "type": "HATE",
+                                "confidence": "HIGH",
+                                "action": "BLOCKED",
+                            }
+                        ],
+                    },
+                    "wordPolicy": {
+                        "customWords": None,       # null
+                        "managedWordLists": None,   # null
+                    },
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": None,       # null
+                        "regexes": None,            # null
+                    },
+                    "contextualGroundingPolicy": None,  # entire policy is null
+                }
+            ],
+        }
+
+        # Should return True because contentPolicy has a BLOCKED filter
+        result = guardrail._should_raise_guardrail_blocked_exception(response)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_should_handle_null_assessments_list(self):
+        """assessments itself is null — should return False."""
+        guardrail = self._create_guardrail()
+
+        response = {
+            "action": "GUARDRAIL_INTERVENED",
+            "assessments": None,  # null from Bedrock API
+        }
+
+        result = guardrail._should_raise_guardrail_blocked_exception(response)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_should_handle_null_topics_with_blocked_word_policy(self):
+        """topics is null but wordPolicy has a BLOCKED customWord."""
+        guardrail = self._create_guardrail()
+
+        response = {
+            "action": "GUARDRAIL_INTERVENED",
+            "assessments": [
+                {
+                    "topicPolicy": {
+                        "topics": None,
+                    },
+                    "wordPolicy": {
+                        "customWords": [
+                            {"match": "badword", "action": "BLOCKED"}
+                        ],
+                        "managedWordLists": None,
+                    },
+                }
+            ],
+        }
+
+        result = guardrail._should_raise_guardrail_blocked_exception(response)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_should_handle_null_pii_with_blocked_regex(self):
+        """piiEntities is null but regexes has a BLOCKED match."""
+        guardrail = self._create_guardrail()
+
+        response = {
+            "action": "GUARDRAIL_INTERVENED",
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": None,
+                        "regexes": [
+                            {"name": "SSN", "match": "123-45-6789", "action": "BLOCKED"}
+                        ],
+                    },
+                }
+            ],
+        }
+
+        result = guardrail._should_raise_guardrail_blocked_exception(response)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_should_handle_null_grounding_filters(self):
+        """contextualGroundingPolicy.filters is null — should not crash."""
+        guardrail = self._create_guardrail()
+
+        response = {
+            "action": "GUARDRAIL_INTERVENED",
+            "assessments": [
+                {
+                    "contextualGroundingPolicy": {
+                        "filters": None,
+                    },
+                }
+            ],
+        }
+
+        result = guardrail._should_raise_guardrail_blocked_exception(response)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_should_not_crash_when_action_is_not_intervened(self):
+        """If action != GUARDRAIL_INTERVENED, null lists should never be reached."""
+        guardrail = self._create_guardrail()
+
+        response = {
+            "action": "NONE",
+            "assessments": [
+                {
+                    "sensitiveInformationPolicy": {
+                        "piiEntities": None,
+                        "regexes": None,
+                    },
+                }
+            ],
+        }
+
+        result = guardrail._should_raise_guardrail_blocked_exception(response)
+        assert result is False
+
+
+class TestApplyGuardrailNullSafety:
+    """Tests for apply_guardrail handling of null/None texts input."""
+
+    @pytest.mark.asyncio
+    async def test_should_handle_none_texts_in_inputs(self):
+        """inputs[\"texts\"] is explicitly None — should not crash."""
+        guardrail = BedrockGuardrail(
+            guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+        )
+
+        inputs = {"texts": None}  # Explicit None
+
+        mock_credentials = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post, patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ), patch.object(
+            guardrail, "_prepare_request", return_value=MagicMock()
+        ):
+            # With empty texts (from None → []), no Bedrock API call should be made
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+            # Should return empty texts without crashing
+            assert result.get("texts") == []
+            # No Bedrock API call should be made for empty input
+            mock_post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_should_handle_missing_texts_key(self):
+        """inputs has no \"texts\" key at all — should not crash."""
+        guardrail = BedrockGuardrail(
+            guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+        )
+
+        inputs = {}  # No "texts" key
+
+        mock_credentials = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", new_callable=AsyncMock
+        ) as mock_post, patch.object(
+            guardrail, "_load_credentials", return_value=(mock_credentials, "us-east-1")
+        ), patch.object(
+            guardrail, "_prepare_request", return_value=MagicMock()
+        ):
+            result = await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={},
+                input_type="request",
+            )
+
+            assert result.get("texts") == []
+            mock_post.assert_not_called()
+
+
+
+@pytest.mark.asyncio
+async def test_bedrock_guardrail_blocked_vs_anonymized_actions():
+    """Test that BLOCKED actions raise exceptions but ANONYMIZED actions do not"""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail", guardrailVersion="DRAFT"
+    )
+
+    # Test 1: ANONYMIZED action should NOT raise exception
+    anonymized_response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "Hello, my phone number is {PHONE}"}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {
+                            "type": "PHONE",
+                            "match": "+1 412 555 1212",
+                            "action": "ANONYMIZED",
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+
+    should_raise = guardrail._should_raise_guardrail_blocked_exception(
+        anonymized_response
+    )
+    assert should_raise is False, "ANONYMIZED actions should not raise exceptions"
+
+    # Test 2: BLOCKED action should raise exception
+    blocked_response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "I can't provide that information."}],
+        "assessments": [
+            {
+                "topicPolicy": {
+                    "topics": [
+                        {"name": "Sensitive Topic", "type": "DENY", "action": "BLOCKED"}
+                    ]
+                }
+            }
+        ],
+    }
+
+    should_raise = guardrail._should_raise_guardrail_blocked_exception(blocked_response)
+    assert should_raise is True, "BLOCKED actions should raise exceptions"
+
+    # Test 3: Mixed actions - should raise if ANY action is BLOCKED
+    mixed_response = {
+        "action": "GUARDRAIL_INTERVENED",
+        "outputs": [{"text": "I can't provide that information."}],
+        "assessments": [
+            {
+                "sensitiveInformationPolicy": {
+                    "piiEntities": [
+                        {
+                            "type": "PHONE",
+                            "match": "+1 412 555 1212",
+                            "action": "ANONYMIZED",
+                        }
+                    ]
+                },
+                "topicPolicy": {
+                    "topics": [
+                        {"name": "Blocked Topic", "type": "DENY", "action": "BLOCKED"}
+                    ]
+                },
+            }
+        ],
+    }
+
+    should_raise = guardrail._should_raise_guardrail_blocked_exception(mixed_response)
+    assert (
+        should_raise is True
+    ), "Mixed actions with any BLOCKED should raise exceptions"
+
+    # Test 4: NONE action should not raise exception
+    none_response = {
+        "action": "NONE",
+        "outputs": [],
+        "assessments": [],
+    }
+
+    should_raise = guardrail._should_raise_guardrail_blocked_exception(none_response)
+    assert should_raise is False, "NONE action should not raise exceptions"
+
+    print("\u2705 BLOCKED vs ANONYMIZED actions test passed")
+
+
 # ---------------------------------------------------------------------------
 # L3: _extract_blocked_assessments + _get_http_exception_for_blocked_guardrail
 # Regression coverage for case 2026-04-10-internal-bedrock-guardrail-streaming-error.
@@ -1338,4 +1815,3 @@ def test_get_http_exception_no_blocked_assessments_omits_field():
     assert isinstance(exc, HTTPException)
     assert "assessments" not in exc.detail
     assert exc.detail["guardrailIdentifier"] == "amgllac6xf3r"
-

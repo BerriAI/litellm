@@ -40,6 +40,7 @@ class TestMCPClient:
         with pytest.raises(
             ValueError, match="stdio_config is required for stdio transport"
         ):
+
             async def _noop(session):
                 return None
 
@@ -251,11 +252,11 @@ class TestMCPClient:
             server_url="http://example.com/sse",
             transport_type="sse",
             auth_type=MCPAuth.token,
-            auth_value="my-secret-token"
+            auth_value="my-secret-token",
         )
-        
+
         headers = client._get_auth_headers()
-        
+
         assert "Authorization" in headers
         assert headers["Authorization"] == "token my-secret-token"
 
@@ -266,27 +267,27 @@ class TestMCPClient:
             server_url="http://example.com/sse",
             transport_type="sse",
             auth_type=MCPAuth.bearer_token,
-            auth_value="bearer-token"
+            auth_value="bearer-token",
         )
         headers = client._get_auth_headers()
         assert headers["Authorization"] == "Bearer bearer-token"
-        
+
         # Test API key
         client = MCPClient(
             server_url="http://example.com/sse",
             transport_type="sse",
             auth_type=MCPAuth.api_key,
-            auth_value="api-key"
+            auth_value="api-key",
         )
         headers = client._get_auth_headers()
         assert headers["X-API-Key"] == "api-key"
-        
+
         # Test basic auth (gets base64 encoded)
         client = MCPClient(
             server_url="http://example.com/sse",
             transport_type="sse",
             auth_type=MCPAuth.basic,
-            auth_value="user:pass"
+            auth_value="user:pass",
         )
         headers = client._get_auth_headers()
         assert headers["Authorization"].startswith("Basic ")
@@ -298,11 +299,11 @@ class TestMCPClient:
             transport_type="sse",
             auth_type=MCPAuth.token,
             auth_value="my-token",
-            extra_headers={"X-Custom-Header": "custom-value"}
+            extra_headers={"X-Custom-Header": "custom-value"},
         )
-        
+
         headers = client._get_auth_headers()
-        
+
         assert headers["Authorization"] == "token my-token"
         assert headers["X-Custom-Header"] == "custom-value"
 
@@ -310,6 +311,81 @@ class TestMCPClient:
         """Test that MCPAuth.token enum exists and has correct value"""
         assert hasattr(MCPAuth, "token")
         assert MCPAuth.token.value == "token"
+
+
+# ---------------------------------------------------------------------------
+# _last_initialize_instructions capture
+# ---------------------------------------------------------------------------
+
+
+class TestMCPClientInstructionsCapture:
+    """Tests for _last_initialize_instructions capture during session init."""
+
+    def test_initial_value_is_none(self):
+        """Fresh client has no cached instructions."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+        assert client._last_initialize_instructions is None
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_captures_instructions_from_initialize(self, mock_session_cls):
+        """Instructions from upstream initialize() are captured and stripped."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+
+        mock_session = AsyncMock()
+        init_result = MagicMock()
+        init_result.instructions = "  upstream says hello  "
+        mock_session.initialize = AsyncMock(return_value=init_result)
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        async def _op(session):
+            return "done"
+
+        await client._execute_session_operation(transport_ctx, _op)
+        assert client._last_initialize_instructions == "upstream says hello"
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_none_instructions_stays_none(self, mock_session_cls):
+        """When upstream returns no instructions the field stays None."""
+        client = MCPClient(
+            server_url="http://example.com/mcp",
+            transport_type="http",
+        )
+
+        mock_session = AsyncMock()
+        init_result = MagicMock()
+        init_result.instructions = None
+        mock_session.initialize = AsyncMock(return_value=init_result)
+
+        session_ctx = MagicMock()
+        session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        session_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_session_cls.return_value = session_ctx
+
+        transport_ctx = MagicMock()
+        transport_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        transport_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        async def _op(session):
+            return "done"
+
+        await client._execute_session_operation(transport_ctx, _op)
+        assert client._last_initialize_instructions is None
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 
 from typing import Any, Optional, cast
 
+from litellm._logging import _redact_string
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.types.realtime import RealtimeQueryParams
 
@@ -148,11 +149,11 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
-            await websocket.close(code=e.status_code, reason=str(e))
+            await websocket.close(code=e.status_code, reason=_redact_string(str(e)))
         except Exception as e:
             try:
                 await websocket.close(
-                    code=1011, reason=f"Internal server error: {str(e)}"
+                    code=1011, reason=_redact_string(f"Internal server error: {str(e)}")
                 )
             except RuntimeError as close_error:
                 if "already completed" in str(close_error) or "websocket.close" in str(

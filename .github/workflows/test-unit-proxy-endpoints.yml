@@ -2,7 +2,11 @@ name: "Unit Tests: Proxy API Endpoints"
 
 on:
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
+      - "litellm_**"
 
 permissions:
   contents: read

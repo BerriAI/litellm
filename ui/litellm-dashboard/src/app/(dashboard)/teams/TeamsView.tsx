@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { teamDeleteCall, Organization } from "@/components/networking";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import { Form } from "antd";
@@ -54,6 +56,7 @@ const TeamsView: React.FC<TeamProps> = ({
   organizations,
   premiumUser = false,
 }) => {
+  const queryClient = useQueryClient();
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState<FilterState>({
@@ -138,6 +141,7 @@ const TeamsView: React.FC<TeamProps> = ({
 
     try {
       await teamDeleteCall(accessToken, teamToDelete);
+      queryClient.invalidateQueries({ queryKey: organizationKeys.all });
       // Successfully completed the deletion. Update the state to trigger a rerender.
       fetchTeams(accessToken, userID, userRole, currentOrg, setTeams);
     } catch (error) {

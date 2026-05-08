@@ -222,5 +222,7 @@ class TestAzureAnthropicChatCompletion:
 
         # Verify non-streaming was handled
         mock_client.post.assert_called_once()
+        mock_get_client.assert_called_once_with(params={"timeout": timeout})
+        assert mock_client.post.call_args.kwargs["timeout"] == timeout
         assert result is not None
 

@@ -933,6 +933,7 @@ if MCP_AVAILABLE:
                 authorization_url=request.authorization_url,
                 registration_url=request.registration_url,
                 oauth2_flow=_oauth2_flow,
+                instructions=request.instructions,
             )
 
             stdio_env = global_mcp_server_manager._build_stdio_env(

@@ -54,7 +54,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
-    DAILY_TAG_SPEND_BATCH_MULTIPLIER
+    DAILY_TAG_SPEND_BATCH_MULTIPLIER,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -1139,7 +1139,54 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
 
 
 router = APIRouter()
-origins = ["*"]
+
+
+def _get_cors_config(
+    cors_origins_env: Optional[str] = None,
+    cors_credentials_env: Optional[str] = None,
+):
+    """
+    Compute CORS allowed origins and credentials flag from environment variables.
+
+    Extracted into a function so it can be unit-tested without reloading the module.
+
+    Args:
+        cors_origins_env: Value of LITELLM_CORS_ORIGINS (defaults to os.getenv).
+        cors_credentials_env: Value of LITELLM_CORS_ALLOW_CREDENTIALS (defaults to os.getenv).
+
+    Returns:
+        Tuple[List[str], bool]: (origins, allow_credentials)
+    """
+    _origins_raw = (
+        cors_origins_env
+        if cors_origins_env is not None
+        else os.getenv("LITELLM_CORS_ORIGINS")
+    )
+    if _origins_raw is None or _origins_raw.strip() == "":
+        computed_origins = ["*"]
+    else:
+        computed_origins = [o.strip() for o in _origins_raw.split(",") if o.strip()]
+
+    # Disable credentials by default when wildcard origins are used — combining
+    # allow_origins=["*"] with allow_credentials=True causes Starlette to reflect
+    # the incoming Origin header, allowing any site to make credentialed requests.
+    # Set LITELLM_CORS_ALLOW_CREDENTIALS=true to explicitly restore the old behaviour
+    # (e.g. for non-browser clients that relied on the Access-Control-Allow-Credentials
+    # header being present regardless of origin).
+    _credentials_raw = (
+        cors_credentials_env
+        if cors_credentials_env is not None
+        else os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS")
+    )
+    if _credentials_raw is not None:
+        computed_credentials = _credentials_raw.strip().lower() == "true"
+    else:
+        computed_credentials = "*" not in computed_origins
+
+    return computed_origins, computed_credentials
+
+
+origins, allow_cors_credentials = _get_cors_config()
 
 
 # get current directory
@@ -1466,7 +1513,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=allow_cors_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=LITELLM_UI_ALLOW_HEADERS,
@@ -1870,26 +1917,20 @@ async def update_cache(  # noqa: PLR0915
         ## CHECK IF USER PROJECTED SPEND > SOFT LIMIT
         if (
             existing_spend_obj.soft_budget_cooldown is False
-            and existing_spend_obj.litellm_budget_table is not None
+            and existing_spend_obj.soft_budget is not None
             and (
                 _is_projected_spend_over_limit(
                     current_spend=new_spend,
-                    soft_budget_limit=existing_spend_obj.litellm_budget_table[
-                        "soft_budget"
-                    ],
+                    soft_budget_limit=existing_spend_obj.soft_budget,
                 )
                 is True
             )
         ):
             projected_spend, projected_exceeded_date = _get_projected_spend_over_limit(
                 current_spend=new_spend,
-                soft_budget_limit=existing_spend_obj.litellm_budget_table.get(
-                    "soft_budget", None
-                ),
+                soft_budget_limit=existing_spend_obj.soft_budget,
             )  # type: ignore
-            soft_limit = existing_spend_obj.litellm_budget_table.get(
-                "soft_budget", float("inf")
-            )
+            soft_limit = existing_spend_obj.soft_budget
             call_info = CallInfo(
                 token=existing_spend_obj.token or "",
                 spend=new_spend,
@@ -1897,7 +1938,7 @@ async def update_cache(  # noqa: PLR0915
                 max_budget=soft_limit,
                 user_id=existing_spend_obj.user_id,
                 projected_spend=projected_spend,
-                projected_exceeded_date=projected_exceeded_date,
+                projected_exceeded_date=str(projected_exceeded_date),
                 event_group=Litellm_EntityType.KEY,
             )
             # alert user
@@ -2315,9 +2356,13 @@ def _write_health_state_to_router_cache(
 
             exception_status = getattr(original_exception, "status_code", 500)
 
-            if llm_router.health_check_ignore_transient_errors and exception_status in (
-                429,
-                408,
+            if (
+                llm_router.health_check_ignore_transient_errors
+                and exception_status
+                in (
+                    429,
+                    408,
+                )
             ):
                 continue
 
@@ -6286,7 +6331,9 @@ class ProxyStartupEvent:
 
         ### UPDATE DAILY TAG SPEND (separate scheduler job with longer interval) ###
         ## Reduces QPS as there are more tags for a single request
-        tag_spend_update_interval = int(batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER)
+        tag_spend_update_interval = int(
+            batch_writing_interval * DAILY_TAG_SPEND_BATCH_MULTIPLIER
+        )
         from litellm.proxy.utils import update_daily_tag_spend
 
         scheduler.add_job(
@@ -7131,9 +7178,9 @@ async def chat_completion(  # noqa: PLR0915
             hasattr(user_api_key_dict, "organization_alias")
             and user_api_key_dict.organization_alias is not None
         ):
-            data["metadata"]["user_api_key_org_alias"] = (
-                user_api_key_dict.organization_alias
-            )
+            data["metadata"][
+                "user_api_key_org_alias"
+            ] = user_api_key_dict.organization_alias
         if (
             hasattr(user_api_key_dict, "agent_id")
             and user_api_key_dict.agent_id is not None
@@ -7312,9 +7359,9 @@ async def completion(  # noqa: PLR0915
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"]["user_api_key_org_alias"] = (
-                    user_api_key_dict.organization_alias
-                )
+                data["metadata"][
+                    "user_api_key_org_alias"
+                ] = user_api_key_dict.organization_alias
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None
@@ -7561,9 +7608,9 @@ async def embeddings(  # noqa: PLR0915
                 hasattr(user_api_key_dict, "organization_alias")
                 and user_api_key_dict.organization_alias is not None
             ):
-                data["metadata"]["user_api_key_org_alias"] = (
-                    user_api_key_dict.organization_alias
-                )
+                data["metadata"][
+                    "user_api_key_org_alias"
+                ] = user_api_key_dict.organization_alias
             if (
                 hasattr(user_api_key_dict, "agent_id")
                 and user_api_key_dict.agent_id is not None

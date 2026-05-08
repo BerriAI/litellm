@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy._types import KeyManagementRoutes, Member
+from litellm.proxy._types import KeyManagementRoutes, Member, ProxyException
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     BASELINE_TEAM_MEMBER_PERMISSIONS,
     TeamMemberPermissionChecks,
@@ -188,3 +188,74 @@ class TestGetDefaultTeamParam:
         assert _get_default_team_param("budget_duration") == "7d"
         assert _get_default_team_param("tpm_limit") == 1000
         assert _get_default_team_param("rpm_limit") == 100
+
+
+class TestCanTeamMemberExecuteKeyManagementEndpoint:
+    @pytest.mark.asyncio
+    async def test_raises_when_user_not_in_keys_team(self, monkeypatch):
+        """Non-members should be blocked from team-scoped key management endpoints."""
+        from litellm.proxy.management_endpoints import key_management_endpoints
+        from litellm.proxy.management_helpers import team_member_permission_checks as module
+
+        async def _mock_get_team_object(**kwargs):
+            team = MagicMock()
+            team.team_id = "team-b"
+            team.team_member_permissions = ["/key/update"]
+            return team
+
+        monkeypatch.setattr(module, "get_team_object", _mock_get_team_object)
+        monkeypatch.setattr(key_management_endpoints, "_get_user_in_team", lambda **kwargs: None)
+
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.user_role = "internal_user"
+        user_api_key_dict.user_id = "user-a"
+        user_api_key_dict.parent_otel_span = None
+
+        existing_key_row = MagicMock()
+        existing_key_row.team_id = "team-b"
+
+        with pytest.raises(ProxyException) as exc:
+            await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+                user_api_key_dict=user_api_key_dict,
+                route=KeyManagementRoutes.KEY_UPDATE,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                existing_key_row=existing_key_row,
+            )
+        assert str(exc.value.code) == "401"
+        assert exc.value.type == "team_member_permission_error"
+
+    @pytest.mark.asyncio
+    async def test_allows_team_admin_in_keys_team(self, monkeypatch):
+        """Team admins of the key's team should be allowed."""
+        from litellm.proxy.management_endpoints import key_management_endpoints
+        from litellm.proxy.management_helpers import team_member_permission_checks as module
+
+        async def _mock_get_team_object(**kwargs):
+            team = MagicMock()
+            team.team_id = "team-a"
+            team.team_member_permissions = ["/key/update"]
+            return team
+
+        monkeypatch.setattr(module, "get_team_object", _mock_get_team_object)
+        monkeypatch.setattr(
+            key_management_endpoints,
+            "_get_user_in_team",
+            lambda **kwargs: Member(role="admin", user_id="user-a"),
+        )
+
+        user_api_key_dict = MagicMock()
+        user_api_key_dict.user_role = "internal_user"
+        user_api_key_dict.user_id = "user-a"
+        user_api_key_dict.parent_otel_span = None
+
+        existing_key_row = MagicMock()
+        existing_key_row.team_id = "team-a"
+
+        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            route=KeyManagementRoutes.KEY_UPDATE,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            existing_key_row=existing_key_row,
+        )

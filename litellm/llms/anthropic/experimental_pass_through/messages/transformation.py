@@ -166,6 +166,36 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         return headers, api_base
 
+    @staticmethod
+    def _translate_legacy_thinking_for_adaptive_model(
+        model: str, optional_params: Dict
+    ) -> None:
+        """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
+        Caller-provided ``output_config.effort`` is never overridden.
+        """
+        if not AnthropicModelInfo._is_adaptive_thinking_model(model):
+            return
+        thinking = optional_params.get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "enabled":
+            return
+
+        budget = int(thinking.get("budget_tokens") or 0)
+        if budget >= 24000:
+            effort = "xhigh"
+        elif budget >= 10000:
+            effort = "high"
+        elif budget >= 5000:
+            effort = "medium"
+        else:
+            effort = "low"
+
+        optional_params["thinking"] = {"type": "adaptive"}
+        existing_output_config = optional_params.get("output_config")
+        if not isinstance(existing_output_config, dict):
+            existing_output_config = {}
+        existing_output_config.setdefault("effort", effort)
+        optional_params["output_config"] = existing_output_config
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -186,6 +216,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 message="max_tokens is required for Anthropic /v1/messages API",
                 status_code=400,
             )
+
+        self._translate_legacy_thinking_for_adaptive_model(
+            model=model,
+            optional_params=anthropic_messages_optional_request_params,
+        )
 
         # Filter out x-anthropic-billing-header from system messages
         system_param = anthropic_messages_optional_request_params.get("system")

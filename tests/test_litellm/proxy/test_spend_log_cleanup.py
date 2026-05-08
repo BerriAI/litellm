@@ -287,9 +287,48 @@ def test_string_retention_still_works():
             general_settings={"maximum_spend_logs_retention_period": setting}
         )
         assert cleaner._should_delete_spend_logs() is True, f"Failed for {setting}"
-        assert cleaner.retention_seconds == expected_seconds, (
-            f"Expected {expected_seconds} for {setting}, got {cleaner.retention_seconds}"
-        )
+        assert (
+            cleaner.retention_seconds == expected_seconds
+        ), f"Expected {expected_seconds} for {setting}, got {cleaner.retention_seconds}"
+
+
+@pytest.mark.asyncio
+async def test_delete_old_logs_aborts_on_non_int_execute_raw_return():
+    """should abort deletion loop immediately when execute_raw returns a non-int
+    (e.g. None or dict), preventing an infinite loop."""
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    mock_db.execute_raw = AsyncMock(return_value=None)
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": "7d"}
+    )
+
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
+    total_deleted = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date)
+
+    assert mock_db.execute_raw.call_count == 1
+    assert total_deleted == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_old_logs_continues_on_valid_int_return():
+    """should continue deletion loop across batches when execute_raw returns valid int counts."""
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    mock_db.execute_raw = AsyncMock(side_effect=[500, 300, 0])
+    mock_prisma_client.db = mock_db
+
+    cleaner = SpendLogCleanup(
+        general_settings={"maximum_spend_logs_retention_period": "7d"}
+    )
+
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=7)
+    total_deleted = await cleaner._delete_old_logs(mock_prisma_client, cutoff_date)
+
+    assert mock_db.execute_raw.call_count == 3
+    assert total_deleted == 800
 
 
 def test_cleanup_batch_size_env_var(monkeypatch):

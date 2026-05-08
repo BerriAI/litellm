@@ -150,7 +150,7 @@ def is_request_body_safe(
     A malicious user can set the ﻿api_base to their own domain and invoke POST /chat/completions to intercept and steal the OpenAI API key.
     Relevant issue: https://huntr.com/bounties/4001e1a2-7b7a-4776-a3ae-e6692ec3d997
     """
-    banned_params = ["api_base", "base_url"]
+    banned_params = ["api_base", "base_url", "user_config"]
 
     for param in banned_params:
         if (

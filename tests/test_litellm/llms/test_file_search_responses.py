@@ -28,6 +28,7 @@ from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfi
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_unified_vs_id(
     unified_uuid: str = "abc-123",
     provider_resource_id: str = "vs_provider_native",
@@ -60,6 +61,7 @@ def _code_interpreter_tool(file_ids: Optional[List[str]] = None) -> Dict[str, An
 # ---------------------------------------------------------------------------
 # A-series: _decode_vector_store_ids_in_tools
 # ---------------------------------------------------------------------------
+
 
 class TestDecodeVectorStoreIdsInTools:
     def test_A1_none_input_returns_none(self):
@@ -108,6 +110,7 @@ class TestDecodeVectorStoreIdsInTools:
 # ---------------------------------------------------------------------------
 # B-series: update_responses_tools_with_model_file_ids
 # ---------------------------------------------------------------------------
+
 
 class TestUpdateResponsesToolsWithModelFileIds:
     def test_B1_file_search_decode_runs_without_mapping(self):
@@ -164,6 +167,7 @@ class TestUpdateResponsesToolsWithModelFileIds:
 # C/D-series: supports_native_file_search
 # ---------------------------------------------------------------------------
 
+
 class TestSupportsNativeFileSearch:
     def test_C1_base_class_default_is_false(self):
         # Access the unbound method directly — no need to instantiate an abstract class
@@ -176,6 +180,7 @@ class TestSupportsNativeFileSearch:
 # ---------------------------------------------------------------------------
 # E-series: file_search guard in responses/main.py
 # ---------------------------------------------------------------------------
+
 
 class TestFileSearchGuardInResponsesMain:
     """Tests for _has_file_search_tool helper and emulated routing guard."""
@@ -238,7 +243,9 @@ class TestFileSearchGuardInResponsesMain:
                 "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
                 return_value={},
             ),
-            patch("litellm.responses.main.run_async_function", return_value=expected) as run_async_mock,
+            patch(
+                "litellm.responses.main.run_async_function", return_value=expected
+            ) as run_async_mock,
         ):
             result = responses(
                 input="hello",
@@ -287,7 +294,9 @@ class TestFileSearchGuardInResponsesMain:
                 "litellm.responses.main.ResponsesAPIRequestUtils.get_requested_response_api_optional_param",
                 return_value={},
             ),
-            patch("litellm.responses.main.run_async_function", return_value=expected) as run_async_mock,
+            patch(
+                "litellm.responses.main.run_async_function", return_value=expected
+            ) as run_async_mock,
         ):
             result = responses(
                 input="hello",
@@ -313,6 +322,7 @@ class TestFileSearchGuardInResponsesMain:
 # ---------------------------------------------------------------------------
 # F-series: ManagedFiles hook — vector_store_ids access control
 # ---------------------------------------------------------------------------
+
 
 class TestManagedFilesVectorStoreAccess:
     def _make_hook(self):
@@ -372,15 +382,20 @@ class TestManagedFilesVectorStoreAccess:
 
         mock_row = self._make_vs_row(vector_store_id="uuid-001", team_id="team-other")
 
-        async def mock_get_rows(uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None):
+        async def mock_get_rows(
+            uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None
+        ):
             return [mock_row]
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            MagicMock(),
-        ), patch(
-            "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
-            side_effect=mock_get_rows,
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
+                side_effect=mock_get_rows,
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await hook.check_vector_store_ids_access(
@@ -396,15 +411,20 @@ class TestManagedFilesVectorStoreAccess:
 
         mock_row = self._make_vs_row(vector_store_id="uuid-002", team_id=None)
 
-        async def mock_get_rows(uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None):
+        async def mock_get_rows(
+            uuids, prisma_client, user_api_key_cache, proxy_logging_obj=None
+        ):
             return [mock_row]
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            MagicMock(),
-        ), patch(
-            "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
-            side_effect=mock_get_rows,
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
+                side_effect=mock_get_rows,
+            ),
         ):
             await hook.check_vector_store_ids_access(
                 [unified_id], self._make_user(team_id="team-caller")
@@ -415,7 +435,9 @@ class TestManagedFilesVectorStoreAccess:
         """Multiple unified IDs resolved in a single DB call (no N+1)."""
         hook = self._make_hook()
         ids = [
-            _make_unified_vs_id(unified_uuid=f"uuid-{i}", provider_resource_id=f"vs_{i}")
+            _make_unified_vs_id(
+                unified_uuid=f"uuid-{i}", provider_resource_id=f"vs_{i}"
+            )
             for i in range(3)
         ]
 
@@ -426,18 +448,25 @@ class TestManagedFilesVectorStoreAccess:
 
         get_rows_mock = AsyncMock(return_value=rows)
 
-        with patch(
-            "litellm.proxy.proxy_server.prisma_client",
-            MagicMock(),
-        ), patch(
-            "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
-            get_rows_mock,
+        with (
+            patch(
+                "litellm.proxy.proxy_server.prisma_client",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
+                get_rows_mock,
+            ),
         ):
             await hook.check_vector_store_ids_access(ids, self._make_user("team-abc"))
 
         get_rows_mock.assert_called_once()
         call_args = get_rows_mock.call_args
-        assert set(call_args.kwargs["uuids"] or call_args.args[0]) == {"uuid-0", "uuid-1", "uuid-2"}
+        assert set(call_args.kwargs["uuids"] or call_args.args[0]) == {
+            "uuid-0",
+            "uuid-1",
+            "uuid-2",
+        }
 
     @pytest.mark.asyncio
     async def test_F6_non_responses_call_type_skipped(self):
@@ -455,7 +484,9 @@ class TestManagedFilesVectorStoreAccess:
         await hook.async_pre_call_hook(
             user_api_key_dict=self._make_user(),
             cache=MagicMock(),
-            data={"tools": [{"type": "file_search", "vector_store_ids": ["vs_native"]}]},
+            data={
+                "tools": [{"type": "file_search", "vector_store_ids": ["vs_native"]}]
+            },
             call_type=CallTypes.acompletion.value,
         )
         hook.async_pre_call_hook.assert_called_once()
@@ -464,6 +495,7 @@ class TestManagedFilesVectorStoreAccess:
 # ---------------------------------------------------------------------------
 # G-series: get_vector_store_ids_from_file_search_tools helper
 # ---------------------------------------------------------------------------
+
 
 class TestGetVectorStoreIdsFromFileSearchTools:
     def _make_hook(self):
@@ -494,9 +526,11 @@ class TestGetVectorStoreIdsFromFileSearchTools:
         # Only the unified ID is included; native IDs are filtered
         assert result == [unified_id]
 
+
 # ---------------------------------------------------------------------------
 # Phase 2: Emulated file_search handler
 # ---------------------------------------------------------------------------
+
 
 class TestEmulatedFileSearchHandler:
     """Tests for litellm/responses/file_search/emulated_handler.py"""
@@ -694,7 +728,9 @@ class TestEmulatedFileSearchHandler:
         r2.content = [{"type": "text", "text": "second hit"}]
 
         search_results = _build_search_results_for_include([r1, r2])
-        assert len(search_results) == 2, "Both chunks should be returned, not deduplicated"
+        assert (
+            len(search_results) == 2
+        ), "Both chunks should be returned, not deduplicated"
         assert search_results[0]["text"] == "first hit"
         assert search_results[1]["text"] == "second hit"
 
@@ -708,7 +744,9 @@ class TestEmulatedFileSearchHandler:
         )
 
         first_resp = self._make_mock_responses_api_response(include_function_call=True)
-        final_resp = self._make_mock_responses_api_response(text="Deep research enables multi-step queries.")
+        final_resp = self._make_mock_responses_api_response(
+            text="Deep research enables multi-step queries."
+        )
 
         search_result = MagicMock()
         search_result.file_id = "file-xyz"
@@ -719,12 +757,15 @@ class TestEmulatedFileSearchHandler:
         mock_search_response = MagicMock()
         mock_search_response.data = [search_result]
 
-        with patch(
-            "litellm.responses.file_search.emulated_handler._call_aresponses",
-            new=AsyncMock(side_effect=[first_resp, final_resp]),
-        ), patch(
-            "litellm.vector_stores.main.asearch",
-            new=AsyncMock(return_value=mock_search_response),
+        with (
+            patch(
+                "litellm.responses.file_search.emulated_handler._call_aresponses",
+                new=AsyncMock(side_effect=[first_resp, final_resp]),
+            ),
+            patch(
+                "litellm.vector_stores.main.asearch",
+                new=AsyncMock(return_value=mock_search_response),
+            ),
         ):
             result = await aresponses_with_emulated_file_search(
                 input="What is deep research?",
@@ -767,7 +808,9 @@ class TestEmulatedFileSearchHandler:
         first_resp_plural.model = "claude-3-5-sonnet"
         first_resp_plural.usage = None
 
-        final_resp = self._make_mock_responses_api_response(text="Deep research uses multiple queries.")
+        final_resp = self._make_mock_responses_api_response(
+            text="Deep research uses multiple queries."
+        )
 
         search_result = MagicMock()
         search_result.file_id = "file-multi"
@@ -777,12 +820,15 @@ class TestEmulatedFileSearchHandler:
         mock_search_response = MagicMock()
         mock_search_response.data = [search_result]
 
-        with patch(
-            "litellm.responses.file_search.emulated_handler._call_aresponses",
-            new=AsyncMock(side_effect=[first_resp_plural, final_resp]),
-        ), patch(
-            "litellm.vector_stores.main.asearch",
-            new=AsyncMock(return_value=mock_search_response),
+        with (
+            patch(
+                "litellm.responses.file_search.emulated_handler._call_aresponses",
+                new=AsyncMock(side_effect=[first_resp_plural, final_resp]),
+            ),
+            patch(
+                "litellm.vector_stores.main.asearch",
+                new=AsyncMock(return_value=mock_search_response),
+            ),
         ):
             result = await aresponses_with_emulated_file_search(
                 input="What is deep research?",
@@ -805,7 +851,9 @@ class TestEmulatedFileSearchHandler:
             aresponses_with_emulated_file_search,
         )
 
-        direct_resp = self._make_mock_responses_api_response(text="I already know the answer.")
+        direct_resp = self._make_mock_responses_api_response(
+            text="I already know the answer."
+        )
 
         with patch(
             "litellm.responses.file_search.emulated_handler._call_aresponses",
@@ -835,11 +883,12 @@ class TestEmulatedFileSearchHandler:
 
     @pytest.mark.asyncio
     async def test_H15_sub_calls_carry_internal_call_flag(self):
-        """Both internal aresponses sub-calls receive _is_litellm_internal_call=True.
+        """Both internal aresponses sub-calls run with is_internal_call context var True.
 
         This ensures wrapper_async skips success/failure callbacks for sub-calls so
         billing fires exactly once (on the outer call) with the synthesized result.
         """
+        from litellm._internal_context import is_internal_call
         from litellm.responses.file_search.emulated_handler import (
             aresponses_with_emulated_file_search,
         )
@@ -855,25 +904,21 @@ class TestEmulatedFileSearchHandler:
         mock_search_response = MagicMock()
         mock_search_response.data = [search_result]
 
-        captured_kwargs: list = []
-
-        async def _capture(*args, **kwargs):
-            captured_kwargs.append(dict(kwargs))
-            return captured_kwargs.__len__() == 1 and first_resp or final_resp
-
-        with patch(
-            "litellm.responses.file_search.emulated_handler._call_aresponses",
-            new=AsyncMock(side_effect=[first_resp, final_resp]),
-        ) as mock_call, patch(
-            "litellm.vector_stores.main.asearch",
-            new=AsyncMock(return_value=mock_search_response),
+        with (
+            patch(
+                "litellm.responses.file_search.emulated_handler._call_aresponses",
+                new=AsyncMock(side_effect=[first_resp, final_resp]),
+            ) as mock_call,
+            patch(
+                "litellm.vector_stores.main.asearch",
+                new=AsyncMock(return_value=mock_search_response),
+            ),
         ):
-            # Intercept kwargs before the mock returns
+            captured_ctx: list = []
             original_side_effect = [first_resp, final_resp]
-            call_kwargs: list = []
 
             async def _intercept(**kwargs):  # type: ignore[misc]
-                call_kwargs.append(dict(kwargs))
+                captured_ctx.append(is_internal_call.get())
                 return original_side_effect.pop(0)
 
             mock_call.side_effect = _intercept
@@ -884,9 +929,9 @@ class TestEmulatedFileSearchHandler:
                 tools=[{"type": "file_search", "vector_store_ids": ["vs_h15"]}],
             )
 
-        assert len(call_kwargs) == 2, "Expected exactly 2 sub-calls"
-        for i, kw in enumerate(call_kwargs):
-            assert kw.get("_is_litellm_internal_call") is True, (
-                f"Sub-call {i} must carry _is_litellm_internal_call=True to suppress "
+        assert len(captured_ctx) == 2, "Expected exactly 2 sub-calls"
+        for i, ctx_val in enumerate(captured_ctx):
+            assert ctx_val is True, (
+                f"Sub-call {i} must run with is_internal_call=True to suppress "
                 "billing callbacks in wrapper_async"
             )
