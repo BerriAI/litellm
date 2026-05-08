@@ -10,7 +10,7 @@ import pytest
 from fastapi import Request
 from starlette.datastructures import State
 
-from litellm.proxy.utils import _get_docs_url, _get_redoc_url
+from litellm.proxy.utils import _get_docs_url, _get_openapi_url, _get_redoc_url
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -733,6 +733,30 @@ def test_get_docs_url(env_vars, expected_url):
         os.environ[key] = value
 
     result = _get_docs_url()
+    assert result == expected_url
+
+@pytest.mark.parametrize(
+    "env_vars, expected_url",
+    [
+        ({}, "/openapi.json"),  # default case
+        ({"OPENAPI_URL": "/custom-openapi.json"}, "/custom-openapi.json"),  # custom URL
+        (
+            {"OPENAPI_URL": "https://example.com/openapi.json"},
+            "https://example.com/openapi.json",
+        ),  # full URL
+        ({"NO_OPENAPI": "True"}, None),  # openapi disabled
+    ],
+)
+def test_get_openapi_url(env_vars, expected_url):
+    # Clear relevant environment variables
+    for key in ["OPENAPI_URL", "NO_OPENAPI"]:
+        os.environ.pop(key, None)
+
+    # Set test environment variables
+    for key, value in env_vars.items():
+        os.environ[key] = value
+
+    result = _get_openapi_url()
     assert result == expected_url
 
 

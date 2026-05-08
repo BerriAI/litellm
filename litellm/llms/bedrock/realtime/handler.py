@@ -8,7 +8,7 @@ import asyncio
 import json
 from typing import Any, Optional
 
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 from ..base_aws_llm import BaseAWSLLM
@@ -152,7 +152,7 @@ class BedrockRealtime(BaseAWSLLM):
                 f"Error in BedrockRealtime.async_realtime: {e}"
             )
             try:
-                await websocket.close(code=1011, reason=f"Internal error: {str(e)}")
+                await websocket.close(code=1011, reason=_redact_string(f"Internal error: {str(e)}"))
             except Exception:
                 pass
             raise

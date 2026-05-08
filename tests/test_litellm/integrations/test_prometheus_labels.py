@@ -69,6 +69,21 @@ def test_model_id_in_required_metrics():
         print(f"✅ {metric_name} contains model_id label")
 
 
+def test_api_provider_in_spend_and_requests_metrics():
+    """
+    Test that api_provider label is present in spend and requests metrics
+    so users can build spend-by-provider and request-count-by-provider dashboards.
+    """
+    api_provider_label = UserAPIKeyLabelNames.API_PROVIDER.value
+
+    for metric_name in ["litellm_spend_metric", "litellm_requests_metric"]:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert (
+            api_provider_label in labels
+        ), f"Metric {metric_name} should contain api_provider label"
+        print(f"✅ {metric_name} contains api_provider label")
+
+
 def test_user_email_label_exists():
     """Test that the USER_EMAIL label is properly defined"""
     assert UserAPIKeyLabelNames.USER_EMAIL.value == "user_email"

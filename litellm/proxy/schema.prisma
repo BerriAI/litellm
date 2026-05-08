@@ -289,6 +289,7 @@ model LiteLLM_MCPServerTable {
   server_name  String?
   alias        String?
   description  String?
+  instructions String?
   url          String?
   spec_path    String?
   transport    String         @default("sse")
@@ -1045,6 +1046,7 @@ model LiteLLM_HealthCheckTable {
   @@index([model_name])
   @@index([checked_at])
   @@index([status])
+  @@index([model_id, model_name, checked_at(sort: Desc)], map: "LiteLLM_HealthCheckTable_model_id_model_name_checked_at_idx")
 }
 
 // Search Tools table for storing search tool configurations

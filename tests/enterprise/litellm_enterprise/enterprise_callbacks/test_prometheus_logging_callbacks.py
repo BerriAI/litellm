@@ -605,6 +605,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         org_alias=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
+        api_provider="openai",
         client_ip=None,
         user_agent=None,
     )
@@ -623,6 +624,7 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         org_alias=None,
         model="gpt-3.5-turbo",
         model_id="model-123",
+        api_provider="openai",
         client_ip=None,
         user_agent=None,
     )

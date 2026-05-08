@@ -320,29 +320,30 @@ async def test_generationconfig_to_config_mapping(sample_request_payload):
     for Google GenAI compatibility in the main functions.
     """
     from litellm.google_genai.main import agenerate_content
-    
+
     # Create a copy of the payload to avoid modifying the fixture
     test_data = sample_request_payload.copy()
-    
-    # Test that agenerate_content can handle generationConfig parameter
-    # This should not raise an error about parameter handling
-    try:
-        # This will fail due to missing API key, but should not fail due to parameter handling
+
+    with patch(
+        "litellm.google_genai.main.base_llm_http_handler.generate_content_handler"
+    ) as mock_generate_content_handler:
+        mock_generate_content_handler.return_value = {"text": "mock response"}
+
         await agenerate_content(
             model="gemini/gemini-2.5-flash",
             contents=test_data["contents"],
-            generationConfig=test_data["generationConfig"],  # Pass as generationConfig
-            custom_llm_provider="gemini"
+            generationConfig=test_data["generationConfig"],
+            custom_llm_provider="gemini",
         )
-    except Exception as e:
-        # Should not fail due to parameter handling issues
-        error_msg = str(e).lower()
-        if "generationconfig" in error_msg or "config" in error_msg or "parameter" in error_msg:
-            pytest.fail(f"Parameter handling failed: {e}")
-        # Other errors (like API key missing) are expected
-        print(f"✅ Parameter handling worked (API error expected): {type(e).__name__}")
-    
-    print("✅ generationConfig to config mapping test passed")
+
+    mock_generate_content_handler.assert_called_once()
+    generate_content_config_dict = mock_generate_content_handler.call_args.kwargs[
+        "generate_content_config_dict"
+    ]
+    assert generate_content_config_dict["temperature"] == 0
+    assert generate_content_config_dict["topP"] == 1
+    assert generate_content_config_dict["responseMimeType"] == "application/json"
+    assert "responseJsonSchema" in generate_content_config_dict
 
 
 @pytest.mark.asyncio
@@ -405,7 +406,7 @@ async def test_gemini_custom_api_base_proxy_integration():
     print(f"✅ Custom API base streaming URL test passed: {result_url_streaming}")
     
     # Test case 3: Error handling - missing API key
-    with pytest.raises(ValueError, match="Missing gemini_api_key"):
+    with pytest.raises(ValueError, match="Missing Gemini API key"):
         vertex_base._check_custom_proxy(
             api_base=custom_api_base,
             custom_llm_provider="gemini",

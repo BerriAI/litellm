@@ -340,6 +340,35 @@ async def update_credential(
                 "updated_by": user_api_key_dict.user_id,
             },
         )
+
+        # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
+        new_name = merged_credential.credential_name
+        existing_in_memory: Optional[CredentialItem] = None
+        for cred in litellm.credential_list:
+            if cred.credential_name == credential_name:
+                existing_in_memory = cred
+                break
+
+        if existing_in_memory is not None:
+            in_memory_values = dict(existing_in_memory.credential_values or {})
+            if credential.credential_values:
+                in_memory_values.update(credential.credential_values)
+            in_memory_info = dict(existing_in_memory.credential_info or {})
+            if credential.credential_info:
+                in_memory_info.update(credential.credential_info)
+            updated_in_memory = CredentialItem(
+                credential_name=new_name,
+                credential_values=in_memory_values,
+                credential_info=in_memory_info,
+            )
+            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
+            if new_name != credential_name:
+                litellm.credential_list = [
+                    c for c in litellm.credential_list
+                    if c.credential_name != credential_name
+                ]
+            CredentialAccessor.upsert_credentials([updated_in_memory])
+
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)

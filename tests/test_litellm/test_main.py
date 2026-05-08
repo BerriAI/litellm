@@ -213,6 +213,8 @@ async def test_url_with_format_param(model, sync_mode, monkeypatch):
             }
         ],
     }
+    if model.startswith("gemini/"):
+        args["api_key"] = "test-api-key"
     with patch.object(client, "post", new=MagicMock()) as mock_client:
         try:
             if sync_mode:

@@ -3140,9 +3140,14 @@ def test_add_additional_properties_definitions():
     assert result["definitions"]["Item"]["properties"]["details"]["additionalProperties"] is False
 
 
-def test_json_object_no_schema_falls_back_to_tool_call():
-    """response_format: {type: json_object} with no schema should use tool-call fallback,
-    even for models that support native structured outputs."""
+def test_json_object_no_schema_skips_tool_injection():
+    """response_format: {type: json_object} with no schema should NOT inject
+    the synthetic json_tool_call tool.
+
+    When no schema is given, _create_json_tool_call_for_response_format builds
+    a tool with an empty schema (properties: {}). The model follows the schema
+    and returns {} instead of the requested JSON. Skipping tool injection lets
+    the model respond naturally with the JSON the caller asked for."""
     old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
     old_cost = litellm.model_cost
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -3162,8 +3167,9 @@ def test_json_object_no_schema_falls_back_to_tool_call():
 
         # Should NOT use native outputConfig (no schema provided)
         assert "outputConfig" not in result
-        # Should use tool-call fallback
-        assert "tools" in result
+        # Should NOT inject tools - empty schema causes model to return {}
+        assert "tools" not in result
+        assert "tool_choice" not in result
         assert result["json_mode"] is True
     finally:
         litellm.model_cost = old_cost
@@ -3655,3 +3661,140 @@ def test_cache_control_injection_tool_config_not_added_without_injection_point()
     tools = result["toolConfig"]["tools"]
     # No cachePoint should be appended
     assert all("cachePoint" not in tool for tool in tools)
+
+
+def test_translate_response_format_json_schema_still_injects_tool():
+    """
+    response_format with an explicit json_schema should still use the
+    synthetic tool call approach (for models that don't support native
+    structured outputs).
+    """
+    config = AmazonConverseConfig()
+
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "FactResult",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "facts": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["facts"],
+            },
+        },
+    }
+
+    optional_params: dict = {}
+    result = config._translate_response_format_param(
+        value=response_format,
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        optional_params=optional_params,
+        non_default_params={"response_format": response_format},
+        is_thinking_enabled=False,
+    )
+
+    assert result["json_mode"] is True
+    assert "tools" in result
+    assert "tool_choice" in result
+
+
+def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools():
+    """
+    When json_mode is True and _filter_json_mode_tools strips all synthetic
+    tool calls, finish_reason should be "stop", not "tool_calls".
+
+    Bedrock returns stopReason="tool_use" for json_tool_call responses.
+    After filtering, the response is plain JSON content and should not look
+    like a pending tool invocation to callers.
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_001",
+                            "name": "json_tool_call",
+                            "input": {
+                                "facts": ["Bob is a software engineer"],
+                            },
+                        }
+                    }
+                ],
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {
+            "inputTokens": 50,
+            "outputTokens": 20,
+            "totalTokens": 70,
+            "cacheReadInputTokenCount": 0,
+            "cacheReadInputTokens": 0,
+            "cacheWriteInputTokenCount": 0,
+            "cacheWriteInputTokens": 0,
+        },
+    }
+
+    class MockResponse:
+        def json(self):
+            return response_json
+
+        @property
+        def text(self):
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+
+    # Simulate what happens when json_tool_call was injected for a
+    # json_schema request: optional_params has the synthetic tool
+    optional_params = {
+        "json_mode": True,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "json_tool_call",
+                    "parameters": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {},
+                    },
+                },
+            }
+        ],
+    }
+
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params=optional_params,
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    # Content should have the JSON from the tool call arguments
+    content = result.choices[0].message.content
+    assert content is not None
+    parsed = json.loads(content)
+    assert parsed["facts"] == ["Bob is a software engineer"]
+
+    # No tool_calls on the message
+    assert result.choices[0].message.tool_calls is None
+
+    # finish_reason must be "stop", not "tool_calls"
+    assert result.choices[0].finish_reason == "stop"
