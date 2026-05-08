@@ -123,6 +123,10 @@ async def run_async_fallback(
     for mg in fallback_model_group:
         if mg == original_model_group:
             continue
+        # Bind before try so except always has a defined dict; reset each
+        # iteration so we never log a stale copy from a prior attempt. Until
+        # safe_deep_copy runs, this aliases the caller kwargs (same as legacy).
+        fallback_kwargs = kwargs
         try:
             # Keep each fallback attempt isolated from mutations made while
             # preparing or sending a previous attempt.
