@@ -297,6 +297,7 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
               valueFormatter={valueFormatter}
               customTooltip={CustomTooltip}
               showLegend={false}
+              yAxisWidth={80}
             />
           </Card>
           <Card>
@@ -313,9 +314,10 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({ modelMetrics, 
               index="date"
               categories={["metrics.successful_requests", "metrics.failed_requests"]}
               colors={["emerald", "red"]}
-              valueFormatter={(number: number) => number.toLocaleString()}
+              valueFormatter={valueFormatter}
               customTooltip={CustomTooltip}
               showLegend={false}
+              yAxisWidth={80}
             />
           </Card>
         </Grid>
