@@ -456,11 +456,14 @@ def test_vertex_ai_anthropic_no_extra_headers_unchanged():
     assert "anthropic-beta" not in headers
 
 
-def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header():
+def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_header(
+    monkeypatch,
+):
     """
     Test that remove_unsupported_beta correctly filters out prompt-caching-scope-2026-01-05
     from the anthropic-beta headers.
     """
+    monkeypatch.delenv("LITELLM_EXTRA_ANTHROPIC_BETA_HEADERS", raising=False)
     from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
         VertexAIPartnerModelsAnthropicMessagesConfig,
     )

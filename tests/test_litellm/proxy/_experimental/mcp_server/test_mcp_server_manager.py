@@ -1326,6 +1326,7 @@ class TestMCPServerManager:
                             "get": {
                                 "operationId": "health_check",
                                 "summary": "health",
+                                "responses": {"200": {"description": "OK"}},
                             }
                         }
                     },
@@ -1345,7 +1346,7 @@ class TestMCPServerManager:
 
         captured: dict = {}
 
-        def fake_create_tool_function(path, method, operation, base_url, headers=None):
+        def fake_create_tool_function(path, method, operation, base_url, headers=None, **kwargs):
             captured["headers"] = headers
 
             async def tool_func(**kwargs):

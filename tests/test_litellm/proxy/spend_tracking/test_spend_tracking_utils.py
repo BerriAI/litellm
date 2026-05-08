@@ -52,10 +52,8 @@ def test_sanitize_request_body_for_spend_logs_payload_basic():
 def test_sanitize_request_body_for_spend_logs_payload_long_string():
     from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
 
-    # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB (2048)
-    long_string = (
-        "a" * 3000
-    )  # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB
+    # Create a string longer than MAX_STRING_LENGTH_PROMPT_IN_DB regardless of env override
+    long_string = "a" * (MAX_STRING_LENGTH_PROMPT_IN_DB + 1000)
     request_body = {"text": long_string, "normal_text": "short text"}
     sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
 

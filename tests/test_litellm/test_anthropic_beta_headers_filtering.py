@@ -119,8 +119,9 @@ class TestAnthropicBetaHeadersFiltering:
                 unknown not in filtered
             ), f"Unknown header '{unknown}' should be filtered out for {provider}"
 
-    def test_update_request_with_filtered_beta_vertex_ai(self):
+    def test_update_request_with_filtered_beta_vertex_ai(self, monkeypatch):
         """Test combined filtering for both HTTP headers and request body betas."""
+        monkeypatch.delenv("LITELLM_EXTRA_ANTHROPIC_BETA_HEADERS", raising=False)
         headers = {
             "anthropic-beta": "files-api-2025-04-14,context-management-2025-06-27,code-execution-2025-05-22"
         }

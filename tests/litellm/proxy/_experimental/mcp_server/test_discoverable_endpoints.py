@@ -244,10 +244,14 @@ async def test_register_client_without_mcp_server_name_returns_dummy():
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             register_client,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
         from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
+    global_mcp_server_manager.registry.clear()
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "https://proxy.litellm.example/"
     mock_request.headers = {}
@@ -779,10 +783,14 @@ async def test_register_client_respects_x_forwarded_proto():
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             register_client,
         )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
         from fastapi import Request
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
+    global_mcp_server_manager.registry.clear()
     # Mock request with http base_url but X-Forwarded-Proto: https
     mock_request = MagicMock(spec=Request)
     mock_request.base_url = "http://proxy.litellm.example/"  # HTTP

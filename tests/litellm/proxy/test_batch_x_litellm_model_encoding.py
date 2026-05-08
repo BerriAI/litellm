@@ -68,6 +68,7 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
     mock_user_api_key_dict = MagicMock()
     mock_user_api_key_dict.parent_otel_span = None
     mock_user_api_key_dict.user_id = "test_user"
+    mock_user_api_key_dict.team_metadata = {}
 
     mock_credentials = {
         "api_key": "sk-test",
@@ -112,6 +113,7 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
             "litellm.proxy.proxy_server.proxy_logging_obj",
             MagicMock(
                 post_call_success_hook=AsyncMock(return_value=mock_response),
+                post_call_failure_hook=AsyncMock(),
                 update_request_status=AsyncMock(),
             ),
         ),
@@ -180,6 +182,7 @@ async def test_create_batch_with_x_litellm_model_encodes_output_and_error_file_i
     mock_user_api_key_dict = MagicMock()
     mock_user_api_key_dict.parent_otel_span = None
     mock_user_api_key_dict.user_id = "test_user"
+    mock_user_api_key_dict.team_metadata = {}
 
     mock_credentials = {
         "api_key": "sk-test",
@@ -224,6 +227,7 @@ async def test_create_batch_with_x_litellm_model_encodes_output_and_error_file_i
             "litellm.proxy.proxy_server.proxy_logging_obj",
             MagicMock(
                 post_call_success_hook=AsyncMock(return_value=mock_response),
+                post_call_failure_hook=AsyncMock(),
                 update_request_status=AsyncMock(),
             ),
         ),
@@ -272,6 +276,7 @@ async def test_create_batch_without_x_litellm_model_returns_raw_ids():
     mock_user_api_key_dict = MagicMock()
     mock_user_api_key_dict.parent_otel_span = None
     mock_user_api_key_dict.user_id = "test_user"
+    mock_user_api_key_dict.team_metadata = {}
 
     with (
         patch(
@@ -303,6 +308,7 @@ async def test_create_batch_without_x_litellm_model_returns_raw_ids():
             "litellm.proxy.proxy_server.proxy_logging_obj",
             MagicMock(
                 post_call_success_hook=AsyncMock(return_value=mock_response),
+                post_call_failure_hook=AsyncMock(),
                 update_request_status=AsyncMock(),
             ),
         ),

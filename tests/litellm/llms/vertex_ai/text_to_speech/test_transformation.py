@@ -171,8 +171,8 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
     )
 
     # Verify request body structure
-    assert "data" in call_kwargs
-    request_body = json.loads(call_kwargs["data"])
+    assert "json" in call_kwargs
+    request_body = call_kwargs["json"]
 
     # Verify input
     assert "input" in request_body
