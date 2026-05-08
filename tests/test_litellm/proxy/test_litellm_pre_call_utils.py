@@ -2159,6 +2159,44 @@ def test_add_headers_to_llm_call_by_model_group_existing_headers_in_data():
         litellm.model_group_settings = original_model_group_settings
 
 
+def test_add_headers_to_llm_call_coerces_non_string_header_values():
+    """
+    Regression test for #27458: proxy-added metadata headers can include floats/dicts.
+    Ensure returned headers are valid for httpx request construction.
+    """
+    import httpx
+    import litellm
+
+    original_add_user_information_to_llm_headers = (
+        litellm.add_user_information_to_llm_headers
+    )
+    litellm.add_user_information_to_llm_headers = True
+
+    try:
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="test_api_key",
+            spend=0.25,
+            metadata={"service_account_id": "svc-123"},
+        )
+
+        headers = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
+            headers={},
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        # Raises TypeError if any header value is non-string/bytes.
+        httpx.Headers(headers)
+
+        assert headers["x-litellm-user_api_key_spend"] == "0.25"
+        assert json.loads(headers["x-litellm-user_api_key_auth_metadata"]) == {
+            "service_account_id": "svc-123"
+        }
+    finally:
+        litellm.add_user_information_to_llm_headers = (
+            original_add_user_information_to_llm_headers
+        )
+
+
 import json
 import time
 from typing import Optional
