@@ -33,6 +33,8 @@ class ManagedAgentsConfig(BaseModel):
     dockerfiles: Dict[str, DockerfileConfig] = Field(default_factory=dict)
     aws: AwsOverrides = Field(default_factory=AwsOverrides)
     reconcile_interval_seconds: int = 60
+    pool_enabled: bool = False
+    pool_min_warm: int = 1
 
 
 class DockerfileOut(BaseModel):
