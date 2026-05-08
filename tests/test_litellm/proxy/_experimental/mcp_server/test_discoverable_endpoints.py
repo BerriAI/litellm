@@ -1512,6 +1512,12 @@ async def test_oauth_callback_redirects_with_state():
         "client_redirect_uri": "http://localhost:3000/ui/mcp/oauth/callback",
     }
 
+    from fastapi import Request
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:3000/"
+    mock_request.headers = {}
+
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
     ) as mock_decode:
@@ -1519,6 +1525,7 @@ async def test_oauth_callback_redirects_with_state():
 
         # Call callback endpoint with code and state
         response = await callback(
+            request=mock_request,
             code="test_authorization_code_12345",
             state="encrypted_state_value",
         )
@@ -1546,6 +1553,12 @@ async def test_oauth_callback_handles_invalid_state():
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 
+    from fastapi import Request
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://localhost:3000/"
+    mock_request.headers = {}
+
     # Mock state decoding to raise an exception
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
@@ -1554,6 +1567,7 @@ async def test_oauth_callback_handles_invalid_state():
 
         # Call callback endpoint with invalid state
         response = await callback(
+            request=mock_request,
             code="test_code",
             state="invalid_encrypted_state",
         )
@@ -1929,9 +1943,15 @@ async def test_callback_revalidates_loopback_on_decoded_base_url():
     valid. /callback must re-validate the decoded base_url so those
     stale states can't be used as an open-redirect + code-theft
     primitive."""
+    from fastapi import Request
+
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
         callback,
     )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
 
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
@@ -1944,8 +1964,98 @@ async def test_callback_revalidates_loopback_on_decoded_base_url():
             "client_redirect_uri": "https://attacker.example.com/cb",
         }
         with pytest.raises(HTTPException) as exc_info:
-            await callback(code="stolen_code", state="encrypted_stale_state")
+            await callback(
+                request=mock_request,
+                code="stolen_code",
+                state="encrypted_stale_state",
+            )
         assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_authorize_endpoint_accepts_same_origin_redirect_uri():
+    """PR #27296: the LiteLLM UI's OAuth flow uses ``<proxy>/ui/mcp/oauth/callback``
+    as redirect_uri — that's not loopback but is on the proxy's own
+    trusted origin, so it must be accepted."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    global_mcp_server_manager.registry.clear()
+    oauth2_server = MCPServer(
+        server_id="test_oauth_server",
+        name="test_oauth",
+        server_name="test_oauth",
+        alias="test_oauth",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        client_secret="cs",
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+    )
+    global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.encrypt_value_helper"
+    ) as mock_encrypt:
+        mock_encrypt.return_value = "mocked_encrypted_state"
+        response = await authorize(
+            request=mock_request,
+            client_id="cid",
+            mcp_server_name="test_oauth",
+            redirect_uri="https://litellm.example.com/ui/mcp/oauth/callback",
+            state="s",
+        )
+    assert response.status_code == 307
+
+
+@pytest.mark.asyncio
+async def test_callback_accepts_same_origin_on_decoded_base_url():
+    """PR #27296: /callback must accept a same-origin decoded base_url
+    so the UI's own callback URI (``<proxy>/ui/mcp/oauth/callback``)
+    completes the flow successfully."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        callback,
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.return_value = {
+            "base_url": "https://litellm.example.com/ui/mcp/oauth/callback",
+            "original_state": "ui-state",
+            "code_challenge": None,
+            "code_challenge_method": None,
+            "client_redirect_uri": "https://litellm.example.com/ui/mcp/oauth/callback",
+        }
+        response = await callback(
+            request=mock_request,
+            code="auth_code_123",
+            state="encrypted_state",
+        )
+    assert response.status_code == 302
+    assert "litellm.example.com/ui/mcp/oauth/callback" in response.headers["location"]
+    assert "code=auth_code_123" in response.headers["location"]
+    assert "state=ui-state" in response.headers["location"]
 
 
 @pytest.mark.asyncio
