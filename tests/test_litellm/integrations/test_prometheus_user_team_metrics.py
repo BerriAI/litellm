@@ -9,6 +9,7 @@ import pytest
 from prometheus_client import REGISTRY
 
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.proxy._types import LiteLLM_UserTable
 
 
 @pytest.fixture(autouse=True)
@@ -45,10 +46,25 @@ class TestPrometheusUserTeamCountMetrics:
         # Verify that the metrics exist
         assert hasattr(prometheus_logger, "litellm_total_users_metric")
         assert hasattr(prometheus_logger, "litellm_teams_count_metric")
+        assert hasattr(prometheus_logger, "litellm_team_total_users_metric")
+        assert hasattr(prometheus_logger, "litellm_team_active_users_metric")
 
         # Verify the metrics are not None
         assert prometheus_logger.litellm_total_users_metric is not None
         assert prometheus_logger.litellm_teams_count_metric is not None
+        assert prometheus_logger.litellm_team_total_users_metric is not None
+        assert prometheus_logger.litellm_team_active_users_metric is not None
+
+    def test_team_user_count_metrics_are_labeled_by_team(self, prometheus_logger):
+        """Team-scoped user gauges must carry readable team labels."""
+        assert prometheus_logger.get_labels_for_metric("litellm_team_total_users") == [
+            "team",
+            "team_alias",
+        ]
+        assert prometheus_logger.get_labels_for_metric("litellm_team_active_users") == [
+            "team",
+            "team_alias",
+        ]
 
     def test_user_count_metric_has_no_labels(self, prometheus_logger):
         """Test that litellm_total_users metric has no labels (as specified)"""
@@ -199,6 +215,8 @@ class TestPrometheusUserTeamCountMetrics:
         # We can test this by checking they have the set() method
         assert hasattr(prometheus_logger.litellm_total_users_metric, "set")
         assert hasattr(prometheus_logger.litellm_teams_count_metric, "set")
+        assert hasattr(prometheus_logger.litellm_team_total_users_metric, "labels")
+        assert hasattr(prometheus_logger.litellm_team_active_users_metric, "labels")
 
         # Gauges have set() method, Counters only have inc()
         assert callable(prometheus_logger.litellm_total_users_metric.set)
@@ -264,6 +282,77 @@ class TestPrometheusUserTeamCountMetrics:
             assert True
         except Exception as e:
             pytest.fail(f"Metrics should handle large values: {e}")
+
+    @pytest.mark.asyncio
+    async def test_initialize_user_and_team_count_metrics_sets_team_user_gauges(
+        self, prometheus_logger
+    ):
+        """Team total/active users are aggregated in batches and emitted per team."""
+        import sys
+
+        prometheus_logger.litellm_total_users_metric = MagicMock()
+        prometheus_logger.litellm_teams_count_metric = MagicMock()
+        prometheus_logger.litellm_team_total_users_metric = MagicMock()
+        prometheus_logger.litellm_team_active_users_metric = MagicMock()
+
+        team_one = MagicMock()
+        team_one.team_id = "team-1"
+        team_one.team_alias = "Product Team"
+        team_one.members = ["user-1"]
+
+        team_two = MagicMock()
+        team_two.team_id = "team-2"
+        team_two.team_alias = None
+        team_two.members = []
+
+        membership_one = MagicMock()
+        membership_one.team_id = "team-1"
+        membership_one.user_id = "user-1"
+        membership_two = MagicMock()
+        membership_two.team_id = "team-1"
+        membership_two.user_id = "user-2"
+        membership_three = MagicMock()
+        membership_three.team_id = "team-2"
+        membership_three.user_id = "user-3"
+
+        active_one = MagicMock()
+        active_one.team_id = "team-1"
+        active_one.user = "user-2"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_usertable.count = AsyncMock(return_value=3)
+        mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=2)
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[team_one, team_two]
+        )
+        mock_prisma.db.litellm_teammembership.find_many = AsyncMock(
+            return_value=[membership_one, membership_two, membership_three]
+        )
+        mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(return_value=[active_one])
+
+        mock_proxy_server = MagicMock()
+        mock_proxy_server.prisma_client = mock_prisma
+
+        with patch.dict(sys.modules, {"litellm.proxy.proxy_server": mock_proxy_server}):
+            await prometheus_logger._initialize_user_and_team_count_metrics()
+
+        total_labels = prometheus_logger.litellm_team_total_users_metric.labels
+        active_labels = prometheus_logger.litellm_team_active_users_metric.labels
+
+        assert total_labels.call_args_list[0].kwargs == {
+            "team": "team-1",
+            "team_alias": "Product Team",
+        }
+        total_labels.return_value.set.assert_any_call(2)
+        assert active_labels.call_args_list[0].kwargs == {
+            "team": "team-1",
+            "team_alias": "Product Team",
+        }
+        active_labels.return_value.set.assert_any_call(1)
+        total_labels.assert_any_call(team="team-2", team_alias=None)
+        total_labels.return_value.set.assert_any_call(1)
+        active_labels.assert_any_call(team="team-2", team_alias=None)
+        active_labels.return_value.set.assert_any_call(0)
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +513,7 @@ async def test_assemble_user_object_uses_db_max_budget_when_metadata_is_none(
         mock_get_user.return_value = db_user
         user_object = await prometheus_logger._assemble_user_object(
             user_id="user-abc-123",
+            user_email=None,
             spend=120.0,
             max_budget=None,  # simulates None coming from request metadata
             response_cost=0.5,
@@ -450,6 +540,7 @@ async def test_assemble_user_object_does_not_override_metadata_max_budget(
         mock_get_user.return_value = db_user
         user_object = await prometheus_logger._assemble_user_object(
             user_id="user-abc-123",
+            user_email="metadata-user@example.com",
             spend=50.0,
             max_budget=100.0,  # metadata has a real value
             response_cost=1.0,
@@ -479,6 +570,7 @@ async def test_set_user_budget_metrics_after_api_request_no_inf_when_metadata_bu
         mock_get_user.return_value = db_user
         await prometheus_logger._set_user_budget_metrics_after_api_request(
             user_id="user-abc-123",
+            user_email=None,
             user_spend=120.0,
             user_max_budget=None,  # simulates stale key cache
             response_cost=0.5,
@@ -519,6 +611,7 @@ async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_b
         mock_get_user.return_value = db_user
         await prometheus_logger._set_user_budget_metrics_after_api_request(
             user_id="user-no-budget",
+            user_email=None,
             user_spend=10.0,
             user_max_budget=None,
             response_cost=1.0,
@@ -534,6 +627,61 @@ async def test_set_user_budget_metrics_after_api_request_inf_when_genuinely_no_b
     ), "remaining_user_budget_metric should be +Inf when user truly has no budget"
 
 
+def test_user_budget_metrics_emit_user_email_label(prometheus_logger):
+    """Remaining user budget gauges should expose email alongside user_id."""
+    prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
+    prometheus_logger.litellm_user_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_user_budget_remaining_hours_metric = MagicMock()
+
+    prometheus_logger._set_user_budget_metrics(
+        LiteLLM_UserTable(
+            user_id="user-1",
+            user_email="user-1@example.com",
+            spend=25.0,
+            max_budget=100.0,
+            budget_reset_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+
+    prometheus_logger.litellm_remaining_user_budget_metric.labels.assert_called_once_with(
+        user="user-1",
+        user_email="user-1@example.com",
+    )
+    prometheus_logger.litellm_user_budget_remaining_hours_metric.labels.assert_called_once_with(
+        user="user-1",
+        user_email="user-1@example.com",
+    )
+
+
+async def test_set_user_budget_metrics_after_api_request_uses_db_user_email(
+    prometheus_logger,
+):
+    """The request path should populate user_email from user lookup when needed."""
+    prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
+    prometheus_logger.litellm_user_max_budget_metric = MagicMock()
+    prometheus_logger.litellm_user_budget_remaining_hours_metric = MagicMock()
+
+    db_user = MagicMock()
+    db_user.max_budget = 500.0
+    db_user.budget_reset_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    db_user.user_email = "db-user@example.com"
+
+    with patch("litellm.proxy.auth.auth_checks.get_user_object") as mock_get_user:
+        mock_get_user.return_value = db_user
+        await prometheus_logger._set_user_budget_metrics_after_api_request(
+            user_id="user-abc-123",
+            user_email=None,
+            user_spend=120.0,
+            user_max_budget=None,
+            response_cost=0.5,
+        )
+
+    prometheus_logger.litellm_remaining_user_budget_metric.labels.assert_called_once_with(
+        user="user-abc-123",
+        user_email="db-user@example.com",
+    )
+
+
 def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
     """Verify org labels appear when flag is on and are absent when flag is off."""
     import litellm
@@ -541,6 +689,10 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
 
     prometheus_logger.litellm_requests_metric = MagicMock()
     prometheus_logger.litellm_spend_metric = MagicMock()
+    prometheus_logger.litellm_tokens_metric = MagicMock()
+    prometheus_logger.litellm_input_tokens_metric = MagicMock()
+    prometheus_logger.litellm_output_tokens_metric = MagicMock()
+    prometheus_logger.litellm_cached_tokens_metric = MagicMock()
 
     enum_values = UserAPIKeyLabelValues(
         hashed_api_key="hashed-key",
@@ -570,11 +722,55 @@ def test_per_request_metrics_emit_all_identity_labels(prometheus_logger):
         prometheus_logger._increment_top_level_request_and_spend_metrics(
             **common_kwargs
         )
-        label_kwargs = prometheus_logger.litellm_requests_metric.labels.call_args.kwargs
-        assert label_kwargs["org_id"] == "org-abc"
-        assert label_kwargs["org_alias"] == "my-org"
-        assert label_kwargs["team"] == "team-abc"
-        assert label_kwargs["user"] == "user-1"
+        for metric in (
+            prometheus_logger.litellm_requests_metric,
+            prometheus_logger.litellm_spend_metric,
+        ):
+            label_kwargs = metric.labels.call_args.kwargs
+            assert label_kwargs["org_id"] == "org-abc"
+            assert label_kwargs["org_alias"] == "my-org"
+            assert label_kwargs["team"] == "team-abc"
+            assert label_kwargs["user"] == "user-1"
+
+        prometheus_logger._increment_token_metrics(
+            standard_logging_payload={
+                "request_tags": [],
+                "total_tokens": 10,
+                "prompt_tokens": 6,
+                "completion_tokens": 4,
+            },
+            enum_values=enum_values,
+            label_context=None,
+            end_user_id=None,
+            user_api_key="hashed-key",
+            user_api_key_alias="my-key",
+            model="gpt-4",
+            user_api_team="team-abc",
+            user_api_team_alias="my-team",
+            user_id="user-1",
+        )
+        for metric in (
+            prometheus_logger.litellm_tokens_metric,
+            prometheus_logger.litellm_input_tokens_metric,
+            prometheus_logger.litellm_output_tokens_metric,
+        ):
+            label_kwargs = metric.labels.call_args.kwargs
+            assert label_kwargs["org_id"] == "org-abc"
+            assert label_kwargs["org_alias"] == "my-org"
+
+        prometheus_logger._increment_cache_metrics(
+            standard_logging_payload={
+                "cache_hit": True,
+                "total_tokens": 10,
+            },
+            enum_values=enum_values,
+            label_context=None,
+        )
+        cached_label_kwargs = (
+            prometheus_logger.litellm_cached_tokens_metric.labels.call_args.kwargs
+        )
+        assert cached_label_kwargs["org_id"] == "org-abc"
+        assert cached_label_kwargs["org_alias"] == "my-org"
 
         # Metrics not in the org-emission list must NOT get org labels
         from litellm.types.integrations.prometheus import PrometheusMetricLabels

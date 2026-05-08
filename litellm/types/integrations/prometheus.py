@@ -232,6 +232,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_cache_hits_metric",
     "litellm_cache_misses_metric",
     "litellm_cached_tokens_metric",
+    "litellm_team_total_users",
+    "litellm_team_active_users",
     "litellm_deployment_tpm_limit",
     "litellm_deployment_rpm_limit",
     "litellm_remaining_api_key_requests_for_model",
@@ -531,6 +533,7 @@ class PrometheusMetricLabels:
 
     litellm_remaining_user_budget_metric = [
         UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
     ]
 
     litellm_user_max_budget_metric = [
@@ -539,10 +542,7 @@ class PrometheusMetricLabels:
 
     litellm_user_budget_remaining_hours_metric = [
         UserAPIKeyLabelNames.USER.value,
-    ]
-
-    litellm_user_budget_remaining_hours_metric = [
-        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
     ]
 
     litellm_remaining_api_key_requests_for_model = [
@@ -646,6 +646,16 @@ class PrometheusMetricLabels:
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
 
+    litellm_team_total_users = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
+    litellm_team_active_users = [
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+    ]
+
     # Metrics whose emission paths supply org context (used by get_labels)
     _org_label_metrics: ClassVar[frozenset] = frozenset(
         {
@@ -661,6 +671,7 @@ class PrometheusMetricLabels:
             "litellm_input_tokens_metric",
             "litellm_total_tokens_metric",
             "litellm_output_tokens_metric",
+            "litellm_cached_tokens_metric",
         }
     )
 
