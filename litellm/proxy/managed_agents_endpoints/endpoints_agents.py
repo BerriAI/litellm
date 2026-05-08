@@ -46,6 +46,7 @@ def _agent_row_to_out(row) -> AgentOut:
         id=row.agent_id,
         name=row.agent_name,
         model=row.model,
+        prompt=getattr(row, "prompt", None),
         template_id=row.template_id,
         branch=row.branch,
         pfp_url=pfp_url if isinstance(pfp_url, str) else None,

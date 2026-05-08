@@ -100,6 +100,7 @@ class AgentOut(BaseModel):
     id: str
     name: Optional[str] = None
     model: str
+    prompt: Optional[str] = None
     template_id: str
     branch: str
     pfp_url: Optional[str] = None
