@@ -363,11 +363,28 @@ async def test_normal_router_call_tpm_v3(
         rate_limit_object, value, "tokens"
     )
 
-    # First request should succeed
+    # First request should succeed. Include messages + a tight max_tokens so
+    # the atomic reserve_tpm_tokens path populates the :tokens counter with a
+    # predictable amount — the pre-call hook no longer touches :tokens via
+    # should_rate_limit.
+    # Estimate: input ~ 1 token (`"hi"`), max_tokens = 5 → reservation = 6,
+    # which fits under the tpm_limit of 10.
+    pre_call_data = {
+        "model": "azure-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 5,
+    }
+    expected_reservation = parallel_request_handler._estimate_tokens_for_request(
+        data=pre_call_data
+    )
+    assert (
+        expected_reservation < 10
+    ), "Test premise: reservation must fit under tpm_limit=10"
+
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=local_cache,
-        data={"model": "azure-model"},
+        data=pre_call_data,
         call_type="",
     )
 
@@ -386,7 +403,7 @@ async def test_normal_router_call_tpm_v3(
     await asyncio.sleep(0)
     time_controller.advance(1)
 
-    # Verify the token count is tracked
+    # Verify the token count is tracked (populated by reserve_tpm_tokens).
     counter_value = await local_cache.async_get_cache(key=counter_key)
     print(f"local_cache: {local_cache.in_memory_cache.cache_dict}")
 
@@ -405,7 +422,7 @@ async def test_normal_router_call_tpm_v3(
         await parallel_request_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             cache=local_cache,
-            data={"model": "azure-model"},
+            data=pre_call_data,
             call_type="",
         )
 
@@ -416,14 +433,18 @@ async def test_normal_router_call_tpm_v3(
     await parallel_request_handler.async_pre_call_hook(
         user_api_key_dict=user_api_key_dict,
         cache=local_cache,
-        data={"model": "azure-model"},
+        data=pre_call_data,
         call_type="",
     )
 
-    # Verify new window and reset counter
+    # Verify new window — counter resets and is repopulated to the new
+    # reservation amount (no longer the +1-per-request inflation artifact).
     final_counter_value = await local_cache.async_get_cache(key=counter_key)
 
-    assert final_counter_value == 1, "Counter should reset to 1 after window expiry"
+    assert final_counter_value == expected_reservation, (
+        f"Counter should reset to a fresh reservation ({expected_reservation}) "
+        f"after window expiry, got {final_counter_value}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1977,18 +1998,10 @@ async def test_async_log_success_event_with_dict_usage_missing_fields(monkeypatc
         end_time=datetime.now(),
     )
 
-    # Find the TPM increment operation
-    tpm_operation = None
-    for op in captured_operations:
-        if op["key"].endswith(":tokens"):
-            tpm_operation = op
-            break
-
-    assert tpm_operation is not None, "Should have a TPM increment operation"
-    # Should default to 0 when field is missing
-    assert (
-        tpm_operation["increment_value"] == 0
-    ), "Should default to 0 when completion_tokens is missing"
+    # When total_tokens resolves to 0 (missing fields) and there's no reservation,
+    # the reconciliation delta is 0 — no TPM increment should be emitted.
+    tpm_ops = [op for op in captured_operations if op["key"].endswith(":tokens")]
+    assert tpm_ops == [], f"Expected no TPM ops when usage is empty, got: {tpm_ops}"
 
 
 @pytest.mark.asyncio

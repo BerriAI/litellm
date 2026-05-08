@@ -388,6 +388,7 @@ anthropic_beta_headers_url: str = os.getenv(
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
@@ -414,6 +415,9 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
+prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
+prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
@@ -586,6 +590,7 @@ anyscale_models: Set = set()
 cerebras_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
+nvidia_riva_models: Set = set()
 sambanova_models: Set = set()
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
@@ -812,6 +817,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             galadriel_models.add(key)
         elif value.get("litellm_provider") == "nvidia_nim":
             nvidia_nim_models.add(key)
+        elif value.get("litellm_provider") == "nvidia_riva":
+            nvidia_riva_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
@@ -971,6 +978,7 @@ model_list = list(
     | cerebras_models
     | galadriel_models
     | nvidia_nim_models
+    | nvidia_riva_models
     | sambanova_models
     | azure_text_models
     | novita_models
@@ -1067,6 +1075,7 @@ models_by_provider: dict = {
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
     "nvidia_nim": nvidia_nim_models,
+    "nvidia_riva": nvidia_riva_models,
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
@@ -1617,6 +1626,9 @@ if TYPE_CHECKING:
     )
     from .llms.deepgram.audio_transcription.transformation import (
         DeepgramAudioTranscriptionConfig as DeepgramAudioTranscriptionConfig,
+    )
+    from .llms.nvidia_riva.audio_transcription.transformation import (
+        NvidiaRivaAudioTranscriptionConfig as NvidiaRivaAudioTranscriptionConfig,
     )
     from .llms.topaz.image_variations.transformation import (
         TopazImageVariationConfig as TopazImageVariationConfig,

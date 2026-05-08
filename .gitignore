@@ -104,6 +104,7 @@ STABILIZATION_TODO.md
 
 # GSD agent
 .gsd/
-.bg-shell/
 
+.bg-shell/
 test-config
+.vscode
