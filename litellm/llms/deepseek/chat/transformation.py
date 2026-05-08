@@ -56,9 +56,17 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 # DeepSeek only accepts {"type": "enabled"}, ignore budget_tokens
                 optional_params["thinking"] = {"type": "enabled"}
 
-        # Handle reasoning_effort - map to thinking enabled
+        # Handle reasoning_effort - enable thinking and pass effort level
+        # DeepSeek V4 Pro/Flash support reasoning_effort as a native param
+        # with values "high" and "max". Older models ignore it gracefully.
         elif reasoning_effort is not None and reasoning_effort != "none":
             optional_params["thinking"] = {"type": "enabled"}
+            # Normalize per DeepSeek V4 compatibility mappings
+            if reasoning_effort in ("low", "medium"):
+                reasoning_effort = "high"
+            elif reasoning_effort == "xhigh":
+                reasoning_effort = "max"
+            optional_params["reasoning_effort"] = reasoning_effort
 
         return optional_params
 
