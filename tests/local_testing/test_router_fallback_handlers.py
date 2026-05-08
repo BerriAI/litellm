@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import os
 import sys
 import time
@@ -416,3 +417,80 @@ async def test_fallback_kwargs_not_mutated():
             f"Expected safe_deep_copy to be called once per fallback attempt (2), "
             f"but was called {mock_sdc.call_count} times"
         )
+
+
+@pytest.mark.asyncio
+async def test_fallback_kwargs_nested_mutation_does_not_leak_between_attempts():
+    """
+    Regression test for fallback kwargs isolation.
+
+    Provider handlers can mutate nested request objects in place while
+    transforming params. Each fallback attempt should still receive the original
+    tool parameters, even if a previous attempt mutated its local copy.
+    """
+    router = MagicMock()
+    router.log_retry = MagicMock(side_effect=lambda kwargs, e: kwargs)
+
+    original_tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "classify",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    original_tool_choice = {
+        "type": "function",
+        "function": {"name": "classify"},
+    }
+
+    captured_kwargs = []
+    call_count = 0
+
+    async def mock_async_function_with_fallbacks(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        captured_kwargs.append(copy.deepcopy(kwargs))
+
+        # Simulate a provider mutating nested params in place during request
+        # transformation. Without a deep copy in run_async_fallback, this
+        # mutation leaks into the next fallback attempt.
+        kwargs["tools"].clear()
+
+        raise litellm.exceptions.ServiceUnavailableError(
+            message="simulated timeout",
+            model=kwargs["model"],
+            llm_provider="openai",
+        )
+
+    router.async_function_with_fallbacks = mock_async_function_with_fallbacks
+
+    request_kwargs = {
+        "messages": [{"role": "user", "content": "test"}],
+        "tools": original_tools,
+        "tool_choice": original_tool_choice,
+        "stream": True,
+        "metadata": {},
+    }
+
+    with pytest.raises(litellm.exceptions.ServiceUnavailableError):
+        await run_async_fallback(
+            litellm_router=router,
+            original_function=MagicMock(),
+            num_retries=0,
+            fallback_model_group=["fallback-a", "fallback-b"],
+            original_model_group="primary-model",
+            original_exception=Exception("primary failed"),
+            max_fallbacks=5,
+            fallback_depth=0,
+            **request_kwargs,
+        )
+
+    assert call_count == 2
+    assert request_kwargs["tools"] == original_tools
+    assert request_kwargs["tool_choice"] == original_tool_choice
+    assert captured_kwargs[0]["tools"] == original_tools
+    assert captured_kwargs[0]["tool_choice"] == original_tool_choice
+    assert captured_kwargs[1]["tools"] == original_tools
+    assert captured_kwargs[1]["tool_choice"] == original_tool_choice
