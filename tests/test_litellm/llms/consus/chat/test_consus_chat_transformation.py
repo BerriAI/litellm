@@ -144,23 +144,69 @@ class TestConsusModelRouting:
 
 
 class TestConsusReasoningSupport:
-    """Reasoning-capable Consus models must surface `reasoning_effort` as a
-    supported OpenAI param so it isn't silently filtered out before the
-    request leaves LiteLLM. Models without `supports_reasoning: true` in
-    the catalog must NOT advertise the param.
+    """Verify that `ConsusChatConfig.get_supported_openai_params` appends
+    `reasoning_effort` if and only if `litellm.supports_reasoning` reports
+    true for the model — so the param survives LiteLLM's pre-call filter
+    and actually reaches the Consus Gateway.
+
+    `litellm.supports_reasoning` is mocked so the test is independent of
+    whichever model registry happens to be loaded (local JSON vs. fetched
+    from GitHub).
     """
 
-    def test_reasoning_effort_supported_for_claude_models(self):
-        config = ConsusChatConfig()
-        params = config.get_supported_openai_params("claude-sonnet-4-5:il2")
+    def test_reasoning_effort_appended_when_model_supports_reasoning(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            litellm,
+            "supports_reasoning",
+            lambda model=None, custom_llm_provider=None: True,
+        )
+        params = ConsusChatConfig().get_supported_openai_params(
+            "claude-sonnet-4-5:il2"
+        )
         assert "reasoning_effort" in params
 
-    def test_reasoning_effort_not_supported_for_gpt_4_1(self):
-        # gpt-4.1 is registered in the Consus catalog without
-        # `supports_reasoning`, so the param must NOT be advertised.
-        config = ConsusChatConfig()
-        params = config.get_supported_openai_params("gpt-4.1:il5+itar")
+    def test_reasoning_effort_not_appended_for_non_reasoning_model(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            litellm,
+            "supports_reasoning",
+            lambda model=None, custom_llm_provider=None: False,
+        )
+        params = ConsusChatConfig().get_supported_openai_params("gpt-4.1:il5+itar")
         assert "reasoning_effort" not in params
+
+    def test_supports_reasoning_called_with_consus_provider(self, monkeypatch):
+        captured: dict = {}
+
+        def fake_supports_reasoning(model=None, custom_llm_provider=None):
+            captured["model"] = model
+            captured["provider"] = custom_llm_provider
+            return False
+
+        monkeypatch.setattr(litellm, "supports_reasoning", fake_supports_reasoning)
+        ConsusChatConfig().get_supported_openai_params("claude-sonnet-4-5:il2")
+        # The override must look the model up under provider "consus" so the
+        # registry's `supports_reasoning: true` flag is honored.
+        assert captured["provider"] == "consus"
+        assert captured["model"] == "claude-sonnet-4-5:il2"
+
+    def test_get_supported_openai_params_swallows_lookup_errors(
+        self, monkeypatch
+    ):
+        # If the registry lookup throws (e.g. unknown model), the override
+        # must fall back to the parent's param list rather than propagating.
+        def boom(model=None, custom_llm_provider=None):
+            raise RuntimeError("registry blew up")
+
+        monkeypatch.setattr(litellm, "supports_reasoning", boom)
+        params = ConsusChatConfig().get_supported_openai_params(
+            "claude-sonnet-4-5:il2"
+        )
+        assert "reasoning_effort" not in params  # parent default has none
+        assert isinstance(params, list)
 
     def test_custom_llm_provider_returns_consus(self):
         assert ConsusChatConfig().custom_llm_provider == "consus"
