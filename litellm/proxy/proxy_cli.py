@@ -1050,11 +1050,6 @@ def run_server(  # noqa: PLR0915
             litellm_settings=litellm_settings if config else None,  # type: ignore[possibly-unbound]
         )
 
-        # --- SEPARATE HEALTH APP LOGIC ---
-        # To run the health app separately, use:
-        #   uvicorn litellm.proxy.health_app_factory:build_health_app --factory --host 0.0.0.0 --port=4001
-        # This is compatible with the SEPARATE_HEALTH_APP Docker/supervisord pattern.
-        # --- END SEPARATE HEALTH APP LOGIC ---
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print(  # noqa
