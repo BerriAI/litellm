@@ -876,8 +876,13 @@ class OpenTelemetry(CustomLogger):
             "mcp_tool_call_metadata",
             "vector_store_request_metadata",
         ]:
-            if md.get(key) is not None:
-                common_attrs[f"metadata.{key}"] = str(md[key])
+            value = md.get(key)
+            if value is None:
+                continue
+            if isinstance(value, (dict, list)):
+                common_attrs[f"metadata.{key}"] = safe_dumps(value)
+            else:
+                common_attrs[f"metadata.{key}"] = str(value)
 
         # get hidden params
         hidden_params = getattr(std_log, "hidden_params", None) or (std_log or {}).get(
