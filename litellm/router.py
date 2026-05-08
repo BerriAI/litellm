@@ -10469,11 +10469,23 @@ class Router:
                     llm_provider="",
                 )
 
-            # 5. Apply load balancing strategy
+            # 5. Determine and apply routing strategy based on priority hierarchy
+            winning_strategy = self._get_routing_strategy_for_request(model, request_kwargs)
+            strategy, selector = self._get_routing_context(model, request_kwargs, winning_strategy)
+
+            # 6. Apply load balancing strategy
             start_time = time.perf_counter()
 
-            # Get the selector for the winning strategy (already determined above)
-            strategy, selector = self._get_routing_context(model, request_kwargs, winning_strategy)
+            # Select deployment using the winning strategy
+            deployment = await self._select_deployment_async(
+                strategy=strategy,
+                selector=selector,
+                model=model,
+                healthy_deployments=pass_through_deployments,
+                messages=messages,
+                input=input,
+                request_kwargs=request_kwargs,
+            )
 
             # Default to simple-shuffle if strategy didn't return anything
             if deployment is None:
@@ -10610,6 +10622,14 @@ class Router:
         # Ensure the logger for the winning strategy is initialized
         self._ensure_routing_strategy_logger(winning_strategy, self.routing_strategy_args)
 
+        # 1. Perform common checks to get healthy deployments list
+        model, healthy_deployments = self._common_checks_available_deployment(
+            model=model,
+            messages=messages,
+            input=input,
+            specific_deployment=specific_deployment,
+            request_kwargs=request_kwargs,
+        )
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
@@ -10691,16 +10711,8 @@ class Router:
             )
             # if users pass rpm or tpm, we do a random weighted pick - based on rpm/tpm
             ############## Check 'weight' param set for weighted pick #################
-            return simple_shuffle(
-                llm_router_instance=self,
-                healthy_deployments=healthy_deployments,
-                model=model,
-            )
-        return simple_shuffle(
-            llm_router_instance=self,
-            healthy_deployments=healthy_deployments,
-            model=model,
-        )
+            return deployment
+        return deployment
 
     def get_available_deployment_for_pass_through(
         self,
