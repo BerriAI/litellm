@@ -854,6 +854,54 @@ class Router:
                 f"or the 'routing_strategy' parameter if using the Router SDK directly."
             )
 
+    def _get_routing_strategy_for_request(
+        self,
+        model: str,
+        request_kwargs: Optional[Dict],
+    ) -> str:
+        """
+        Determines routing strategy priority: Request > Model > Key > Team > Global
+
+        Args:
+            model: The model name for the request
+            request_kwargs: Request kwargs from client/proxy
+
+        Returns:
+            Strategy name (normalized)
+        """
+        if not request_kwargs:
+            request_kwargs = {}
+
+        # 1. Request level (highest priority) - passed by client explicitly via request_kwargs["routing_strategy"]
+        # Thanks to route_llm_request.py logic, this field already contains client value
+        # if provided, or Key/Team override (Key > Team) if not provided by client.
+        request_strategy = request_kwargs.get("routing_strategy")
+        if request_strategy:
+            normalized = self._normalize_strategy(request_strategy)
+            if normalized:
+                return normalized
+
+        # 2. Model level (via routing_groups) - has priority over Key/Team
+        model_group_name = self._model_to_group.get(model)
+        if model_group_name:
+            group = self._routing_groups[model_group_name]
+            model_strategy = self._normalize_strategy(group.routing_strategy)
+            if model_strategy:
+                return model_strategy  # Model wins over key/team
+
+        # 3. Key/Team level - request_kwargs["routing_strategy"] already contains Key > Team
+        # (thanks to _get_hierarchical_router_settings in proxy)
+        # But we need to check if it was already checked for Model group priority
+        # If model was not in a group, use the key/team strategy from the request
+        if request_strategy:
+            normalized = self._normalize_strategy(request_strategy)
+            if normalized:
+                return normalized
+
+        # 4. Global level (lowest priority) - fallback to router's default
+        global_strategy = self._normalize_strategy(self.routing_strategy)
+        return global_strategy or "simple-shuffle"
+
     def _build_strategy_selector(
         self,
         strategy: Union[RoutingStrategy, str],
@@ -10177,52 +10225,13 @@ class Router:
 
         Allows all cache calls to be made async => 10x perf impact (8rps -> 100 rps).
         """
-        # CUSTOM ROUTING LOGIC
-        # ---------------------
-        #
-        # Implement the following priority: Request -> Model -> Team/Key -> Global
+        # Determine routing strategy based on priority: Request > Model > Key > Team > Global
+        winning_strategy = self._get_routing_strategy_for_request(model, request_kwargs)
 
-        # 1. Get potential strategies from all levels
-        request_strategy = request_kwargs.get("routing_strategy")
-
-        model_group_name = self._model_to_group.get(model)
-        model_strategy = None
-        if model_group_name:
-            group = self._routing_groups[model_group_name]
-            model_strategy = self._normalize_strategy(group.routing_strategy)
-
-        # `request_strategy` can be from a team/key or a direct request.
-        # We assume if the user passed it directly, they pass it in `metadata`.
-        # This is a convention we need to establish.
-        # For now, let's assume `metadata["routing_strategy"]` is the request override.
-        direct_request_strategy = request_kwargs.get("metadata", {}).get("routing_strategy")
-
-        # The `request_kwargs["routing_strategy"]` is likely from a team or key
-        team_key_strategy = request_strategy
-
-        global_strategy = self.routing_strategy
-
-        # 2. Determine the winning strategy based on the hierarchy
-        winning_strategy = None
-        if direct_request_strategy:
-            winning_strategy = direct_request_strategy
-        elif model_strategy:
-            winning_strategy = model_strategy
-        elif team_key_strategy:
-            winning_strategy = team_key_strategy
-        else:
-            winning_strategy = global_strategy
-
-        winning_strategy = self._normalize_strategy(winning_strategy)
-
-        # Fallback to simple-shuffle if no strategy is resolved
-        if winning_strategy is None:
-            winning_strategy = "simple-shuffle"
-
-        # 3. Get the selector for the winning strategy
+        # Get the selector for the winning strategy
         strategy, selector = self._get_routing_context(model, request_kwargs, winning_strategy)
 
-        # 4. Ensure the logger for the winning strategy is initialized
+        # Ensure the logger for the winning strategy is initialized
         self._ensure_routing_strategy_logger(winning_strategy, self.routing_strategy_args)
 
         # Fallback for strategies that don't have an async implementation
@@ -10460,43 +10469,13 @@ class Router:
                     llm_provider="",
                 )
 
-             # 5. Apply load balancing strategy
+            # 5. Apply load balancing strategy
             start_time = time.perf_counter()
 
-            # CUSTOM ROUTING LOGIC
-            # --------------------------------------------------------
-            # 1. Get potential strategies from all levels
-            request_strategy = request_kwargs.get("routing_strategy")
-            model_group_name = self._model_to_group.get(model)
-            model_strategy = None
-            if model_group_name:
-                group = self._routing_groups[model_group_name]
-                model_strategy = self._normalize_strategy(group.routing_strategy)
-
-            direct_request_strategy = request_kwargs.get("metadata", {}).get("routing_strategy")
-            team_key_strategy = request_strategy
-            global_strategy = self.routing_strategy
-
-            # 2. Determine the winning strategy based on the hierarchy
-            winning_strategy = None
-            if direct_request_strategy:
-                winning_strategy = direct_request_strategy
-            elif model_strategy:
-                winning_strategy = model_strategy
-            elif team_key_strategy:
-                winning_strategy = team_key_strategy
-            else:
-                winning_strategy = global_strategy
-
-            winning_strategy = self._normalize_strategy(winning_strategy)
-
-            if winning_strategy is None:
-                winning_strategy = "simple-shuffle"
-
-            # 3. Get the selector for the winning strategy and ensure the logger is initialized
+            # Get the selector for the winning strategy (already determined above)
             strategy, selector = self._get_routing_context(model, request_kwargs, winning_strategy)
-            self._ensure_routing_strategy_logger(winning_strategy, self.routing_strategy_args)
-            # 2. Default to simple-shuffle if strategy didn't return anything
+
+            # Default to simple-shuffle if strategy didn't return anything
             if deployment is None:
                 deployment = simple_shuffle(
                     llm_router_instance=self,
@@ -10622,46 +10601,13 @@ class Router:
         # users need to explicitly call a specific deployment, by setting `specific_deployment = True` as completion()/embedding() kwarg
         # When this was no explicit we had several issues with fallbacks timing out
 
-        # CUSTOM ROUTING LOGIC
-        # ---------------------
-        #
-        # Implement the following priority: Request -> Model -> Team/Key -> Global
+        # Determine routing strategy based on priority: Request > Model > Key > Team > Global
+        winning_strategy = self._get_routing_strategy_for_request(model, request_kwargs)
 
-        # 1. Get potential strategies from all levels
-        request_strategy = request_kwargs.get("routing_strategy") if request_kwargs else None
-
-        model_group_name = self._model_to_group.get(model)
-        model_strategy = None
-        if model_group_name:
-            group = self._routing_groups[model_group_name]
-            model_strategy = self._normalize_strategy(group.routing_strategy)
-
-        direct_request_strategy = request_kwargs.get("metadata", {}).get("routing_strategy") if request_kwargs else None
-
-        team_key_strategy = request_strategy
-
-        global_strategy = self.routing_strategy
-
-        # 2. Determine the winning strategy based on the hierarchy
-        winning_strategy = None
-        if direct_request_strategy:
-            winning_strategy = direct_request_strategy
-        elif model_strategy:
-            winning_strategy = model_strategy
-        elif team_key_strategy:
-            winning_strategy = team_key_strategy
-        else:
-            winning_strategy = global_strategy
-
-        winning_strategy = self._normalize_strategy(winning_strategy)
-
-        if winning_strategy is None:
-            winning_strategy = "simple-shuffle"
-
-        # 3. Get the selector for the winning strategy
+        # Get the selector for the winning strategy
         strategy, selector = self._get_routing_context(model, request_kwargs, winning_strategy)
 
-        # 4. Ensure the logger for the winning strategy is initialized
+        # Ensure the logger for the winning strategy is initialized
         self._ensure_routing_strategy_logger(winning_strategy, self.routing_strategy_args)
 
 
@@ -10726,8 +10672,7 @@ class Router:
                 cooldown_list=_cooldown_list,
             )
 
-        strategy, selector = self._get_routing_context(model, request_kwargs)
-
+        # strategy, selector already determined above
         deployment = self._select_deployment_sync(
             strategy=strategy,
             selector=selector,
@@ -10859,7 +10804,10 @@ class Router:
             )
 
         # 6. Apply load balancing strategy
-        strategy, strategy_selector = self._get_routing_context(model)
+        # Determine routing strategy based on priority: Request > Model > Key > Team > Global
+        winning_strategy = self._get_routing_strategy_for_request(model, request_kwargs)
+        strategy, strategy_selector = self._get_routing_context(model, request_kwargs, winning_strategy)
+
         if strategy == "simple-shuffle":
             return simple_shuffle(
                 llm_router_instance=self,
