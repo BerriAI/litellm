@@ -17,7 +17,7 @@ export function valueFormatterSpend(number: number) {
     return "$" + (number / 1_000_000_000).toFixed(2) + "B";
   }
   if (number >= 1_000_000) {
-    return "$" + number / 1_000_000 + "M";
+    return "$" + (number / 1_000_000).toFixed(2) + "M";
   }
   if (number >= 1000) {
     return "$" + number / 1000 + "k";
