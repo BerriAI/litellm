@@ -18,9 +18,24 @@ CONSUS_API_BASE = "https://api.consus.io/v1"
 
 
 class ConsusChatConfig(OpenAIGPTConfig):
+    @property
+    def custom_llm_provider(self) -> Optional[str]:
+        return "consus"
+
     @staticmethod
     def _resolve_api_key(api_key: Optional[str]) -> Optional[str]:
         return api_key or litellm.consus_key or get_secret_str("CONSUS_API_KEY")
+
+    def get_supported_openai_params(self, model: str) -> list:
+        base_params = super().get_supported_openai_params(model)
+        try:
+            if litellm.supports_reasoning(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            ):
+                base_params.append("reasoning_effort")
+        except Exception:
+            pass
+        return base_params
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]

@@ -141,3 +141,26 @@ class TestConsusModelRouting:
         model, provider, _, _ = litellm.get_llm_provider("consus/gemini-2-5-pro:il5")
         assert provider == "consus"
         assert model == "gemini-2-5-pro:il5"
+
+
+class TestConsusReasoningSupport:
+    """Reasoning-capable Consus models must surface `reasoning_effort` as a
+    supported OpenAI param so it isn't silently filtered out before the
+    request leaves LiteLLM. Models without `supports_reasoning: true` in
+    the catalog must NOT advertise the param.
+    """
+
+    def test_reasoning_effort_supported_for_claude_models(self):
+        config = ConsusChatConfig()
+        params = config.get_supported_openai_params("claude-sonnet-4-5:il2")
+        assert "reasoning_effort" in params
+
+    def test_reasoning_effort_not_supported_for_gpt_4_1(self):
+        # gpt-4.1 is registered in the Consus catalog without
+        # `supports_reasoning`, so the param must NOT be advertised.
+        config = ConsusChatConfig()
+        params = config.get_supported_openai_params("gpt-4.1:il5+itar")
+        assert "reasoning_effort" not in params
+
+    def test_custom_llm_provider_returns_consus(self):
+        assert ConsusChatConfig().custom_llm_provider == "consus"
