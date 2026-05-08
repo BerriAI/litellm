@@ -124,12 +124,8 @@ async def run_async_fallback(
         if mg == original_model_group:
             continue
         try:
-            # Deep copy kwargs so each fallback attempt starts from the
-            # original, unmodified parameters.  Without this, provider-
-            # specific handlers (e.g. Bedrock's converse_handler) can
-            # mutate kwargs via .pop() calls, leaving subsequent fallback
-            # providers with missing keys (e.g. `tool_choice` present but
-            # `tools` removed).  See https://github.com/BerriAI/litellm/issues/24764
+            # Keep each fallback attempt isolated from mutations made while
+            # preparing or sending a previous attempt.
             fallback_kwargs = safe_deep_copy(kwargs)
 
             # LOGGING
