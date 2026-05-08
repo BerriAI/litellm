@@ -1609,6 +1609,21 @@ def test_effort_validation():
         )
 
 
+def test_xhigh_effort_accepted_for_bedrock_invoke_opus_47():
+    """Test xhigh effort uses Bedrock model-map capabilities for invoke models."""
+    config = AnthropicConfig()
+
+    result = config.transform_request(
+        model="invoke/global.anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": "Test"}],
+        optional_params={"output_config": {"effort": "xhigh"}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "xhigh"
+
+
 def test_effort_with_claude_opus_45():
     """Test effort parameter works with Claude Opus 4.5 model."""
     config = AnthropicConfig()

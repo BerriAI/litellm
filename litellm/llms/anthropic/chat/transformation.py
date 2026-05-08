@@ -204,15 +204,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         Mirrors the pattern used in ``openai/chat/gpt_5_transformation.py`` so
         that adding support for a new effort level is a pure model-map change.
+        Bedrock Claude invoke still uses AnthropicConfig for request shaping, so
+        explicit Bedrock route prefixes must check Bedrock model-map entries.
         """
-        try:
-            return _supports_factory(
-                model=model,
-                custom_llm_provider="anthropic",
-                key=f"supports_{level}_reasoning_effort",
-            )
-        except Exception:
-            return False
+        providers_to_check: List[Optional[str]] = [None, "anthropic"]
+        if model.startswith(("bedrock/", "converse/", "invoke/")):
+            providers_to_check.insert(0, "bedrock")
+
+        for custom_llm_provider in providers_to_check:
+            try:
+                if _supports_factory(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    key=f"supports_{level}_reasoning_effort",
+                ):
+                    return True
+            except Exception:
+                continue
+        return False
 
     def get_supported_openai_params(self, model: str):
         params = [
