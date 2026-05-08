@@ -914,22 +914,12 @@ class ResponseAPILoggingUtils:
             )
         response_api_usage: ResponseAPIUsage
         if isinstance(usage_input, dict):
-            # Realtime uses input_token_details and output_token_details; convert to
-            # input_tokens_details and output_tokens_details when those are unset.
-            if (
-                usage_input.get("input_tokens_details") is None
-                and "input_token_details" in usage_input
-            ):
-                usage_input["input_tokens_details"] = usage_input[
-                    "input_token_details"
-                ]
-            if (
-                usage_input.get("output_tokens_details") is None
-                and "output_token_details" in usage_input
-            ):
-                usage_input["output_tokens_details"] = usage_input[
-                    "output_token_details"
-                ]
+            usage_input = dict(usage_input)  # shallow copy; avoid mutating caller
+            # Realtime *_token_details → *_tokens_details when unset.
+            if usage_input.get("input_tokens_details") is None and "input_token_details" in usage_input:
+                usage_input["input_tokens_details"] = usage_input["input_token_details"]
+            if usage_input.get("output_tokens_details") is None and "output_token_details" in usage_input:
+                usage_input["output_tokens_details"] = usage_input["output_token_details"]
             total_tokens = usage_input.get("total_tokens")
             if total_tokens is None:
                 input_tokens = usage_input.get("input_tokens")
