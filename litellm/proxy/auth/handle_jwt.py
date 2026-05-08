@@ -249,6 +249,11 @@ class JWTHandler:
                 default=None,
             )
             if isinstance(singular, list):
+                if singular:
+                    verbose_proxy_logger.debug(
+                        f"JWT Auth: team_id_jwt_field '{self.litellm_jwtauth.team_id_jwt_field}' "
+                        f"returned a list {singular}; using first element '{singular[0]}' automatically."
+                    )
                 singular = singular[0] if singular else None
             if singular and singular not in team_ids:
                 team_ids.append(singular)
