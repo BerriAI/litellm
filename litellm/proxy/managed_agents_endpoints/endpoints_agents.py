@@ -39,6 +39,13 @@ def _coerce_metadata(raw: Any) -> Dict[str, Any]:
     return {}
 
 
+def _coerce_string_list(raw: Any) -> List[str]:
+    """Best-effort: accept a list, drop non-strings."""
+    if not isinstance(raw, list):
+        return []
+    return [v for v in raw if isinstance(v, str)]
+
+
 def _agent_row_to_out(row) -> AgentOut:
     metadata = _coerce_metadata(getattr(row, "metadata", None))
     pfp_url = metadata.get("pfp_url")
@@ -50,6 +57,7 @@ def _agent_row_to_out(row) -> AgentOut:
         template_id=row.template_id,
         branch=row.branch,
         pfp_url=pfp_url if isinstance(pfp_url, str) else None,
+        mcp_servers=_coerce_string_list(metadata.get("mcp_servers")),
         created_at=getattr(row, "created_at", None),
     )
 
@@ -89,6 +97,8 @@ async def create_agent(
     }
     if body.pfp_url is not None:
         metadata["pfp_url"] = body.pfp_url
+    if body.mcp_servers:
+        metadata["mcp_servers"] = list(body.mcp_servers)
 
     create_data = jsonify_object(
         {
@@ -178,13 +188,22 @@ async def update_agent(
     if "name" in fields:
         update_data["agent_name"] = fields["name"] or None
 
-    if "pfp_url" in fields:
+    if "pfp_url" in fields or "mcp_servers" in fields:
+        # Pull existing metadata once and apply both edits to the same dict so
+        # we don't issue two updates that race each other.
         metadata = _coerce_metadata(getattr(row, "metadata", None))
-        new_pfp = fields["pfp_url"]
-        if new_pfp:
-            metadata["pfp_url"] = new_pfp
-        else:
-            metadata.pop("pfp_url", None)
+        if "pfp_url" in fields:
+            new_pfp = fields["pfp_url"]
+            if new_pfp:
+                metadata["pfp_url"] = new_pfp
+            else:
+                metadata.pop("pfp_url", None)
+        if "mcp_servers" in fields:
+            new_list = _coerce_string_list(fields["mcp_servers"])
+            if new_list:
+                metadata["mcp_servers"] = new_list
+            else:
+                metadata.pop("mcp_servers", None)
         update_data["metadata"] = metadata
 
     if len(update_data) == 1:  # only updated_by
