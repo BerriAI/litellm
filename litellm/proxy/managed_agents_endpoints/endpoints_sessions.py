@@ -8,7 +8,10 @@ from fastapi import Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+from litellm.proxy.management_endpoints.key_management_endpoints import (
+    delete_verification_tokens,
+    generate_key_helper_fn,
+)
 from litellm.proxy.managed_agents_endpoints import config_loader as _config_loader
 from litellm.proxy.managed_agents_endpoints.endpoints import (
     _assert_owner_or_admin,
@@ -35,6 +38,11 @@ from litellm.proxy.managed_agents_endpoints.types import (
     SessionCreateIn,
     SessionOut,
 )
+from litellm.proxy.managed_agents_endpoints.warm_pool import (
+    post_claim as _warm_pool_post_claim,
+    schedule_refill as _warm_pool_schedule_refill,
+    try_claim as _warm_pool_try_claim,
+)
 from litellm.proxy.utils import jsonify_object
 
 
@@ -55,6 +63,41 @@ def _resolve_region() -> str:
     if cfg is not None and cfg.aws_region:
         return cfg.aws_region
     return "us-east-1"
+
+
+async def _mint_session_key(
+    user_api_key_dict: UserAPIKeyAuth,
+    agent_id: str,
+    agent_model: str,
+    session_id: str,
+) -> tuple[str, str]:
+    """Mint a session-scoped LiteLLM key for a managed-agent sandbox.
+
+    Returns (plaintext_key, token_hash). The hash is what's stored on the
+    session row; the plaintext is injected as LITELLM_API_KEY into the
+    container env and never persisted.
+    """
+    key_data = await generate_key_helper_fn(
+        request_type="key",
+        duration=None,
+        models=[agent_model],
+        user_id=user_api_key_dict.user_id,
+        team_id=user_api_key_dict.team_id,
+        agent_id=agent_id,
+        key_alias=f"managed-agent-session-{session_id}",
+        metadata={
+            "managed_agent_id": agent_id,
+            "managed_agent_session_id": session_id,
+        },
+    )
+    plaintext = key_data.get("token")
+    token_hash = key_data.get("token_id")
+    if not plaintext or not token_hash:
+        raise RuntimeError(
+            "generate_key_helper_fn returned no token/token_id for session "
+            f"{session_id}"
+        )
+    return plaintext, token_hash
 
 
 def _region_from_arn(arn: Optional[str]) -> Optional[str]:
@@ -186,61 +229,124 @@ async def create_session(
     )
     session_id = row.session_id
 
-    encrypted_key = metadata.get("litellm_api_key_encrypted")
-    decrypted_key = (
-        decrypt_value_helper(
-            encrypted_key, key="litellm_api_key", return_original_value=True
-        )
-        if encrypted_key
-        else ""
-    )
-    env: Dict[str, str] = {
-        "LITELLM_API_KEY": decrypted_key or "",
-        "LITELLM_API_BASE": metadata.get("litellm_api_base", "") or "",
-        "LITELLM_DEFAULT_MODEL": agent.model,
-        "REPO_URL": template.repo_url,
-        "BRANCH": agent.branch or template.default_branch,
-    }
-    git_token = await decrypt_git_token(prisma_client, template.git_credential_id)
-    if git_token:
-        env["GIT_TOKEN"] = git_token
-    if agent.prompt:
-        env["AGENT_PROMPT"] = agent.prompt
-
     client = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10, read=None, write=None, pool=10)
     )
 
     task_arn: Optional[str] = None
+    session_key_hash: Optional[str] = None
     try:
-        infra = await asyncio.to_thread(
-            bootstrap_shared_infra, region, aws_overrides, template.container_port
-        )
-        if not infra.subnet_ids:
-            raise RuntimeError("bootstrap_shared_infra returned no subnets")
-        subnet = infra.subnet_ids[0]
-        security_group = infra.security_group_id
-
-        task_arn = await asyncio.to_thread(
-            run_task_sync,
-            region=region,
-            cluster=cluster,
-            task_def_arn=template.task_def_arn,
-            container_name="harness",
-            subnet=subnet,
-            security_group=security_group,
-            env=env,
-            session_id=session_id,
+        # Mint a session-scoped LiteLLM key for the sandbox container instead
+        # of passing the user's own key through. The key is scoped to the
+        # agent's model only, aliased by session_id, and revoked when the
+        # session stops. Done inside try so a mint failure cleans up the
+        # session row via _mark_session_failed.
+        session_key, session_key_hash = await _mint_session_key(
+            user_api_key_dict=user_api_key_dict,
             agent_id=agent_id,
+            agent_model=agent.model,
+            session_id=session_id,
         )
         await prisma_client.db.litellm_managedagentsessiontable.update(
             where={"session_id": session_id},
-            data={"task_arn": task_arn},
+            data={"virtual_key_hash": session_key_hash},
         )
 
-        public_ip = await asyncio.to_thread(
-            wait_running_get_ip_sync, region, cluster, task_arn, 300
-        )
+        env: Dict[str, str] = {
+            "LITELLM_API_KEY": session_key,
+            "LITELLM_API_BASE": metadata.get("litellm_api_base", "") or "",
+            "LITELLM_DEFAULT_MODEL": agent.model,
+            "REPO_URL": template.repo_url,
+            "BRANCH": agent.branch or template.default_branch,
+        }
+        git_token = await decrypt_git_token(prisma_client, template.git_credential_id)
+        if git_token:
+            env["GIT_TOKEN"] = git_token
+        if agent.prompt:
+            env["AGENT_PROMPT"] = agent.prompt
+
+        # Warm-pool fast path: try to claim a pre-spawned Fargate task whose
+        # shim is already listening. On success we skip RunTask + ENI wait +
+        # ECR pull entirely (~30-60s saved). On any failure (no slot, claim
+        # POST 4xx/5xx/timeout) we fall through to the cold path below.
+        public_ip: Optional[str] = None
+        cfg = _config_loader.MANAGED_AGENTS_CONFIG
+        pool_enabled = bool(cfg and getattr(cfg, "pool_enabled", False))
+        pool_min_warm = int(getattr(cfg, "pool_min_warm", 1)) if cfg else 1
+        if pool_enabled:
+            slot = await _warm_pool_try_claim(template.template_id)
+            if slot is not None:
+                claimed_arn, claimed_ip, claimed_port, claimed_secret = slot
+                try:
+                    await _warm_pool_post_claim(
+                        public_ip=claimed_ip,
+                        container_port=claimed_port,
+                        secret=claimed_secret,
+                        env=env,
+                        timeout=120.0,
+                    )
+                    task_arn = claimed_arn
+                    public_ip = claimed_ip
+                    await prisma_client.db.litellm_managedagentsessiontable.update(
+                        where={"session_id": session_id},
+                        data={"task_arn": task_arn},
+                    )
+                    verbose_proxy_logger.info(
+                        f"managed_agents: warm-pool hit template={template.template_id} "
+                        f"session={session_id} ip={public_ip}"
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.warning(
+                        "managed_agents: warm-pool claim failed, falling back "
+                        f"(template={template.template_id} arn={claimed_arn}): {e}"
+                    )
+                    await asyncio.to_thread(
+                        stop_task_sync,
+                        region,
+                        cluster,
+                        claimed_arn,
+                        "warm_pool claim failed",
+                    )
+                    public_ip = None
+                    task_arn = None
+                finally:
+                    _warm_pool_schedule_refill(
+                        template=template,
+                        region=region,
+                        aws_overrides=aws_overrides,
+                        cluster=cluster,
+                        min_warm=pool_min_warm,
+                    )
+
+        if public_ip is None:
+            infra = await asyncio.to_thread(
+                bootstrap_shared_infra, region, aws_overrides, template.container_port
+            )
+            if not infra.subnet_ids:
+                raise RuntimeError("bootstrap_shared_infra returned no subnets")
+            subnet = infra.subnet_ids[0]
+            security_group = infra.security_group_id
+
+            task_arn = await asyncio.to_thread(
+                run_task_sync,
+                region=region,
+                cluster=cluster,
+                task_def_arn=template.task_def_arn,
+                container_name="harness",
+                subnet=subnet,
+                security_group=security_group,
+                env=env,
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+            await prisma_client.db.litellm_managedagentsessiontable.update(
+                where={"session_id": session_id},
+                data={"task_arn": task_arn},
+            )
+
+            public_ip = await asyncio.to_thread(
+                wait_running_get_ip_sync, region, cluster, task_arn, 300
+            )
         # NOTE (v1): proxy↔sandbox traffic is plain HTTP over the task's public IP.
         # Tracked for follow-up: route through PrivateLink/VPC-internal addressing
         # or terminate TLS on the harness so prompts/responses and the env-injected
@@ -299,6 +405,12 @@ async def create_session(
                 verbose_proxy_logger.warning(
                     f"managed_agents: stop_task after failure raised: {stop_err}"
                 )
+        if session_key_hash:
+            await _revoke_session_key(
+                session_id=session_id,
+                token_hash=session_key_hash,
+                user_api_key_dict=user_api_key_dict,
+            )
         if isinstance(e, HTTPException):
             raise
         raise HTTPException(status_code=500, detail=f"session create failed: {e}")
@@ -387,9 +499,39 @@ async def delete_session(
             session_id=session_id,
         )
 
+    if row.virtual_key_hash:
+        await _revoke_session_key(
+            session_id=session_id,
+            token_hash=row.virtual_key_hash,
+            user_api_key_dict=user_api_key_dict,
+        )
+
     await prisma_client.db.litellm_managedagentsessiontable.update(
         where={"session_id": session_id},
         data={"status": "dead", "stopped_at": _now_utc()},
     )
 
     return {"id": session_id, "status": "dead"}
+
+
+async def _revoke_session_key(
+    session_id: str,
+    token_hash: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """Revoke a session-scoped LiteLLM key. Best-effort: a failure here must
+    not block session teardown."""
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    try:
+        await delete_verification_tokens(
+            tokens=[token_hash],
+            user_api_key_cache=user_api_key_cache,
+            user_api_key_dict=user_api_key_dict,
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            "managed_agents: failed to revoke session key for session=%s: %s",
+            session_id,
+            e,
+        )

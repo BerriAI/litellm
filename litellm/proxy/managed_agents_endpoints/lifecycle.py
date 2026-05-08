@@ -27,6 +27,7 @@ from litellm.proxy.managed_agents_endpoints.fargate.tasks import (
     list_tagged_task_arns,
     stop_task_sync,
 )
+from litellm.proxy.managed_agents_endpoints.warm_pool import POOL_SLOT_PREFIX
 
 ALIVE_STATUSES = ("creating", "ready")
 DEAD_STATUSES = ("dead", "failed", "stopped")
@@ -121,16 +122,27 @@ async def reconcile_orphans(
     if not managed_tasks:
         return {"scanned": 0, "orphaned_stopped": 0, "stale_creating_stopped": 0}
 
-    session_ids = [t["tags"][TAG_SESSION_ID] for t in managed_tasks]
-    rows = await prisma_client.db.litellm_managedagentsessiontable.find_many(
-        where={"session_id": {"in": session_ids}}
+    # Warm-pool tasks are tagged with a sentinel session_id ('pool-warm-...') and
+    # have no DB row. They are managed in-process by warm_pool.py, not the DB.
+    real_tasks = [
+        t
+        for t in managed_tasks
+        if not t["tags"][TAG_SESSION_ID].startswith(POOL_SLOT_PREFIX)
+    ]
+    session_ids = [t["tags"][TAG_SESSION_ID] for t in real_tasks]
+    rows = (
+        await prisma_client.db.litellm_managedagentsessiontable.find_many(
+            where={"session_id": {"in": session_ids}}
+        )
+        if session_ids
+        else []
     )
     by_id = {r.session_id: r for r in rows}
 
     orphaned = 0
     stale = 0
     now_ts = time.time()
-    for task in managed_tasks:
+    for task in real_tasks:
         sid = task["tags"][TAG_SESSION_ID]
         arn = task["taskArn"]
         row = by_id.get(sid)

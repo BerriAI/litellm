@@ -138,6 +138,25 @@ def _sg_has_tcp_ingress(sg: dict, port: int) -> bool:
     return False
 
 
+def _ensure_tcp_ingress(ec2, sg_id: str, sg_name: str, port: int) -> None:
+    try:
+        ec2.authorize_security_group_ingress(
+            GroupId=sg_id,
+            IpPermissions=[
+                {
+                    "IpProtocol": "tcp",
+                    "FromPort": port,
+                    "ToPort": port,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }
+            ],
+        )
+        verbose_proxy_logger.info(f"Added ingress for tcp/{port} to {sg_name}")
+    except ClientError as e:
+        if "InvalidPermission.Duplicate" not in str(e):
+            raise
+
+
 def ensure_security_group(
     region: str,
     sg_name: str,
@@ -146,6 +165,7 @@ def ensure_security_group(
     container_port: int,
 ) -> str:
     ec2 = _ec2(region)
+    shim_port = container_port + 1
     r = ec2.describe_security_groups(
         Filters=[
             {"Name": "vpc-id", "Values": [vpc_id]},
@@ -159,30 +179,10 @@ def ensure_security_group(
         verbose_proxy_logger.debug(
             f"Security group {sg_name} already exists in VPC {vpc_id}"
         )
-        # The SG is shared across all templates. If a new template uses a
-        # different container_port, the existing SG won't have an ingress
-        # rule for it and the harness will be unreachable. Add the missing
-        # rule rather than silently returning.
         if not _sg_has_tcp_ingress(sg, container_port):
-            try:
-                ec2.authorize_security_group_ingress(
-                    GroupId=sg_id,
-                    IpPermissions=[
-                        {
-                            "IpProtocol": "tcp",
-                            "FromPort": container_port,
-                            "ToPort": container_port,
-                            "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
-                        }
-                    ],
-                )
-                verbose_proxy_logger.info(
-                    f"Added ingress for tcp/{container_port} to {sg_name}"
-                )
-            except ClientError as e:
-                # InvalidPermission.Duplicate => another worker added it concurrently
-                if "InvalidPermission.Duplicate" not in str(e):
-                    raise
+            _ensure_tcp_ingress(ec2, sg_id, sg_name, container_port)
+        if not _sg_has_tcp_ingress(sg, shim_port):
+            _ensure_tcp_ingress(ec2, sg_id, sg_name, shim_port)
         return sg_id
 
     verbose_proxy_logger.info(f"Creating security group {sg_name} in VPC {vpc_id}")
@@ -200,7 +200,13 @@ def ensure_security_group(
                 "FromPort": container_port,
                 "ToPort": container_port,
                 "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
-            }
+            },
+            {
+                "IpProtocol": "tcp",
+                "FromPort": shim_port,
+                "ToPort": shim_port,
+                "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+            },
         ],
     )
 

@@ -173,12 +173,15 @@ def test_discover_vpc_subnet_no_public_subnet_raises(mock_ec2):
 
 
 def test_ensure_security_group_existing_with_port_returns_id(mock_ec2):
+    # Existing SG must already have BOTH the harness port AND the warm-pool
+    # shim port (container_port + 1) for the no-op path.
     mock_ec2.describe_security_groups.return_value = {
         "SecurityGroups": [
             {
                 "GroupId": "sg-existing",
                 "IpPermissions": [
-                    {"IpProtocol": "tcp", "FromPort": 4096, "ToPort": 4096}
+                    {"IpProtocol": "tcp", "FromPort": 4096, "ToPort": 4096},
+                    {"IpProtocol": "tcp", "FromPort": 4097, "ToPort": 4097},
                 ],
             }
         ]
@@ -197,7 +200,7 @@ def test_ensure_security_group_existing_with_port_returns_id(mock_ec2):
 
 def test_ensure_security_group_existing_missing_port_authorizes(mock_ec2):
     """Existing SG was created for a different container_port; we must add
-    an ingress rule for the new port so multi-port deployments work."""
+    ingress rules for both the harness port and the shim port (port + 1)."""
     mock_ec2.describe_security_groups.return_value = {
         "SecurityGroups": [
             {
@@ -214,12 +217,13 @@ def test_ensure_security_group_existing_missing_port_authorizes(mock_ec2):
         )
 
     assert sg_id == "sg-existing"
-    mock_ec2.authorize_security_group_ingress.assert_called_once()
-    perms = mock_ec2.authorize_security_group_ingress.call_args.kwargs["IpPermissions"][
-        0
-    ]
-    assert perms["FromPort"] == 5000
-    assert perms["ToPort"] == 5000
+    # Two calls: one for the harness port (5000), one for the shim port (5001).
+    assert mock_ec2.authorize_security_group_ingress.call_count == 2
+    authorized_ports = sorted(
+        call.kwargs["IpPermissions"][0]["FromPort"]
+        for call in mock_ec2.authorize_security_group_ingress.call_args_list
+    )
+    assert authorized_ports == [5000, 5001]
 
 
 def test_ensure_security_group_existing_missing_port_swallows_duplicate(mock_ec2):

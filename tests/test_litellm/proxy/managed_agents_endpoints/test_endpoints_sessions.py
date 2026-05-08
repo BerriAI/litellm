@@ -91,6 +91,7 @@ def _make_session(session_id="sess-1", **kw):
         harness_session_id=None,
         fargate_cluster="litellm-agents",
         fargate_task_def_arn="arn:td",
+        virtual_key_hash=None,
         failure_reason=None,
         stopped_at=None,
         last_seen_at=None,
@@ -201,8 +202,8 @@ def test_create_session_happy_path_with_initial_prompt(app_factory, user):
             new=AsyncMock(return_value={"parts": [{"type": "text", "text": "hi"}]}),
         ),
         patch(
-            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_value_helper",
-            return_value="sk-x",
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions._mint_session_key",
+            new=AsyncMock(return_value=("sk-session", "hash-session")),
         ),
         patch(
             "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_git_token",
@@ -237,7 +238,7 @@ def test_create_session_happy_path_with_initial_prompt(app_factory, user):
     # run_task_sync got the env vars from agent.metadata + template
     _, run_kwargs = mock_run.call_args
     env = run_kwargs["env"]
-    assert env["LITELLM_API_KEY"] == "sk-x"
+    assert env["LITELLM_API_KEY"] == "sk-session"
     assert env["LITELLM_API_BASE"] == "http://x"
     assert env["LITELLM_DEFAULT_MODEL"] == "anthropic/claude-sonnet-4-6"
     assert env["REPO_URL"] == "https://github.com/x/y"
@@ -286,6 +287,10 @@ def test_create_session_happy_path_no_initial_prompt(app_factory, user):
         patch(
             "litellm.proxy.managed_agents_endpoints.endpoints_sessions.harness_send_message",
             new=send_mock,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions._mint_session_key",
+            new=AsyncMock(return_value=("sk-session", "hash-session")),
         ),
         patch(
             "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_git_token",
@@ -342,6 +347,14 @@ def test_create_session_marks_failed_on_exception(app_factory, user):
             return_value=None,
         ) as mock_stop,
         patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions._mint_session_key",
+            new=AsyncMock(return_value=("sk-session", "hash-session")),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions._revoke_session_key",
+            new=AsyncMock(return_value=None),
+        ) as mock_revoke,
+        patch(
             "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_git_token",
             new=AsyncMock(return_value=None),
         ),
@@ -357,6 +370,8 @@ def test_create_session_marks_failed_on_exception(app_factory, user):
 
     assert resp.status_code == 500
     assert "session create failed" in resp.json()["detail"]
+    # Minted key revoked on failure
+    mock_revoke.assert_awaited_once()
 
     # Session row was marked failed
     update_calls = prisma.db.litellm_managedagentsessiontable.update.call_args_list
@@ -700,8 +715,8 @@ def test_create_session_uses_region_from_template_arn(app_factory, user):
             new=AsyncMock(return_value="harness-sess-1"),
         ),
         patch(
-            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_value_helper",
-            return_value="sk-x",
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions._mint_session_key",
+            new=AsyncMock(return_value=("sk-session", "hash-session")),
         ),
         patch(
             "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_git_token",
@@ -761,8 +776,8 @@ def test_create_session_falls_back_to_config_when_arn_malformed(app_factory, use
             new=AsyncMock(return_value="harness-sess-1"),
         ),
         patch(
-            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_value_helper",
-            return_value="sk-x",
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions._mint_session_key",
+            new=AsyncMock(return_value=("sk-session", "hash-session")),
         ),
         patch(
             "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_git_token",
@@ -812,3 +827,148 @@ def test_delete_session_uses_region_from_task_arn(app_factory, user):
     assert resp.status_code == 200
     stop_mock.assert_awaited_once()
     assert stop_mock.call_args.kwargs["region"] == "us-west-2"
+
+
+# ---------------------------------------------------------------------------
+# session-scoped temp key: mint at create, revoke at delete
+# ---------------------------------------------------------------------------
+
+
+def test_create_session_mints_key_and_persists_hash(app_factory, user):
+    """Mint a session-scoped key, store its hash, and pass plaintext to env."""
+    client = app_factory(user)
+    template = _make_template()
+    agent = _make_agent(template)
+    prisma = _make_prisma(agent=agent, session=_make_session())
+    infra = SimpleNamespace(
+        cluster_arn="arn:cluster",
+        task_exec_role_arn="arn:role",
+        security_group_id="sg-1",
+        log_group_name="/ecs/x",
+        vpc_id="vpc-1",
+        subnet_ids=["subnet-1"],
+    )
+    mint_mock = AsyncMock(return_value=("sk-fresh-token", "hash-abc"))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.bootstrap_shared_infra",
+            return_value=infra,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.run_task_sync",
+            return_value="arn:task/abc",
+        ) as mock_run,
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.wait_running_get_ip_sync",
+            return_value="1.2.3.4",
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.wait_http_ready",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.harness_create_session",
+            new=AsyncMock(return_value="harness-sess-1"),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions._mint_session_key",
+            new=mint_mock,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.decrypt_git_token",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.config_loader.MANAGED_AGENTS_CONFIG",
+            SimpleNamespace(
+                aws_region="us-west-2",
+                aws=SimpleNamespace(cluster=None),
+            ),
+        ),
+    ):
+        resp = client.post("/v1/managed_agents/agents/agt-1/session", json={})
+
+    assert resp.status_code == 200, resp.text
+    mint_mock.assert_awaited_once()
+    # Plaintext key flowed into ECS env, not the user's key
+    env = mock_run.call_args.kwargs["env"]
+    assert env["LITELLM_API_KEY"] == "sk-fresh-token"
+    # Hash persisted on session row
+    update_calls = prisma.db.litellm_managedagentsessiontable.update.call_args_list
+    hash_updates = [
+        c
+        for c in update_calls
+        if c.kwargs.get("data", {}).get("virtual_key_hash") == "hash-abc"
+    ]
+    assert hash_updates, f"expected virtual_key_hash update, got {update_calls}"
+
+
+def test_delete_session_revokes_key_when_hash_present(app_factory, user):
+    client = app_factory(user)
+    sess = _make_session(
+        session_id="sess-9",
+        status="ready",
+        task_arn="arn:aws:ecs:us-west-2:1:task/litellm-agents/xyz",
+        virtual_key_hash="hash-to-revoke",
+    )
+    prisma = _make_prisma(session=sess)
+    revoke_mock = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.stop_session_task",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions._revoke_session_key",
+            new=revoke_mock,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.config_loader.MANAGED_AGENTS_CONFIG",
+            SimpleNamespace(
+                aws_region="us-west-2",
+                aws=SimpleNamespace(cluster=None),
+            ),
+        ),
+    ):
+        resp = client.delete("/v1/managed_agents/sessions/sess-9")
+
+    assert resp.status_code == 200
+    revoke_mock.assert_awaited_once()
+    assert revoke_mock.call_args.kwargs["token_hash"] == "hash-to-revoke"
+
+
+def test_delete_session_skips_revoke_when_no_hash(app_factory, user):
+    client = app_factory(user)
+    sess = _make_session(
+        session_id="sess-9",
+        status="ready",
+        task_arn="arn:aws:ecs:us-west-2:1:task/litellm-agents/xyz",
+        virtual_key_hash=None,
+    )
+    prisma = _make_prisma(session=sess)
+    revoke_mock = AsyncMock(return_value=None)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions.stop_session_task",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.endpoints_sessions._revoke_session_key",
+            new=revoke_mock,
+        ),
+        patch(
+            "litellm.proxy.managed_agents_endpoints.config_loader.MANAGED_AGENTS_CONFIG",
+            SimpleNamespace(
+                aws_region="us-west-2",
+                aws=SimpleNamespace(cluster=None),
+            ),
+        ),
+    ):
+        resp = client.delete("/v1/managed_agents/sessions/sess-9")
+
+    assert resp.status_code == 200
+    revoke_mock.assert_not_called()

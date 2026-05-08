@@ -953,6 +953,25 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             f"managed_agents: started Fargate orphan reconciler (cluster={cluster_name})"
         )
 
+        if managed_agents_config.pool_enabled:
+            from litellm.proxy.managed_agents_endpoints.warm_pool import (
+                warm_pool_startup,
+            )
+
+            asyncio.create_task(
+                warm_pool_startup(
+                    prisma_client=prisma_client,
+                    region=managed_agents_config.aws_region or "us-east-1",
+                    aws_overrides=managed_agents_config.aws,
+                    cluster=cluster_name,
+                    min_warm=managed_agents_config.pool_min_warm,
+                )
+            )
+            verbose_proxy_logger.info(
+                "managed_agents: warm pool startup kicked "
+                f"(min_warm={managed_agents_config.pool_min_warm})"
+            )
+
     # End of startup event
     yield
 

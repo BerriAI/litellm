@@ -16,7 +16,7 @@ RUN find /root/.opencode -maxdepth 2 -type d -name 'cache' -exec rm -rf {} + 2>/
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates bash \
+      git ca-certificates bash python3 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 1000 -s /bin/bash sandbox \
     && mkdir -p /work \
@@ -27,9 +27,10 @@ ENV PATH="/home/sandbox/.opencode/bin:${PATH}"
 
 WORKDIR /work
 COPY --chown=sandbox:sandbox entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --chown=sandbox:sandbox shim.py /shim.py
+RUN chmod +x /entrypoint.sh /shim.py
 
 USER sandbox
 
-EXPOSE 4096
-ENTRYPOINT ["/entrypoint.sh"]
+EXPOSE 4096 4097
+ENTRYPOINT ["python3", "/shim.py"]
