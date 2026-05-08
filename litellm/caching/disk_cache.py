@@ -17,14 +17,14 @@ class DiskCache(BaseCache):
             import diskcache as dc
         except ModuleNotFoundError as e:
             raise ModuleNotFoundError(
-                "DiskCache requires the `diskcache` package. Install it with "
-                "`pip install diskcache`."
+                "Please install litellm with `litellm[caching]` to use disk caching."
             ) from e
 
-        # JSONDisk avoids pickle deserialization (CVE-2025-69872). Values
-        # passed to set_cache must be JSON-serializable.
-        cache_dir = disk_cache_dir if disk_cache_dir is not None else ".litellm_cache"
-        self.disk_cache = dc.Cache(cache_dir, disk=dc.JSONDisk)
+        # if users don't provider one, use the default litellm cache
+        if disk_cache_dir is None:
+            self.disk_cache = dc.Cache(".litellm_cache")
+        else:
+            self.disk_cache = dc.Cache(disk_cache_dir)
 
     def set_cache(self, key, value, **kwargs):
         if "ttl" in kwargs:
@@ -43,15 +43,14 @@ class DiskCache(BaseCache):
                 self.set_cache(key=cache_key, value=cache_value)
 
     def get_cache(self, key, **kwargs):
-        cached = self.disk_cache.get(key)
-        if cached is None:
-            return None
-        if isinstance(cached, str):
+        original_cached_response = self.disk_cache.get(key)
+        if original_cached_response:
             try:
-                return json.loads(cached)
+                cached_response = json.loads(original_cached_response)  # type: ignore
             except Exception:
-                return cached
-        return cached
+                cached_response = original_cached_response
+            return cached_response
+        return None
 
     def batch_get_cache(self, keys: list, **kwargs):
         return_val = []
