@@ -27192,6 +27192,20 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "openrouter/qwen/qwen3.6-plus": {
+        "input_cost_per_token": 3.25e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.95e-06,
+        "source": "https://openrouter.ai/qwen/qwen3.6-plus",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "openrouter/qwen/qwen3.5-35b-a3b": {
         "input_cost_per_token": 2.5e-07,
         "litellm_provider": "openrouter",
