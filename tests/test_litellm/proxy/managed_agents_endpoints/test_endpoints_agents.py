@@ -317,6 +317,19 @@ def test_get_agent_pfp_url_null_when_absent(app_factory, user):
     assert resp.json()["pfp_url"] is None
 
 
+def test_get_agent_surfaces_prompt(app_factory, user):
+    client = app_factory(user)
+    a = _make_agent(prompt="You review PRs for clarity, correctness, security.")
+    prisma = _make_prisma(agent=a)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents/agt-1")
+    assert resp.status_code == 200
+    assert (
+        resp.json()["prompt"]
+        == "You review PRs for clarity, correctness, security."
+    )
+
+
 def test_get_agent_metadata_as_json_string(app_factory, user):
     """Prisma sometimes returns Json columns as string. _coerce_metadata
     should parse it transparently."""
