@@ -49,6 +49,11 @@ class OpenAITextCompletion(BaseLLM):
         headers: Optional[dict] = None,
     ):
         try:
+            # Track caller-provided headers (e.g. proxy-forwarded x-* headers)
+            # separately so they can be merged into extra_headers for the SDK call
+            # without being conflated with the auto-generated auth dict from
+            # validate_environment().
+            extra_request_headers = headers
             if headers is None:
                 headers = self.validate_environment(api_key=api_key)
             if model is None or messages is None:
@@ -67,6 +72,11 @@ class OpenAITextCompletion(BaseLLM):
                 optional_params=optional_params,
                 headers=headers,
             )
+            if extra_request_headers:
+                data["extra_headers"] = {
+                    **(data.get("extra_headers") or {}),
+                    **extra_request_headers,
+                }
             max_retries = data.pop("max_retries", 2)
             ## LOGGING
             logging_obj.pre_call(
