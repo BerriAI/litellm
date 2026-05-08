@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import enum
+import gc
 import importlib
 import inspect
 import io
@@ -964,6 +965,13 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
+
+    ## Freeze long-lived objects to reduce gen2 GC scan time
+    gc.collect()
+    gc.freeze()
+    verbose_proxy_logger.info(
+        "GC freeze applied: long-lived objects excluded from future collections"
+    )
 
     # End of startup event
     yield
