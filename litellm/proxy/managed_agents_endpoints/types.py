@@ -81,17 +81,23 @@ class AgentCreate(BaseModel):
     litellm_api_key: Optional[str] = None
     litellm_api_base: Optional[str] = None
     pfp_url: Optional[str] = None
+    mcp_servers: List[str] = Field(default_factory=list)
 
 
 class AgentUpdate(BaseModel):
     """Partial update — every field is optional. Only provided fields are
     written. Setting a string field to "" clears it; null is treated as
-    no-op (field absent in the request)."""
+    no-op (field absent in the request).
+
+    mcp_servers is replace-style: passing an empty list clears the binding;
+    omitting it leaves the existing list untouched.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     name: Optional[str] = None
     pfp_url: Optional[str] = None
+    mcp_servers: Optional[List[str]] = None
 
 
 class AgentOut(BaseModel):
@@ -104,6 +110,7 @@ class AgentOut(BaseModel):
     template_id: str
     branch: str
     pfp_url: Optional[str] = None
+    mcp_servers: List[str] = Field(default_factory=list)
     created_at: Optional[datetime] = None
 
 
