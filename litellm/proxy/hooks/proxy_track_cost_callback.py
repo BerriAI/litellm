@@ -75,9 +75,17 @@ class _ProxyDBLogger(CustomLogger):
         existing_litellm_params = request_data.get("litellm_params", {})
         existing_litellm_metadata = existing_litellm_params.get("metadata", {}) or {}
 
-        # Preserve tags from existing metadata
+        # Preserve tags, model_info, and model_group from existing litellm_params metadata
         if existing_litellm_metadata.get("tags"):
             existing_metadata["tags"] = existing_litellm_metadata.get("tags")
+        if not existing_metadata.get("model_info") and existing_litellm_metadata.get(
+            "model_info"
+        ):
+            existing_metadata["model_info"] = existing_litellm_metadata["model_info"]
+        if not existing_metadata.get("model_group") and existing_litellm_metadata.get(
+            "model_group"
+        ):
+            existing_metadata["model_group"] = existing_litellm_metadata["model_group"]
 
         request_data["litellm_params"]["proxy_server_request"] = (
             request_data.get("proxy_server_request")
@@ -96,29 +104,13 @@ class _ProxyDBLogger(CustomLogger):
                 "custom_llm_provider"
             ) or request_data.get("custom_llm_provider", "")
 
-        # Propagate standard_logging_object and litellm_trace_id from the
-        # Logging instance so that _get_session_id_for_spend_log uses the same
-        # trace_id that Langfuse received (via async_failure_handler).
-        # Without this, the DB session_id would be a random UUID that doesn't
-        # match the Langfuse trace_id, making failed requests unsearchable.
-        _litellm_logging_obj = request_data.get("litellm_logging_obj")
-        if _litellm_logging_obj is not None:
-            if not request_data.get("standard_logging_object"):
-                request_data["standard_logging_object"] = getattr(
-                    _litellm_logging_obj, "model_call_details", {}
-                ).get("standard_logging_object")
-            if request_data.get("litellm_trace_id") is None:
-                request_data["litellm_trace_id"] = getattr(
-                    _litellm_logging_obj, "litellm_trace_id", None
-                )
+        # standard_logging_object, litellm_trace_id, and start_time are now
+        # pre-extracted by post_call_failure_hook (utils.py) before
+        # litellm_logging_obj is popped from request_data.
 
-        # Use the actual request start time from the logging object so that
-        # failed requests record the real duration instead of 0.
-        actual_start_time = datetime.now()
-        if _litellm_logging_obj is not None:
-            obj_start = getattr(_litellm_logging_obj, "start_time", None)
-            if obj_start is not None:
-                actual_start_time = obj_start
+        actual_start_time = (
+            request_data.pop("_logging_obj_start_time", None) or datetime.now()
+        )
 
         await proxy_logging_obj.db_spend_update_writer.update_database(
             token=user_api_key_dict.api_key,

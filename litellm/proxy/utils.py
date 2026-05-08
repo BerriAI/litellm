@@ -1812,7 +1812,38 @@ class ProxyLogging:
                 original_exception=original_exception,
             )
 
-        # Remove before callbacks iterate — not serialisable
+        # Extract useful data from litellm_logging_obj before removing it
+        # (it's not serialisable). Callbacks (e.g. _ProxyDBLogger) need
+        # model_info/standard_logging_object for spend logs.
+        _logging_obj = request_data.get("litellm_logging_obj")
+        if _logging_obj is not None:
+            _model_call_details = getattr(_logging_obj, "model_call_details", {}) or {}
+            _lp = _model_call_details.get("litellm_params", {}) or {}
+            _lp_metadata = _lp.get("metadata", {}) or {}
+
+            _req_metadata = request_data.get("metadata")
+            if isinstance(_req_metadata, dict):
+                if not _req_metadata.get("model_info") and _lp_metadata.get(
+                    "model_info"
+                ):
+                    _req_metadata["model_info"] = _lp_metadata["model_info"]
+                if not _req_metadata.get("model_group") and _lp_metadata.get(
+                    "model_group"
+                ):
+                    _req_metadata["model_group"] = _lp_metadata["model_group"]
+
+            if not request_data.get("standard_logging_object"):
+                request_data["standard_logging_object"] = _model_call_details.get(
+                    "standard_logging_object"
+                )
+            if request_data.get("litellm_trace_id") is None:
+                request_data["litellm_trace_id"] = getattr(
+                    _logging_obj, "litellm_trace_id", None
+                )
+            _obj_start = getattr(_logging_obj, "start_time", None)
+            if _obj_start is not None:
+                request_data.setdefault("_logging_obj_start_time", _obj_start)
+
         request_data.pop("litellm_logging_obj", None)
 
         # Track the first HTTPException returned or raised by any callback

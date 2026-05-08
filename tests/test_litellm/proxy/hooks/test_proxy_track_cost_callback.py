@@ -84,6 +84,48 @@ async def test_async_post_call_failure_hook():
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_hook_preserves_model_info():
+    """
+    Verify that model_info and model_group from request_data["metadata"]
+    are preserved in the spend log metadata when a request fails.
+    """
+    logger = _ProxyDBLogger()
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        user_id="test_user_id",
+        team_id="test_team_id",
+    )
+
+    request_data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {
+            "model_info": {"id": "deployment-uuid-123", "db_model": True},
+            "model_group": "gpt-4",
+        },
+        "proxy_server_request": {},
+    }
+
+    with patch(
+        "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+        new_callable=AsyncMock,
+    ) as mock_update_database:
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=Exception("Rate limit"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        mock_update_database.assert_called_once()
+        call_kwargs = mock_update_database.call_args[1]["kwargs"]
+        metadata = call_kwargs["litellm_params"]["metadata"]
+
+        assert metadata["model_info"]["id"] == "deployment-uuid-123"
+        assert metadata["model_group"] == "gpt-4"
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_non_llm_route():
     # Setup
     logger = _ProxyDBLogger()
@@ -172,13 +214,12 @@ async def test_track_cost_callback_skips_when_no_standard_logging_object():
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj():
     """
-    When an LLM call fails, the proxy calls post_call_failure_hook with
-    request_data that doesn't contain standard_logging_object. But the
-    litellm_logging_obj (set by function_setup) is in request_data and
-    holds the standard_logging_object with the correct trace_id.
+    When an LLM call fails, post_call_failure_hook (utils.py) pre-extracts
+    standard_logging_object and litellm_trace_id from the litellm_logging_obj
+    before popping it. The _ProxyDBLogger callback then sees these fields
+    already set in request_data.
 
-    The failure hook should propagate this so the DB spend log's session_id
-    matches the Langfuse trace_id.
+    The DB spend log's session_id should match the Langfuse trace_id.
     """
     logger = _ProxyDBLogger()
 
@@ -188,24 +229,19 @@ async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj
         team_id="test_team_id",
     )
 
-    # Simulate a litellm_logging_obj with model_call_details containing
-    # the standard_logging_object (as set by _failure_handler_helper_fn)
-    mock_logging_obj = MagicMock()
-    mock_logging_obj.litellm_trace_id = "trace-id-from-logging-obj"
-    mock_logging_obj.model_call_details = {
-        "standard_logging_object": {
-            "trace_id": "trace-id-from-logging-obj",
-            "error_str": "InternalServerError",
-        }
-    }
-
+    # Simulate request_data as it would look AFTER post_call_failure_hook
+    # extracts data from the logging obj (the obj itself is already popped).
     request_data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello"}],
         "metadata": {},
         "litellm_params": {},
-        "litellm_logging_obj": mock_logging_obj,
-        # Note: no "standard_logging_object" and no "litellm_trace_id"
+        # Pre-extracted by post_call_failure_hook before callbacks iterate:
+        "standard_logging_object": {
+            "trace_id": "trace-id-from-logging-obj",
+            "error_str": "InternalServerError",
+        },
+        "litellm_trace_id": "trace-id-from-logging-obj",
     }
 
     with patch(
@@ -221,13 +257,13 @@ async def test_async_post_call_failure_hook_propagates_trace_id_from_logging_obj
         mock_update_database.assert_called_once()
         call_kwargs = mock_update_database.call_args[1]["kwargs"]
 
-        # standard_logging_object should have been propagated from logging obj
+        # standard_logging_object should be present
         assert call_kwargs.get("standard_logging_object") is not None
         assert (
             call_kwargs["standard_logging_object"]["trace_id"]
             == "trace-id-from-logging-obj"
         )
-        # litellm_trace_id should also be propagated as a fallback
+        # litellm_trace_id should also be present
         assert call_kwargs.get("litellm_trace_id") == "trace-id-from-logging-obj"
 
 
@@ -500,8 +536,8 @@ async def test_async_post_call_failure_hook_uses_actual_start_time():
     Verify that failed requests record the actual request start time
     instead of datetime.now(), so the spend log shows the real duration.
 
-    Previously both start_time and end_time were set to datetime.now()
-    at failure-logging time, resulting in duration=0 for all failures.
+    post_call_failure_hook (utils.py) pre-extracts start_time from the
+    logging object and stores it as _logging_obj_start_time in request_data.
     """
     from datetime import timedelta
 
@@ -518,17 +554,13 @@ async def test_async_post_call_failure_hook_uses_actual_start_time():
     # Simulate a request that started 60 seconds ago
     simulated_start = datetime.now() - timedelta(seconds=60)
 
-    mock_logging_obj = MagicMock()
-    mock_logging_obj.start_time = simulated_start
-    mock_logging_obj.model_call_details = {}
-    mock_logging_obj.litellm_trace_id = None
-
+    # _logging_obj_start_time is pre-extracted by post_call_failure_hook
     request_data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello"}],
         "metadata": {},
         "proxy_server_request": {},
-        "litellm_logging_obj": mock_logging_obj,
+        "_logging_obj_start_time": simulated_start,
     }
 
     original_exception = Exception("Timeout error")
