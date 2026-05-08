@@ -563,9 +563,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         kwargs_with_provider = (
                             litellm_params.copy() if litellm_params else {}
                         )
-                        kwargs_with_provider[
-                            "custom_llm_provider"
-                        ] = custom_llm_provider
+                        kwargs_with_provider["custom_llm_provider"] = (
+                            custom_llm_provider
+                        )
 
                         # For OpenAI Chat Completions, use the chat completion agentic loop method
                         agentic_response = (

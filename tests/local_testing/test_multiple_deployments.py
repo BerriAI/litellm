@@ -25,7 +25,7 @@ model_list = [
     {
         "model_name": "mistral-7b-instruct",
         "litellm_params": {  # params for litellm completion/embedding call
-            "model": "together_ai/Qwen/Qwen3.5-9B",
+            "model": "together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
             "api_key": os.getenv("TOGETHERAI_API_KEY"),
         },
     },

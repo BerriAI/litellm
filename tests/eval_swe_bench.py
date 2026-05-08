@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import litellm  # noqa: E402
 from litellm.compression import compress as litellm_compress  # noqa: E402
+from litellm.types.utils import CallTypes  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -445,7 +446,7 @@ def eval_instance(
         compress_kwargs: dict = {
             "messages": messages,
             "model": model,
-            "input_type": "openai_chat_completions",
+            "call_type": CallTypes.completion,
             "compression_trigger": compression_trigger,
             "embedding_model": embedding_model,
         }

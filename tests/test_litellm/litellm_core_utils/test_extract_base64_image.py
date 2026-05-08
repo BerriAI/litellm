@@ -6,6 +6,7 @@ which fixes the Ollama error "illegal base64 data at input byte 4".
 
 Related issue: https://github.com/BerriAI/litellm/issues/18338
 """
+
 import pytest
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (

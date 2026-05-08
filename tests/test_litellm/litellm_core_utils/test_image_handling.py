@@ -5,9 +5,20 @@ from httpx import Request, Response
 
 import litellm
 from litellm import constants
+from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
+
+
+@pytest.fixture(autouse=True)
+def _bypass_ssrf(monkeypatch):
+    """Bypass SSRF validation in image handling tests — tests use fake URLs."""
+    monkeypatch.setattr(
+        image_handling,
+        "safe_get",
+        lambda client, url, **kw: client.get(url, follow_redirects=True),
+    )
 
 
 class DummyClient:
@@ -37,9 +48,7 @@ def test_completion_with_invalid_image_url(monkeypatch):
         }
     ]
     with pytest.raises(litellm.ImageFetchError) as excinfo:
-        litellm.completion(
-            model="gemini/gemini-pro", messages=messages, api_key="test"
-        )
+        litellm.completion(model="gemini/gemini-pro", messages=messages, api_key="test")
     assert excinfo.value.status_code == 400
     assert "Unable to fetch image" in str(excinfo.value)
 
@@ -81,7 +90,7 @@ class StreamingLargeImageClient:
         headers = {"Content-Type": "image/jpeg"}
         if self.include_content_length:
             headers["Content-Length"] = str(size_bytes)
-        
+
         # Create a generator that yields chunks without creating the whole file in memory
         def generate_chunks(total_size, chunk_size=8192):
             bytes_sent = 0
@@ -89,7 +98,7 @@ class StreamingLargeImageClient:
                 chunk = b"x" * min(chunk_size, total_size - bytes_sent)
                 bytes_sent += len(chunk)
                 yield chunk
-        
+
         # Create response with streaming content
         response = Response(
             status_code=200,
@@ -97,7 +106,9 @@ class StreamingLargeImageClient:
             request=Request("GET", url),
         )
         # Mock the iter_bytes method to return our generator
-        response.iter_bytes = lambda chunk_size=8192: generate_chunks(size_bytes, chunk_size)
+        response.iter_bytes = lambda chunk_size=8192: generate_chunks(
+            size_bytes, chunk_size
+        )
         return response
 
 
@@ -121,7 +132,9 @@ def test_image_exceeds_size_limit_without_content_length(monkeypatch):
     This uses the old non-streaming mock for backward compatibility.
     """
     monkeypatch.setattr(
-        litellm, "module_level_client", LargeImageClient(size_mb=100, include_content_length=False)
+        litellm,
+        "module_level_client",
+        LargeImageClient(size_mb=100, include_content_length=False),
     )
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
@@ -134,7 +147,7 @@ def test_streaming_download_protects_against_huge_files(monkeypatch):
     """
     Test that streaming download aborts early when file exceeds size limit,
     preventing memory exhaustion from huge files (e.g., petabyte-sized files).
-    
+
     This test verifies that the streaming implementation doesn't download the entire
     file into memory before checking size. Instead, it should abort as soon as the
     limit is exceeded during streaming.
@@ -148,7 +161,7 @@ def test_streaming_download_protects_against_huge_files(monkeypatch):
 
     # Verify the error message shows it was caught during streaming
     assert "exceeds maximum allowed size" in str(excinfo.value)
-    
+
     # The error should be raised after downloading just slightly more than the limit
     # not after downloading the full 1GB
 
@@ -187,13 +200,15 @@ def test_streaming_download_handles_petabyte_file(monkeypatch):
     """
     Test that streaming download can handle extremely large file URLs (e.g., petabyte-sized)
     without attempting to download the entire file or causing memory exhaustion.
-    
+
     This simulates what happens if a malicious actor or misconfiguration provides
     a URL to an extremely large file.
     """
     # Simulate a 1 petabyte file (1,000,000 GB)
     # Without streaming protection, this would cause OOM or hang indefinitely
-    client = StreamingLargeImageClient(size_mb=1_000_000_000, include_content_length=False)
+    client = StreamingLargeImageClient(
+        size_mb=1_000_000_000, include_content_length=False
+    )
     monkeypatch.setattr(litellm, "module_level_client", client)
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
@@ -214,6 +229,6 @@ def test_image_size_limit_disabled(monkeypatch):
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
         convert_url_to_base64("https://example.com/image.jpg")
-    
+
     assert "Image URL download is disabled" in str(excinfo.value)
     assert "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0" in str(excinfo.value)

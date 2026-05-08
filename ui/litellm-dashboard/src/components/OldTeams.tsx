@@ -57,9 +57,16 @@ import type { KeyResponse, Team } from "./key_team_helpers/key_list";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "./mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "./molecules/notifications_manager";
-import { Organization, fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
+import {
+  Organization,
+  fetchMCPAccessGroups,
+  getGuardrailsList,
+  getPoliciesList,
+  teamDeleteCall,
+} from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import SearchToolSelector from "./SearchTools/SearchToolSelector";
 
 interface TeamProps {
   teams: Team[] | null;
@@ -505,7 +512,10 @@ const Teams: React.FC<TeamProps> = ({
           }
         }
 
-        // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
+        const hasSearchTools =
+          Array.isArray(formValues.object_permission_search_tools) &&
+          formValues.object_permission_search_tools.length > 0;
+
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
           (formValues.allowed_mcp_servers_and_groups &&
@@ -513,7 +523,9 @@ const Teams: React.FC<TeamProps> = ({
               formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
               formValues.allowed_mcp_servers_and_groups.toolPermissions))
         ) {
-          formValues.object_permission = {};
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
           if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
             formValues.object_permission.vector_stores = formValues.allowed_vector_store_ids;
             delete formValues.allowed_vector_store_ids;
@@ -529,11 +541,7 @@ const Teams: React.FC<TeamProps> = ({
             delete formValues.allowed_mcp_servers_and_groups;
           }
 
-          // Add tool permissions separately
           if (formValues.mcp_tool_permissions && Object.keys(formValues.mcp_tool_permissions).length > 0) {
-            if (!formValues.object_permission) {
-              formValues.object_permission = {};
-            }
             formValues.object_permission.mcp_tool_permissions = formValues.mcp_tool_permissions;
             delete formValues.mcp_tool_permissions;
           }
@@ -561,6 +569,14 @@ const Teams: React.FC<TeamProps> = ({
             formValues.object_permission.agent_access_groups = accessGroups;
           }
           delete formValues.allowed_agents_and_groups;
+        }
+
+        if (hasSearchTools) {
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
+          formValues.object_permission.search_tools = formValues.object_permission_search_tools;
+          delete formValues.object_permission_search_tools;
         }
 
         // Add model_aliases if any are defined
@@ -1511,6 +1527,34 @@ const Teams: React.FC<TeamProps> = ({
                           value={form.getFieldValue("allowed_agents_and_groups")}
                           accessToken={accessToken || ""}
                           placeholder="Select agents or access groups (optional)"
+                        />
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-8 mb-8">
+                    <AccordionHeader>
+                      <b>Search Tool Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Search Tools{" "}
+                            <Tooltip title="Select which search tools this team can access. Leave empty to allow all search tools.">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="object_permission_search_tools"
+                        className="mt-4"
+                        help="Restrict which configured search tools keys on this team may call."
+                      >
+                        <SearchToolSelector
+                          onChange={(vals: string[]) => form.setFieldValue("object_permission_search_tools", vals)}
+                          value={form.getFieldValue("object_permission_search_tools")}
+                          accessToken={accessToken || ""}
+                          placeholder="Select search tools (optional, empty = all allowed)"
                         />
                       </Form.Item>
                     </AccordionBody>

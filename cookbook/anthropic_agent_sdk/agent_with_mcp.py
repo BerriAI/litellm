@@ -24,24 +24,26 @@ async def interactive_chat_with_mcp():
     Interactive CLI chat with the agent and MCP server
     """
     config = Config()
-    
+
     # Configure Anthropic SDK to point to LiteLLM gateway
     litellm_base_url = setup_litellm_env(config)
-    
+
     # Fetch available models from proxy
-    available_models = await fetch_available_models(litellm_base_url, config.LITELLM_API_KEY)
-    
+    available_models = await fetch_available_models(
+        litellm_base_url, config.LITELLM_API_KEY
+    )
+
     current_model = config.LITELLM_MODEL
-    
+
     # MCP server configuration
     mcp_server_url = f"{litellm_base_url}/mcp/deepwiki2"
     use_mcp = os.getenv("USE_MCP", "true").lower() == "true"
-    
+
     if not use_mcp:
         print("⚠️  MCP disabled via USE_MCP=false")
-    
+
     print_header(litellm_base_url, current_model, has_mcp=use_mcp)
-    
+
     while True:
         # Configure agent options
         if use_mcp:
@@ -58,7 +60,7 @@ async def interactive_chat_with_mcp():
                             "url": mcp_server_url,
                             "headers": {
                                 "Authorization": f"Bearer {config.LITELLM_API_KEY}"
-                            }
+                            },
                         }
                     },
                 )
@@ -78,12 +80,12 @@ async def interactive_chat_with_mcp():
                 model=current_model,
                 max_turns=50,
             )
-        
+
         # Create agent client
         try:
             async with ClaudeSDKClient(options=options) as client:
                 conversation_active = True
-                
+
                 while conversation_active:
                     # Get user input
                     try:
@@ -91,34 +93,36 @@ async def interactive_chat_with_mcp():
                     except (EOFError, KeyboardInterrupt):
                         print("\n\n👋 Goodbye!")
                         return
-                    
+
                     # Handle commands
-                    if user_input.lower() in ['quit', 'exit']:
+                    if user_input.lower() in ["quit", "exit"]:
                         print("\n👋 Goodbye!")
                         return
-                    
-                    if user_input.lower() == 'clear':
+
+                    if user_input.lower() == "clear":
                         print("\n🔄 Starting new conversation...\n")
                         conversation_active = False
                         continue
-                    
-                    if user_input.lower() == 'models':
+
+                    if user_input.lower() == "models":
                         handle_model_list(available_models, current_model)
                         continue
-                    
-                    if user_input.lower() == 'model':
-                        new_model, should_restart = handle_model_switch(available_models, current_model)
+
+                    if user_input.lower() == "model":
+                        new_model, should_restart = handle_model_switch(
+                            available_models, current_model
+                        )
                         if should_restart:
                             current_model = new_model
                             conversation_active = False
                         continue
-                    
+
                     if not user_input:
                         continue
-                    
+
                     # Stream response from agent
                     await stream_response(client, user_input)
-        
+
         except Exception as e:
             print(f"\n❌ Error creating agent client: {e}")
             print("This might be an MCP configuration issue. Try running without MCP:")

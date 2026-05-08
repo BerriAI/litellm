@@ -2,7 +2,6 @@
 Test Google AI Studio (Gemini) files transformation functionality
 """
 
-import os
 from unittest.mock import Mock, patch
 
 import httpx
@@ -38,10 +37,7 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         # API key is passed via x-goog-api-key header, not in URL
-        assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/test123"
-        )
+        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
         assert "key=" not in url
 
         # CRITICAL: params should be empty dict, not contain Content-Type or any other params
@@ -65,10 +61,7 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         # API key is passed via x-goog-api-key header, not in URL
-        assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/test123"
-        )
+        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
         assert "key=" not in url
 
         # CRITICAL: params should be empty dict
@@ -94,11 +87,34 @@ class TestGoogleAIStudioFilesTransformation:
         )
 
         assert (
-            url
-            == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
+            url == "https://generativelanguage.googleapis.com/v1beta/files/cctqueckiggb"
         )
         assert "key=" not in url
         assert params == {}
+
+    def test_transform_retrieve_file_request_encodes_file_id_path_segment(self):
+        file_id = "files/../../models/gemini-pro?x=1#frag"
+        litellm_params = {"api_key": "test-api-key"}
+
+        url, params = self.handler.transform_retrieve_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert (
+            url
+            == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
+        )
+        assert params == {}
+
+    def test_transform_retrieve_file_request_rejects_dot_path_segment(self):
+        with pytest.raises(ValueError, match="file_id cannot be a dot path segment"):
+            self.handler.transform_retrieve_file_request(
+                file_id="files/..",
+                optional_params={},
+                litellm_params={"api_key": "test-api-key"},
+            )
 
     @patch.dict("os.environ", {}, clear=True)
     @patch("litellm.llms.gemini.common_utils.get_secret_str", return_value=None)
@@ -304,9 +320,7 @@ class TestGoogleAIStudioFilesTransformation:
             litellm_params=litellm_params,
         )
 
-        # Verify URL extraction
-        assert "files/test123" in url
-        assert "generativelanguage.googleapis.com" in url
+        assert url == "https://generativelanguage.googleapis.com/v1beta/files/test123"
 
         # Params should be empty (API key goes in header via validate_environment)
         assert params == {}
@@ -328,4 +342,23 @@ class TestGoogleAIStudioFilesTransformation:
         # Verify URL construction
         assert file_id in url
         assert "generativelanguage.googleapis.com" in url
+        assert params == {}
+
+    def test_transform_delete_file_request_encodes_file_id_path_segment(self):
+        file_id = "files/../../models/gemini-pro?x=1#frag"
+        litellm_params = {
+            "api_key": "test-api-key",
+            "api_base": "https://generativelanguage.googleapis.com",
+        }
+
+        url, params = self.handler.transform_delete_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        assert (
+            url
+            == "https://generativelanguage.googleapis.com/v1beta/files/..%2F..%2Fmodels%2Fgemini-pro%3Fx%3D1%23frag"
+        )
         assert params == {}

@@ -120,11 +120,21 @@ class TestInteractionOperationUrls:
         "method_name,interaction_id,expected_suffix",
         [
             ("transform_get_interaction_request", "interaction-123", "interaction-123"),
-            ("transform_delete_interaction_request", "interaction-456", "interaction-456"),
-            ("transform_cancel_interaction_request", "interaction-789", "interaction-789:cancel"),
+            (
+                "transform_delete_interaction_request",
+                "interaction-456",
+                "interaction-456",
+            ),
+            (
+                "transform_cancel_interaction_request",
+                "interaction-789",
+                "interaction-789:cancel",
+            ),
         ],
     )
-    def test_url_excludes_key(self, config, method_name, interaction_id, expected_suffix):
+    def test_url_excludes_key(
+        self, config, method_name, interaction_id, expected_suffix
+    ):
         with patch(_PATCH_GET_API_KEY, return_value="secret-key"):
             url, params = getattr(config, method_name)(
                 interaction_id=interaction_id,
@@ -136,6 +146,21 @@ class TestInteractionOperationUrls:
         assert "key=" not in url
         assert "secret-key" not in url
         assert expected_suffix in url
+
+    def test_interaction_id_is_encoded_as_one_path_segment(self, config):
+        with patch(_PATCH_GET_API_KEY, return_value="secret-key"):
+            url, params = config.transform_cancel_interaction_request(
+                interaction_id="../../interactions/other?x=1#frag",
+                api_base="https://generativelanguage.googleapis.com",
+                litellm_params=GenericLiteLLMParams(api_key="secret-key"),
+                headers={},
+            )
+
+        assert (
+            url
+            == "https://generativelanguage.googleapis.com/v1beta/interactions/..%2F..%2Finteractions%2Fother%3Fx%3D1%23frag:cancel"
+        )
+        assert params == {}
 
     def test_get_interaction_raises_without_key(self, config):
         with patch(_PATCH_GET_API_KEY, return_value=None):

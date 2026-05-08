@@ -15,9 +15,7 @@ import sys
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client

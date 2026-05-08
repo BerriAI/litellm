@@ -433,9 +433,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             # contain API keys or other secrets) in error responses.
             raise Exception(f"Presidio PII analysis failed: {type(e).__name__}") from e
 
-    async def _post_presidio_anonymize(
-        self, text: str, analyze_results: Any
-    ) -> Any:
+    async def _post_presidio_anonymize(self, text: str, analyze_results: Any) -> Any:
         """POST to Presidio anonymize; returns parsed JSON body."""
         # Use shared session to prevent memory leak (issue #14540)
         async with self._get_session_iterator() as session:
@@ -752,9 +750,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if messages is None:
                 return data
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
                 content = m.get("content", None)
@@ -855,9 +853,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ):  # /chat/completions requests
             messages: Optional[List] = kwargs.get("messages", None)
             tasks = []
-            task_mappings: List[
-                Tuple[int, Optional[int]]
-            ] = []  # Track (message_index, content_index) for each task
+            task_mappings: List[Tuple[int, Optional[int]]] = (
+                []
+            )  # Track (message_index, content_index) for each task
 
             if messages is None:
                 return kwargs, result
@@ -1162,14 +1160,38 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.types.utils import ModelResponse
 
         all_chunks: List[ModelResponseStream] = []
+        passthrough_due_to_unknown_stream_shape = False
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
-                    all_chunks.append(chunk)
+                    if passthrough_due_to_unknown_stream_shape:
+                        yield chunk
+                    else:
+                        all_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
                     yield chunk  # type: ignore[misc]
                     continue
-
+                else:
+                    if all_chunks:
+                        # Flush buffered chunks and switch to transparent passthrough for this stream shape.
+                        # NOTE: these buffered chunks are emitted unmasked because this
+                        # stream mixed chunk types and cannot be safely reconstructed.
+                        verbose_proxy_logger.warning(
+                            "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
+                            "Flushing %d buffered chunks without PII masking and switching to transparent passthrough.",
+                            len(all_chunks),
+                        )
+                        for buffered_chunk in all_chunks:
+                            yield buffered_chunk
+                        all_chunks = []
+                    passthrough_due_to_unknown_stream_shape = True
+                    yield chunk
+            if passthrough_due_to_unknown_stream_shape:
+                verbose_proxy_logger.warning(
+                    "Presidio apply_to_output: streaming response contained unknown event objects "
+                    "(e.g. /v1/responses events). Output PII masking was skipped for this response."
+                )
+                return
             if not all_chunks:
                 verbose_proxy_logger.warning(
                     "Presidio apply_to_output: streaming response contained only "

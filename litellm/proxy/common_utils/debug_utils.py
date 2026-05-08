@@ -50,7 +50,10 @@ def configure_gc_thresholds():
 configure_gc_thresholds()
 
 
-@router.get("/debug/asyncio-tasks")
+@router.get(
+    "/debug/asyncio-tasks",
+    dependencies=[Depends(user_api_key_auth)],
+)
 async def get_active_tasks_stats():
     """
     Returns:
@@ -103,7 +106,11 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
 
     tracemalloc.start(10)
 
-    @router.get("/memory-usage", include_in_schema=False)
+    @router.get(
+        "/memory-usage",
+        dependencies=[Depends(user_api_key_auth)],
+        include_in_schema=False,
+    )
     async def memory_usage():
         # Take a snapshot of the current memory usage
         snapshot = tracemalloc.take_snapshot()
@@ -245,9 +252,9 @@ async def get_memory_summary(
             health_status = "healthy"
 
     except ImportError:
-        process_memory[
-            "error"
-        ] = "Install psutil for memory monitoring: pip install psutil"
+        process_memory["error"] = (
+            "Install psutil for memory monitoring: pip install psutil"
+        )
     except Exception as e:
         process_memory["error"] = str(e)
 
@@ -301,9 +308,9 @@ async def get_memory_summary(
 
     # Add warning if garbage collection issues detected
     if uncollectable > 0:
-        gc_info[
-            "warning"
-        ] = f"{uncollectable} uncollectable objects (possible memory leak)"
+        gc_info["warning"] = (
+            f"{uncollectable} uncollectable objects (possible memory leak)"
+        )
 
     return {
         "worker_pid": os.getpid(),
@@ -369,9 +376,11 @@ def _get_uncollectable_objects_info() -> Dict[str, Any]:
     return {
         "count": len(uncollectable),
         "sample_types": [type(obj).__name__ for obj in uncollectable[:10]],
-        "warning": "If count > 0, you may have reference cycles preventing garbage collection"
-        if len(uncollectable) > 0
-        else None,
+        "warning": (
+            "If count > 0, you may have reference cycles preventing garbage collection"
+            if len(uncollectable) > 0
+            else None
+        ),
     }
 
 
@@ -441,12 +450,16 @@ def _get_cache_memory_stats(
                     if hasattr(redis_usage_cache.redis_client, "connection_pool"):
                         pool_info = redis_usage_cache.redis_client.connection_pool  # type: ignore
                         cache_stats["redis_usage_cache"]["connection_pool"] = {
-                            "max_connections": pool_info.max_connections
-                            if hasattr(pool_info, "max_connections")
-                            else None,
-                            "connection_class": pool_info.connection_class.__name__
-                            if hasattr(pool_info, "connection_class")
-                            else None,
+                            "max_connections": (
+                                pool_info.max_connections
+                                if hasattr(pool_info, "max_connections")
+                                else None
+                            ),
+                            "connection_class": (
+                                pool_info.connection_class.__name__
+                                if hasattr(pool_info, "connection_class")
+                                else None
+                            ),
                         }
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error getting Redis pool info: {e}")
@@ -561,9 +574,11 @@ def _get_process_memory_info(
                 "description": "Percentage of total system RAM being used",
             },
             "open_file_handles": {
-                "count": process.num_fds()
-                if hasattr(process, "num_fds")
-                else "N/A (Windows)",
+                "count": (
+                    process.num_fds()
+                    if hasattr(process, "num_fds")
+                    else "N/A (Windows)"
+                ),
                 "description": "Number of open file descriptors/handles",
             },
             "threads": {
@@ -703,7 +718,11 @@ async def configure_gc_thresholds_endpoint(
     }
 
 
-@router.get("/otel-spans", include_in_schema=False)
+@router.get(
+    "/otel-spans",
+    dependencies=[Depends(user_api_key_auth)],
+    include_in_schema=False,
+)
 async def get_otel_spans():
     from litellm.proxy.proxy_server import open_telemetry_logger
 

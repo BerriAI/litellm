@@ -688,18 +688,22 @@ def test_embedding(mock_aembedding, client_no_auth):
         async def _post_call_success_side_effect(**kwargs):
             return kwargs["response"]
 
-        with patch.object(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "pre_call_hook",
-            new=AsyncMock(side_effect=_pre_call_hook_side_effect),
-        ) as mock_pre_call_hook, patch.object(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "during_call_hook",
-            new=AsyncMock(return_value=None),
-        ) as mock_during_hook, patch.object(
-            litellm.proxy.proxy_server.proxy_logging_obj,
-            "post_call_success_hook",
-            new=AsyncMock(side_effect=_post_call_success_side_effect),
+        with (
+            patch.object(
+                litellm.proxy.proxy_server.proxy_logging_obj,
+                "pre_call_hook",
+                new=AsyncMock(side_effect=_pre_call_hook_side_effect),
+            ) as mock_pre_call_hook,
+            patch.object(
+                litellm.proxy.proxy_server.proxy_logging_obj,
+                "during_call_hook",
+                new=AsyncMock(return_value=None),
+            ) as mock_during_hook,
+            patch.object(
+                litellm.proxy.proxy_server.proxy_logging_obj,
+                "post_call_success_hook",
+                new=AsyncMock(side_effect=_post_call_success_side_effect),
+            ),
         ):
             response = client_no_auth.post("/v1/embeddings", json=test_data)
 
@@ -1202,16 +1206,20 @@ async def test_create_team_member_add(prisma_client, new_member_method):
         }
     team_member_add_request = TeamMemberAddRequest(**data)
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
-        new_callable=AsyncMock,
-    ) as mock_litellm_usertable, patch(
-        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
-        new=AsyncMock(return_value=team_obj),
-    ) as mock_team_obj, patch(
-        "litellm.proxy.proxy_server.prisma_client.get_data",
-        new=AsyncMock(return_value=[]),
-    ) as mock_get_data:
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+            new_callable=AsyncMock,
+        ) as mock_litellm_usertable,
+        patch(
+            "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+            new=AsyncMock(return_value=team_obj),
+        ) as mock_team_obj,
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.get_data",
+            new=AsyncMock(return_value=[]),
+        ) as mock_get_data,
+    ):
 
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
@@ -1391,16 +1399,20 @@ async def test_create_team_member_add_team_admin(
         }
     team_member_add_request = TeamMemberAddRequest(**data)
 
-    with patch(
-        "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
-        new_callable=AsyncMock,
-    ) as mock_litellm_usertable, patch(
-        "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
-        new=AsyncMock(return_value=team_obj),
-    ) as mock_team_obj, patch(
-        "litellm.proxy.proxy_server.prisma_client.get_data",
-        new=AsyncMock(return_value=[]),
-    ) as mock_get_data:
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.db.litellm_usertable",
+            new_callable=AsyncMock,
+        ) as mock_litellm_usertable,
+        patch(
+            "litellm.proxy.auth.auth_checks._get_team_object_from_user_api_key_cache",
+            new=AsyncMock(return_value=team_obj),
+        ) as mock_team_obj,
+        patch(
+            "litellm.proxy.proxy_server.prisma_client.get_data",
+            new=AsyncMock(return_value=[]),
+        ) as mock_get_data,
+    ):
         mock_client = AsyncMock(
             return_value=LiteLLM_UserTable(
                 user_id="1234", max_budget=100, user_email="1234"
@@ -1541,6 +1553,7 @@ async def test_add_callback_via_key(prisma_client):
                 fastapi_response=Response(),
                 user_api_key_dict=UserAPIKeyAuth(
                     metadata={
+                        "allow_client_mock_response": True,
                         "logging": [
                             {
                                 "callback_name": "langfuse",  # 'otel', 'langfuse', 'lunary'
@@ -1551,7 +1564,7 @@ async def test_add_callback_via_key(prisma_client):
                                     "langfuse_host": "https://us.cloud.langfuse.com",
                                 },
                             }
-                        ]
+                        ],
                     }
                 ),
             )
@@ -1645,6 +1658,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
             team_id=None,
             max_parallel_requests=None,
             metadata={
+                "allow_client_mock_response": True,
                 "logging": [
                     {
                         "callback_name": "langfuse",
@@ -1655,7 +1669,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils(
                             "langfuse_host": "https://us.cloud.langfuse.com",
                         },
                     }
-                ]
+                ],
             },
             tpm_limit=None,
             rpm_limit=None,
@@ -1801,6 +1815,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
             team_id=None,
             max_parallel_requests=None,
             metadata={
+                "allow_client_mock_response": True,
                 "logging": [
                     {
                         "callback_name": "gcs_bucket",
@@ -1810,7 +1825,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_gcs_bucket(
                             "gcs_path_service_account": "pathrise-convert-1606954137718-a956eef1a2a8.json",
                         },
                     }
-                ]
+                ],
             },
             tpm_limit=None,
             rpm_limit=None,
@@ -1934,6 +1949,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
             team_id=None,
             max_parallel_requests=None,
             metadata={
+                "allow_client_mock_response": True,
                 "logging": [
                     {
                         "callback_name": "langsmith",
@@ -1944,7 +1960,7 @@ async def test_add_callback_via_key_litellm_pre_call_utils_langsmith(
                             "langsmith_base_url": "https://api.smith.langchain.com",
                         },
                     }
-                ]
+                ],
             },
             tpm_limit=None,
             rpm_limit=None,
@@ -2752,48 +2768,52 @@ async def test_update_config_success_callback_normalization():
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy._types import ConfigYAML
 
-    # Ensure feature is enabled and prisma_client is set
-    setattr(proxy_server, "store_model_in_db", True)
     setattr(proxy_server, "proxy_logging_obj", MagicMock())
+
+    existing_litellm_settings = {"success_callback": ["langfuse"]}
+
+    class FakeRow:
+        def __init__(self, name, value):
+            self.param_name = name
+            self.param_value = value
+
+    upserted = {}
+
+    async def fake_find_first(where=None):
+        if where and where.get("param_name") == "litellm_settings":
+            return FakeRow("litellm_settings", existing_litellm_settings)
+        return None
+
+    async def fake_upsert(where=None, data=None):
+        upserted[where["param_name"]] = json.loads(data["update"]["param_value"])
 
     class MockPrisma:
         def __init__(self):
             self.db = MagicMock()
             self.db.litellm_config = MagicMock()
-            self.db.litellm_config.upsert = AsyncMock()
-
-        # proxy_server.update_config expects this to be sync returning a dict
-        def jsonify_object(self, obj):
-            return obj
+            self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
+            self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
 
     setattr(proxy_server, "prisma_client", MockPrisma())
 
     class MockProxyConfig:
-        def __init__(self):
-            self.saved_config = None
-
-        async def get_config(self):
-            # Existing config has one lowercase callback already
-            return {"litellm_settings": {"success_callback": ["langfuse"]}}
-
-        async def save_config(self, new_config: dict):
-            self.saved_config = new_config
-
         async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
             return None
 
-    mock_proxy_config = MockProxyConfig()
-    setattr(proxy_server, "proxy_config", mock_proxy_config)
+    setattr(proxy_server, "proxy_config", MockProxyConfig())
 
-    # Update config with mixed-case callbacks - expect normalization to lowercase
     config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    admin_user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test")
+
+    admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+    )
     await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
 
-    saved = mock_proxy_config.saved_config
-    assert saved is not None, "save_config was not called"
-    callbacks = saved["litellm_settings"]["success_callback"]
+    assert (
+        "litellm_settings" in upserted
+    ), "litellm_config.upsert was not called for litellm_settings"
+    callbacks = upserted["litellm_settings"]["success_callback"]
 
     # Deduped and normalized
     assert "sqs" in callbacks

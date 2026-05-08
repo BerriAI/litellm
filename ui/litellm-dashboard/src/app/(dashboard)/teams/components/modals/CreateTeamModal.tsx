@@ -15,10 +15,18 @@ import ModelAliasManager from "@/components/common_components/ModelAliasManager"
 import React, { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { fetchMCPAccessGroups, getGuardrailsList, getPoliciesList, Organization, Team, teamCreateCall } from "@/components/networking";
+import {
+  fetchMCPAccessGroups,
+  getGuardrailsList,
+  getPoliciesList,
+  Organization,
+  Team,
+  teamCreateCall,
+} from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { organizationKeys } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
+import SearchToolSelector from "@/components/SearchTools/SearchToolSelector";
 
 interface ModelAliases {
   [key: string]: string;
@@ -212,15 +220,27 @@ const CreateTeamModal = ({
           }
         }
 
-        // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
+        // Transform integrations into object_permission (vector stores, MCP, agents, search tools)
+        const hasAgents =
+          formValues.allowed_agents_and_groups &&
+          ((formValues.allowed_agents_and_groups.agents?.length ?? 0) > 0 ||
+            (formValues.allowed_agents_and_groups.accessGroups?.length ?? 0) > 0);
+        const hasSearchTools =
+          Array.isArray(formValues.object_permission_search_tools) &&
+          formValues.object_permission_search_tools.length > 0;
+
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
           (formValues.allowed_mcp_servers_and_groups &&
             (formValues.allowed_mcp_servers_and_groups.servers?.length > 0 ||
               formValues.allowed_mcp_servers_and_groups.accessGroups?.length > 0 ||
-              formValues.allowed_mcp_servers_and_groups.toolPermissions))
+              formValues.allowed_mcp_servers_and_groups.toolPermissions)) ||
+          hasAgents ||
+          hasSearchTools
         ) {
-          formValues.object_permission = {};
+          if (!formValues.object_permission) {
+            formValues.object_permission = {};
+          }
           if (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) {
             formValues.object_permission.vector_stores = formValues.allowed_vector_store_ids;
             delete formValues.allowed_vector_store_ids;
@@ -238,9 +258,6 @@ const CreateTeamModal = ({
 
           // Add tool permissions separately
           if (formValues.mcp_tool_permissions && Object.keys(formValues.mcp_tool_permissions).length > 0) {
-            if (!formValues.object_permission) {
-              formValues.object_permission = {};
-            }
             formValues.object_permission.mcp_tool_permissions = formValues.mcp_tool_permissions;
             delete formValues.mcp_tool_permissions;
           }
@@ -248,9 +265,6 @@ const CreateTeamModal = ({
           // Handle agent permissions
           if (formValues.allowed_agents_and_groups) {
             const { agents, accessGroups } = formValues.allowed_agents_and_groups;
-            if (!formValues.object_permission) {
-              formValues.object_permission = {};
-            }
             if (agents && agents.length > 0) {
               formValues.object_permission.agents = agents;
             }
@@ -258,6 +272,11 @@ const CreateTeamModal = ({
               formValues.object_permission.agent_access_groups = accessGroups;
             }
             delete formValues.allowed_agents_and_groups;
+          }
+
+          if (hasSearchTools) {
+            formValues.object_permission.search_tools = formValues.object_permission_search_tools;
+            delete formValues.object_permission_search_tools;
           }
         }
 
@@ -395,6 +414,80 @@ const CreateTeamModal = ({
             </Select2>
           </Form.Item>
 
+          <Accordion className="mt-8 mb-8">
+            <AccordionHeader>
+              <b>Team Member Settings</b>
+            </AccordionHeader>
+            <AccordionBody>
+              <Text className="text-xs text-gray-500 mb-4">
+                Optional defaults applied when members join this team. All fields can be overridden per member.
+              </Text>
+              <Form.Item
+                noStyle
+                shouldUpdate={(prev, cur) => prev.models !== cur.models}
+              >
+                {({ getFieldValue }) => {
+                  const teamModels: string[] = getFieldValue("models") || [];
+                  const opts = teamModels.length > 0 ? teamModels : modelsToPick;
+                  return (
+                    <Form.Item
+                      label={
+                        <span>
+                          Default Model Access{" "}
+                          <Tooltip title="Optional. If set, new members can only access these models by default. Must be a subset of the team's models. Leave empty to give all members access to all team models.">
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      name="default_team_member_models"
+                    >
+                      <Select2
+                        mode="multiple"
+                        placeholder="Leave empty — all team models accessible to every member"
+                        style={{ width: "100%" }}
+                      >
+                        {opts.map((m) => (
+                          <Select2.Option key={m} value={m}>
+                            {getModelDisplayName(m)}
+                          </Select2.Option>
+                        ))}
+                      </Select2>
+                    </Form.Item>
+                  );
+                }}
+              </Form.Item>
+              <Form.Item
+                label="Default Member Budget (USD)"
+                name="team_member_budget"
+                normalize={(value) => (value ? Number(value) : undefined)}
+                tooltip="Default spend budget for each member in this team."
+              >
+                <NumericalInput step={0.01} precision={2} width={200} />
+              </Form.Item>
+              <Form.Item
+                label="Default Key Duration (eg: 1d, 1mo)"
+                name="team_member_key_duration"
+                tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
+              >
+                <TextInput placeholder="e.g., 30d" />
+              </Form.Item>
+              <Form.Item
+                label="Default RPM Limit"
+                name="team_member_rpm_limit"
+                tooltip="Default requests per minute limit for each member. Can be overridden per member."
+              >
+                <NumericalInput step={1} width={400} />
+              </Form.Item>
+              <Form.Item
+                label="Default TPM Limit"
+                name="team_member_tpm_limit"
+                tooltip="Default tokens per minute limit for each member. Can be overridden per member."
+              >
+                <NumericalInput step={1} width={400} />
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
+
           <Form.Item label="Max Budget (USD)" name="max_budget">
             <NumericalInput step={0.01} precision={2} width={200} />
           </Form.Item>
@@ -413,7 +506,7 @@ const CreateTeamModal = ({
           </Form.Item>
 
           <Accordion
-            className="mt-20 mb-8"
+            className="mt-8 mb-8"
             onClick={() => {
               if (!mcpAccessGroupsLoaded) {
                 fetchMcpAccessGroups();
@@ -435,35 +528,6 @@ const CreateTeamModal = ({
                     e.target.value = e.target.value.trim();
                   }}
                 />
-              </Form.Item>
-              <Form.Item
-                label="Team Member Budget (USD)"
-                name="team_member_budget"
-                normalize={(value) => (value ? Number(value) : undefined)}
-                tooltip="This is the individual budget for a user in the team."
-              >
-                <NumericalInput step={0.01} precision={2} width={200} />
-              </Form.Item>
-              <Form.Item
-                label="Team Member Key Duration (eg: 1d, 1mo)"
-                name="team_member_key_duration"
-                tooltip="Set a limit to the duration of a team member's key. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days), 1mo (month)"
-              >
-                <TextInput placeholder="e.g., 30d" />
-              </Form.Item>
-              <Form.Item
-                label="Team Member RPM Limit"
-                name="team_member_rpm_limit"
-                tooltip="The RPM (Requests Per Minute) limit for individual team members"
-              >
-                <NumericalInput step={1} width={400} />
-              </Form.Item>
-              <Form.Item
-                label="Team Member TPM Limit"
-                name="team_member_tpm_limit"
-                tooltip="The TPM (Tokens Per Minute) limit for individual team members"
-              >
-                <NumericalInput step={1} width={400} />
               </Form.Item>
               <Form.Item
                 label="Metadata"
@@ -679,6 +743,34 @@ const CreateTeamModal = ({
                   value={form.getFieldValue("allowed_agents_and_groups")}
                   accessToken={accessToken || ""}
                   placeholder="Select agents or access groups (optional)"
+                />
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
+
+          <Accordion className="mt-8 mb-8">
+            <AccordionHeader>
+              <b>Search Tool Settings</b>
+            </AccordionHeader>
+            <AccordionBody>
+              <Form.Item
+                label={
+                  <span>
+                    Allowed Search Tools{" "}
+                    <Tooltip title="Select which search tools this team can access. Leave empty to allow all search tools.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="object_permission_search_tools"
+                className="mt-4"
+                help="Restrict which configured search tools keys on this team may call."
+              >
+                <SearchToolSelector
+                  onChange={(vals: string[]) => form.setFieldValue("object_permission_search_tools", vals)}
+                  value={form.getFieldValue("object_permission_search_tools")}
+                  accessToken={accessToken || ""}
+                  placeholder="Select search tools (optional, empty = all allowed)"
                 />
               </Form.Item>
             </AccordionBody>

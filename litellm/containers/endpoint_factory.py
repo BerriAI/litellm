@@ -90,10 +90,10 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
                     custom_llm_provider=resolved_custom_llm_provider,
                     litellm_params=litellm_params,
                 )
-            container_provider_config: Optional[
-                BaseContainerConfig
-            ] = ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(resolved_custom_llm_provider),
+            container_provider_config: Optional[BaseContainerConfig] = (
+                ProviderConfigManager.get_provider_container_config(
+                    provider=litellm.LlmProviders(resolved_custom_llm_provider),
+                )
             )
 
             if container_provider_config is None:

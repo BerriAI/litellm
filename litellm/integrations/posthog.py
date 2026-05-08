@@ -349,9 +349,9 @@ class PostHogLogger(CustomBatchLogger):
         Returns:
             tuple[str, str]: (api_key, api_url)
         """
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params", None)
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params", None)
+        )
 
         if standard_callback_dynamic_params is not None:
             api_key = (

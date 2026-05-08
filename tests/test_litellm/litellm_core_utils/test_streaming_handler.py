@@ -539,15 +539,16 @@ async def test_streaming_with_usage_and_logging(sync_mode: bool):
         cache_read_input_tokens=1796,
     )
 
-    with patch.object(
-        mock_callback, "log_success_event"
-    ) as mock_log_success_event, patch.object(
-        mock_callback, "log_stream_event"
-    ) as mock_log_stream_event, patch.object(
-        mock_callback, "async_log_success_event"
-    ) as mock_async_log_success_event, patch.object(
-        mock_callback, "async_log_stream_event"
-    ) as mock_async_log_stream_event:
+    with (
+        patch.object(mock_callback, "log_success_event") as mock_log_success_event,
+        patch.object(mock_callback, "log_stream_event") as mock_log_stream_event,
+        patch.object(
+            mock_callback, "async_log_success_event"
+        ) as mock_async_log_success_event,
+        patch.object(
+            mock_callback, "async_log_stream_event"
+        ) as mock_async_log_stream_event,
+    ):
         await test_streaming_handler_with_usage(
             sync_mode=sync_mode, final_usage_block=final_usage_block
         )
@@ -875,6 +876,39 @@ def test_sync_streaming_bad_request_not_midstream(logging_obj: Logging):
 
     assert getattr(excinfo.value, "status_code", None) == 400
     assert "invalid maxOutputTokens" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_read_timeout_triggers_midstream_fallback(
+    logging_obj: Logging,
+):
+    """A mid-stream httpx.ReadTimeout must wrap into MidStreamFallbackError so
+    the Router's FallbackStreamWrapper can switch to a fallback model.
+
+    Previously __anext__ caught httpx.TimeoutException and re-raised it raw,
+    which bypassed _handle_stream_fallback_error and prevented stream_timeout
+    from triggering fallbacks the way connection-phase timeout does.
+    """
+    import httpx
+
+    from litellm.exceptions import MidStreamFallbackError
+
+    async def _raise_read_timeout(**kwargs):
+        raise httpx.ReadTimeout("Timeout on reading data from socket")
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        make_call=_raise_read_timeout,
+    )
+
+    with pytest.raises(MidStreamFallbackError) as excinfo:
+        await response.__anext__()
+
+    assert excinfo.value.is_pre_first_chunk is True
+    assert isinstance(excinfo.value.original_exception, Exception)
 
 
 def test_streaming_handler_with_created_time_propagation(
@@ -1876,6 +1910,150 @@ async def test_custom_stream_wrapper_anext_exhaustion_raises_stop_async_iteratio
         pass  # expected clean termination
     except RuntimeError as e:
         pytest.fail(f"PEP 479 regression: StopIteration leaked as RuntimeError: {e}")
+
+
+# Azure streaming chunks that reproduce issue #24221:
+# Azure sends an initial chunk with prompt_filter_results and choices=[],
+# then a chunk with role='assistant' and content='', then content chunks.
+# With stream_options.include_usage=True, the empty-choices chunk was
+# forwarded with an inflated default choice, consuming the sent_first_chunk
+# flag and causing strip_role_from_delta to strip the role from the real
+# first chunk.
+_AZURE_CHUNKS_WITH_PROMPT_FILTER = [
+    # Chunk 1: prompt_filter_results, no choices (Azure-specific)
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[],
+        usage=None,
+    ),
+    # Chunk 2: first real chunk with role='assistant' and empty content
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="", role="assistant"),
+            )
+        ],
+        usage=None,
+    ),
+    # Chunk 3: content
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="Hello!"),
+            )
+        ],
+        usage=None,
+    ),
+    # Chunk 4: finish_reason
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(),
+            )
+        ],
+        usage=None,
+    ),
+    # Chunk 5: final usage chunk, no choices
+    ModelResponseStream(
+        id="chatcmpl-abc123",
+        created=1742056047,
+        model=None,
+        object="chat.completion.chunk",
+        choices=[],
+        usage=Usage(
+            completion_tokens=10,
+            prompt_tokens=20,
+            total_tokens=30,
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool):
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/24221
+
+    Azure sends an initial chunk with choices=[] (prompt_filter_results)
+    before the first content chunk. With stream_options.include_usage=True,
+    this chunk was forwarded with an inflated default choice, which:
+    1. Consumed the sent_first_chunk flag
+    2. Caused strip_role_from_delta to strip role from the real first chunk
+
+    The fix ensures:
+    - Chunks with choices=[] are forwarded faithfully (no inflated choices)
+    - sent_first_chunk is only marked for chunks with real choices
+    - Chunks with role in delta are not discarded as empty
+    """
+    completion_stream = ModelResponseListIterator(
+        model_responses=_AZURE_CHUNKS_WITH_PROMPT_FILTER
+    )
+
+    response = CustomStreamWrapper(
+        completion_stream=completion_stream,
+        model="azure/gpt-5-nano",
+        custom_llm_provider="azure",
+        logging_obj=Logging(
+            model="azure/gpt-5-nano",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="12345",
+            function_id="1245",
+        ),
+        stream_options={"include_usage": True},
+    )
+
+    chunks = []
+    if sync_mode:
+        for chunk in response:
+            chunks.append(chunk)
+    else:
+        async for chunk in response:
+            chunks.append(chunk)
+
+    # The prompt_filter chunk should be forwarded with choices=[]
+    assert len(chunks[0].choices) == 0, (
+        f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
+    )
+
+    # At least one chunk must have role='assistant' in its delta
+    has_role = any(
+        len(c.choices) > 0
+        and getattr(c.choices[0].delta, "role", None) == "assistant"
+        for c in chunks
+    )
+    assert has_role, (
+        "No chunk contained role='assistant' in delta (issue #24221). "
+        "Chunk deltas: "
+        + str([
+            c.choices[0].delta if c.choices else "no choices"
+            for c in chunks
+        ])
+    )
 
 
 def test_gemini_legacy_vertex_stop_finish_reason_normalised():

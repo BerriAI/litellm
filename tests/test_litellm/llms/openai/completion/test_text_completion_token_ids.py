@@ -46,9 +46,7 @@ class TestTextCompletionTokenIds:
     """Test text_completion with token IDs as prompt."""
 
     @respx.mock
-    def test_completion_prompt_token_ids(
-        self, text_completion_response, monkeypatch
-    ):
+    def test_completion_prompt_token_ids(self, text_completion_response, monkeypatch):
         """
         Test text_completion with a list of token IDs (integers).
         This tests the fix for https://github.com/BerriAI/litellm/issues/17118

@@ -536,6 +536,81 @@ def test_gpt5_unknown_model_passes_through_minimal(config: OpenAIConfig):
     assert params["reasoning_effort"] == "minimal"
 
 
+def test_gpt5_5_pro_rejects_reasoning_effort_low(config: OpenAIConfig):
+    """gpt-5.5-pro only accepts {medium, high, xhigh} — 'low' must raise.
+
+    Verified against OpenAI's live API: /v1/chat/completions with
+    reasoning_effort='low' on gpt-5.5-pro returns HTTP 400.
+    """
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params={},
+            model="gpt-5.5-pro",
+            drop_params=False,
+        )
+
+
+def test_gpt5_5_pro_dated_rejects_reasoning_effort_low(config: OpenAIConfig):
+    """Dated snapshot must inherit the base alias's low-rejection behavior."""
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params={},
+            model="gpt-5.5-pro-2026-04-23",
+            drop_params=False,
+        )
+
+
+def test_gpt5_5_pro_drops_reasoning_effort_low_when_requested(config: OpenAIConfig):
+    """drop_params=True silently strips 'low' instead of round-tripping a 400."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="gpt-5.5-pro",
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in params
+
+
+def test_gpt5_5_chat_allows_reasoning_effort_low(config: OpenAIConfig):
+    """gpt-5.5 (chat) supports 'low'; flag absent → opt-out check passes."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="gpt-5.5",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "low"
+
+
+def test_gpt5_unknown_model_passes_through_low(config: OpenAIConfig):
+    """Unknown gpt-5 models pass 'low' through (opt-out, not opt-in)."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="gpt-5.4-turbo-preview",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "low"
+
+
+def test_gpt5_low_explicitly_disabled_check(gpt5_config: OpenAIGPT5Config):
+    """supports_low_reasoning_effort=false → disabled; missing/true → not disabled."""
+    assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.5-pro", "low"
+    )
+    assert gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.5-pro-2026-04-23", "low"
+    )
+    assert not gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.5", "low"
+    )
+    assert not gpt5_config._is_reasoning_effort_level_explicitly_disabled(
+        "gpt-5.4", "low"
+    )
+
+
 def test_gpt5_normalizes_reasoning_effort_dict_with_summary(config: OpenAIConfig):
     """Dict with summary/generate_summary is normalized for chat completions."""
     params = config.map_openai_params(
@@ -1031,3 +1106,131 @@ def test_gpt5_1_logprobs_dropped_with_reasoning_effort(config: OpenAIConfig):
     assert "logprobs" not in params
     assert "top_p" not in params
     assert params["reasoning_effort"] == "high"
+
+
+# ---------------------------------------------------------------------------
+# Responses API: GPT-5 temperature validation (#16090)
+# ---------------------------------------------------------------------------
+
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+
+@pytest.fixture()
+def responses_config() -> OpenAIResponsesAPIConfig:
+    return OpenAIResponsesAPIConfig()
+
+
+def test_responses_gpt5_drop_temperature(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """drop_params=True should silently drop temperature!=1 for gpt-5."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.5,
+        ),
+        model="gpt-5",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_responses_gpt5_reject_temperature(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """Without drop_params, temperature!=1 should raise UnsupportedParamsError."""
+    with pytest.raises(litellm.UnsupportedParamsError):
+        responses_config.map_openai_params(
+            response_api_optional_params=ResponsesAPIOptionalRequestParams(
+                temperature=0.5,
+            ),
+            model="gpt-5",
+            drop_params=False,
+        )
+
+
+def test_responses_gpt5_allow_temperature_1(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """temperature=1 should always be allowed for gpt-5."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=1,
+        ),
+        model="gpt-5",
+        drop_params=False,
+    )
+    assert params["temperature"] == 1
+
+
+def test_responses_gpt5_mini_drop_temperature(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5-mini should also drop temperature!=1."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.7,
+        ),
+        model="gpt-5-mini",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_responses_gpt5_chat_allow_temperature(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5-chat models should allow any temperature (not GPT-5 restricted)."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.3,
+        ),
+        model="gpt-5-chat-latest",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.3
+
+
+def test_responses_gpt51_allow_temperature_no_reasoning(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5.1 supports reasoning_effort='none'; no reasoning defaults to 'none',
+    so temperature should be allowed."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.5,
+        ),
+        model="gpt-5.1",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.5
+
+
+def test_responses_gpt51_drop_temperature_with_high_effort(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5.1 with reasoning.effort='high' should drop temperature!=1."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.5,
+            reasoning={"effort": "high"},
+        ),
+        model="gpt-5.1",
+        drop_params=True,
+    )
+    assert "temperature" not in params
+
+
+def test_responses_gpt54_allow_temperature_effort_none(
+    responses_config: OpenAIResponsesAPIConfig,
+):
+    """gpt-5.4 with explicit reasoning.effort='none' should allow temperature."""
+    params = responses_config.map_openai_params(
+        response_api_optional_params=ResponsesAPIOptionalRequestParams(
+            temperature=0.7,
+            reasoning={"effort": "none"},
+        ),
+        model="gpt-5.4",
+        drop_params=False,
+    )
+    assert params["temperature"] == 0.7

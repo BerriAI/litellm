@@ -17,8 +17,4 @@ def effective_skip_system_message_for_guardrail(guardrail_to_apply: Any) -> bool
 def openai_messages_without_system(
     messages: List[AllMessageValues],
 ) -> List[AllMessageValues]:
-    return [
-        m
-        for m in messages
-        if str((m or {}).get("role") or "").lower() != "system"
-    ]
+    return [m for m in messages if str((m or {}).get("role") or "").lower() != "system"]

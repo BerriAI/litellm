@@ -19,7 +19,9 @@ import tracemalloc
 from datetime import datetime, timedelta, timezone
 from typing import Any, List
 
-SEED_MARKER = "benchmark_get_all_latest_health_checks.py" # Utility Marker for cleanup process.
+SEED_MARKER = (
+    "benchmark_get_all_latest_health_checks.py"  # Utility Marker for cleanup process.
+)
 
 
 def _rss_kb_linux() -> int:
@@ -125,7 +127,9 @@ async def _bench(prisma: Any) -> None:
 
 
 async def _amain() -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     p.add_argument("action", choices=("seed", "bench", "cleanup"))
     p.add_argument("--rows", type=int, default=10_000)
     p.add_argument("--batch-size", type=int, default=1000)

@@ -288,9 +288,7 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
     post_call_failure_hook = _setup_proxy_logging(monkeypatch)
 
     fake_manager = types.SimpleNamespace(
-        call_tool=AsyncMock(
-            side_effect=HTTPException(status_code=500, detail="boom")
-        )
+        call_tool=AsyncMock(side_effect=HTTPException(status_code=500, detail="boom"))
     )
     monkeypatch.setattr(
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
@@ -350,9 +348,7 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
-    tool_calls = [
-        {"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}
-    ]
+    tool_calls = [{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}]
 
     await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
         tool_server_map={tool_name: "deepwiki"},
@@ -395,7 +391,9 @@ async def test_get_mcp_tools_from_manager_enables_list_tools_logging(monkeypatch
     user_auth = types.SimpleNamespace(api_key="test_key", user_id="test_user")
     tools, _server_names = await LiteLLM_Proxy_MCP_Handler._get_mcp_tools_from_manager(
         user_api_key_auth=user_auth,
-        mcp_tools_with_litellm_proxy=[{"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}],
+        mcp_tools_with_litellm_proxy=[
+            {"type": "mcp", "server_url": "litellm_proxy/mcp/deepwiki"}
+        ],
     )
 
     assert tools == []

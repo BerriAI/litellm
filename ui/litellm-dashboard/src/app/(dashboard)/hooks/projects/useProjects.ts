@@ -6,8 +6,8 @@ import {
   deriveErrorMessage,
   handleError,
 } from "@/components/networking";
-import { all_admin_roles } from "@/utils/roles";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { all_admin_roles } from "@/utils/roles";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,7 +81,6 @@ export const useProjects = () => {
   return useQuery<ProjectResponse[]>({
     queryKey: projectKeys.list({}),
     queryFn: async () => fetchProjects(accessToken!),
-    enabled:
-      Boolean(accessToken) && all_admin_roles.includes(userRole || ""),
+    enabled: Boolean(accessToken) && all_admin_roles.includes(userRole!),
   });
 };
