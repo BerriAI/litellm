@@ -155,3 +155,22 @@ class TestZAITransformMessages:
 
         assert isinstance(result[0]["content"], str)
         assert "caption" in result[0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_tool_message_list_content_flattened_async(self):
+        """Async path: tool message with list content is flattened."""
+        messages = [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "async result"}],
+            },
+        ]
+
+        result = await self.config._transform_messages(
+            messages, model="glm-4.6", is_async=True
+        )
+
+        tool_msg = result[0]
+        assert isinstance(tool_msg["content"], str)
+        assert tool_msg["content"] == "async result"
