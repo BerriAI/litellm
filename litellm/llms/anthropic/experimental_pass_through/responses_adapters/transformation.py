@@ -6,6 +6,8 @@ path used for OpenAI and Azure models.
 """
 
 import json
+
+import litellm
 from typing import Any, Dict, List, Optional, Union, cast
 
 from litellm.llms.anthropic.experimental_pass_through.utils import (
@@ -382,9 +384,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 responses_kwargs["context_management"] = openai_cm
 
         # metadata user_id -> user
+        # When litellm.drop_params is set, omit optional fields that
+        # strict Responses API gateways may reject (resolves #26241).
         metadata = anthropic_request.get("metadata")
         if isinstance(metadata, dict) and "user_id" in metadata:
-            responses_kwargs["user"] = str(metadata["user_id"])[:64]
+            if not litellm.drop_params:
+                responses_kwargs["user"] = str(metadata["user_id"])[:64]
 
         return responses_kwargs
 
