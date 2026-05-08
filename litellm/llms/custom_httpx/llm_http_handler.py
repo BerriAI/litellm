@@ -4885,14 +4885,18 @@ class BaseLLMHTTPHandler:
                 )
 
                 if plan.response_override is not None:
-                    return plan.response_override
+                    return self._maybe_wrap_in_fake_stream(
+                        plan.response_override, logging_obj
+                    )
                 if plan.terminate:
                     verbose_logger.debug(
                         "Agentic loop terminated by callback=%s reason=%s",
                         callback.__class__.__name__,
                         plan.stop_reason,
                     )
-                    return response
+                    return self._maybe_wrap_in_fake_stream(
+                        response, logging_obj
+                    )
                 if not plan.run_agentic_loop:
                     continue
 
