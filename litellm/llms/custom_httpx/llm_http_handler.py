@@ -10858,6 +10858,7 @@ class BaseLLMHTTPHandler:
         self,
         request_body: Dict,
         headers: dict,
+        skills_api_provider_config: "BaseSkillsAPIConfig",
     ) -> tuple[Optional[Dict], Optional[list]]:
         """
         Helper to prepare multipart/form-data request for skills API.
@@ -10878,8 +10879,9 @@ class BaseLLMHTTPHandler:
 
         # Prepare files for multipart upload
         files = []
+        file_field_name = skills_api_provider_config.get_skill_file_field_name()
         for file_obj in request_body["files"]:
-            files.append(("files[]", file_obj))
+            files.append((file_field_name, file_obj))
 
         # Prepare data (non-file fields)
         data = {k: v for k, v in request_body.items() if k != "files"}
@@ -10937,7 +10939,9 @@ class BaseLLMHTTPHandler:
         try:
             # Check if files are present - use multipart/form-data
             data, files = self._prepare_skill_multipart_request(
-                request_body=request_body, headers=headers
+                request_body=request_body,
+                headers=headers,
+                skills_api_provider_config=skills_api_provider_config,
             )
 
             if files is not None:
@@ -10997,7 +11001,9 @@ class BaseLLMHTTPHandler:
         try:
             # Check if files are present - use multipart/form-data
             data, files = self._prepare_skill_multipart_request(
-                request_body=request_body, headers=headers
+                request_body=request_body,
+                headers=headers,
+                skills_api_provider_config=skills_api_provider_config,
             )
 
             if files is not None:

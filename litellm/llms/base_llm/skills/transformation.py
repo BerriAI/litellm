@@ -75,6 +75,17 @@ class BaseSkillsAPIConfig(ABC):
             raise ValueError("api_base is required")
         return f"{api_base}/v1/{endpoint}"
 
+    def get_api_base(
+        self,
+        litellm_params: Optional[GenericLiteLLMParams],
+    ) -> Optional[str]:
+        """Resolve the provider-specific base URL used by Skills API calls."""
+        return litellm_params.api_base if litellm_params else None
+
+    def get_skill_file_field_name(self) -> str:
+        """Multipart field name for uploaded skill files."""
+        return "files[]"
+
     @abstractmethod
     def transform_create_skill_request(
         self,

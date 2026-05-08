@@ -86,6 +86,17 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
             return f"{api_base}/v1/skills/{encoded_skill_id}"
         return f"{api_base}/v1/{endpoint}"
 
+    def get_api_base(
+        self,
+        litellm_params: Optional[GenericLiteLLMParams],
+    ) -> Optional[str]:
+        """Resolve the Anthropic API base for skills requests."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        return AnthropicModelInfo.get_api_base(
+            litellm_params.api_base if litellm_params else None
+        )
+
     def transform_create_skill_request(
         self,
         create_request: CreateSkillRequest,

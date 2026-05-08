@@ -1697,6 +1697,9 @@ if TYPE_CHECKING:
     from .llms.anthropic.skills.transformation import (
         AnthropicSkillsConfig as AnthropicSkillsConfig,
     )
+    from .llms.openai.skills.transformation import (
+        OpenAISkillsConfig as OpenAISkillsConfig,
+    )
     from .llms.base_llm.skills.transformation import (
         BaseSkillsAPIConfig as BaseSkillsAPIConfig,
     )

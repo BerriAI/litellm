@@ -220,9 +220,7 @@ def create_skill(
         )
 
         # Get API base and URL
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
         url = skills_api_provider_config.get_complete_url(
             api_base=api_base, endpoint="skills"
         )
@@ -571,9 +569,7 @@ def get_skill(
         )
 
         # Get API base
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
 
         # Transform request
         url, headers = skills_api_provider_config.transform_get_skill_request(
@@ -739,9 +735,7 @@ def delete_skill(
         )
 
         # Get API base
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        api_base = AnthropicModelInfo.get_api_base(litellm_params.api_base)
+        api_base = skills_api_provider_config.get_api_base(litellm_params)
 
         # Transform request
         url, headers = skills_api_provider_config.transform_delete_skill_request(
