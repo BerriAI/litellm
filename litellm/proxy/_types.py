@@ -691,10 +691,6 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_add",
         "/team/member_delete",
         "/team/member_update",
-        # Team lifecycle writes: handlers call _verify_team_access (proxy admin,
-        # team admin, or org admin of the team's org). Route-level org-admin
-        # detection only inspects organization_id in the body, which these
-        # payloads often omit, so they must be self-managed like member_*.
         "/team/update",
         "/team/delete",
         "/team/block",

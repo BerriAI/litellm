@@ -1949,6 +1949,43 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
     )
 
 
+@pytest.mark.parametrize(
+    "route,request_data",
+    [
+        ("/team/update", {"team_id": "team-abc"}),
+        ("/team/delete", {"team_ids": ["team-abc"]}),
+        ("/team/block", {"team_id": "team-abc"}),
+        ("/team/unblock", {"team_id": "team-abc"}),
+    ],
+)
+def test_team_write_routes_pass_route_gate_without_organization_id(
+    route, request_data
+):
+    """
+    Team lifecycle routes are self-managed: the route gate must not require
+    organization_id in the body (org-admin detection uses that field; handlers
+    enforce _verify_team_access). Regression: GitHub #27294.
+    """
+    role = LitellmUserRoles.INTERNAL_USER.value
+    user_obj = LiteLLM_UserTable(
+        user_id="route_gate_user",
+        user_email="rg@example.com",
+        user_role=role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="route_gate_user", user_role=role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data=request_data,
+    )
+
+
 # ── _user_is_org_admin tests ──────────────────────────────────────────────────
 
 from datetime import datetime
