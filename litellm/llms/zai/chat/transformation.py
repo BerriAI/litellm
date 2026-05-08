@@ -1,5 +1,8 @@
-from typing import List, Optional, Tuple
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, overload
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    convert_content_list_to_str,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
@@ -19,6 +22,50 @@ class ZAIChatConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("ZAI_API_BASE") or ZAI_API_BASE
         dynamic_api_key = api_key or get_secret_str("ZAI_API_KEY")
         return api_base, dynamic_api_key
+
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
+
+    @overload
+    def _transform_messages(
+        self,
+        messages: List[AllMessageValues],
+        model: str,
+        is_async: Literal[False] = False,
+    ) -> List[AllMessageValues]: ...
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        """Flatten list-format content in tool/assistant messages for GLM.
+
+        GLM's Jinja template checks ``m.content is string`` — list-format
+        content parts (used by Go clients like openai-go) are silently
+        dropped.  Flatten them to strings before forwarding.
+
+        Only tool/assistant roles are flattened — user messages are left
+        intact so the parent's image_url processing can handle them.
+
+        See: https://github.com/BerriAI/litellm/issues/25868
+        """
+        for message in messages:
+            role = message.get("role")
+            if role in ("tool", "assistant"):
+                content = message.get("content")
+                if content is not None and not isinstance(content, str):
+                    text = convert_content_list_to_str(message)
+                    message["content"] = text if text else ""
+
+        if is_async:
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=True
+            )
+        else:
+            return super()._transform_messages(
+                messages=messages, model=model, is_async=False
+            )
 
     def remove_cache_control_flag_from_messages_and_tools(
         self,
