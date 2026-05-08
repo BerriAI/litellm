@@ -139,6 +139,112 @@ def test_get_cost_for_anthropic_web_search():
     assert cost > 0.0
 
 
+def test_get_cost_for_anthropic_web_search_with_dict_server_tool_use():
+    """
+    Test that Anthropic web search cost is tracked when server_tool_use is a plain dict.
+
+    This simulates the streaming path where stream_chunk_builder calls
+    Usage(**usage.model_dump()), converting ServerToolUse from a Pydantic model to a dict.
+    """
+    from litellm.types.utils import ServerToolUse, Usage
+
+    model = "claude-3-7-sonnet-20250219"
+    # Simulate the streaming round-trip: ServerToolUse → model_dump() → dict
+    original_usage = Usage(server_tool_use=ServerToolUse(web_search_requests=2))
+    dumped = original_usage.model_dump()
+    # After model_dump, server_tool_use is a dict
+    assert isinstance(dumped["server_tool_use"], dict)
+
+    # Reconstruct Usage from the dumped dict (what stream_chunk_builder does)
+    rebuilt_usage = Usage(**dumped)
+    # The fix coerces dict back to ServerToolUse in Usage.__init__
+    assert isinstance(rebuilt_usage.server_tool_use, ServerToolUse)
+    assert rebuilt_usage.server_tool_use.web_search_requests == 2
+
+    # Cost calculation should succeed with the rebuilt usage
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=rebuilt_usage,
+        response_object=None,
+        standard_built_in_tools_params=None,
+        custom_llm_provider="anthropic",
+    )
+    assert cost > 0.0
+
+
+def test_usage_server_tool_use_dict_coercion():
+    """
+    Test that Usage.__init__ coerces a dict server_tool_use into a ServerToolUse object.
+    """
+    from litellm.types.utils import ServerToolUse, Usage
+
+    # Pass dict directly
+    usage = Usage(server_tool_use={"web_search_requests": 3})
+    assert isinstance(usage.server_tool_use, ServerToolUse)
+    assert usage.server_tool_use.web_search_requests == 3
+
+    # Pass ServerToolUse object (existing behavior)
+    usage2 = Usage(server_tool_use=ServerToolUse(web_search_requests=5))
+    assert isinstance(usage2.server_tool_use, ServerToolUse)
+    assert usage2.server_tool_use.web_search_requests == 5
+
+
+def test_get_web_search_requests_helper_handles_dict_and_object():
+    """
+    Test that _get_web_search_requests helper works with both dict and ServerToolUse.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+        _get_web_search_requests,
+    )
+    from litellm.types.utils import ServerToolUse
+
+    # dict input
+    assert _get_web_search_requests({"web_search_requests": 4}) == 4
+    assert _get_web_search_requests({"web_search_requests": None}) is None
+    assert _get_web_search_requests({}) is None
+
+    # ServerToolUse object input
+    assert _get_web_search_requests(ServerToolUse(web_search_requests=7)) == 7
+    assert _get_web_search_requests(ServerToolUse(web_search_requests=None)) is None
+    assert _get_web_search_requests(ServerToolUse()) is None
+
+
+def test_response_object_includes_web_search_call_with_dict_server_tool_use():
+    """
+    Test that response_object_includes_web_search_call works when Usage has
+    server_tool_use as a dict (streaming round-trip scenario).
+    """
+    from litellm.types.utils import Choices, Message, ServerToolUse, Usage
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="test", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model="claude-3-7-sonnet-20250219",
+        object="chat.completion",
+    )
+    # Simulate streaming: server_tool_use as dict after model_dump round-trip
+    original = Usage(
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30,
+        server_tool_use=ServerToolUse(web_search_requests=1),
+    )
+    usage = Usage(**original.model_dump())
+    response.usage = usage
+
+    result = StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response, usage=usage
+    )
+    assert result is True
+
+
 @pytest.mark.parametrize(
     "model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"]
 )
