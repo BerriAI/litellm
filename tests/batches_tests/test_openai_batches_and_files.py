@@ -557,7 +557,9 @@ async def test_avertex_batch_prediction(monkeypatch):
             mock_get_response = MagicMock()
             mock_get_response.json.return_value = mock_vertex_batch_response
             mock_get_response.status_code = 200
+            mock_get_response.is_redirect = False
             mock_get_response.raise_for_status.return_value = None
+            mock_get_response.is_redirect = False
             mock_get.return_value = mock_get_response
 
             retrieved_batch = await litellm.aretrieve_batch(
@@ -590,6 +592,7 @@ async def test_vertex_list_batches(monkeypatch):
         mock_get_response.json.return_value = mock_vertex_list_response
         mock_get_response.status_code = 200
         mock_get_response.raise_for_status.return_value = None
+        mock_get_response.is_redirect = False
         mock_get.return_value = mock_get_response
 
         list_response = await litellm.alist_batches(

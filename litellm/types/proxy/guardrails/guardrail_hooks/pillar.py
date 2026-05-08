@@ -1,6 +1,7 @@
 """
 Pillar Security Guardrail Config Model
 """
+
 from typing import Optional
 
 from pydantic import BaseModel, Field

@@ -25,9 +25,7 @@ async def config_update(session, routing_strategy=None):
             "routing_strategy": routing_strategy,
         },
         "general_settings": {
-            "alert_to_webhook_url": {
-                "llm_exceptions": "example-slack-webhook-url"
-            },
+            "alert_to_webhook_url": {"llm_exceptions": "example-slack-webhook-url"},
             "alert_types": ["llm_exceptions", "db_exceptions"],
         },
     }

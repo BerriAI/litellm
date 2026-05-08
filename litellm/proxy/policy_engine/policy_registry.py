@@ -226,6 +226,7 @@ class PolicyRegistry:
             policy: Policy object to add
         """
         self._policies[policy_name] = policy
+        self._initialized = True
         verbose_proxy_logger.debug(f"Added/updated policy: {policy_name}")
 
     def remove_policy(self, policy_name: str) -> bool:

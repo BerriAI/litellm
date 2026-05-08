@@ -21,6 +21,9 @@ class SensitiveDataMasker:
             "auth",
             "authorization",
             "credential",
+            # Plural form: Vertex uses ``vertex_credentials``; segment-exact
+            # matching otherwise misses it because "credential" != "credentials".
+            "credentials",
             "access",
             "private",
             "certificate",

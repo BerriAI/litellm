@@ -45,7 +45,7 @@ async def test_allm_passthrough_route_with_hosted_vllm_model_does_not_raise():
         )
         fake_response = httpx.Response(
             status_code=200,
-            content=b"{\n  \"ok\": true\n}",
+            content=b'{\n  "ok": true\n}',
             request=fake_request,
             headers={"content-type": "application/json"},
         )

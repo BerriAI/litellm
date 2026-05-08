@@ -6,10 +6,13 @@ Tests the model-based routing ID encoding/decoding used by the batch
 and file proxy endpoints.
 """
 
+from types import MappingProxyType
+
 from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     encode_file_id_with_model,
     get_original_file_id,
+    prepare_data_with_credentials,
 )
 
 
@@ -31,16 +34,16 @@ class TestEncodeFileIdWithModel:
         result = encode_file_id_with_model(
             "3814889423749775360", "gemini-2.5-pro", id_type="batch"
         )
-        assert result.startswith("batch_"), (
-            f"Expected batch_ prefix for Vertex numeric batch ID, got: {result[:10]}"
-        )
+        assert result.startswith(
+            "batch_"
+        ), f"Expected batch_ prefix for Vertex numeric batch ID, got: {result[:10]}"
 
     def test_vertex_numeric_id_defaults_to_file_prefix(self):
         """Vertex AI numeric IDs should default to file- prefix when id_type is not specified."""
         result = encode_file_id_with_model("3814889423749775360", "gemini-2.5-pro")
-        assert result.startswith("file-"), (
-            "Default id_type should produce file- prefix for backward compatibility"
-        )
+        assert result.startswith(
+            "file-"
+        ), "Default id_type should produce file- prefix for backward compatibility"
 
     def test_gcs_uri_gets_file_prefix(self):
         """GCS URIs (output_file_id) should produce file- prefix."""
@@ -48,6 +51,42 @@ class TestEncodeFileIdWithModel:
             "gs://bucket/path/to/file.jsonl", "gemini-2.5-pro"
         )
         assert result.startswith("file-")
+
+
+class TestPrepareDataWithCredentials:
+    def test_preserves_trusted_internal_credentials_snapshot(self):
+        data = {"file_id": "file-abc"}
+        credentials = {
+            "custom_llm_provider": "bedrock",
+            "s3_bucket_name": "safe-bucket",
+        }
+
+        prepare_data_with_credentials(
+            data=data,
+            credentials=credentials,
+            include_internal_credentials=True,
+        )
+
+        assert data["s3_bucket_name"] == "safe-bucket"
+        assert "custom_llm_provider" not in data
+        assert isinstance(
+            data["_litellm_internal_model_credentials"], type(MappingProxyType({}))
+        )
+        assert (
+            data["_litellm_internal_model_credentials"]["s3_bucket_name"]
+            == "safe-bucket"
+        )
+
+    def test_does_not_add_internal_credentials_by_default(self):
+        data = {"file_id": "file-abc"}
+        credentials = {
+            "custom_llm_provider": "bedrock",
+            "s3_bucket_name": "safe-bucket",
+        }
+
+        prepare_data_with_credentials(data=data, credentials=credentials)
+
+        assert "_litellm_internal_model_credentials" not in data
 
 
 class TestRoundTrip:

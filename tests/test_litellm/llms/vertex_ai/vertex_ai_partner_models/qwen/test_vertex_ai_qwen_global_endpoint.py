@@ -56,7 +56,11 @@ class TestVertexBaseGetVertexRegion:
 
         with patch.dict(
             litellm.model_cost,
-            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+            {
+                "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
+                    "supported_regions": ["global"]
+                }
+            },
             clear=False,
         ):
             result = vertex_base.get_vertex_region(
@@ -71,7 +75,11 @@ class TestVertexBaseGetVertexRegion:
 
         with patch.dict(
             litellm.model_cost,
-            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+            {
+                "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
+                    "supported_regions": ["global"]
+                }
+            },
             clear=False,
         ):
             result = vertex_base.get_vertex_region(
@@ -166,17 +174,28 @@ async def test_vertex_ai_qwen_global_endpoint_url():
     mock_vertexai = MagicMock()
     mock_vertexai.preview = MagicMock()
 
-    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler") as mock_http_handler, \
-         patch(
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler"
+        ) as mock_http_handler,
+        patch(
             "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
             return_value=("fake-token", "test-project"),
-         ), \
-         patch.dict("sys.modules", {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview}), \
-         patch.dict(
+        ),
+        patch.dict(
+            "sys.modules",
+            {"vertexai": mock_vertexai, "vertexai.preview": mock_vertexai.preview},
+        ),
+        patch.dict(
             litellm.model_cost,
-            {"vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {"supported_regions": ["global"]}},
+            {
+                "vertex_ai/qwen/qwen3-next-80b-a3b-instruct-maas": {
+                    "supported_regions": ["global"]
+                }
+            },
             clear=False,
-         ):
+        ),
+    ):
         mock_http_handler.return_value.post = AsyncMock(return_value=mock_response)
 
         response = await litellm.acompletion(

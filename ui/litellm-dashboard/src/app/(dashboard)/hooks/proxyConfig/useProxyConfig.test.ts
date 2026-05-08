@@ -7,6 +7,7 @@ import {
   useDeleteProxyConfigField,
   getProxyConfigCall,
   deleteProxyConfigFieldCall,
+  proxyConfigKeys,
   ConfigType,
   GeneralSettingsFieldName,
   type ProxyConfigResponse,
@@ -425,6 +426,28 @@ describe("useDeleteProxyConfigField", () => {
     });
 
     expect(result.current.error).toBeDefined();
+  });
+
+  it("should invalidate proxyConfig queries after a successful delete", async () => {
+    (fetchSpy as any).mockResolvedValue({
+      ok: true,
+      json: async () => mockDeleteResponse,
+    });
+
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    const { result } = renderHook(() => useDeleteProxyConfigField(), { wrapper });
+
+    result.current.mutate({
+      config_type: ConfigType.GENERAL_SETTINGS,
+      field_name: GeneralSettingsFieldName.MAXIMUM_SPEND_LOGS_RETENTION_PERIOD,
+    });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: proxyConfigKeys.all });
   });
 });
 

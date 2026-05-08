@@ -348,9 +348,7 @@ async def test_release_lock_reuses_registered_script(pod_lock_manager, mock_redi
 
 
 @pytest.mark.asyncio
-async def test_release_lock_lua_path_emits_released_event(
-    pod_lock_manager, mock_redis
-):
+async def test_release_lock_lua_path_emits_released_event(pod_lock_manager, mock_redis):
     """
     Test that _emit_released_lock_event is called when the Lua path returns 1
     (successful release).

@@ -1,3 +1,4 @@
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
@@ -66,6 +67,8 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         aws_region_name = litellm_params.get("aws_region_name")
         if not aws_region_name:
             raise ValueError("aws_region_name is required for S3 Vectors")
+        if not re.match(r"^[a-z][a-z0-9-]*$", aws_region_name):
+            raise ValueError("Invalid aws_region_name format")
         return f"https://s3vectors.{aws_region_name}.api.aws"
 
     def transform_search_vector_store_request(
@@ -76,6 +79,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """Sync version - generates embedding synchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name
@@ -137,6 +141,7 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """Async version - generates embedding asynchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name

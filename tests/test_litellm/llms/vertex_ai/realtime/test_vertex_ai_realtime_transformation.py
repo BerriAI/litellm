@@ -95,24 +95,14 @@ def test_session_configuration_request_model_format():
 SETUP_COMPLETE = json.dumps({"setupComplete": {}})
 
 SERVER_TEXT_DELTA = json.dumps(
-    {
-        "serverContent": {
-            "modelTurn": {
-                "parts": [{"text": "Hello from Vertex AI!"}]
-            }
-        }
-    }
+    {"serverContent": {"modelTurn": {"parts": [{"text": "Hello from Vertex AI!"}]}}}
 )
 
 # generationComplete fires RESPONSE_TEXT_DONE; turnComplete fires RESPONSE_DONE
 # They must be separate messages (the transformer processes one top-level key per message).
-SERVER_GENERATION_COMPLETE = json.dumps(
-    {"serverContent": {"generationComplete": True}}
-)
+SERVER_GENERATION_COMPLETE = json.dumps({"serverContent": {"generationComplete": True}})
 
-SERVER_TURN_COMPLETE = json.dumps(
-    {"serverContent": {"turnComplete": True}}
-)
+SERVER_TURN_COMPLETE = json.dumps({"serverContent": {"turnComplete": True}})
 
 # OpenAI-format text message the client sends
 CLIENT_TEXT_MESSAGE = json.dumps(
@@ -204,15 +194,11 @@ async def test_vertex_realtime_text_in_text_out():
     # --- Assertions ---
 
     # session.created should have been forwarded to client
-    session_created_msgs = [
-        m for m in sent_to_client if '"session.created"' in m
-    ]
+    session_created_msgs = [m for m in sent_to_client if '"session.created"' in m]
     assert session_created_msgs, "Expected session.created to be sent to client"
 
     # At least one text delta should have been forwarded
-    text_delta_msgs = [
-        m for m in sent_to_client if '"response.text.delta"' in m
-    ]
+    text_delta_msgs = [m for m in sent_to_client if '"response.text.delta"' in m]
     assert text_delta_msgs, "Expected response.text.delta to be sent to client"
 
     # Verify the delta contains the model's text

@@ -5,6 +5,7 @@ This test suite ensures that all Vertex AI endpoints properly handle the 'global
 which uses a different URL format than regional endpoints.
 
 Regional: https://{region}-aiplatform.googleapis.com/...
+Multi-region: https://aiplatform.{geo}.rep.googleapis.com/...
 Global: https://aiplatform.googleapis.com/...
 """
 
@@ -30,6 +31,8 @@ class TestVertexBaseURL:
             ("europe-west1", "https://europe-west1-aiplatform.googleapis.com"),
             ("asia-northeast1", "https://asia-northeast1-aiplatform.googleapis.com"),
             ("global", "https://aiplatform.googleapis.com"),
+            ("us", "https://aiplatform.us.rep.googleapis.com"),
+            ("eu", "https://aiplatform.eu.rep.googleapis.com"),
         ],
     )
     def test_get_vertex_base_url(self, vertex_location, expected_base_url):
@@ -71,9 +74,7 @@ class TestChatCompletionURLs:
             ),
         ],
     )
-    def test_chat_url_construction(
-        self, vertex_location, stream, expected_url_pattern
-    ):
+    def test_chat_url_construction(self, vertex_location, stream, expected_url_pattern):
         """Test that chat URLs are correctly constructed for regional and global locations."""
         with patch(
             "litellm.VertexGeminiConfig.get_model_for_vertex_ai_url",
@@ -128,7 +129,9 @@ class TestChatCompletionURLs:
         if vertex_location == "global":
             assert url.startswith("https://aiplatform.googleapis.com")
         else:
-            assert url.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
+            assert url.startswith(
+                f"https://{vertex_location}-aiplatform.googleapis.com"
+            )
 
 
 class TestEmbeddingURLs:
@@ -182,7 +185,9 @@ class TestEmbeddingURLs:
             assert url.startswith("https://aiplatform.googleapis.com")
             assert "-aiplatform.googleapis.com" not in url
         else:
-            assert url.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
+            assert url.startswith(
+                f"https://{vertex_location}-aiplatform.googleapis.com"
+            )
 
     @pytest.mark.parametrize(
         "vertex_location",
@@ -425,4 +430,3 @@ class TestBackwardCompatibility:
 
         # Should include streaming endpoint and alt=sse
         assert ":streamGenerateContent?alt=sse" in url
-

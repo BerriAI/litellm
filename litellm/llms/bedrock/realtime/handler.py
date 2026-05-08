@@ -152,7 +152,9 @@ class BedrockRealtime(BaseAWSLLM):
                 f"Error in BedrockRealtime.async_realtime: {e}"
             )
             try:
-                await websocket.close(code=1011, reason=_redact_string(f"Internal error: {str(e)}"))
+                await websocket.close(
+                    code=1011, reason=_redact_string(f"Internal error: {str(e)}")
+                )
             except Exception:
                 pass
             raise
@@ -235,7 +237,9 @@ class BedrockRealtime(BaseAWSLLM):
                     # Transform Bedrock format to OpenAI format
                     from litellm.types.realtime import RealtimeResponseTransformInput
 
-                    realtime_response_transform_input: RealtimeResponseTransformInput = {
+                    realtime_response_transform_input: (
+                        RealtimeResponseTransformInput
+                    ) = {
                         "current_output_item_id": session_state.get(
                             "current_output_item_id"
                         ),

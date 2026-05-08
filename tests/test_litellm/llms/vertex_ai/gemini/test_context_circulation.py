@@ -92,7 +92,11 @@ class TestExtractServerSideToolInvocations:
                 "thoughtSignature": "sig1",
             },
             {
-                "toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "id": "search1", "response": "result1"},
+                "toolResponse": {
+                    "toolType": "GOOGLE_SEARCH_WEB",
+                    "id": "search1",
+                    "response": "result1",
+                },
                 "thoughtSignature": "sig2",
             },
             {
@@ -104,7 +108,11 @@ class TestExtractServerSideToolInvocations:
                 "thoughtSignature": "sig3",
             },
             {
-                "toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "id": "search2", "response": "result2"},
+                "toolResponse": {
+                    "toolType": "GOOGLE_SEARCH_WEB",
+                    "id": "search2",
+                    "response": "result2",
+                },
                 "thoughtSignature": "sig4",
             },
         ]
@@ -180,13 +188,17 @@ class TestReInjectServerSideToolInvocations:
         assert len(tool_call_parts) == 1
         assert tool_call_parts[0]["toolCall"]["toolType"] == "GOOGLE_SEARCH_WEB"
         assert tool_call_parts[0]["toolCall"]["id"] == "abc123"
-        assert tool_call_parts[0]["toolCall"]["args"] == {"queries": ["weather Buenos Aires"]}
+        assert tool_call_parts[0]["toolCall"]["args"] == {
+            "queries": ["weather Buenos Aires"]
+        }
         assert tool_call_parts[0]["thoughtSignature"] == "sig_abc"
 
         assert len(tool_response_parts) == 1
         assert tool_response_parts[0]["toolResponse"]["id"] == "abc123"
         assert tool_response_parts[0]["toolResponse"]["toolType"] == "GOOGLE_SEARCH_WEB"
-        assert tool_response_parts[0]["toolResponse"]["response"] == {"weather": "Sunny, 20°C"}
+        assert tool_response_parts[0]["toolResponse"]["response"] == {
+            "weather": "Sunny, 20°C"
+        }
 
     def test_no_invocations_no_extra_parts(self):
         """Without server_side_tool_invocations, no extra parts are added."""

@@ -26,6 +26,7 @@ from litellm.types.llms.openai import AllMessageValues
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_logging_obj(
     merged_model: str,
     merged_messages: List[AllMessageValues],
@@ -40,9 +41,7 @@ def _make_logging_obj(
     logging_obj.should_run_prompt_management_hooks.return_value = should_run
     prompt_return = (merged_model, merged_messages, merged_optional_params)
     logging_obj.get_chat_completion_prompt.return_value = prompt_return
-    logging_obj.async_get_chat_completion_prompt = AsyncMock(
-        return_value=prompt_return
-    )
+    logging_obj.async_get_chat_completion_prompt = AsyncMock(return_value=prompt_return)
     logging_obj.model_call_details = {}
     return logging_obj
 
@@ -76,6 +75,7 @@ def _patch_responses_dispatch():
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestResponsesAPIPromptManagement:
 
     def test_str_input_coerced_and_merged(self):
@@ -96,6 +96,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             litellm.responses(
                 input="Tell me about AI.",
                 model="gpt-4o",
@@ -130,6 +131,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             litellm.responses(
                 input=client_messages,  # type: ignore[arg-type]
                 model="gpt-4o",
@@ -152,6 +154,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             litellm.responses(
                 input="Hello",
                 model="gpt-4o",
@@ -182,6 +185,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3] as mock_handler:
             import litellm
+
             litellm.responses(
                 input="Hello",
                 model="gpt-4o",
@@ -207,6 +211,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3] as mock_handler:
             import litellm
+
             litellm.responses(
                 input="What is AI?",
                 model="gpt-4o",
@@ -221,7 +226,8 @@ class TestResponsesAPIPromptManagement:
 
     def test_non_message_input_items_filtered(self):
         """[F] Non-message items in ResponseInputParam (e.g. function_call_output) are
-        filtered out before being passed to the prompt hook, avoiding malformed merges."""
+        filtered out before being passed to the prompt hook, avoiding malformed merges.
+        """
         template_messages: List[AllMessageValues] = [
             {"role": "system", "content": "You are helpful."},  # type: ignore[list-item]
         ]
@@ -237,6 +243,7 @@ class TestResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             litellm.responses(
                 input=mixed_input,  # type: ignore[arg-type]
                 model="gpt-4o",
@@ -251,7 +258,8 @@ class TestResponsesAPIPromptManagement:
 
     def test_model_override_re_resolves_provider(self):
         """[G] When the prompt template overrides the model to a different provider,
-        custom_llm_provider is re-resolved so downstream routing uses the correct provider."""
+        custom_llm_provider is re-resolved so downstream routing uses the correct provider.
+        """
         template_messages: List[AllMessageValues] = [
             {"role": "user", "content": "Hi"},  # type: ignore[list-item]
         ]
@@ -274,6 +282,7 @@ class TestResponsesAPIPromptManagement:
             patches[3] as mock_handler,
         ):
             import litellm
+
             litellm.responses(
                 input="Hi",
                 model="gpt-4o",
@@ -309,6 +318,7 @@ class TestAsyncResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             await litellm.aresponses(
                 input="Hi",
                 model="gpt-4o",
@@ -338,6 +348,7 @@ class TestAsyncResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3] as mock_handler:
             import litellm
+
             await litellm.aresponses(
                 input="Hello",
                 model="gpt-4o",
@@ -368,6 +379,7 @@ class TestAsyncResponsesAPIPromptManagement:
         patches = _patch_responses_dispatch()
         with patches[0], patches[1], patches[2], patches[3]:
             import litellm
+
             await litellm.aresponses(
                 input=mixed_input,  # type: ignore[arg-type]
                 model="gpt-4o",

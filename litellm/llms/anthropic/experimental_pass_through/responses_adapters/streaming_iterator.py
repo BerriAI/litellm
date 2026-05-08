@@ -35,9 +35,9 @@ class AnthropicResponsesStreamWrapper:
         # Map item_id -> content_block_index so we can stop the right block later
         self._item_id_to_block_index: Dict[str, int] = {}
         # Track open function_call items by item_id so we can emit tool_use start
-        self._pending_tool_ids: Dict[
-            str, str
-        ] = {}  # item_id -> call_id / name accumulator
+        self._pending_tool_ids: Dict[str, str] = (
+            {}
+        )  # item_id -> call_id / name accumulator
         self._sent_message_start = False
         self._sent_message_stop = False
         self._chunk_queue: deque = deque()

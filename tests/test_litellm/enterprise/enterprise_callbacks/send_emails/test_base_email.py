@@ -879,3 +879,199 @@ async def test_budget_alerts_max_budget_alert_crossed(
         assert cache_call_args["key"] == "email_budget_alerts:max_budget_alert:test_user"
         assert cache_call_args["value"] == "SENT"
         assert cache_call_args["ttl"] == EMAIL_BUDGET_ALERT_TTL
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_sends_crossed_thresholds(
+    base_email_logger, mock_send_email
+):
+    """Test that multi-threshold path sends emails for all crossed thresholds"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=80.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "50": ["finance@co.com"],
+            "75": ["finance@co.com", "bu_lead@co.com"],
+            "100": ["cto@co.com"],
+        },
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+
+        # spend=80 crosses 50% ($50) and 75% ($75), but not 100% ($100)
+        assert mock_send_email.call_count == 2
+
+        # Check cache keys include threshold percentage
+        cache_keys = [
+            c[1]["key"] for c in mock_cache.async_set_cache.call_args_list
+        ]
+        assert "email_budget_alerts:max_budget_alert:50:hashed_key_1" in cache_keys
+        assert "email_budget_alerts:max_budget_alert:75:hashed_key_1" in cache_keys
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_dedup_cache_prevents_resend(
+    base_email_logger, mock_send_email
+):
+    """Test that cached thresholds are not re-sent"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=80.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "50": ["finance@co.com"],
+            "75": ["finance@co.com"],
+        },
+    )
+
+    # Simulate 50% already sent (cached), 75% not yet sent
+    async def cache_get(key):
+        if "50:" in key:
+            return "SENT"
+        return None
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(side_effect=cache_get)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+
+        # Only 75% should fire
+        assert mock_send_email.call_count == 1
+        cache_key = mock_cache.async_set_cache.call_args[1]["key"]
+        assert "75:" in cache_key
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_owner_email_auto_included(
+    base_email_logger, mock_send_email
+):
+    """Test that the owner email is auto-appended and deduplicated"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=60.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "50": ["finance@co.com", "owner@co.com"],  # owner already in list
+        },
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+
+        mock_send_email.assert_called_once()
+        to_emails = mock_send_email.call_args[1]["to_email"]
+        # owner@co.com should appear exactly once (deduplicated)
+        assert sorted(to_emails) == ["finance@co.com", "owner@co.com"]
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_malformed_keys_skipped(
+    base_email_logger, mock_send_email
+):
+    """Test that non-numeric threshold keys are skipped"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=60.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "fifty": ["finance@co.com"],  # invalid
+            "50": ["finance@co.com"],     # valid, crossed
+        },
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+
+        # Only the valid "50" threshold should fire
+        assert mock_send_email.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_multi_threshold_empty_emails_only_owner(
+    base_email_logger, mock_send_email
+):
+    """Test that empty email list for a threshold sends only to owner"""
+    user_info = CallInfo(
+        token="hashed_key_1",
+        user_id="test_user",
+        user_email="owner@co.com",
+        spend=60.0,
+        max_budget=100.0,
+        event_group=Litellm_EntityType.KEY,
+        max_budget_alert_emails={
+            "50": [],  # empty list
+        },
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+
+        mock_send_email.assert_called_once()
+        to_emails = mock_send_email.call_args[1]["to_email"]
+        assert to_emails == ["owner@co.com"]
+
+
+@pytest.mark.asyncio
+async def test_no_map_preserves_old_single_threshold(
+    base_email_logger, mock_send_email
+):
+    """Test that without max_budget_alert_emails, the old 80% single-threshold path works"""
+    user_info = CallInfo(
+        user_id="test_user",
+        user_email="test@example.com",
+        spend=165.0,
+        max_budget=200.0,
+        event_group=Litellm_EntityType.USER,
+    )
+
+    mock_cache = mock.AsyncMock()
+    mock_cache.async_get_cache = mock.AsyncMock(return_value=None)
+    mock_cache.async_set_cache = mock.AsyncMock()
+    base_email_logger.internal_usage_cache = mock_cache
+
+    with mock.patch.dict(os.environ, {"PROXY_BASE_URL": "http://test.com"}):
+        await base_email_logger.budget_alerts(type="max_budget_alert", user_info=user_info)
+
+        mock_send_email.assert_called_once()
+        call_args = mock_send_email.call_args[1]
+        assert call_args["to_email"] == ["test@example.com"]
+        # Old path cache key has no threshold percentage
+        cache_key = mock_cache.async_set_cache.call_args[1]["key"]
+        assert cache_key == "email_budget_alerts:max_budget_alert:test_user"

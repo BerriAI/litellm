@@ -99,9 +99,7 @@ class BedrockAgentCoreA2AHandler:
             )
         )
 
-        verbose_logger.info(
-            f"BedrockAgentCore A2A: Sending streaming request to {url}"
-        )
+        verbose_logger.info(f"BedrockAgentCore A2A: Sending streaming request to {url}")
 
         client = get_async_httpx_client(
             llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),

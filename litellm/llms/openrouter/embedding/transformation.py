@@ -6,6 +6,7 @@ OpenRouter is OpenAI-compatible and supports embeddings via the /v1/embeddings e
 
 Docs: https://openrouter.ai/docs
 """
+
 from typing import TYPE_CHECKING, Any, Optional
 
 import httpx

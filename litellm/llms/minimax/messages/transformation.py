@@ -1,6 +1,7 @@
 """
 MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
 """
+
 from typing import Optional
 
 import litellm

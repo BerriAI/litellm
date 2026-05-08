@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_custom_stream_wrapper() -> CustomStreamWrapper:
     """Build a minimal CustomStreamWrapper for testing."""
     return CustomStreamWrapper(
@@ -80,6 +81,7 @@ class TestCustomStreamWrapperMaxDuration:
 # BaseResponsesAPIStreamingIterator (responses)
 # ---------------------------------------------------------------------------
 
+
 class TestResponsesStreamingIteratorMaxDuration:
     def _make_base_iterator(self):
         """Build a minimal BaseResponsesAPIStreamingIterator for testing."""
@@ -105,14 +107,16 @@ class TestResponsesStreamingIteratorMaxDuration:
     def test_should_not_raise_when_duration_is_none(self):
         it = self._make_base_iterator()
         with patch(
-            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS", None
+            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS",
+            None,
         ):
             it._check_max_streaming_duration()
 
     def test_should_not_raise_when_under_limit(self):
         it = self._make_base_iterator()
         with patch(
-            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS", 60.0
+            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS",
+            60.0,
         ):
             it._check_max_streaming_duration()
 
@@ -120,7 +124,8 @@ class TestResponsesStreamingIteratorMaxDuration:
         it = self._make_base_iterator()
         it._stream_created_time = time.time() - 20
         with patch(
-            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS", 10.0
+            "litellm.responses.streaming_iterator.LITELLM_MAX_STREAMING_DURATION_SECONDS",
+            10.0,
         ):
             with pytest.raises(litellm.Timeout, match="max streaming duration"):
                 it._check_max_streaming_duration()

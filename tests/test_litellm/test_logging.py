@@ -195,9 +195,9 @@ def test_json_formatter_includes_component_field():
         )
         output = formatter.format(record)
         obj = json.loads(output)
-        assert obj["component"] == logger_name, (
-            f"Expected component={logger_name!r}, got {obj.get('component')!r}"
-        )
+        assert (
+            obj["component"] == logger_name
+        ), f"Expected component={logger_name!r}, got {obj.get('component')!r}"
 
 
 def test_json_formatter_includes_logger_field():
@@ -217,9 +217,9 @@ def test_json_formatter_includes_logger_field():
     )
     output = formatter.format(record)
     obj = json.loads(output)
-    assert obj["logger"] == "proxy_server.py:123", (
-        f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
-    )
+    assert (
+        obj["logger"] == "proxy_server.py:123"
+    ), f"Expected logger='proxy_server.py:123', got {obj['logger']!r}"
 
 
 def test_json_formatter_extra_component_not_overwritten():
@@ -238,9 +238,9 @@ def test_json_formatter_extra_component_not_overwritten():
     )
     record.component = "auth-service"
     obj = json.loads(formatter.format(record))
-    assert obj["component"] == "auth-service", (
-        f"User-supplied component was overwritten, got {obj['component']!r}"
-    )
+    assert (
+        obj["component"] == "auth-service"
+    ), f"User-supplied component was overwritten, got {obj['component']!r}"
 
 
 def test_initialize_loggers_with_handler_sets_propagate_false():

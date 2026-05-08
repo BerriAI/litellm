@@ -1,5 +1,5 @@
 """
-Cost calculator for OpenAI image generation models (gpt-image-1, gpt-image-1-mini)
+Cost calculator for OpenAI image generation models (gpt-image family)
 
 These models use token-based pricing instead of pixel-based pricing like DALL-E.
 """
@@ -17,13 +17,13 @@ def cost_calculator(
     custom_llm_provider: Optional[str] = None,
 ) -> float:
     """
-    Calculate cost for OpenAI gpt-image-1 and gpt-image-1-mini models.
+    Calculate cost for OpenAI gpt-image models.
 
     Uses the same usage format as Responses API, so we reuse the helper
     to transform to chat completion format and use generic_cost_per_token.
 
     Args:
-        model: The model name (e.g., "gpt-image-1", "gpt-image-1-mini")
+        model: The model name (e.g., "gpt-image-1", "gpt-image-2")
         image_response: The ImageResponse containing usage data
         custom_llm_provider: Optional provider name
 

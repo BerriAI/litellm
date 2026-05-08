@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 import httpx
 
 import litellm
+from litellm import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -514,12 +515,16 @@ def strip_bedrock_routing_prefix(model: str) -> str:
 
 
 def strip_bedrock_throughput_suffix(model: str) -> str:
-    """Strip throughput tier suffixes from Bedrock model names."""
+    """Strip throughput tier suffixes and context window suffixes from Bedrock model names."""
     import re
 
     # Pattern matches model:version:throughput where throughput is like 51k, 18k, etc.
     # Keep the model:version part, strip the :throughput suffix
-    return re.sub(r"(:\d+):\d+k$", r"\1", model)
+    model = re.sub(r"(:\d+):\d+k$", r"\1", model)
+    # Strip context window suffixes like [1m], [200k], etc.
+    # e.g. "us.anthropic.claude-opus-4-6-v1[1m]" -> "us.anthropic.claude-opus-4-6-v1"
+    model = re.sub(r"\[\w+\]$", "", model)
+    return model
 
 
 def get_bedrock_base_model(model: str) -> str:
@@ -692,6 +697,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
         "agentcore",
         "async_invoke",
         "openai",
+        "mantle",
     ]:
         """
         Get the bedrock route for the given model.
@@ -706,6 +712,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
                 "agentcore",
                 "async_invoke",
                 "openai",
+                "mantle",
             ],
         ] = {
             "invoke/": "invoke",
@@ -715,6 +722,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
             "agentcore/": "agentcore",
             "async_invoke/": "async_invoke",
             "openai/": "openai",
+            "mantle/": "mantle",
         }
 
         # Check explicit routes first
@@ -767,6 +775,13 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return "agentcore/" in model
 
     @staticmethod
+    def _explicit_mantle_route(model: str) -> bool:
+        """
+        Check if the model is an explicit mantle route (bedrock-mantle endpoint).
+        """
+        return "mantle/" in model
+
+    @staticmethod
     def _explicit_converse_like_route(model: str) -> bool:
         """
         Check if the model is an explicit converse like route.
@@ -804,6 +819,16 @@ class BedrockModelInfo(BaseLLMModelInfo):
         # Converse routes should go through litellm.completion()
         if BedrockModelInfo._explicit_converse_route(model):
             return None
+
+        #########################################################
+        # Mantle route uses the bedrock-mantle endpoint (not bedrock-runtime)
+        #########################################################
+        if BedrockModelInfo._explicit_mantle_route(model):
+            from litellm.llms.bedrock.messages.mantle_transformation import (
+                AmazonMantleMessagesConfig,
+            )
+
+            return AmazonMantleMessagesConfig()
 
         #########################################################
         # This goes through litellm.AmazonAnthropicClaude3MessagesConfig()
@@ -851,6 +876,12 @@ def get_bedrock_chat_config(model: str):
         )
 
         return AmazonAgentCoreConfig()
+    elif bedrock_route == "mantle":
+        from litellm.llms.bedrock.chat.mantle.transformation import (
+            AmazonMantleConfig,
+        )
+
+        return AmazonMantleConfig()
 
     # Handle provider-specific configs
     if bedrock_invoke_provider == "amazon":
@@ -887,38 +918,57 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonInvokeConfig()
 
 
+def _load_bedrock_response_stream_shape():
+    """
+    Load the ResponseStream shape from botocore's bundled bedrock-runtime schema.
+
+    Called once at module import time; the result is stored in
+    ``BEDROCK_RESPONSE_STREAM_SHAPE`` and reused for the process lifetime.
+    Returns ``None`` if botocore is unavailable or the service model cannot be
+    loaded, so the module still imports cleanly.
+    """
+    try:
+        from botocore.loaders import Loader
+        from botocore.model import ServiceModel
+
+        loader = Loader()
+        service_dict = loader.load_service_model("bedrock-runtime", "service-2")
+        return ServiceModel(service_dict).shape_for("ResponseStream")
+    except Exception as e:
+        verbose_logger.warning(
+            "litellm: could not pre-load bedrock-runtime response stream shape "
+            "— Bedrock event-stream decoding will be unavailable. Error: %s",
+            e,
+        )
+        return None
+
+
+# Eagerly resolved once per process — avoids per-instance or per-request disk I/O.
+BEDROCK_RESPONSE_STREAM_SHAPE = _load_bedrock_response_stream_shape()
+
+
 class BedrockEventStreamDecoderBase:
     """
     Base class for event stream decoding for Bedrock
     """
-
-    _response_stream_shape_cache = None
 
     def __init__(self):
         from botocore.parsers import EventStreamJSONParser
 
         self.parser = EventStreamJSONParser()
 
-    def get_response_stream_shape(self):
-        if self._response_stream_shape_cache is None:
-            from botocore.loaders import Loader
-            from botocore.model import ServiceModel
-
-            loader = Loader()
-            bedrock_service_dict = loader.load_service_model(
-                "bedrock-runtime", "service-2"
-            )
-            bedrock_service_model = ServiceModel(bedrock_service_dict)
-            self._response_stream_shape_cache = bedrock_service_model.shape_for(
-                "ResponseStream"
-            )
-
-        return self._response_stream_shape_cache
-
     def _parse_message_from_event(self, event) -> Optional[str]:
+        if BEDROCK_RESPONSE_STREAM_SHAPE is None:
+            raise BedrockError(
+                status_code=500,
+                message=(
+                    "Bedrock event-stream shape could not be loaded from botocore. "
+                    "Ensure botocore is correctly installed."
+                ),
+            )
         response_dict = event.to_response_dict()
         parsed_response = self.parser.parse(
-            response_dict, self.get_response_stream_shape()
+            response_dict, BEDROCK_RESPONSE_STREAM_SHAPE
         )
 
         if response_dict["status_code"] != 200:
@@ -1148,9 +1198,11 @@ class CommonBatchFilesUtils:
 
         return (
             dict(prepped.headers),
-            request_data.encode("utf-8")
-            if isinstance(request_data, str)
-            else request_data,
+            (
+                request_data.encode("utf-8")
+                if isinstance(request_data, str)
+                else request_data
+            ),
         )
 
     def generate_unique_job_name(self, model: str, prefix: str = "litellm") -> str:

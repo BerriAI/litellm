@@ -733,15 +733,15 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
         </div>
       )}
 
-      {/* ── Body: two columns ──────────────────────────────────── */}
-      <div className="flex">
-        {/* Left column: Request Lifecycle */}
-        <div className="w-[340px] flex-shrink-0 border-r border-gray-100 px-6 py-5">
+      {/* ── Body: stacked ──────────────────────────────────────── */}
+      <div className="flex flex-col">
+        {/* Request Lifecycle */}
+        <div className="border-b border-gray-100 px-6 py-5">
           <RequestLifecycle entries={guardrailEntries} />
         </div>
 
-        {/* Right column: Evaluation Details */}
-        <div className="flex-1 px-6 py-5 min-w-0">
+        {/* Evaluation Details */}
+        <div className="px-6 py-5">
           <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">
             Evaluation Details
           </h4>

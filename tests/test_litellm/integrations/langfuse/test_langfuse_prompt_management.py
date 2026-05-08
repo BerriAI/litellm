@@ -23,11 +23,14 @@ class TestLangfusePromptManagement:
 
     def test_get_prompt_from_id(self):
         langfuse_prompt_management = LangfusePromptManagement()
-        with patch.object(
-            langfuse_prompt_management, "should_run_prompt_management"
-        ) as mock_should_run_prompt_management, patch.object(
-            langfuse_prompt_management, "_get_prompt_from_id"
-        ) as mock_get_prompt_from_id:
+        with (
+            patch.object(
+                langfuse_prompt_management, "should_run_prompt_management"
+            ) as mock_should_run_prompt_management,
+            patch.object(
+                langfuse_prompt_management, "_get_prompt_from_id"
+            ) as mock_get_prompt_from_id,
+        ):
             mock_should_run_prompt_management.return_value = True
             langfuse_prompt_management.get_chat_completion_prompt(
                 model="langfuse/langfuse-model",

@@ -364,10 +364,10 @@ async def create_file(  # noqa: PLR0915
         expires_after: Optional[FileExpiresAfter] = None
         form_data_raw = await request.form()
         form_data_dict: Dict[str, Any] = dict(form_data_raw)
-        extracted_litellm_metadata: Optional[
-            Dict[str, Any]
-        ] = extract_nested_form_metadata(
-            form_data=form_data_dict, prefix="litellm_metadata["
+        extracted_litellm_metadata: Optional[Dict[str, Any]] = (
+            extract_nested_form_metadata(
+                form_data=form_data_dict, prefix="litellm_metadata["
+            )
         )
         expires_after_anchor = form_data_raw.get("expires_after[anchor]")
         expires_after_seconds_str = form_data_raw.get("expires_after[seconds]")
@@ -634,7 +634,7 @@ async def get_file_content(  # noqa: PLR0915
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
-           
+
         ## check if file_id is a litellm managed file
         is_base64_unified_file_id = _is_base64_encoded_unified_file_id(file_id)
         if is_base64_unified_file_id:
@@ -735,6 +735,7 @@ async def get_file_content(  # noqa: PLR0915
             from litellm.proxy.openai_files_endpoints.file_content_streaming_handler import (
                 FileContentStreamingHandler,
             )
+
             (
                 resolved_custom_llm_provider,
                 resolved_file_id,
@@ -773,6 +774,7 @@ async def get_file_content(  # noqa: PLR0915
                     data=data,
                     credentials=credentials,  # type: ignore
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
+                    include_internal_credentials=True,
                 )
                 response = await litellm.afile_content(
                     custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
@@ -948,6 +950,7 @@ async def get_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_retrieve(**data)  # type: ignore
@@ -1148,6 +1151,7 @@ async def delete_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_delete(

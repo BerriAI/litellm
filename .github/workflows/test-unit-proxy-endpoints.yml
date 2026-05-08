@@ -36,6 +36,8 @@ jobs:
         tests/test_litellm/proxy/health_endpoints
         tests/test_litellm/proxy/public_endpoints
         tests/test_litellm/proxy/prompts
+        tests/test_litellm/proxy/rag_endpoints
+        tests/test_litellm/proxy/realtime_endpoints
         tests/test_litellm/proxy/ui_crud_endpoints
       workers: 2
       reruns: 2

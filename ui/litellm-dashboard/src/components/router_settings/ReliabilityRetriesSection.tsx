@@ -1,5 +1,5 @@
 import React from "react";
-import { TextInput } from "@tremor/react";
+import { Input } from "antd";
 
 interface ReliabilityRetriesSectionProps {
   routerSettings: { [key: string]: any };
@@ -36,7 +36,7 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
                 <p className="text-xs text-gray-500 mt-0.5 mb-2">
                   {routerFieldsMetadata[param]?.field_description || ""}
                 </p>
-                <TextInput
+                <Input
                   name={param}
                   defaultValue={
                     value === null || value === undefined || value === "null"

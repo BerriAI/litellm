@@ -1,5 +1,5 @@
 import React from "react";
-import { Switch } from "@tremor/react";
+import { Switch } from "antd";
 
 interface TagFilteringToggleProps {
   enabled: boolean;

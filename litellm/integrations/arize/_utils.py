@@ -220,23 +220,57 @@ def _set_structured_outputs(span: "Span", response_obj, msg_attrs, span_attrs):
             safe_set_attribute(span, f"{prefix}.{msg_attrs.MESSAGE_ROLE}", message_role)
 
 
+def _safe_get(obj, key, default=None):
+    """Read ``key`` from a dict-like or Pydantic-model-like object.
+
+    The arize/langfuse_otel logger receives ``usage`` objects from many sources:
+    plain dicts, litellm ``Usage`` (which exposes ``.get``), and raw OpenAI
+    Pydantic models (e.g. ``openai.types.completion_usage.CompletionUsage`` and
+    nested ``CompletionTokensDetails`` / ``OutputTokensDetails``) which do NOT
+    expose ``.get``. Calling ``.get`` on the latter raised ``AttributeError`` —
+    see https://github.com/BerriAI/litellm/issues/13672.
+    """
+    if obj is None:
+        return default
+    getter = getattr(obj, "get", None)
+    if callable(getter):
+        try:
+            return getter(key, default)
+        except TypeError:
+            # Some objects expose `.get` with a different signature
+            pass
+    return getattr(obj, key, default)
+
+
 def _set_usage_outputs(span: "Span", response_obj, span_attrs):
     usage = response_obj and response_obj.get("usage")
     if not usage:
         return
 
     safe_set_attribute(
-        span, span_attrs.LLM_TOKEN_COUNT_TOTAL, usage.get("total_tokens")
+        span, span_attrs.LLM_TOKEN_COUNT_TOTAL, _safe_get(usage, "total_tokens")
     )
-    completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+    completion_tokens = _safe_get(usage, "completion_tokens") or _safe_get(
+        usage, "output_tokens"
+    )
     if completion_tokens:
         safe_set_attribute(
             span, span_attrs.LLM_TOKEN_COUNT_COMPLETION, completion_tokens
         )
-    prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
+    prompt_tokens = _safe_get(usage, "prompt_tokens") or _safe_get(
+        usage, "input_tokens"
+    )
     if prompt_tokens:
         safe_set_attribute(span, span_attrs.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
-    reasoning_tokens = usage.get("output_tokens_details", {}).get("reasoning_tokens")
+
+    # Reasoning tokens live in `completion_tokens_details` for Chat Completions
+    # API (Usage) and in `output_tokens_details` for Responses API
+    # (ResponseAPIUsage). Both nested objects may be plain Pydantic models
+    # without `.get`.
+    token_details = _safe_get(usage, "completion_tokens_details") or _safe_get(
+        usage, "output_tokens_details"
+    )
+    reasoning_tokens = _safe_get(token_details, "reasoning_tokens")
     if reasoning_tokens:
         safe_set_attribute(
             span,

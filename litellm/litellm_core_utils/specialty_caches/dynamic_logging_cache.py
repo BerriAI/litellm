@@ -7,6 +7,7 @@ This ensures we do
 1. Proper cleanup of Langfuse initialized clients.
 2. Re-use created langfuse clients.
 """
+
 import hashlib
 import json
 from typing import Any, Optional

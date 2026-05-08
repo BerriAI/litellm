@@ -1,6 +1,7 @@
 """
 Test for response_api_endpoints/endpoints.py
 """
+
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -81,7 +82,9 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                     type="message",
                     role="assistant",
                     content=[
-                        ResponseOutputText(type="output_text", text="Hello from Cursor!")
+                        ResponseOutputText(
+                            type="output_text", text="Hello from Cursor!"
+                        )
                     ],
                 )
             ],
@@ -123,7 +126,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         """
         Test that x-litellm-key-spend header includes the current request's response_cost
         for /v1/responses endpoint.
-        
+
         This ensures the spend header reflects updated spend including the current request,
         even though spend tracking updates happen asynchronously after the response.
         """
@@ -142,7 +145,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         mock_user_api_key_dict.allowed_model_region = None
         mock_user_api_key_dict.api_key = "sk-test-key"
         mock_user_api_key_dict.metadata = {}
-        
+
         mock_auth.return_value = mock_user_api_key_dict
 
         # Mock response with hidden_params containing response_cost
@@ -161,13 +164,13 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 )
             ],
         )
-        
+
         # Add hidden_params with response_cost to the mock response
         mock_response._hidden_params = {
             "response_cost": 0.0005,  # Current request cost: $0.0005
             "model_id": "test-model-id",
         }
-        
+
         mock_router.aresponses = AsyncMock(return_value=mock_response)
 
         client = TestClient(app)
@@ -193,4 +196,3 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         assert "x-litellm-response-cost" in response.headers
         response_cost_value = float(response.headers["x-litellm-response-cost"])
         assert response_cost_value == pytest.approx(0.0005, abs=1e-10)
-

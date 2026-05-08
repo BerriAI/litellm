@@ -174,6 +174,4 @@ def test_router_mock_request_with_mock_timeout_with_fallbacks():
     print(response)
     end_time = time.time()
     assert end_time - start_time >= 3, f"Time taken: {end_time - start_time}"
-    assert (
-        "gpt-4.1-nano" in response.model
-    ), "Model should be gpt-4.1-nano"
+    assert "gpt-4.1-nano" in response.model, "Model should be gpt-4.1-nano"

@@ -42,6 +42,7 @@ ignored_keys = [
     "metadata.cold_storage_object_key",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
+    "metadata.eval_information",
 ]
 
 
@@ -133,6 +134,7 @@ def assert_gcs_pubsub_request_matches_expected(
     if differences:
         assert False, f"Dictionary mismatch: {differences}"
 
+
 def assert_gcs_pubsub_request_matches_expected_standard_logging_payload(
     actual_request_body: dict,
     expected_file_name: str,
@@ -175,7 +177,7 @@ def assert_gcs_pubsub_request_matches_expected_standard_logging_payload(
         "response_time",
         "completion_tokens",
         "prompt_tokens",
-        "total_tokens"
+        "total_tokens",
     ]
 
     for field in FIELDS_EXISTENCE_CHECKS:

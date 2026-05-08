@@ -44,10 +44,8 @@ class TestIsEncryptedResponseId:
         """Test that a properly encrypted response ID is identified correctly"""
         # Patch at the module level where it's imported
         import litellm.proxy.hooks.responses_id_security as responses_module
-        
-        with patch.object(
-            responses_module, "decrypt_value_helper"
-        ) as mock_decrypt:
+
+        with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
             mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_123;user_id:user-456"
 
             result = responses_id_security._is_encrypted_response_id(
@@ -61,10 +59,8 @@ class TestIsEncryptedResponseId:
         """Test that an unencrypted response ID returns False"""
         # Patch at the module level where it's imported
         import litellm.proxy.hooks.responses_id_security as responses_module
-        
-        with patch.object(
-            responses_module, "decrypt_value_helper"
-        ) as mock_decrypt:
+
+        with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
             mock_decrypt.return_value = None
 
             result = responses_id_security._is_encrypted_response_id("resp_plain_value")
@@ -79,10 +75,8 @@ class TestDecryptResponseId:
         """Test decrypting a valid encrypted response ID"""
         # Patch at the module level where it's imported
         import litellm.proxy.hooks.responses_id_security as responses_module
-        
-        with patch.object(
-            responses_module, "decrypt_value_helper"
-        ) as mock_decrypt:
+
+        with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
             mock_decrypt.return_value = f"{SpecialEnums.LITELM_MANAGED_FILE_ID_PREFIX.value}response_id:resp_original_123;user_id:user-456;team_id:team-789"
 
             original_id, user_id, team_id = responses_id_security._decrypt_response_id(
@@ -97,10 +91,8 @@ class TestDecryptResponseId:
         """Test decrypting a non-encrypted response ID"""
         # Patch at the module level where it's imported
         import litellm.proxy.hooks.responses_id_security as responses_module
-        
-        with patch.object(
-            responses_module, "decrypt_value_helper"
-        ) as mock_decrypt:
+
+        with patch.object(responses_module, "decrypt_value_helper") as mock_decrypt:
             mock_decrypt.return_value = None
 
             original_id, user_id, team_id = responses_id_security._decrypt_response_id(
@@ -115,7 +107,9 @@ class TestDecryptResponseId:
 class TestEncryptResponseId:
     """Test _encrypt_response_id function"""
 
-    @pytest.mark.skip(reason="Flaky on CI; disabling temporarily until responses_id_security is fixed")
+    @pytest.mark.skip(
+        reason="Flaky on CI; disabling temporarily until responses_id_security is fixed"
+    )
     def test_encrypt_response_id_success(
         self, responses_id_security, mock_user_api_key_dict
     ):
@@ -128,7 +122,7 @@ class TestEncryptResponseId:
             "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
         ) as mock_encrypt:
             mock_encrypt.return_value = "encrypted_base64_value"
-            
+
             with patch.object(
                 responses_id_security, "_get_signing_key", return_value="test-key"
             ):
@@ -140,7 +134,9 @@ class TestEncryptResponseId:
                 assert result.id.startswith("resp_")
                 mock_encrypt.assert_called_once()
 
-    @pytest.mark.skip(reason="Flaky on CI; disabling temporarily until responses_id_security is fixed")
+    @pytest.mark.skip(
+        reason="Flaky on CI; disabling temporarily until responses_id_security is fixed"
+    )
     def test_encrypt_response_id_maintains_prefix(
         self, responses_id_security, mock_user_api_key_dict
     ):
@@ -151,7 +147,7 @@ class TestEncryptResponseId:
 
         with patch(
             "litellm.proxy.common_utils.encrypt_decrypt_utils._get_salt_key",
-            return_value="test-salt-key"
+            return_value="test-salt-key",
         ):
             with patch.object(
                 responses_id_security, "_get_signing_key", return_value="test-key"
@@ -545,7 +541,9 @@ class TestAsyncPostCallSuccessHook:
                 response=mock_response,
             )
 
-            mock_encrypt.assert_called_once_with(mock_response, mock_user_api_key_dict, request_cache=None)
+            mock_encrypt.assert_called_once_with(
+                mock_response, mock_user_api_key_dict, request_cache=None
+            )
             assert result == mock_response
 
     @pytest.mark.asyncio

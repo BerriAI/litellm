@@ -5,9 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)
+sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -23,7 +21,11 @@ def client():
 async def test_delete_cloudzero_settings_success(client, monkeypatch):
     mock_config = MagicMock()
     mock_config.param_name = "cloudzero_settings"
-    mock_config.param_value = {"api_key": "encrypted_key", "connection_id": "conn_123", "timezone": "UTC"}
+    mock_config.param_value = {
+        "api_key": "encrypted_key",
+        "connection_id": "conn_123",
+        "timezone": "UTC",
+    }
 
     mock_litellm_config = MagicMock()
     mock_litellm_config.find_first = AsyncMock(return_value=mock_config)
@@ -86,7 +88,7 @@ async def test_get_cloudzero_settings_success(client, monkeypatch):
     mock_config.param_value = {
         "api_key": "encrypted_key",
         "connection_id": "conn_123",
-        "timezone": "UTC"
+        "timezone": "UTC",
     }
 
     mock_litellm_config = MagicMock()
@@ -99,13 +101,17 @@ async def test_get_cloudzero_settings_success(client, monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     # Mock the decrypt function to return a decrypted key
-    with patch("litellm.proxy.spend_tracking.cloudzero_endpoints.decrypt_value_helper") as mock_decrypt:
+    with patch(
+        "litellm.proxy.spend_tracking.cloudzero_endpoints.decrypt_value_helper"
+    ) as mock_decrypt:
         mock_decrypt.return_value = "decrypted_api_key"
-        
+
         # Mock the masker
-        with patch("litellm.proxy.spend_tracking.cloudzero_endpoints._sensitive_masker") as mock_masker:
+        with patch(
+            "litellm.proxy.spend_tracking.cloudzero_endpoints._sensitive_masker"
+        ) as mock_masker:
             mock_masker.mask_dict.return_value = {"api_key": "test****key"}
-            
+
             app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
             )
@@ -185,4 +191,3 @@ async def test_get_cloudzero_settings_empty_param_value(client, monkeypatch):
         mock_litellm_config.find_first.assert_awaited_once()
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
-

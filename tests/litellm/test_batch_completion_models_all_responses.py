@@ -20,7 +20,9 @@ def test_batch_completion_models_all_responses_submits_before_waiting(monkeypatc
 
         def result(self):
             if self._executor.submit_count != self._expected_submissions:
-                raise AssertionError("Not all model calls were submitted before waiting")
+                raise AssertionError(
+                    "Not all model calls were submitted before waiting"
+                )
             return self._result
 
     class _RecordingThreadPoolExecutor:
@@ -81,7 +83,9 @@ def test_batch_completion_models_all_responses_continues_on_model_error(monkeypa
     assert sorted(response["model"] for response in responses) == ["model-a", "model-b"]
 
 
-def test_batch_completion_models_all_responses_returns_empty_for_empty_models(monkeypatch):
+def test_batch_completion_models_all_responses_returns_empty_for_empty_models(
+    monkeypatch,
+):
     called = False
 
     def _mock_completion(*args, model, **kwargs):

@@ -6,6 +6,7 @@ Tests that:
 - stream label IS added when litellm.prometheus_emit_stream_label = True
 - stream value is populated correctly from standard_logging_payload
 """
+
 import pytest
 
 import litellm
@@ -26,7 +27,9 @@ def test_stream_label_present_when_opted_in():
     """stream label SHOULD appear in litellm_proxy_total_requests_metric when opted in"""
     litellm.prometheus_emit_stream_label = True
     try:
-        labels = PrometheusMetricLabels.get_labels("litellm_proxy_total_requests_metric")
+        labels = PrometheusMetricLabels.get_labels(
+            "litellm_proxy_total_requests_metric"
+        )
         assert UserAPIKeyLabelNames.STREAM.value in labels
     finally:
         litellm.prometheus_emit_stream_label = False
@@ -45,9 +48,9 @@ def test_stream_label_not_in_other_metrics_when_opted_in():
         ]
         for metric in other_metrics:
             labels = PrometheusMetricLabels.get_labels(metric)
-            assert UserAPIKeyLabelNames.STREAM.value not in labels, (
-                f"stream label should not be in {metric}"
-            )
+            assert (
+                UserAPIKeyLabelNames.STREAM.value not in labels
+            ), f"stream label should not be in {metric}"
     finally:
         litellm.prometheus_emit_stream_label = False
 

@@ -4,9 +4,12 @@ from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
     router as email_events_router,
 )
 
+from . import ui_crud_endpoints  # side-effect: registers extra UI settings
 from .audit_logging_endpoints import router as audit_logging_router
 from .management_endpoints import management_endpoints_router
 from .utils import _should_block_robots
+
+__all__ = ["router", "ui_crud_endpoints"]
 
 router = APIRouter()
 router.include_router(email_events_router)

@@ -116,9 +116,7 @@ class TestAzureAnthropicConfig:
             "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
         ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
-            with patch.object(
-                config, "get_anthropic_headers", return_value={}
-            ):
+            with patch.object(config, "get_anthropic_headers", return_value={}):
                 result = config.validate_environment(
                     headers=headers,
                     model=model,
@@ -167,8 +165,15 @@ class TestAzureAnthropicConfig:
         with patch(
             "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
         ) as mock_validate:
-            mock_validate.return_value = {"api-key": "test-api-key", "anthropic-version": "2024-01-01"}
-            with patch.object(config, "get_anthropic_headers", return_value={"anthropic-version": "2024-01-01"}):
+            mock_validate.return_value = {
+                "api-key": "test-api-key",
+                "anthropic-version": "2024-01-01",
+            }
+            with patch.object(
+                config,
+                "get_anthropic_headers",
+                return_value={"anthropic-version": "2024-01-01"},
+            ):
                 result = config.validate_environment(
                     headers=headers,
                     model=model,
@@ -210,7 +215,9 @@ class TestAzureAnthropicConfig:
             "transform_request",
             return_value={
                 "model": "claude-sonnet-4-5",
-                "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+                ],
                 "max_tokens": 100,
                 "max_retries": 3,  # Should be removed
                 "stream_options": {"include_usage": True},  # Should be removed
@@ -238,21 +245,15 @@ class TestAzureAnthropicConfig:
     def test_context_management_compact_beta_header(self):
         """Test that context_management with compact adds the correct beta header for Azure AI"""
         config = AzureAnthropicConfig()
-        
+
         messages = [{"role": "user", "content": "Hello"}]
         optional_params = {
-            "context_management": {
-                "edits": [
-                    {
-                        "type": "compact_20260112"
-                    }
-                ]
-            },
-            "max_tokens": 100
+            "context_management": {"edits": [{"type": "compact_20260112"}]},
+            "max_tokens": 100,
         }
         litellm_params = {"api_key": "test-key"}
         headers = {"api-key": "test-key"}
-        
+
         with patch(
             "litellm.llms.azure.common_utils.BaseAzureLLM._base_validate_azure_environment"
         ) as mock_validate:
@@ -264,7 +265,7 @@ class TestAzureAnthropicConfig:
                 litellm_params=litellm_params,
                 headers=headers,
             )
-        
+
         # Verify context_management is included
         assert "context_management" in result
         assert result["context_management"]["edits"][0]["type"] == "compact_20260112"
@@ -272,60 +273,143 @@ class TestAzureAnthropicConfig:
     def test_context_management_compact_beta_header_in_headers(self):
         """Test that compact beta header is added to headers for Azure AI"""
         config = AzureAnthropicConfig()
-        
+
         messages = [{"role": "user", "content": "Hello"}]
         optional_params = {
-            "context_management": {
-                "edits": [
-                    {
-                        "type": "compact_20260112"
-                    }
-                ]
-            },
-            "max_tokens": 100
+            "context_management": {"edits": [{"type": "compact_20260112"}]},
+            "max_tokens": 100,
         }
-        
+
         # Test that the parent's update_headers_with_optional_anthropic_beta is called
         # which should add the compact beta header
         headers = {}
         headers = config.update_headers_with_optional_anthropic_beta(
-            headers=headers,
-            optional_params=optional_params
+            headers=headers, optional_params=optional_params
         )
-        
+
         # Verify compact beta header is present
         assert "anthropic-beta" in headers
         assert "compact-2026-01-12" in headers["anthropic-beta"]
 
+    def test_output_config_promoted_from_extra_body(self):
+        """Anthropic ``output_config`` routed via ``extra_body`` reaches the request body."""
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+            "extra_body": {"output_config": {"effort": "low"}},
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        result = config.transform_request(
+            model="claude-opus-4-6",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert result["output_config"] == {"effort": "low"}
+        assert "extra_body" not in result
+
+    def test_invalid_output_config_effort_raises_via_extra_body(self):
+        """Invalid ``effort`` via ``extra_body`` raises BadRequestError."""
+        import litellm
+
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+            "extra_body": {"output_config": {"effort": "invalid"}},
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+            config.transform_request(
+                model="claude-opus-4-6",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        assert "Invalid effort value" in str(exc_info.value)
+
+    def test_unsupported_effort_xhigh_raises_via_extra_body(self):
+        """Unsupported ``effort='xhigh'`` via ``extra_body`` raises BadRequestError."""
+        import litellm
+
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+            "extra_body": {"output_config": {"effort": "xhigh"}},
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        with pytest.raises(litellm.exceptions.BadRequestError) as exc_info:
+            config.transform_request(
+                model="claude-sonnet-4-6",
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
+        assert "xhigh" in str(exc_info.value)
+
+    def test_extra_body_promotion_does_not_clobber_top_level(self):
+        """Top-level ``optional_params`` wins over duplicates in ``extra_body``."""
+        config = AzureAnthropicConfig()
+
+        messages = [{"role": "user", "content": "Hello"}]
+        optional_params = {
+            "max_tokens": 100,
+            "output_config": {"effort": "low"},
+            "extra_body": {"output_config": {"effort": "high"}},
+        }
+        litellm_params = {"api_key": "test-key"}
+        headers = {"api-key": "test-key", "anthropic-version": "2023-06-01"}
+
+        result = config.transform_request(
+            model="claude-opus-4-6",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+        assert result["output_config"] == {"effort": "low"}
+
     def test_context_management_mixed_edits_beta_headers(self):
         """Test that context_management with both compact and other edits adds both beta headers"""
         config = AzureAnthropicConfig()
-        
+
         messages = [{"role": "user", "content": "Hello"}]
         optional_params = {
             "context_management": {
                 "edits": [
-                    {
-                        "type": "compact_20260112"
-                    },
+                    {"type": "compact_20260112"},
                     {
                         "type": "replace",
                         "message_id": "msg_123",
-                        "content": "new content"
-                    }
+                        "content": "new content",
+                    },
                 ]
             },
-            "max_tokens": 100
+            "max_tokens": 100,
         }
-        
+
         headers = {}
         headers = config.update_headers_with_optional_anthropic_beta(
-            headers=headers,
-            optional_params=optional_params
+            headers=headers, optional_params=optional_params
         )
-        
+
         # Verify both beta headers are present
         assert "anthropic-beta" in headers
         assert "compact-2026-01-12" in headers["anthropic-beta"]
         assert "context-management-2025-06-27" in headers["anthropic-beta"]
-

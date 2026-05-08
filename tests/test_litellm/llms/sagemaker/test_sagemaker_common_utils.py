@@ -11,6 +11,102 @@ from litellm.llms.sagemaker.common_utils import AWSEventStreamDecoder
 from litellm.llms.sagemaker.completion.transformation import SagemakerConfig
 
 
+# --------------------------------------------------------------------------- #
+# SAGEMAKER_RESPONSE_STREAM_SHAPE eager-load tests                            #
+# --------------------------------------------------------------------------- #
+
+
+def test_sagemaker_response_stream_shape_loaded_at_import():
+    """
+    SAGEMAKER_RESPONSE_STREAM_SHAPE is resolved at module import time.
+    In a standard environment with botocore installed it must be non-None.
+    """
+    from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
+
+    assert SAGEMAKER_RESPONSE_STREAM_SHAPE is not None
+
+
+def test_sagemaker_response_stream_shape_load_failure_returns_none():
+    """
+    If botocore's Loader raises (e.g. missing data files), _load_sagemaker_response_stream_shape
+    should return None rather than propagating the exception, so the module
+    still imports cleanly.
+    """
+    from unittest.mock import patch
+
+    import litellm.llms.sagemaker.common_utils as mod
+
+    with patch(
+        "botocore.loaders.Loader.load_service_model",
+        side_effect=Exception("no data"),
+    ):
+        shape = mod._load_sagemaker_response_stream_shape()
+        assert shape is None
+
+
+def test_sagemaker_response_stream_shape_is_structure_shape():
+    """
+    The loaded shape should be the botocore StructureShape for
+    InvokeEndpointWithResponseStreamOutput, not a plain dict or any other type.
+    """
+    from botocore.model import StructureShape
+
+    from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
+
+    assert SAGEMAKER_RESPONSE_STREAM_SHAPE is not None, (
+        "SAGEMAKER_RESPONSE_STREAM_SHAPE is None — botocore may not be installed"
+    )
+    shape: StructureShape = SAGEMAKER_RESPONSE_STREAM_SHAPE  # remove Optional
+    assert isinstance(shape, StructureShape)
+    assert shape.name == "InvokeEndpointWithResponseStreamOutput"
+
+
+def test_sagemaker_response_stream_shape_not_reloaded_on_new_decoder():
+    """
+    Creating multiple AWSEventStreamDecoder instances must not trigger
+    additional botocore Loader calls — the shape is resolved once at import
+    time and reused.
+    """
+    from litellm.llms.sagemaker.common_utils import SAGEMAKER_RESPONSE_STREAM_SHAPE
+
+    decoder_a = AWSEventStreamDecoder(model="test-model-a")
+    decoder_b = AWSEventStreamDecoder(model="test-model-b")
+
+    # Both decoders should use the same pre-loaded shape object (identity check)
+    assert "_response_stream_shape_cache" not in decoder_a.__dict__
+    assert "_response_stream_shape_cache" not in decoder_b.__dict__
+    # The module constant is still the same object
+    from litellm.llms.sagemaker.common_utils import (
+        SAGEMAKER_RESPONSE_STREAM_SHAPE as shape_after,
+    )
+
+    assert SAGEMAKER_RESPONSE_STREAM_SHAPE is shape_after
+
+
+def test_sagemaker_parse_message_from_event_raises_on_none_shape():
+    """
+    When SAGEMAKER_RESPONSE_STREAM_SHAPE is None (botocore unavailable),
+    _parse_message_from_event must raise ValueError before touching the
+    botocore parser — not an opaque AttributeError from inside botocore.
+    """
+    from unittest.mock import MagicMock, patch
+
+    import litellm.llms.sagemaker.common_utils as mod
+    from litellm.llms.sagemaker.common_utils import SagemakerError
+
+    decoder = AWSEventStreamDecoder(model="test-model")
+    mock_event = MagicMock()
+
+    with patch.object(mod, "SAGEMAKER_RESPONSE_STREAM_SHAPE", None):
+        with pytest.raises(SagemakerError) as exc_info:
+            decoder._parse_message_from_event(mock_event)
+
+    assert exc_info.value.status_code == 500
+    assert "botocore" in str(exc_info.value.message).lower()
+    # The botocore parser must never have been called
+    mock_event.to_response_dict.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_aiter_bytes_unicode_decode_error():
     """

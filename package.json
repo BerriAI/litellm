@@ -2,7 +2,7 @@
   "dependencies": {
     "prism-react-renderer": "2.4.1",
     "prisma": "5.17.0",
-    "react-copy-to-clipboard": "5.1.0"
+    "react-copy-to-clipboard": "5.1.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "6.8.0",
@@ -12,7 +12,8 @@
   },
   "overrides": {
     "glob": "13.0.0",
-    "minimatch": "10.1.1",
+    "minimatch": "10.2.5",
+    "picomatch": "2.3.2",
     "@isaacs/brace-expansion": "5.0.0",
     "@babel/traverse": "7.28.5",
     "braces": "3.0.3"

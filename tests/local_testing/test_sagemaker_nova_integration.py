@@ -60,9 +60,7 @@ def _make_test_png() -> str:
 
     png = (
         b"\x89PNG\r\n\x1a\n"
-        + chunk(
-            b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-        )
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
         + chunk(b"IDAT", zlib.compress(raw))
         + chunk(b"IEND", b"")
     )
@@ -141,7 +139,9 @@ class TestSagemakerNovaIntegration:
         final_chunks_with_finish = [
             c for c in chunks if c.choices and c.choices[0].finish_reason is not None
         ]
-        assert len(final_chunks_with_finish) > 0, "Expected at least one chunk with finish_reason"
+        assert (
+            len(final_chunks_with_finish) > 0
+        ), "Expected at least one chunk with finish_reason"
 
     def test_should_return_logprobs(self):
         """Logprobs are returned when requested."""
@@ -163,7 +163,11 @@ class TestSagemakerNovaIntegration:
         assert "token" in first_token or hasattr(first_token, "token")
         assert "logprob" in first_token or hasattr(first_token, "logprob")
 
-        top = first_token.get("top_logprobs") if isinstance(first_token, dict) else first_token.top_logprobs
+        top = (
+            first_token.get("top_logprobs")
+            if isinstance(first_token, dict)
+            else first_token.top_logprobs
+        )
         assert top is not None and len(top) == 3, "Expected 3 top_logprobs"
 
     def test_should_handle_multimodal_image_input(self):
@@ -181,9 +185,7 @@ class TestSagemakerNovaIntegration:
                         },
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{b64_image}"
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{b64_image}"},
                         },
                     ],
                 }
@@ -194,9 +196,9 @@ class TestSagemakerNovaIntegration:
         assert response.choices[0].message.content is not None
         assert len(content) > 0
         # The image has red and blue — model should mention at least one
-        assert "red" in content or "blue" in content, (
-            f"Expected 'red' or 'blue' in multimodal response, got: {content}"
-        )
+        assert (
+            "red" in content or "blue" in content
+        ), f"Expected 'red' or 'blue' in multimodal response, got: {content}"
 
     def test_should_pass_nova_specific_params(self):
         """Nova-specific parameters (top_k) are accepted."""

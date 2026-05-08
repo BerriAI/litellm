@@ -1,4 +1,5 @@
 """Test that cost calculation uses appropriate log levels"""
+
 import logging
 import os
 import sys
@@ -43,30 +44,28 @@ def test_cost_calculation_uses_debug_level():
             "object": "chat.completion",
             "created": 1234567890,
             "model": "gpt-3.5-turbo",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "Test response"},
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 20,
-                "total_tokens": 30
-            }
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Test response"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
         }
 
         # Call completion_cost to trigger logs
         try:
             cost = completion_cost(
-                completion_response=mock_response,
-                model="gpt-3.5-turbo"
+                completion_response=mock_response, model="gpt-3.5-turbo"
             )
         except Exception:
             pass  # Cost calculation may fail, but we're checking log levels
 
         # Find the cost calculation log records
         cost_calc_records = [
-            record for record in handler.records
+            record
+            for record in handler.records
             if "selected model name for cost calculation" in record.getMessage()
         ]
 
@@ -74,8 +73,9 @@ def test_cost_calculation_uses_debug_level():
         assert len(cost_calc_records) > 0, "No cost calculation logs found"
 
         for record in cost_calc_records:
-            assert record.levelno == logging.DEBUG, \
-                f"Cost calculation log should be DEBUG level, but was {record.levelname}"
+            assert (
+                record.levelno == logging.DEBUG
+            ), f"Cost calculation log should be DEBUG level, but was {record.levelname}"
     finally:
         # Clean up: remove handler and restore original logger level
         verbose_logger.removeHandler(handler)
@@ -116,24 +116,24 @@ def test_batch_cost_calculation_uses_debug_level():
         # Call batch_cost_calculator to trigger logs
         try:
             batch_cost_calculator(
-                usage=usage,
-                model="gpt-3.5-turbo",
-                custom_llm_provider="openai"
+                usage=usage, model="gpt-3.5-turbo", custom_llm_provider="openai"
             )
         except Exception:
             pass  # May fail, but we're checking log levels
 
         # Find batch cost calculation log records
         batch_cost_records = [
-            record for record in handler.records
+            record
+            for record in handler.records
             if "Calculating batch cost per token" in record.getMessage()
         ]
 
         # Verify logs exist and are at DEBUG level
         if batch_cost_records:  # May not always log depending on the code path
             for record in batch_cost_records:
-                assert record.levelno == logging.DEBUG, \
-                    f"Batch cost calculation log should be DEBUG level, but was {record.levelname}"
+                assert (
+                    record.levelno == logging.DEBUG
+                ), f"Batch cost calculation log should be DEBUG level, but was {record.levelname}"
     finally:
         # Clean up: remove handler and restore original logger level
         verbose_logger.removeHandler(handler)

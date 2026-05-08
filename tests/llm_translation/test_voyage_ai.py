@@ -33,9 +33,10 @@ class TestVoyageAI(BaseLLMEmbeddingTest):
         embedding_call_args = self.get_base_embedding_call_args()
 
         # Mock the embedding function to avoid API calls
-        with patch("litellm.embedding") as mock_embedding, patch(
-            "litellm.aembedding"
-        ) as mock_aembedding:
+        with (
+            patch("litellm.embedding") as mock_embedding,
+            patch("litellm.aembedding") as mock_aembedding,
+        ):
             # Create a mock response that matches Voyage format
             mock_response = MagicMock()
             mock_response.model = "voyage-3-lite"

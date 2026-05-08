@@ -11,6 +11,10 @@ from typing import Literal
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import (
+    is_text_content_call_type,
+    iter_message_text,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm._logging import verbose_proxy_logger
 from fastapi import HTTPException
@@ -73,10 +77,9 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
             - check if user id part of blocked list
             """
             self.print_verbose("Inside Banned Keyword List Pre-Call Hook")
-            if call_type == "completion" and "messages" in data:
-                for m in data["messages"]:
-                    if "content" in m and isinstance(m["content"], str):
-                        self.test_violation(test_str=m["content"])
+            if is_text_content_call_type(call_type):
+                for text in iter_message_text(data):
+                    self.test_violation(test_str=text)
 
         except HTTPException as e:
             raise e
@@ -93,11 +96,16 @@ class _ENTERPRISE_BannedKeywords(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
-        if isinstance(response, litellm.ModelResponse) and isinstance(
-            response.choices[0], litellm.utils.Choices
-        ):
-            for word in self.banned_keywords_list:
-                self.test_violation(test_str=response.choices[0].message.content or "")
+        if not isinstance(response, litellm.ModelResponse):
+            return
+
+        for choice in response.choices:
+            if not isinstance(choice, litellm.utils.Choices):
+                continue
+            message = getattr(choice, "message", None)
+            content = getattr(message, "content", None)
+            if isinstance(content, str):
+                self.test_violation(test_str=content)
 
     async def async_post_call_streaming_hook(
         self,

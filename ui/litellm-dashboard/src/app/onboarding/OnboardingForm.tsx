@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { useOnboardingCredentials, useClaimOnboardingToken } from "@/app/(dashboard)/hooks/onboarding/useOnboarding";
 import { getProxyBaseUrl } from "@/components/networking";
+import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { OnboardingLoadingView } from "./OnboardingLoadingView";
 import { OnboardingErrorView } from "./OnboardingErrorView";
 import { OnboardingFormBody } from "./OnboardingFormBody";
@@ -31,18 +32,26 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
   const userEmail: string = decoded?.user_email ?? "";
   const userId: string | null = decoded?.user_id ?? null;
   const accessToken: string | null = decoded?.key ?? null;
-  const jwtToken: string | null = credentialsData?.token ?? null;
 
   const handleSubmit = (formValues: { password: string }) => {
-    if (!accessToken || !jwtToken || !userId || !inviteId) return;
+    if (!accessToken || !userId || !inviteId) return;
 
     setClaimError(null);
 
     claimToken(
       { accessToken, inviteId, userId, password: formValues.password },
       {
-        onSuccess: () => {
-          document.cookie = `token=${jwtToken}; path=/; SameSite=Lax`;
+        onSuccess: (data: { token?: string }) => {
+          if (!data?.token) {
+            setClaimError("Failed to start session. Please try again.");
+            return;
+          }
+          // Invite signup is a principal-change boundary — the prior admin's
+          // cookies/sessionStorage must be invalidated before the new user's
+          // session is established, otherwise getCookie() can fall back to
+          // the inviter's token.
+          clearTokenCookies();
+          storeLoginToken(data.token);
           const proxyBaseUrl = getProxyBaseUrl();
           window.location.href = proxyBaseUrl
             ? `${proxyBaseUrl}/ui/?login=success`

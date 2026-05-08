@@ -6,6 +6,7 @@ transformations for the Responses API.
 
 Source: litellm/llms/github_copilot/responses/transformation.py
 """
+
 import sys
 import os
 from unittest.mock import patch, MagicMock
@@ -55,25 +56,25 @@ class TestGithubCopilotResponsesAPITransformation:
 
         # Test with default GitHub Copilot API base (from authenticator)
         url = config.get_complete_url(api_base=None, litellm_params={})
-        assert url == "https://api.individual.githubcopilot.com/responses", (
-            f"Expected GitHub Copilot responses endpoint, got {url}"
-        )
+        assert (
+            url == "https://api.individual.githubcopilot.com/responses"
+        ), f"Expected GitHub Copilot responses endpoint, got {url}"
 
         # Test with custom api_base (overrides authenticator)
         custom_url = config.get_complete_url(
             api_base="https://custom.githubcopilot.com", litellm_params={}
         )
-        assert custom_url == "https://custom.githubcopilot.com/responses", (
-            f"Expected custom endpoint, got {custom_url}"
-        )
+        assert (
+            custom_url == "https://custom.githubcopilot.com/responses"
+        ), f"Expected custom endpoint, got {custom_url}"
 
         # Test with trailing slash
         url_with_slash = config.get_complete_url(
             api_base="https://api.githubcopilot.com/", litellm_params={}
         )
-        assert url_with_slash == "https://api.githubcopilot.com/responses", (
-            "Should handle trailing slash"
-        )
+        assert (
+            url_with_slash == "https://api.githubcopilot.com/responses"
+        ), "Should handle trailing slash"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_default_headers(self, mock_authenticator_class):
@@ -237,9 +238,9 @@ class TestGithubCopilotResponsesAPITransformation:
             headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params
         )
 
-        assert headers.get("copilot-vision-request") == "true", (
-            "Should add copilot-vision-request header for vision input"
-        )
+        assert (
+            headers.get("copilot-vision-request") == "true"
+        ), "Should add copilot-vision-request header for vision input"
 
     @patch("litellm.llms.github_copilot.responses.transformation.Authenticator")
     def test_validate_environment_with_x_initiator(self, mock_authenticator_class):
@@ -261,9 +262,9 @@ class TestGithubCopilotResponsesAPITransformation:
             headers={}, model="gpt-5.1-codex", litellm_params=mock_litellm_params
         )
 
-        assert headers.get("X-Initiator") == "agent", (
-            "Should set X-Initiator to 'agent' for assistant role"
-        )
+        assert (
+            headers.get("X-Initiator") == "agent"
+        ), "Should set X-Initiator to 'agent' for assistant role"
 
     def test_map_openai_params_no_transformation(self):
         """Test that map_openai_params passes through parameters unchanged"""
@@ -274,7 +275,9 @@ class TestGithubCopilotResponsesAPITransformation:
         )
 
         result = config.map_openai_params(
-            response_api_optional_params=params, model="gpt-5.1-codex", drop_params=False
+            response_api_optional_params=params,
+            model="gpt-5.1-codex",
+            drop_params=False,
         )
 
         assert result.get("temperature") == 0.7
@@ -323,9 +326,9 @@ class TestGithubCopilotResponsesAPITransformation:
         result = config._handle_reasoning_item(reasoning_item)
 
         # encrypted_content should be preserved
-        assert result.get("encrypted_content") == "encrypted-blob-abc123", (
-            "encrypted_content must be preserved for GitHub Copilot multi-turn conversations"
-        )
+        assert (
+            result.get("encrypted_content") == "encrypted-blob-abc123"
+        ), "encrypted_content must be preserved for GitHub Copilot multi-turn conversations"
         # status=None should be filtered out
         assert "status" not in result, "status=None should be filtered out"
         # content=None should be filtered out

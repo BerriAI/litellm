@@ -27,10 +27,6 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
   // Set initial values when mcpServer changes
   useEffect(() => {
     if (mcpServer) {
-      // Set extra_headers if they exist
-      if (mcpServer.extra_headers) {
-        form.setFieldValue("extra_headers", mcpServer.extra_headers);
-      }
       if (mcpServer.static_headers) {
         const staticHeaders = Object.entries(mcpServer.static_headers).map(([header, value]) => ({
           header,

@@ -9,11 +9,26 @@ from litellm.utils import _add_path_to_api_base
 
 
 class AzureImageEditConfig(OpenAIImageEditConfig):
+    @staticmethod
+    def azure_deployment_image_edit_form_data(data: dict, request_url: str) -> dict:
+        """
+        Azure OpenAI ``.../openai/deployments/{deployment}/images/edits`` routes by
+        deployment in the URL; including ``model`` in multipart fields can break
+        the same way as image generations (LiteLLM #26316).
+
+        Non-deployment edit URLs keep ``model`` when present.
+        """
+        if "images/edits" in request_url and "/openai/deployments/" in request_url:
+            return {k: v for k, v in data.items() if k != "model"}
+        return data
+
     def validate_environment(
         self,
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[dict] = None,
+        api_base: Optional[str] = None,
     ) -> dict:
         api_key = (
             api_key
@@ -81,3 +96,8 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         final_url = httpx.URL(new_url).copy_with(params=query_params)
 
         return str(final_url)
+
+    def finalize_image_edit_request_data(
+        self, data: dict, resolved_request_url: str
+    ) -> dict:
+        return self.azure_deployment_image_edit_form_data(data, resolved_request_url)

@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from typing import Any, Dict, List, Literal, Optional, Union, cast
 
@@ -294,7 +295,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             raise ValueError(f"Invalid ARN format: {batch_id}")
 
         region = arn_parts[3]
-        # arn_parts[5] contains "model-invocation-job/{jobId}"
+        if not re.match(r"^[a-z][a-z0-9-]*$", region):
+            raise ValueError(f"Invalid region in ARN: {batch_id}")
 
         # Build the endpoint URL for GetModelInvocationJob
         # AWS API format: GET /model-invocation-job/{jobIdentifier}

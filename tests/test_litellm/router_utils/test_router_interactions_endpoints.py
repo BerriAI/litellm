@@ -140,4 +140,3 @@ class TestInitInteractionsApiEndpoints:
             custom_llm_provider="vertex_ai",
         )
         assert result == {"result": "success"}
-

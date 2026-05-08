@@ -7,7 +7,10 @@ import litellm
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import (
+    get_vertex_base_url,
+    pop_vertex_request_labels,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -203,13 +206,16 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "sampleCount": 1,
         }
 
-        # Merge with optional params
+        labels = pop_vertex_request_labels(optional_params, litellm_params)
+        # Merge with optional params (after popping labels so they are not sent as Imagen parameters)
         parameters = {**default_params, **optional_params}
 
-        request_body = {
+        request_body: dict = {
             "instances": [{"prompt": prompt}],
             "parameters": parameters,
         }
+        if labels:
+            request_body["labels"] = labels
 
         return request_body
 

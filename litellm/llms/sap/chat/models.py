@@ -24,7 +24,6 @@ def validate_different_content(v: Union[str, dict, list]) -> str:
     raise ValueError("Content must be a string")
 
 
-
 class TextContent(BaseModel):
     type_: Literal["text"] = Field(default="text", alias="type")
     text: str

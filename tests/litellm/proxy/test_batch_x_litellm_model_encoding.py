@@ -79,7 +79,11 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
         patch(
             "litellm.proxy.batches_endpoints.endpoints._read_request_body",
             new=AsyncMock(
-                return_value={"input_file_id": "file-input456", "endpoint": "/v1/chat/completions", "completion_window": "24h"}
+                return_value={
+                    "input_file_id": "file-input456",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                }
             ),
         ),
         patch(
@@ -116,7 +120,11 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
         mock_processor = MagicMock()
         mock_processor.common_processing_pre_call_logic = AsyncMock(
             return_value=(
-                {"input_file_id": "file-input456", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+                {
+                    "input_file_id": "file-input456",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                },
                 MagicMock(),
             )
         )
@@ -130,23 +138,23 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
         )
 
     # The batch_id should be encoded with model info
-    assert response.id != raw_batch_id, (
-        f"Expected batch_id to be encoded, but got raw ID: {response.id}"
-    )
-    assert response.id.startswith("batch_"), (
-        f"Encoded batch_id should keep batch_ prefix, got: {response.id}"
-    )
+    assert (
+        response.id != raw_batch_id
+    ), f"Expected batch_id to be encoded, but got raw ID: {response.id}"
+    assert response.id.startswith(
+        "batch_"
+    ), f"Encoded batch_id should keep batch_ prefix, got: {response.id}"
 
     # Should be decodable back to the original
     decoded_model = decode_model_from_file_id(response.id)
-    assert decoded_model == model_name, (
-        f"Expected model '{model_name}' from decoded batch_id, got: {decoded_model}"
-    )
+    assert (
+        decoded_model == model_name
+    ), f"Expected model '{model_name}' from decoded batch_id, got: {decoded_model}"
 
     original_id = get_original_file_id(response.id)
-    assert original_id == raw_batch_id, (
-        f"Expected original ID '{raw_batch_id}', got: {original_id}"
-    )
+    assert (
+        original_id == raw_batch_id
+    ), f"Expected original ID '{raw_batch_id}', got: {original_id}"
 
 
 @pytest.mark.asyncio
@@ -183,7 +191,11 @@ async def test_create_batch_with_x_litellm_model_encodes_output_and_error_file_i
         patch(
             "litellm.proxy.batches_endpoints.endpoints._read_request_body",
             new=AsyncMock(
-                return_value={"input_file_id": "file-input456", "endpoint": "/v1/chat/completions", "completion_window": "24h"}
+                return_value={
+                    "input_file_id": "file-input456",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                }
             ),
         ),
         patch(
@@ -219,7 +231,11 @@ async def test_create_batch_with_x_litellm_model_encodes_output_and_error_file_i
         mock_processor = MagicMock()
         mock_processor.common_processing_pre_call_logic = AsyncMock(
             return_value=(
-                {"input_file_id": "file-input456", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+                {
+                    "input_file_id": "file-input456",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                },
                 MagicMock(),
             )
         )
@@ -261,7 +277,11 @@ async def test_create_batch_without_x_litellm_model_returns_raw_ids():
         patch(
             "litellm.proxy.batches_endpoints.endpoints._read_request_body",
             new=AsyncMock(
-                return_value={"input_file_id": "file-input456", "endpoint": "/v1/chat/completions", "completion_window": "24h"}
+                return_value={
+                    "input_file_id": "file-input456",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                }
             ),
         ),
         patch(
@@ -290,7 +310,11 @@ async def test_create_batch_without_x_litellm_model_returns_raw_ids():
         mock_processor = MagicMock()
         mock_processor.common_processing_pre_call_logic = AsyncMock(
             return_value=(
-                {"input_file_id": "file-input456", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+                {
+                    "input_file_id": "file-input456",
+                    "endpoint": "/v1/chat/completions",
+                    "completion_window": "24h",
+                },
                 MagicMock(),
             )
         )

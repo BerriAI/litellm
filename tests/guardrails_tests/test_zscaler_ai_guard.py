@@ -88,6 +88,7 @@ async def test_make_zscaler_ai_guard_api_call_block():
             == "BLOCK"
         )
 
+
 @pytest.mark.asyncio
 async def test_make_zscaler_ai_guard_api_call_request_exception():
     """Test Zscaler AI Guard API call where an exception in the request occurs."""
@@ -110,6 +111,7 @@ async def test_make_zscaler_ai_guard_api_call_request_exception():
 
         assert e.value.status_code == 500
         assert "Connection error" in e.value.detail["reason"]
+
 
 def test_extract_blocking_info():
     """Test extract_blocking_info method."""
@@ -237,6 +239,7 @@ async def test_policy_id_from_init(mock_api_call):
     mock_api_call.assert_called_once()
     assert mock_api_call.call_args.kwargs["policy_id"] == 100
 
+
 @pytest.mark.asyncio
 @patch(
     "litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard.ZscalerAIGuard.make_zscaler_ai_guard_api_call",
@@ -256,6 +259,7 @@ async def test_policy_id_zero_from_request_metadata(mock_api_call):
     await guardrail.apply_guardrail(inputs, request_data, "request")
     mock_api_call.assert_called_once()
     assert mock_api_call.call_args.kwargs["policy_id"] == 0
+
 
 @pytest.mark.asyncio
 async def test_should_use_config_send_user_api_key_alias_when_true():
@@ -280,11 +284,7 @@ async def test_should_preserve_policy_id_zero_in_init():
 @pytest.mark.asyncio
 async def test_should_resolve_from_litellm_metadata_during_post_call():
     """Test that user_api_key_alias is resolved from litellm_metadata during post-call"""
-    request_data = {
-        "litellm_metadata": {
-            "user_api_key_alias": "test-alias-post-call"
-        }
-    }
+    request_data = {"litellm_metadata": {"user_api_key_alias": "test-alias-post-call"}}
     result = ZscalerAIGuard._resolve_metadata_value(request_data, "user_api_key_alias")
     assert result == "test-alias-post-call"
 
@@ -292,11 +292,7 @@ async def test_should_resolve_from_litellm_metadata_during_post_call():
 @pytest.mark.asyncio
 async def test_should_resolve_user_api_key_key_alias_mapping():
     """Test key_alias -> user_api_key_key_alias mapping in litellm_metadata"""
-    request_data = {
-        "litellm_metadata": {
-            "user_api_key_key_alias": "test-key-alias"
-        }
-    }
+    request_data = {"litellm_metadata": {"user_api_key_key_alias": "test-key-alias"}}
     result = ZscalerAIGuard._resolve_metadata_value(request_data, "user_api_key_alias")
     assert result == "test-key-alias"
 

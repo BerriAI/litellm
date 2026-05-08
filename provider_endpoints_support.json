@@ -193,6 +193,23 @@
         "a2a": false
       }
     },
+    "aihubmix": {
+      "display_name": "AIHubMix (`aihubmix`)",
+      "url": "https://docs.litellm.ai/docs/providers/aihubmix",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": true,
+        "audio_speech": true,
+        "moderations": true,
+        "batches": false,
+        "rerank": true,
+        "a2a": false
+      }
+    },
     "assemblyai": {
       "display_name": "AssemblyAI (`assemblyai`)",
       "url": "https://docs.litellm.ai/docs/pass_through/assembly_ai",
@@ -603,6 +620,24 @@
     "compactifai": {
       "display_name": "CompactifAI (`compactifai`)",
       "url": "https://docs.litellm.ai/docs/providers/compactifai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "crusoe": {
+      "display_name": "Crusoe (`crusoe`)",
+      "url": "https://docs.litellm.ai/docs/providers/crusoe",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -1575,6 +1610,22 @@
         "interactions": true
       }
     },
+    "nvidia_riva": {
+      "display_name": "Nvidia Riva (`nvidia_riva`)",
+      "url": "https://docs.litellm.ai/docs/providers/nvidia_riva",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": true,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "oci": {
       "display_name": "OCI (`oci`)",
       "url": "https://docs.litellm.ai/docs/providers/oci",
@@ -1968,7 +2019,7 @@
         "responses": true,
         "embeddings": false,
         "image_generations": false,
-        "audio_transcriptions": false,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,

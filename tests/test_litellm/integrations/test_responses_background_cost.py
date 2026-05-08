@@ -50,11 +50,9 @@ class TestResponsesBackgroundCostTracking:
             output=[],
             usage=None,
         )
-        
+
         # Add hidden params with model_id (simulating what base_process_llm_request does)
-        response._hidden_params = {
-            "model_id": "model-deployment-id-123"
-        }
+        response._hidden_params = {"model_id": "model-deployment-id-123"}
 
         # Mock request data
         data = {
@@ -73,7 +71,7 @@ class TestResponsesBackgroundCostTracking:
                 # Get model_id from hidden params
                 hidden_params = getattr(response, "_hidden_params", {}) or {}
                 model_id = hidden_params.get("model_id", None)
-                
+
                 if model_id:
                     # Store in managed objects table using response.id directly
                     await mock_managed_files_obj.store_unified_object_id(
@@ -192,7 +190,7 @@ class TestResponsesBackgroundCostTracking:
             if response.status in ["queued", "in_progress"]:
                 hidden_params = getattr(response, "_hidden_params", {}) or {}
                 model_id = hidden_params.get("model_id", None)
-                
+
                 if model_id:  # This will be False
                     await mock_managed_files_obj.store_unified_object_id(
                         unified_object_id=response.id,
@@ -241,7 +239,7 @@ class TestResponsesBackgroundCostTracking:
                 if response.status in ["queued", "in_progress"]:
                     hidden_params = getattr(response, "_hidden_params", {}) or {}
                     model_id = hidden_params.get("model_id", None)
-                    
+
                     if model_id:
                         await mock_managed_files_obj.store_unified_object_id(
                             unified_object_id=response.id,
@@ -265,6 +263,7 @@ def _check_responses_cost_module_available():
         from litellm_enterprise.proxy.common_utils.check_responses_cost import (  # noqa: F401
             CheckResponsesCost,
         )
+
         return True
     except ImportError:
         return False
@@ -272,7 +271,7 @@ def _check_responses_cost_module_available():
 
 @pytest.mark.skipif(
     not _check_responses_cost_module_available(),
-    reason="litellm_enterprise.proxy.common_utils.check_responses_cost module not available (enterprise-only feature)"
+    reason="litellm_enterprise.proxy.common_utils.check_responses_cost module not available (enterprise-only feature)",
 )
 class TestCheckResponsesCost:
     """Tests for the CheckResponsesCost polling class"""
@@ -398,9 +397,12 @@ class TestCheckResponsesCost:
 
             # Verify update_many was called to mark job as completed
             # (stale cleanup also calls update_many, so check the specific completion call)
-            update_many_calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            update_many_calls = (
+                mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            )
             completion_calls = [
-                c for c in update_many_calls
+                c
+                for c in update_many_calls
                 if c.kwargs.get("where", {}).get("id") is not None
             ]
             assert len(completion_calls) == 1
@@ -450,9 +452,12 @@ class TestCheckResponsesCost:
 
             # Verify job was marked as completed even though it failed
             # (stale cleanup also calls update_many, so check the specific completion call)
-            update_many_calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            update_many_calls = (
+                mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            )
             completion_calls = [
-                c for c in update_many_calls
+                c
+                for c in update_many_calls
                 if c.kwargs.get("where", {}).get("id") is not None
             ]
             assert len(completion_calls) == 1
@@ -500,9 +505,12 @@ class TestCheckResponsesCost:
 
             # Verify no completion update_many was called (job still in progress)
             # (stale cleanup may still call update_many, so filter for completion calls)
-            update_many_calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            update_many_calls = (
+                mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            )
             completion_calls = [
-                c for c in update_many_calls
+                c
+                for c in update_many_calls
                 if c.kwargs.get("where", {}).get("id") is not None
             ]
             assert len(completion_calls) == 0
@@ -544,9 +552,12 @@ class TestCheckResponsesCost:
 
             # Verify no completion update_many was called (error occurred)
             # (stale cleanup may still call update_many, so filter for completion calls)
-            update_many_calls = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            update_many_calls = (
+                mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+            )
             completion_calls = [
-                c for c in update_many_calls
+                c
+                for c in update_many_calls
                 if c.kwargs.get("where", {}).get("id") is not None
             ]
             assert len(completion_calls) == 0

@@ -63,9 +63,7 @@ class HttpStatusGuardrail(CustomGuardrail):
 
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         self.calls += 1
-        raise HTTPException(
-            status_code=self.status_code, detail="Simulated HTTP error"
-        )
+        raise HTTPException(status_code=self.status_code, detail="Simulated HTTP error")
 
 
 class AlwaysPassGuardrail(CustomGuardrail):
@@ -108,9 +106,7 @@ class PiiMaskingGuardrail(CustomGuardrail):
         masked_messages = []
         for msg in data.get("messages", []):
             masked_msg = dict(msg)
-            masked_msg["content"] = msg["content"].replace(
-                "John Smith", "[REDACTED]"
-            )
+            masked_msg["content"] = msg["content"].replace("John Smith", "[REDACTED]")
             masked_messages.append(masked_msg)
         return {"messages": masked_messages}
 
@@ -155,12 +151,8 @@ async def test_escalation_step1_fails_step2_blocks():
     pipeline = GuardrailPipeline(
         mode="pre_call",
         steps=[
-            PipelineStep(
-                guardrail="simple-filter", on_fail="next", on_pass="allow"
-            ),
-            PipelineStep(
-                guardrail="advanced-filter", on_fail="block", on_pass="allow"
-            ),
+            PipelineStep(guardrail="simple-filter", on_fail="next", on_pass="allow"),
+            PipelineStep(guardrail="advanced-filter", on_fail="block", on_pass="allow"),
         ],
     )
 
@@ -205,12 +197,8 @@ async def test_early_allow_step1_passes_step2_skipped():
     pipeline = GuardrailPipeline(
         mode="pre_call",
         steps=[
-            PipelineStep(
-                guardrail="simple-filter", on_fail="next", on_pass="allow"
-            ),
-            PipelineStep(
-                guardrail="advanced-filter", on_fail="block", on_pass="allow"
-            ),
+            PipelineStep(guardrail="simple-filter", on_fail="next", on_pass="allow"),
+            PipelineStep(guardrail="advanced-filter", on_fail="block", on_pass="allow"),
         ],
     )
 
@@ -251,12 +239,8 @@ async def test_escalation_step1_fails_step2_passes():
     pipeline = GuardrailPipeline(
         mode="pre_call",
         steps=[
-            PipelineStep(
-                guardrail="simple-filter", on_fail="next", on_pass="allow"
-            ),
-            PipelineStep(
-                guardrail="advanced-filter", on_fail="block", on_pass="allow"
-            ),
+            PipelineStep(guardrail="simple-filter", on_fail="next", on_pass="allow"),
+            PipelineStep(guardrail="advanced-filter", on_fail="block", on_pass="allow"),
         ],
     )
 
@@ -305,9 +289,7 @@ async def test_data_forwarding_pii_masking():
                 on_pass="next",
                 pass_data=True,
             ),
-            PipelineStep(
-                guardrail="content-check", on_fail="block", on_pass="allow"
-            ),
+            PipelineStep(guardrail="content-check", on_fail="block", on_pass="allow"),
         ],
     )
 
@@ -318,9 +300,7 @@ async def test_data_forwarding_pii_masking():
         result = await PipelineExecutor.execute_steps(
             steps=pipeline.steps,
             mode=pipeline.mode,
-            data={
-                "messages": [{"role": "user", "content": "Hello John Smith"}]
-            },
+            data={"messages": [{"role": "user", "content": "Hello John Smith"}]},
             user_api_key_dict=MagicMock(),
             call_type="completion",
             policy_name="pii-then-safety",

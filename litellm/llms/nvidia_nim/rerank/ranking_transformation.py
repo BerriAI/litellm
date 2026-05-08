@@ -66,6 +66,7 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
         model: str,
         optional_rerank_params: Dict,
         headers: dict,
+        litellm_params: Optional[dict] = None,
     ) -> dict:
         """
         Transform request, using clean model name without 'ranking/' prefix.
@@ -75,4 +76,5 @@ class NvidiaNimRankingConfig(NvidiaNimRerankConfig):
             model=clean_model,
             optional_rerank_params=optional_rerank_params,
             headers=headers,
+            litellm_params=litellm_params,
         )

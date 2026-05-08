@@ -6,7 +6,8 @@ from typing import Any, Optional
 import httpx
 
 import litellm
-from litellm._logging import _redact_string, verbose_logger
+from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string, verbose_logger
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -261,10 +262,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
         original_exception=original_exception
     )
     try:
-        error_str = str(original_exception)
+        error_str = (
+            redact_string(str(original_exception))
+            if _ENABLE_SECRET_REDACTION
+            else str(original_exception)
+        )
         if model:
             if hasattr(original_exception, "message"):
-                error_str = str(original_exception.message)
+                error_str = (
+                    redact_string(str(original_exception.message))
+                    if _ENABLE_SECRET_REDACTION
+                    else str(original_exception.message)
+                )
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
             else:
@@ -2431,7 +2440,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             else:
                 raise APIConnectionError(
                     message="{}\n{}".format(
-                        str(original_exception), _redact_string(traceback.format_exc())
+                        str(original_exception),
+                        _redact_string(traceback.format_exc()),
                     ),
                     llm_provider=custom_llm_provider,
                     model=model,
@@ -2460,7 +2470,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     setattr(e, "litellm_response_headers", litellm_response_headers)
                     raise e  # it's already mapped
             raised_exc = APIConnectionError(
-                message="{}\n{}".format(original_exception, _redact_string(traceback.format_exc())),
+                message="{}\n{}".format(
+                    original_exception,
+                    _redact_string(traceback.format_exc()),
+                ),
                 llm_provider="",
                 model="",
             )

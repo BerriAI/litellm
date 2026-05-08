@@ -60,9 +60,7 @@ async def test_scheduler_poll_persists_queue_to_cache():
     await scheduler.add_request(item1)
     await scheduler.add_request(item2)
 
-    await scheduler.poll(
-        id="10", model_name="gpt-3.5-turbo", health_deployments=[]
-    )
+    await scheduler.poll(id="10", model_name="gpt-3.5-turbo", health_deployments=[])
 
     queue_key = f"{SchedulerCacheKeys.queue.value}:{item1.model_name}"
     updated_queue = redis_cache.store[queue_key]
@@ -145,7 +143,9 @@ async def test_scheduler_queue_cleanup_on_timeout():
 
     # Verify queue was cleaned up
     queue_after = await scheduler.get_queue(model_name="gpt-3.5-turbo")
-    assert len(queue_after) == 2, f"Expected 2 items after cleanup, got {len(queue_after)}"
+    assert (
+        len(queue_after) == 2
+    ), f"Expected 2 items after cleanup, got {len(queue_after)}"
 
     # Verify the correct request was removed
     remaining_ids = [item[1] for item in queue_after]

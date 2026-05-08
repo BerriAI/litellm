@@ -102,6 +102,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
         """RAGFlow vector stores are management-only, search is not supported."""
         raise NotImplementedError(

@@ -10,7 +10,9 @@ def override_env_settings(monkeypatch):
     # Set environment variables only for tests using-monkeypatch (function scope by default).
     # Use DATABASE_URL from environment (set by CircleCI to local postgres)
     if "DATABASE_URL" not in os.environ:
-        pytest.fail("DATABASE_URL not set - this test requires a local postgres database to be running")
+        pytest.fail(
+            "DATABASE_URL not set - this test requires a local postgres database to be running"
+        )
     monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-1234")
     monkeypatch.setenv("LITELLM_LOG", "DEBUG")
 

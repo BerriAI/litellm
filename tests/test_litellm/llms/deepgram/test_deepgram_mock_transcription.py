@@ -300,12 +300,27 @@ class TestDeepgramMockTranscription:
                                 "transcript": "Bonjour le monde",
                                 "confidence": 0.99,
                                 "words": [
-                                    {"word": "Bonjour", "start": 0.0, "end": 0.5, "confidence": 0.99},
-                                    {"word": "le", "start": 0.5, "end": 0.7, "confidence": 0.98},
-                                    {"word": "monde", "start": 0.7, "end": 1.2, "confidence": 0.97},
-                                ]
+                                    {
+                                        "word": "Bonjour",
+                                        "start": 0.0,
+                                        "end": 0.5,
+                                        "confidence": 0.99,
+                                    },
+                                    {
+                                        "word": "le",
+                                        "start": 0.5,
+                                        "end": 0.7,
+                                        "confidence": 0.98,
+                                    },
+                                    {
+                                        "word": "monde",
+                                        "start": 0.7,
+                                        "end": 1.2,
+                                        "confidence": 0.97,
+                                    },
+                                ],
                             }
-                        ]
+                        ],
                     }
                 ]
             },
@@ -382,7 +397,9 @@ class TestDeepgramMockTranscription:
             assert response["task"] == "transcribe"
             assert response["duration"] == 0.8
 
-    def test_transcription_response_with_empty_detected_language(self, test_audio_bytes):
+    def test_transcription_response_with_empty_detected_language(
+        self, test_audio_bytes
+    ):
         """Test response transformation when detected_language is present but None"""
         # Mock response with None detected_language
         mock_response_data = {
@@ -404,7 +421,7 @@ class TestDeepgramMockTranscription:
                                 "transcript": "Test transcript",
                                 "confidence": 0.99,
                             }
-                        ]
+                        ],
                     }
                 ]
             },

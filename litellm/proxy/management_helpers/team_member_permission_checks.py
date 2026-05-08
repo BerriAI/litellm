@@ -1,6 +1,5 @@
 from typing import List, Optional
 
-from litellm.caching import DualCache
 from litellm.proxy._types import (
     KeyManagementRoutes,
     LiteLLM_TeamTableCachedObj,
@@ -12,6 +11,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.auth.auth_checks import get_team_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient
@@ -65,7 +65,7 @@ class TeamMemberPermissionChecks:
         user_api_key_dict: UserAPIKeyAuth,
         route: KeyManagementRoutes,
         prisma_client: PrismaClient,
-        user_api_key_cache: DualCache,
+        user_api_key_cache: UserApiKeyCache,
         existing_key_row: LiteLLM_VerificationToken,
     ):
         """

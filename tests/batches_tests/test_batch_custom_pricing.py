@@ -21,6 +21,7 @@ from litellm.types.utils import Usage
 
 # --- helpers ---
 
+
 def _make_batch_output_line(prompt_tokens: int = 10, completion_tokens: int = 5):
     """Return a single successful batch output line (OpenAI JSONL format)."""
     return {
@@ -72,12 +73,12 @@ def test_batch_cost_calculator_uses_custom_model_info():
 
     expected_prompt = 10 * 0.00125
     expected_completion = 5 * 0.005
-    assert prompt_cost == pytest.approx(expected_prompt), (
-        f"Expected prompt cost {expected_prompt}, got {prompt_cost}"
-    )
-    assert completion_cost == pytest.approx(expected_completion), (
-        f"Expected completion cost {expected_completion}, got {completion_cost}"
-    )
+    assert prompt_cost == pytest.approx(
+        expected_prompt
+    ), f"Expected prompt cost {expected_prompt}, got {prompt_cost}"
+    assert completion_cost == pytest.approx(
+        expected_completion
+    ), f"Expected completion cost {expected_completion}, got {completion_cost}"
 
 
 def test_get_batch_job_cost_from_file_content_uses_custom_model_info():
@@ -91,9 +92,9 @@ def test_get_batch_job_cost_from_file_content_uses_custom_model_info():
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert cost == pytest.approx(expected), (
-        f"Expected total cost {expected}, got {cost}"
-    )
+    assert cost == pytest.approx(
+        expected
+    ), f"Expected total cost {expected}, got {cost}"
 
 
 def test_batch_cost_calculator_func_uses_custom_model_info():
@@ -107,9 +108,9 @@ def test_batch_cost_calculator_func_uses_custom_model_info():
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert cost == pytest.approx(expected), (
-        f"Expected total cost {expected}, got {cost}"
-    )
+    assert cost == pytest.approx(
+        expected
+    ), f"Expected total cost {expected}, got {cost}"
 
 
 @pytest.mark.asyncio
@@ -124,8 +125,8 @@ async def test_calculate_batch_cost_and_usage_uses_custom_model_info():
     )
 
     expected = (10 * 0.00125) + (5 * 0.005)
-    assert batch_cost == pytest.approx(expected), (
-        f"Expected total cost {expected}, got {batch_cost}"
-    )
+    assert batch_cost == pytest.approx(
+        expected
+    ), f"Expected total cost {expected}, got {batch_cost}"
     assert batch_usage.prompt_tokens == 10
     assert batch_usage.completion_tokens == 5

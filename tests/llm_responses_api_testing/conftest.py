@@ -1,5 +1,6 @@
 # conftest.py
 
+import asyncio
 import importlib
 import os
 import sys
@@ -9,9 +10,49 @@ import pytest
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import litellm
 
-import asyncio
+import litellm  # noqa: E402
+
+from tests._vcr_conftest_common import (  # noqa: E402
+    VerboseReporterState,
+    apply_vcr_auto_marker_to_items,
+    record_vcr_outcome,
+    register_persister_if_enabled,
+    vcr_config_dict,
+)
+
+_verbose_state = VerboseReporterState()
+
+
+@pytest.fixture(scope="module")
+def vcr_config():
+    return vcr_config_dict()
+
+
+def pytest_recording_configure(config, vcr):
+    register_persister_if_enabled(vcr)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
+
+
+@pytest.fixture(autouse=True)
+def _vcr_outcome_gate(request, vcr):
+    yield
+    record_vcr_outcome(request, vcr)
+
+
+def pytest_configure(config):
+    _verbose_state.remember_pluginmanager(config)
+
+
+def pytest_runtest_logreport(report):
+    _verbose_state.maybe_emit_verdict(report)
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -28,13 +69,11 @@ def setup_and_teardown():
     """
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
-    curr_dir = os.getcwd()  # Get the current working directory
     sys.path.insert(
         0, os.path.abspath("../..")
     )  # Adds the project directory to the system path
 
     import litellm
-    from litellm import Router
 
     importlib.reload(litellm)
 
@@ -46,12 +85,9 @@ def setup_and_teardown():
     except Exception as e:
         print(f"Error reloading litellm.proxy.proxy_server: {e}")
 
-    import asyncio
-
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)
     print(litellm)
-    # from litellm import Router, completion, aembedding, acompletion, embedding
     yield
 
     # Teardown code (executes after the yield point)
@@ -60,15 +96,14 @@ def setup_and_teardown():
 
 
 def pytest_collection_modifyitems(config, items):
-    # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
+    apply_vcr_auto_marker_to_items(items)
+
     custom_logger_tests = [
         item for item in items if "custom_logger" in item.parent.name
     ]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
-    # Sort tests based on their names
     custom_logger_tests.sort(key=lambda x: x.name)
     other_tests.sort(key=lambda x: x.name)
 
-    # Reorder the items list
     items[:] = custom_logger_tests + other_tests

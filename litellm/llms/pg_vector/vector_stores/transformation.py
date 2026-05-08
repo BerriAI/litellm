@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.openai.vector_stores.transformation import OpenAIVectorStoreConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -80,8 +81,12 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
+        extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict]:
-        url = f"{api_base}/{vector_store_id}/search"
+        encoded_vector_store_id = encode_url_path_segment(
+            vector_store_id, field_name="vector_store_id"
+        )
+        url = f"{api_base}/{encoded_vector_store_id}/search"
         _, request_body = super().transform_search_vector_store_request(
             vector_store_id=vector_store_id,
             query=query,
@@ -89,5 +94,6 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
             api_base=api_base,
             litellm_logging_obj=litellm_logging_obj,
             litellm_params=litellm_params,
+            extra_body=extra_body,
         )
         return url, request_body

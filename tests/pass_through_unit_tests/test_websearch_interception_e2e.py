@@ -25,9 +25,9 @@ async def test_websearch_interception_non_streaming():
     """
     litellm._turn_on_debug()
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("E2E TEST 1: WebSearch Interception (Non-Streaming)")
-    print("="*80)
+    print("=" * 80)
 
     # Initialize real router with search_tools configuration
     import litellm.proxy.proxy_server as proxy_server
@@ -38,9 +38,7 @@ async def test_websearch_interception_non_streaming():
         search_tools=[
             {
                 "search_tool_name": "my-perplexity-search",
-                "litellm_params": {
-                    "search_provider": "perplexity"
-                }
+                "litellm_params": {"search_provider": "perplexity"},
             }
         ]
     )
@@ -71,7 +69,12 @@ async def test_websearch_interception_non_streaming():
 
         response = await messages.acreate(
             model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            messages=[{"role": "user", "content": "What is LiteLLM? Give me a brief overview."}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is LiteLLM? Give me a brief overview.",
+                }
+            ],
             tools=[
                 {
                     "name": "WebSearch",
@@ -116,13 +119,17 @@ async def test_websearch_interception_non_streaming():
             block_type = block.get("type") if isinstance(block, dict) else block.type
             print(f"   Block {i}: type={block_type}")
             if block_type == "tool_use":
-                block_name = block.get("name") if isinstance(block, dict) else block.name
+                block_name = (
+                    block.get("name") if isinstance(block, dict) else block.name
+                )
                 print(f"            name={block_name}")
 
         # Validate response
         assert response is not None, "Response should not be None"
         assert response_content is not None, "Response should have content"
-        assert len(response_content) > 0, "Response should have at least one content block"
+        assert (
+            len(response_content) > 0
+        ), "Response should have at least one content block"
 
         # Check if response contains tool_use (means interception didn't work)
         has_tool_use = any(
@@ -144,23 +151,29 @@ async def test_websearch_interception_non_streaming():
 
         elif has_text and response_stop_reason != "tool_use":
             text_block = next(
-                block for block in response_content
-                if (block.get("type") if isinstance(block, dict) else block.type) == "text"
+                block
+                for block in response_content
+                if (block.get("type") if isinstance(block, dict) else block.type)
+                == "text"
             )
-            text_content = text_block.get("text") if isinstance(text_block, dict) else text_block.text
+            text_content = (
+                text_block.get("text")
+                if isinstance(text_block, dict)
+                else text_block.text
+            )
 
             print(f"\n📝 Response Text:")
             print(f"   {text_content[:200]}...")
 
             if "litellm" in text_content.lower():
-                print("\n" + "="*80)
+                print("\n" + "=" * 80)
                 print("✅ TEST 1 PASSED!")
-                print("="*80)
+                print("=" * 80)
                 print("✅ User made ONE litellm.messages.acreate() call")
                 print("✅ Got back final answer (not tool_use)")
                 print("✅ Agentic loop executed transparently")
                 print("✅ WebSearch interception working!")
-                print("="*80)
+                print("=" * 80)
                 return True
             else:
                 print("\n⚠️  Got text response but doesn't mention LiteLLM")
@@ -172,6 +185,7 @@ async def test_websearch_interception_non_streaming():
     except Exception as e:
         print(f"\n❌ Test 1 failed with error: {str(e)}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -181,9 +195,9 @@ async def test_websearch_interception_streaming():
     Test WebSearch interception with streaming request.
     Validates that stream=True is converted to stream=False transparently.
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("E2E TEST 2: WebSearch Interception (Streaming)")
-    print("="*80)
+    print("=" * 80)
 
     # Router already initialized from test 1
     print("\n✅ Using existing router configuration")
@@ -200,7 +214,12 @@ async def test_websearch_interception_streaming():
 
         response = await messages.acreate(
             model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            messages=[{"role": "user", "content": "What is LiteLLM? Give me a brief overview."}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is LiteLLM? Give me a brief overview.",
+                }
+            ],
             tools=[
                 {
                     "name": "WebSearch",
@@ -225,6 +244,7 @@ async def test_websearch_interception_streaming():
 
         # Check if response is actually a stream (async generator)
         import inspect
+
         is_stream = inspect.isasyncgen(response)
 
         if is_stream:
@@ -240,7 +260,9 @@ async def test_websearch_interception_streaming():
                 print(chunk)
                 chunks.append(chunk)
 
-            print(f"\n❌ TEST 2 FAILED: Got {len(chunks)} stream chunks instead of single response")
+            print(
+                f"\n❌ TEST 2 FAILED: Got {len(chunks)} stream chunks instead of single response"
+            )
             return False
 
         # If not a stream, validate as normal response
@@ -271,7 +293,9 @@ async def test_websearch_interception_streaming():
         # Validate response
         assert response is not None, "Response should not be None"
         assert response_content is not None, "Response should have content"
-        assert len(response_content) > 0, "Response should have at least one content block"
+        assert (
+            len(response_content) > 0
+        ), "Response should have at least one content block"
 
         # Check if response contains tool_use (means interception didn't work)
         has_tool_use = any(
@@ -292,24 +316,32 @@ async def test_websearch_interception_streaming():
 
         elif has_text and response_stop_reason != "tool_use":
             text_block = next(
-                block for block in response_content
-                if (block.get("type") if isinstance(block, dict) else block.type) == "text"
+                block
+                for block in response_content
+                if (block.get("type") if isinstance(block, dict) else block.type)
+                == "text"
             )
-            text_content = text_block.get("text") if isinstance(text_block, dict) else text_block.text
+            text_content = (
+                text_block.get("text")
+                if isinstance(text_block, dict)
+                else text_block.text
+            )
 
             print(f"\n📝 Response Text:")
             print(f"   {text_content[:200]}...")
 
             if "litellm" in text_content.lower():
-                print("\n" + "="*80)
+                print("\n" + "=" * 80)
                 print("✅ TEST 2 PASSED!")
-                print("="*80)
-                print("✅ User made ONE litellm.messages.acreate() call with stream=True")
+                print("=" * 80)
+                print(
+                    "✅ User made ONE litellm.messages.acreate() call with stream=True"
+                )
                 print("✅ Stream was transparently converted to non-streaming")
                 print("✅ Got back final answer (not tool_use)")
                 print("✅ Agentic loop executed transparently")
                 print("✅ WebSearch interception working with streaming!")
-                print("="*80)
+                print("=" * 80)
                 return True
             else:
                 print("\n⚠️  Got text response but doesn't mention LiteLLM")
@@ -321,6 +353,7 @@ async def test_websearch_interception_streaming():
     except Exception as e:
         print(f"\n❌ Test 2 failed with error: {str(e)}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -328,16 +361,16 @@ async def test_websearch_interception_streaming():
 async def test_websearch_interception_no_tool_call_streaming():
     """
     Test WebSearch interception when LLM doesn't make a tool call with streaming.
-    
+
     This tests the scenario where:
     1. User requests stream=True
     2. WebSearch tool is provided
     3. LLM decides NOT to use the tool (just responds with text)
     4. System should return a fake stream
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("E2E TEST 3: WebSearch Interception (No Tool Call, Streaming)")
-    print("="*80)
+    print("=" * 80)
 
     # Router already initialized from test 1
     print("\n✅ Using existing router configuration")
@@ -354,7 +387,12 @@ async def test_websearch_interception_no_tool_call_streaming():
 
         response = await messages.acreate(
             model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            messages=[{"role": "user", "content": "What is 2+2? Just give me the answer, no need to search."}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is 2+2? Just give me the answer, no need to search.",
+                }
+            ],
             tools=[
                 {
                     "name": "WebSearch",
@@ -379,8 +417,11 @@ async def test_websearch_interception_no_tool_call_streaming():
 
         # Check if response is actually a stream (async generator or async iterator)
         import inspect
+
         is_async_gen = inspect.isasyncgen(response)
-        is_async_iter = hasattr(response, '__aiter__') and hasattr(response, '__anext__')
+        is_async_iter = hasattr(response, "__aiter__") and hasattr(
+            response, "__anext__"
+        )
         is_stream = is_async_gen or is_async_iter
 
         if not is_stream:
@@ -389,7 +430,9 @@ async def test_websearch_interception_no_tool_call_streaming():
             print(f"❌ Response type: {type(response)}")
             return False
 
-        print(f"✅ Response is a stream (async_gen={is_async_gen}, async_iter={is_async_iter})")
+        print(
+            f"✅ Response is a stream (async_gen={is_async_gen}, async_iter={is_async_iter})"
+        )
         print("\n📦 Consuming stream chunks:")
 
         chunks = []
@@ -398,20 +441,22 @@ async def test_websearch_interception_no_tool_call_streaming():
             chunk_count += 1
             print(f"\n--- Chunk {chunk_count} ---")
             print(f"   Type: {type(chunk)}")
-            print(f"   Content: {chunk[:200] if isinstance(chunk, bytes) else str(chunk)[:200]}...")
+            print(
+                f"   Content: {chunk[:200] if isinstance(chunk, bytes) else str(chunk)[:200]}..."
+            )
             chunks.append(chunk)
 
         print(f"\n✅ Received {len(chunks)} stream chunk(s)")
 
         if len(chunks) > 0:
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print("✅ TEST 3 PASSED!")
-            print("="*80)
+            print("=" * 80)
             print("✅ User made ONE litellm.messages.acreate() call with stream=True")
             print("✅ LLM didn't use the WebSearch tool")
             print("✅ Got back a fake stream (not a non-streaming response)")
             print("✅ WebSearch interception handles no-tool-call case correctly!")
-            print("="*80)
+            print("=" * 80)
             return True
         else:
             print("\n❌ TEST 3 FAILED: No chunks received")
@@ -420,6 +465,7 @@ async def test_websearch_interception_no_tool_call_streaming():
     except Exception as e:
         print(f"\n❌ Test 3 failed with error: {str(e)}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -427,14 +473,14 @@ async def test_websearch_interception_no_tool_call_streaming():
 async def test_claude_code_native_websearch():
     """
     Test WebSearch interception with Claude Code's native web_search_20250305 tool.
-    
+
     This tests the exact request format that Claude Code sends:
     - tools: [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 8}]
     - Model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("E2E TEST: Claude Code Native WebSearch (web_search_20250305)")
-    print("="*80)
+    print("=" * 80)
 
     # Router already initialized from test 1
     print("\n✅ Using existing router configuration")
@@ -450,13 +496,14 @@ async def test_claude_code_native_websearch():
 
         response = await messages.acreate(
             model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            messages=[{"role": "user", "content": "Perform a web search for the query: litellm what is it"}],
-            tools=[
+            messages=[
                 {
-                    "type": "web_search_20250305",
-                    "name": "web_search",
-                    "max_uses": 8
+                    "role": "user",
+                    "content": "Perform a web search for the query: litellm what is it",
                 }
+            ],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
             ],
             max_tokens=1024,
             stream=False,
@@ -486,13 +533,17 @@ async def test_claude_code_native_websearch():
             block_type = block.get("type") if isinstance(block, dict) else block.type
             print(f"   Block {i}: type={block_type}")
             if block_type == "tool_use":
-                block_name = block.get("name") if isinstance(block, dict) else block.name
+                block_name = (
+                    block.get("name") if isinstance(block, dict) else block.name
+                )
                 print(f"            name={block_name}")
 
         # Validate response
         assert response is not None, "Response should not be None"
         assert response_content is not None, "Response should have content"
-        assert len(response_content) > 0, "Response should have at least one content block"
+        assert (
+            len(response_content) > 0
+        ), "Response should have at least one content block"
 
         # Check if response contains tool_use (means interception didn't work)
         has_tool_use = any(
@@ -514,25 +565,33 @@ async def test_claude_code_native_websearch():
 
         elif has_text and response_stop_reason != "tool_use":
             text_block = next(
-                block for block in response_content
-                if (block.get("type") if isinstance(block, dict) else block.type) == "text"
+                block
+                for block in response_content
+                if (block.get("type") if isinstance(block, dict) else block.type)
+                == "text"
             )
-            text_content = text_block.get("text") if isinstance(text_block, dict) else text_block.text
+            text_content = (
+                text_block.get("text")
+                if isinstance(text_block, dict)
+                else text_block.text
+            )
 
             print(f"\n📝 Response Text:")
             print(f"   {text_content[:200]}...")
 
             if "litellm" in text_content.lower():
-                print("\n" + "="*80)
+                print("\n" + "=" * 80)
                 print("✅ TEST PASSED!")
-                print("="*80)
-                print("✅ Claude Code's native web_search_20250305 tool was intercepted")
+                print("=" * 80)
+                print(
+                    "✅ Claude Code's native web_search_20250305 tool was intercepted"
+                )
                 print("✅ Tool was converted to LiteLLM standard format")
                 print("✅ User made ONE litellm.messages.acreate() call")
                 print("✅ Got back final answer with search results")
                 print("✅ Agentic loop executed transparently")
                 print("✅ WebSearch interception working with Claude Code!")
-                print("="*80)
+                print("=" * 80)
                 return True
             else:
                 print("\n⚠️  Got text response but doesn't mention LiteLLM")
@@ -544,47 +603,49 @@ async def test_claude_code_native_websearch():
     except Exception as e:
         print(f"\n❌ Test failed with error: {str(e)}")
         import traceback
+
         traceback.print_exc()
         return False
 
 
 if __name__ == "__main__":
     import asyncio
-    
+
     async def run_all_tests():
         """Run all E2E tests"""
         test_results = []
-        
+
         # Test 1: Non-streaming
         result1 = await test_websearch_interception_non_streaming()
         test_results.append(("Non-Streaming", result1))
-        
+
         # Test 2: Streaming
         result2 = await test_websearch_interception_streaming()
         test_results.append(("Streaming", result2))
-        
+
         # Test 3: No tool call with streaming
         result3 = await test_websearch_interception_no_tool_call_streaming()
         test_results.append(("No Tool Call Streaming", result3))
-        
+
         # Test 4: Claude Code native web_search
         result4 = await test_claude_code_native_websearch()
         test_results.append(("Claude Code Native WebSearch", result4))
-        
+
         # Print summary
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("TEST SUMMARY")
-        print("="*80)
+        print("=" * 80)
         for test_name, result in test_results:
             status = "✅ PASSED" if result else "❌ FAILED"
             print(f"{test_name}: {status}")
-        print("="*80)
-        
+        print("=" * 80)
+
         # Return overall result
         return all(result for _, result in test_results)
-    
+
     result = asyncio.run(run_all_tests())
     import sys
+
     sys.exit(0 if result else 1)
 
 
@@ -595,9 +656,9 @@ async def test_litellm_standard_websearch_tool():
     This validates that using get_litellm_web_search_tool() directly
     works end-to-end without any conversion needed.
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("E2E TEST: LiteLLM Standard WebSearch Tool")
-    print("="*80)
+    print("=" * 80)
 
     from litellm.integrations.websearch_interception import get_litellm_web_search_tool
 
@@ -613,7 +674,12 @@ async def test_litellm_standard_websearch_tool():
 
         response = await messages.acreate(
             model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            messages=[{"role": "user", "content": "What is the latest news about AI? Give me a brief overview."}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is the latest news about AI? Give me a brief overview.",
+                }
+            ],
             tools=[get_litellm_web_search_tool()],
             max_tokens=1024,
             stream=False,
@@ -654,19 +720,25 @@ async def test_litellm_standard_websearch_tool():
 
         elif has_text and response_stop_reason != "tool_use":
             text_block = next(
-                block for block in response_content
-                if (block.get("type") if isinstance(block, dict) else block.type) == "text"
+                block
+                for block in response_content
+                if (block.get("type") if isinstance(block, dict) else block.type)
+                == "text"
             )
-            text_content = text_block.get("text") if isinstance(text_block, dict) else text_block.text
+            text_content = (
+                text_block.get("text")
+                if isinstance(text_block, dict)
+                else text_block.text
+            )
 
             print(f"\n📝 Response Text: {text_content[:200]}...")
 
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print("✅ TEST PASSED!")
-            print("="*80)
+            print("=" * 80)
             print("✅ LiteLLM standard tool format works without conversion")
             print("✅ Agentic loop executed transparently")
-            print("="*80)
+            print("=" * 80)
             return True
         else:
             print("\n❌ Unexpected response format")
@@ -675,6 +747,7 @@ async def test_litellm_standard_websearch_tool():
     except Exception as e:
         print(f"\n❌ Test failed with error: {str(e)}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -688,9 +761,9 @@ async def test_claude_code_native_websearch_streaming():
     - Stream=True → Stream=False conversion
     - Agentic loop executes with both conversions
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("E2E TEST: Claude Code Native WebSearch + Streaming")
-    print("="*80)
+    print("=" * 80)
 
     print("\n✅ Using existing router configuration")
     print("✅ WebSearch interception already enabled for Bedrock")
@@ -703,8 +776,12 @@ async def test_claude_code_native_websearch_streaming():
 
         response = await messages.acreate(
             model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            messages=[{"role": "user", "content": "Search for the latest AI developments."}],
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+            messages=[
+                {"role": "user", "content": "Search for the latest AI developments."}
+            ],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+            ],
             max_tokens=1024,
             stream=True,
         )
@@ -712,6 +789,7 @@ async def test_claude_code_native_websearch_streaming():
         print("\n✅ Received response!")
 
         import inspect
+
         is_stream = inspect.isasyncgen(response)
 
         if is_stream:
@@ -742,13 +820,13 @@ async def test_claude_code_native_websearch_streaming():
             return False
 
         elif has_text and response_stop_reason != "tool_use":
-            print("\n" + "="*80)
+            print("\n" + "=" * 80)
             print("✅ TEST PASSED!")
-            print("="*80)
+            print("=" * 80)
             print("✅ Native tool converted to litellm_web_search")
             print("✅ Stream=True converted to Stream=False")
             print("✅ Both conversions working together!")
-            print("="*80)
+            print("=" * 80)
             return True
         else:
             print("\n❌ Unexpected response format")
@@ -757,6 +835,7 @@ async def test_claude_code_native_websearch_streaming():
     except Exception as e:
         print(f"\n❌ Test failed with error: {str(e)}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -767,18 +846,34 @@ def test_is_web_search_tool_detection():
 
     Validates detection of all supported formats including future versions.
     """
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("UNIT TEST: Web Search Tool Detection")
-    print("="*80)
+    print("=" * 80)
 
     from litellm.integrations.websearch_interception import is_web_search_tool
 
     test_cases = [
         ({"name": "litellm_web_search"}, True, "LiteLLM standard tool"),
-        ({"type": "web_search_20250305", "name": "web_search", "max_uses": 8}, True, "Current Anthropic native (2025)"),
-        ({"type": "web_search_2026", "name": "web_search"}, True, "Future Anthropic native (2026)"),
-        ({"type": "web_search_20270615", "name": "web_search"}, True, "Future Anthropic native (2027)"),
-        ({"name": "web_search", "type": "web_search_20250305"}, True, "Claude Code format"),
+        (
+            {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+            True,
+            "Current Anthropic native (2025)",
+        ),
+        (
+            {"type": "web_search_2026", "name": "web_search"},
+            True,
+            "Future Anthropic native (2026)",
+        ),
+        (
+            {"type": "web_search_20270615", "name": "web_search"},
+            True,
+            "Future Anthropic native (2027)",
+        ),
+        (
+            {"name": "web_search", "type": "web_search_20250305"},
+            True,
+            "Claude Code format",
+        ),
         ({"name": "WebSearch"}, True, "Legacy WebSearch"),
         ({"name": "calculator"}, False, "Non-web-search tool"),
         ({"name": "some_tool", "type": "function"}, False, "Other tool with type"),
@@ -802,12 +897,12 @@ def test_is_web_search_tool_detection():
     print(f"\n📊 Results: {passed} passed, {failed} failed")
 
     if failed == 0:
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("✅ ALL DETECTION TESTS PASSED!")
-        print("="*80)
+        print("=" * 80)
         print("✅ Detects all current formats")
         print("✅ Future-proof for new web_search_* versions")
-        print("="*80)
+        print("=" * 80)
         return True
     else:
         print("\n❌ Some detection tests failed")
@@ -830,15 +925,15 @@ async def test_pre_request_hook_modifies_request_body():
 
     litellm._turn_on_debug()
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("UNIT TEST: Pre-Request Hook Modifies Request Body")
-    print("="*80)
+    print("=" * 80)
 
     # Initialize WebSearchInterceptionLogger
     litellm.callbacks = [
         WebSearchInterceptionLogger(
             enabled_providers=[LlmProviders.BEDROCK],
-            search_tool_name="test-search-tool"
+            search_tool_name="test-search-tool",
         )
     ]
 
@@ -866,73 +961,76 @@ async def test_pre_request_hook_modifies_request_body():
         api_base=None,
         client=None,
         custom_llm_provider=None,
-        **kwargs
+        **kwargs,
     ):
         """Mock handler that captures the actual request parameters"""
         # Capture what gets sent to the handler (after hook modifications)
-        captured_request['tools'] = tools
-        captured_request['stream'] = stream
-        captured_request['max_tokens'] = max_tokens
-        captured_request['model'] = model
+        captured_request["tools"] = tools
+        captured_request["stream"] = stream
+        captured_request["max_tokens"] = max_tokens
+        captured_request["model"] = model
 
         # Return a mock response (non-streaming)
-        from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+        from litellm.types.llms.anthropic_messages.anthropic_response import (
+            AnthropicMessagesResponse,
+        )
+
         return AnthropicMessagesResponse(
             id="msg_test",
             type="message",
             role="assistant",
-            content=[{
-                "type": "text",
-                "text": "Test response"
-            }],
+            content=[{"type": "text", "text": "Test response"}],
             model="claude-sonnet-4-5",
             stop_reason="end_turn",
-            usage={
-                "input_tokens": 10,
-                "output_tokens": 20
-            }
+            usage={"input_tokens": 10, "output_tokens": 20},
         )
 
     # Patch the anthropic_messages_handler function (called after hooks)
-    with patch('litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler',
-               side_effect=mock_anthropic_messages_handler):
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
+        side_effect=mock_anthropic_messages_handler,
+    ):
 
-        print("\n📝 Making request with native web_search_20250305 tool (stream=True)...")
+        print(
+            "\n📝 Making request with native web_search_20250305 tool (stream=True)..."
+        )
 
         # Make the request with native tool format
         response = await messages.acreate(
             model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             messages=[{"role": "user", "content": "Test query"}],
-            tools=[{
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "max_uses": 8
-            }],
+            tools=[
+                {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+            ],
             max_tokens=100,
-            stream=True  # Should be converted to False
+            stream=True,  # Should be converted to False
         )
 
         print("\n🔍 Verifying request modifications...")
 
         # Verify tool was converted
-        tools = captured_request.get('tools')
+        tools = captured_request.get("tools")
         print(f"\n   Captured tools: {tools}")
 
         if tools and len(tools) > 0:
             tool = tools[0]
-            tool_name = tool.get('name')
+            tool_name = tool.get("name")
 
             if tool_name == LITELLM_WEB_SEARCH_TOOL_NAME:
-                print(f"   ✅ Tool converted: web_search_20250305 → {LITELLM_WEB_SEARCH_TOOL_NAME}")
+                print(
+                    f"   ✅ Tool converted: web_search_20250305 → {LITELLM_WEB_SEARCH_TOOL_NAME}"
+                )
             else:
-                print(f"   ❌ Tool NOT converted: expected {LITELLM_WEB_SEARCH_TOOL_NAME}, got {tool_name}")
+                print(
+                    f"   ❌ Tool NOT converted: expected {LITELLM_WEB_SEARCH_TOOL_NAME}, got {tool_name}"
+                )
                 return False
         else:
             print("   ❌ No tools captured in request")
             return False
 
         # Verify stream was converted
-        stream = captured_request.get('stream')
+        stream = captured_request.get("stream")
         print(f"   Captured stream: {stream}")
 
         if stream is False:
@@ -941,14 +1039,13 @@ async def test_pre_request_hook_modifies_request_body():
             print(f"   ❌ Stream NOT converted: expected False, got {stream}")
             return False
 
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("✅ PRE-REQUEST HOOK TEST PASSED!")
-        print("="*80)
+        print("=" * 80)
         print("✅ CustomLogger is active")
         print("✅ async_pre_request_hook modifies request body")
         print("✅ Tool conversion works correctly")
         print("✅ Stream conversion works correctly")
-        print("="*80)
+        print("=" * 80)
 
         return True
-

@@ -2,6 +2,8 @@
 Unit tests for cache settings management endpoints
 """
 
+import asyncio
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,12 +14,15 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy._types import LitellmUserRoles
+import litellm
+from litellm.proxy._types import LitellmTableNames, LitellmUserRoles
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.cache_settings_endpoints import (
     CacheSettingsManager,
+    CacheSettingsUpdateRequest,
     CacheTestRequest,
     test_cache_connection,
+    update_cache_settings,
 )
 
 
@@ -177,7 +182,9 @@ class TestCacheSettingsManager:
         # Mock prisma client
         mock_prisma_client = MagicMock()
         mock_cache_config = MagicMock()
-        mock_cache_config.cache_settings = '{"type": "redis", "host": "localhost", "port": "6379"}'
+        mock_cache_config.cache_settings = (
+            '{"type": "redis", "host": "localhost", "port": "6379"}'
+        )
         mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(
             return_value=mock_cache_config
         )
@@ -224,7 +231,9 @@ class TestCacheSettingsManager:
         # Mock prisma client
         mock_prisma_client = MagicMock()
         mock_cache_config = MagicMock()
-        mock_cache_config.cache_settings = '{"type": "redis", "host": "localhost", "port": "6379"}'
+        mock_cache_config.cache_settings = (
+            '{"type": "redis", "host": "localhost", "port": "6379"}'
+        )
         mock_prisma_client.db.litellm_cacheconfig.find_unique = AsyncMock(
             return_value=mock_cache_config
         )
@@ -249,3 +258,140 @@ class TestCacheSettingsManager:
         # Verify cache was NOT initialized (params unchanged)
         mock_proxy_config._init_cache.assert_not_called()
         mock_proxy_config.switch_on_llm_response_caching.assert_not_called()
+
+
+# ── Audit-log emission for /cache/settings ────────────────────────────────────
+
+
+def _admin_auth() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="hashed",
+        user_id="admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_cache_settings_emits_audit_log_when_enabled(monkeypatch):
+    """Cache config carries Redis credentials; mutation must emit an
+    audit-log row when ``store_audit_logs`` is on, with values redacted."""
+    monkeypatch.setattr(litellm, "store_audit_logs", True)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_cacheconfig.upsert = AsyncMock()
+
+    proxy_config = MagicMock()
+    proxy_config._encrypt_env_variables = MagicMock(
+        side_effect=lambda environment_variables: dict(environment_variables)
+    )
+    proxy_config._decrypt_db_variables = MagicMock(
+        side_effect=lambda variables_dict: dict(variables_dict)
+    )
+    proxy_config._init_cache = MagicMock()
+    proxy_config.switch_on_llm_response_caching = MagicMock()
+
+    audit_calls = []
+
+    async def capture(request_data):
+        audit_calls.append(request_data)
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_config",
+            proxy_config,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            True,
+        ),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+            new=capture,
+        ),
+    ):
+        await update_cache_settings(
+            request=CacheSettingsUpdateRequest(
+                cache_settings={
+                    "type": "redis",
+                    "host": "redis.example.com",
+                    "password": "super-secret-redis-pw",
+                }
+            ),
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+        # asyncio.create_task fires the coroutine eagerly; await one tick to let
+        # the audit-log emit run before the test exits.
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    assert len(audit_calls) == 1
+    log = audit_calls[0]
+    assert log.table_name == LitellmTableNames.CACHE_CONFIG_TABLE_NAME
+    assert log.object_id == "cache_config"
+    assert log.action == "created"  # no existing row → create
+
+    after = json.loads(log.updated_values)
+    # Field names are preserved so an auditor can see what changed.
+    assert set(after["settings"].keys()) == {"type", "host", "password"}
+    # Plaintext values must NOT appear in the serialized row.
+    assert "super-secret-redis-pw" not in log.updated_values
+    assert "redis.example.com" not in log.updated_values
+
+
+@pytest.mark.asyncio
+async def test_update_cache_settings_no_audit_when_disabled(monkeypatch):
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_cacheconfig.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_cacheconfig.upsert = AsyncMock()
+
+    proxy_config = MagicMock()
+    proxy_config._encrypt_env_variables = MagicMock(
+        side_effect=lambda environment_variables: dict(environment_variables)
+    )
+    proxy_config._decrypt_db_variables = MagicMock(
+        side_effect=lambda variables_dict: dict(variables_dict)
+    )
+    proxy_config._init_cache = MagicMock()
+    proxy_config.switch_on_llm_response_caching = MagicMock()
+
+    audit_calls = []
+
+    async def capture(request_data):
+        audit_calls.append(request_data)
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            mock_prisma,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_config",
+            proxy_config,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.store_model_in_db",
+            True,
+        ),
+        patch(
+            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+            new=capture,
+        ),
+    ):
+        await update_cache_settings(
+            request=CacheSettingsUpdateRequest(
+                cache_settings={"type": "redis", "host": "redis.example.com"}
+            ),
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    assert audit_calls == []

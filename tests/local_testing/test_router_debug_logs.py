@@ -18,6 +18,7 @@ from litellm import Router
 
 # this tests debug logs from litellm router and litellm proxy server
 from litellm._logging import verbose_logger, verbose_proxy_logger, verbose_router_logger
+from litellm.llms.custom_httpx.async_client_cleanup import close_litellm_async_clients
 
 
 # this tests debug logs from litellm router and litellm proxy server
@@ -74,6 +75,9 @@ def test_async_fallbacks(caplog):
             pytest.fail(f"An exception occurred: {e}")
         finally:
             router.reset()
+            # Close cached aiohttp/httpx clients before the event loop ends
+            # to prevent "Unclosed client session" / "Unclosed connector" warnings.
+            await close_litellm_async_clients()
 
     asyncio.run(_make_request())
     captured_logs = [rec.message for rec in caplog.records]

@@ -245,6 +245,16 @@ class UnifiedLLMGuardrails(CustomLogger):
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)  # type: ignore
 
+        # Fallback: resolve call_type from logging_obj for pass-through endpoints
+        if call_type is None:
+            litellm_logging_obj = data.get("litellm_logging_obj")
+            if (
+                litellm_logging_obj is not None
+                and getattr(litellm_logging_obj, "call_type", None)
+                == CallTypes.pass_through.value
+            ):
+                call_type = CallTypes.pass_through.value
+
         if call_type is None:
             return response
 

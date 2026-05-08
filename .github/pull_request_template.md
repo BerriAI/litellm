@@ -2,6 +2,10 @@
 
 <!-- e.g. "Fixes #000" -->
 
+## Linear ticket
+
+<!-- if you are an internal contributor, add the Linear ticket e.g. "Resolves LIT-1234" to magically link the Linear ticket to the GitHub PR -->
+
 ## Pre-Submission checklist
 
 **Please complete all items before asking a LiteLLM maintainer to review your PR**
