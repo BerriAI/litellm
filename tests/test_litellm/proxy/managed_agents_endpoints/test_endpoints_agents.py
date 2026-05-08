@@ -7,7 +7,6 @@ endpoints.
 """
 
 import json
-import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -324,10 +323,88 @@ def test_get_agent_surfaces_prompt(app_factory, user):
     with patch("litellm.proxy.proxy_server.prisma_client", prisma):
         resp = client.get("/v1/managed_agents/agents/agt-1")
     assert resp.status_code == 200
-    assert (
-        resp.json()["prompt"]
-        == "You review PRs for clarity, correctness, security."
+    assert resp.json()["prompt"] == "You review PRs for clarity, correctness, security."
+
+
+def test_get_agent_surfaces_mcp_servers_from_metadata(app_factory, user):
+    client = app_factory(user)
+    a = _make_agent(metadata={"mcp_servers": ["mcp-1", "mcp-2"]})
+    prisma = _make_prisma(agent=a)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents/agt-1")
+    assert resp.json()["mcp_servers"] == ["mcp-1", "mcp-2"]
+
+
+def test_get_agent_mcp_servers_empty_when_absent(app_factory, user):
+    client = app_factory(user)
+    a = _make_agent(metadata={})
+    prisma = _make_prisma(agent=a)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents/agt-1")
+    assert resp.json()["mcp_servers"] == []
+
+
+def test_get_agent_mcp_servers_drops_non_strings(app_factory, user):
+    """If the column somehow ends up with junk, the read endpoint should
+    silently coerce rather than 500."""
+    client = app_factory(user)
+    a = _make_agent(metadata={"mcp_servers": ["good", 123, None, "ok"]})
+    prisma = _make_prisma(agent=a)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.get("/v1/managed_agents/agents/agt-1")
+    assert resp.json()["mcp_servers"] == ["good", "ok"]
+
+
+def test_update_agent_sets_mcp_servers(app_factory, user):
+    client = app_factory(user)
+    existing = _make_agent(metadata={"litellm_api_key": "sk-x"})
+    updated = _make_agent(
+        metadata={"litellm_api_key": "sk-x", "mcp_servers": ["mcp-1"]}
     )
+    prisma = _make_prisma(agent=existing, updated=updated)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.patch(
+            "/v1/managed_agents/agents/agt-1", json={"mcp_servers": ["mcp-1"]}
+        )
+    assert resp.status_code == 200
+    _, kwargs = prisma.db.litellm_managedagenttable.update.call_args
+    new_metadata = json.loads(kwargs["data"]["metadata"])
+    assert new_metadata["mcp_servers"] == ["mcp-1"]
+    assert new_metadata["litellm_api_key"] == "sk-x"
+
+
+def test_update_agent_clears_mcp_servers_with_empty_list(app_factory, user):
+    client = app_factory(user)
+    existing = _make_agent(metadata={"mcp_servers": ["old"]})
+    updated = _make_agent(metadata={})
+    prisma = _make_prisma(agent=existing, updated=updated)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.patch("/v1/managed_agents/agents/agt-1", json={"mcp_servers": []})
+    assert resp.status_code == 200
+    _, kwargs = prisma.db.litellm_managedagenttable.update.call_args
+    new_metadata = json.loads(kwargs["data"]["metadata"])
+    assert "mcp_servers" not in new_metadata
+
+
+def test_update_agent_pfp_and_mcp_in_one_call(app_factory, user):
+    """Both edits should land in a single metadata write, not two races."""
+    client = app_factory(user)
+    existing = _make_agent(metadata={"litellm_api_key": "sk-x"})
+    updated = _make_agent(metadata={})
+    prisma = _make_prisma(agent=existing, updated=updated)
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        resp = client.patch(
+            "/v1/managed_agents/agents/agt-1",
+            json={"pfp_url": "data:image/png;base64,XXX", "mcp_servers": ["m1"]},
+        )
+    assert resp.status_code == 200
+    # Single update call, with both keys present in the new metadata.
+    assert prisma.db.litellm_managedagenttable.update.call_count == 1
+    _, kwargs = prisma.db.litellm_managedagenttable.update.call_args
+    new_metadata = json.loads(kwargs["data"]["metadata"])
+    assert new_metadata["pfp_url"] == "data:image/png;base64,XXX"
+    assert new_metadata["mcp_servers"] == ["m1"]
+    assert new_metadata["litellm_api_key"] == "sk-x"
 
 
 def test_get_agent_metadata_as_json_string(app_factory, user):
