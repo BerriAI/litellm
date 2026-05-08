@@ -382,41 +382,48 @@ async def authorize_with_server(
 async def _post_to_upstream_token_endpoint(token_url: str, token_data: Dict[str, Any]):
     """POST to the upstream IdP /token endpoint.
 
-    Uses a raw httpx client (instead of get_async_httpx_client) so we can inspect
-    4xx/5xx responses and surface them as proper OAuth2 error JSON per RFC 6749
-    §5.2. The wrapped client raises MaskedHTTPStatusError on raise_for_status()
-    before downstream code can read the response body, so the actual
-    AADSTS<code> / error_description from Entra/Okta is lost and the client sees
-    a generic 500.
+    Uses the pooled get_async_httpx_client and catches the wrapped
+    HTTPStatusError so the upstream `error` / `error_description` payload
+    (RFC 6749 §5.2) reaches the client. The wrapper turns any 4xx/5xx into
+    a MaskedHTTPStatusError before downstream code can read the response
+    body, which would otherwise surface as a generic 500 and hide the
+    actual AADSTS<code> / error_description from Entra/Okta.
 
-    Returns the parsed JSON dict on success, or a JSONResponse with the upstream
-    error body on 4xx/5xx (or a transport failure).
+    Returns the parsed JSON dict on success, or a JSONResponse with the
+    upstream error body on 4xx/5xx (or a transport failure).
     """
+    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
     try:
-        async with httpx.AsyncClient(timeout=30.0) as raw_client:
-            response = await raw_client.post(
-                token_url,
-                headers={"Accept": "application/json"},
-                data=token_data,
+        response = await async_client.post(
+            token_url,
+            headers={"Accept": "application/json"},
+            data=token_data,
+        )
+    except httpx.HTTPStatusError as exc:
+        upstream_response = exc.response
+        try:
+            err_body = upstream_response.json()
+        except ValueError:
+            # MaskedHTTPStatusError (the wrapped form) carries a sanitized body
+            # on `.text`; fall back to the raw response text otherwise.
+            description = (
+                getattr(exc, "text", None)
+                or upstream_response.text
+                or "upstream token endpoint error"
             )
+            err_body = {
+                "error": "invalid_request",
+                "error_description": description,
+            }
+        return JSONResponse(
+            err_body,
+            status_code=upstream_response.status_code,
+            headers=TOKEN_NO_CACHE_HEADERS,
+        )
     except httpx.HTTPError as exc:
         return JSONResponse(
             {"error": "server_error", "error_description": str(exc)},
             status_code=502,
-            headers=TOKEN_NO_CACHE_HEADERS,
-        )
-
-    if response.status_code >= 400:
-        try:
-            err_body = response.json()
-        except ValueError:
-            err_body = {
-                "error": "invalid_request",
-                "error_description": response.text or "upstream token endpoint error",
-            }
-        return JSONResponse(
-            err_body,
-            status_code=response.status_code,
             headers=TOKEN_NO_CACHE_HEADERS,
         )
 

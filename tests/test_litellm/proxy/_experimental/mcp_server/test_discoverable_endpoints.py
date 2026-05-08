@@ -3,6 +3,7 @@
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -296,13 +297,10 @@ async def test_token_endpoint_forwards_code_verifier():
 
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
-    fake_cm = MagicMock()
-    fake_cm.__aenter__ = AsyncMock(return_value=mock_async_client)
-    fake_cm.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.httpx.AsyncClient",
-        return_value=fake_cm,
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
     ):
         # Call token endpoint with code_verifier
         response = await token_endpoint(
@@ -641,13 +639,10 @@ async def test_token_endpoint_respects_x_forwarded_proto():
 
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
-    fake_cm = MagicMock()
-    fake_cm.__aenter__ = AsyncMock(return_value=mock_async_client)
-    fake_cm.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.httpx.AsyncClient",
-        return_value=fake_cm,
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
     ):
         await token_endpoint(
             request=mock_request,
@@ -947,13 +942,10 @@ async def test_token_endpoint_respects_x_forwarded_host():
 
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
-    fake_cm = MagicMock()
-    fake_cm.__aenter__ = AsyncMock(return_value=mock_async_client)
-    fake_cm.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.httpx.AsyncClient",
-        return_value=fake_cm,
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
     ):
         await token_endpoint(
             request=mock_request,
@@ -1578,14 +1570,11 @@ async def test_token_root_resolves_single_oauth2_server():
 
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
-    fake_cm = MagicMock()
-    fake_cm.__aenter__ = AsyncMock(return_value=mock_async_client)
-    fake_cm.__aexit__ = AsyncMock(return_value=None)
 
     try:
         with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.httpx.AsyncClient",
-            return_value=fake_cm,
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=mock_async_client,
         ):
             # Call /token WITHOUT mcp_server_name
             response = await token_endpoint(
@@ -2101,13 +2090,10 @@ async def test_token_endpoint_refresh_token_grant():
 
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
-    fake_cm = MagicMock()
-    fake_cm.__aenter__ = AsyncMock(return_value=mock_async_client)
-    fake_cm.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.httpx.AsyncClient",
-        return_value=fake_cm,
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
     ):
         response = await token_endpoint(
             request=mock_request,
@@ -2398,13 +2384,10 @@ async def test_token_endpoint_sets_no_store_cache_control():
     }
     fake_http_client = MagicMock()
     fake_http_client.post = AsyncMock(return_value=fake_http_response)
-    fake_cm = MagicMock()
-    fake_cm.__aenter__ = AsyncMock(return_value=fake_http_client)
-    fake_cm.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.httpx.AsyncClient",
-        return_value=fake_cm,
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=fake_http_client,
     ):
         response = await exchange_token_with_server(
             request=mock_request,
@@ -2646,13 +2629,10 @@ async def test_exchange_token_omits_placeholder_client_secret(placeholder):
 
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
-    fake_cm = MagicMock()
-    fake_cm.__aenter__ = AsyncMock(return_value=mock_async_client)
-    fake_cm.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.httpx.AsyncClient",
-        return_value=fake_cm,
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
     ):
         await exchange_token_with_server(
             request=mock_request,
@@ -2706,19 +2686,18 @@ async def test_exchange_token_surfaces_upstream_4xx_as_oauth_error_json():
         "error": "invalid_grant",
         "error_description": "AADSTS70008: The provided authorization code or refresh token has expired",
     }
-    mock_response = MagicMock()
-    mock_response.status_code = 400
-    mock_response.json.return_value = upstream_body
+    fake_request = httpx.Request("POST", server.token_url)
+    fake_response = httpx.Response(400, json=upstream_body, request=fake_request)
+    raised = httpx.HTTPStatusError(
+        "400 Bad Request", request=fake_request, response=fake_response
+    )
 
     mock_async_client = MagicMock()
-    mock_async_client.post = AsyncMock(return_value=mock_response)
-    fake_cm = MagicMock()
-    fake_cm.__aenter__ = AsyncMock(return_value=mock_async_client)
-    fake_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_async_client.post = AsyncMock(side_effect=raised)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.httpx.AsyncClient",
-        return_value=fake_cm,
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
     ):
         response = await exchange_token_with_server(
             request=mock_request,
@@ -2769,20 +2748,22 @@ async def test_exchange_token_handles_upstream_non_json_4xx():
     mock_request.base_url = "https://proxy.litellm.example/"
     mock_request.headers = {}
 
-    mock_response = MagicMock()
-    mock_response.status_code = 502
-    mock_response.json.side_effect = ValueError("not json")
-    mock_response.text = "<html>upstream gateway error</html>"
+    fake_request = httpx.Request("POST", server.token_url)
+    fake_response = httpx.Response(
+        502,
+        content=b"<html>upstream gateway error</html>",
+        request=fake_request,
+    )
+    raised = httpx.HTTPStatusError(
+        "502 Bad Gateway", request=fake_request, response=fake_response
+    )
 
     mock_async_client = MagicMock()
-    mock_async_client.post = AsyncMock(return_value=mock_response)
-    fake_cm = MagicMock()
-    fake_cm.__aenter__ = AsyncMock(return_value=mock_async_client)
-    fake_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_async_client.post = AsyncMock(side_effect=raised)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.httpx.AsyncClient",
-        return_value=fake_cm,
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
     ):
         response = await exchange_token_with_server(
             request=mock_request,
