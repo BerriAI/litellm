@@ -21,6 +21,13 @@ from litellm.types.utils import (
 )
 
 
+def _get_web_search_requests(server_tool_use: Any) -> Optional[int]:
+    """Extract web_search_requests from server_tool_use, handling both dict and object."""
+    if isinstance(server_tool_use, dict):
+        return server_tool_use.get("web_search_requests")
+    return getattr(server_tool_use, "web_search_requests", None)
+
+
 class StandardBuiltInToolCostTracking:
     """
     Helper class for tracking the cost of built-in tools
@@ -340,7 +347,7 @@ class StandardBuiltInToolCostTracking:
                 if (
                     hasattr(usage, "server_tool_use")
                     and usage.server_tool_use is not None
-                    and usage.server_tool_use.web_search_requests is not None
+                    and _get_web_search_requests(usage.server_tool_use) is not None
                 ):
                     return True
             return False
@@ -353,7 +360,7 @@ class StandardBuiltInToolCostTracking:
             if (
                 hasattr(usage, "server_tool_use")
                 and usage.server_tool_use is not None
-                and usage.server_tool_use.web_search_requests is not None
+                and _get_web_search_requests(usage.server_tool_use) is not None
             ):
                 return True
             elif (
