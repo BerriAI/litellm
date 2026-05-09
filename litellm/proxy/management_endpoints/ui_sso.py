@@ -4154,7 +4154,7 @@ async def debug_sso_callback(request: Request):
     # Replace the placeholder in the template with the actual data
     html_content = jwt_display_template.replace(
         "const ssoData = SSO_DATA;",
-        f"const ssoData = {json.dumps(sso_payload, indent=2, default=str)};",
+        f"const ssoData = {json.dumps(sso_payload, indent=2, default=str).replace('</', '<\\/')};",
     )
 
     return HTMLResponse(content=html_content)
