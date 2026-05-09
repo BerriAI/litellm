@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import re
 import time
 from collections import OrderedDict
@@ -54,6 +55,20 @@ def _sanitize_for_log(value: Any) -> str:
         text = repr(value)
     # Strip CR/LF characters commonly used for log injection
     return text.replace("\r", "").replace("\n", "")
+
+
+def _coerce_header_value(value: Any) -> Union[str, bytes]:
+    """
+    Convert header values to httpx-compatible types (str/bytes).
+    """
+    if isinstance(value, (str, bytes)):
+        return value
+    if isinstance(value, (dict, list, tuple, bool, int, float)):
+        try:
+            return json.dumps(value, default=str)
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
 
 
 from litellm.router import Router
@@ -796,6 +811,12 @@ class LiteLLMProxyRequestSetup:
             for k, v in litellm_logging_metadata_headers.items():
                 if v is not None:
                     returned_headers["x-litellm-{}".format(k)] = v
+
+        returned_headers = {
+            header_name: _coerce_header_value(header_value)
+            for header_name, header_value in returned_headers.items()
+            if header_value is not None
+        }
 
         return returned_headers
 

@@ -573,6 +573,8 @@ def test_add_litellm_data_for_backend_llm_call(
 def test_foward_litellm_user_info_to_backend_llm_call():
     import json
 
+    import httpx
+
     litellm.add_user_information_to_llm_headers = True
 
     from litellm.proxy._types import UserAPIKeyAuth
@@ -587,12 +589,16 @@ def test_foward_litellm_user_info_to_backend_llm_call():
         user_api_key_dict=user_api_key_dict,
     )
 
+    # Regression for #27458: if any value is non-string/bytes, httpx will throw
+    # `TypeError: Header value must be str or bytes`.
+    httpx.Headers(data)
+
     expected_data = {
         "x-litellm-user_api_key_user_id": "test_user_id",
         "x-litellm-user_api_key_org_id": "test_org_id",
         "x-litellm-user_api_key_hash": "test_api_key",
-        "x-litellm-user_api_key_spend": 0.0,
-        "x-litellm-user_api_key_auth_metadata": {},
+        "x-litellm-user_api_key_spend": "0.0",
+        "x-litellm-user_api_key_auth_metadata": "{}",
     }
 
     assert json.dumps(data, sort_keys=True) == json.dumps(expected_data, sort_keys=True)
