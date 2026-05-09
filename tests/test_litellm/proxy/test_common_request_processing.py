@@ -2028,3 +2028,110 @@ class TestHandleLLMApiExceptionDictDetail:
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
+
+
+@pytest.mark.asyncio
+class TestHandleLLMApiExceptionBase64Truncation:
+    """
+    Verify that _handle_llm_api_exception uses logger.error() (not .exception())
+    and applies _truncate_base64_in_string to prevent large base64 payloads from
+    bloating log output and blocking the event loop in K8s stdout environments.
+    """
+
+    async def test_base64_truncated_in_log_message(self, monkeypatch):
+        """Exception containing a large base64 data URI should be truncated in the log."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        large_base64 = "A" * 500_000
+        exc_msg = (
+            f'litellm.APIConnectionError: Fal_aiException - '
+            f'{{"detail":[{{"input":"data:image/png;base64,{large_base64}"}}]}}'
+        )
+        exc = litellm.exceptions.APIConnectionError(
+            message=exc_msg, llm_provider="fal_ai", model="fal-ai/image-edit"
+        )
+
+        logged_messages = []
+
+        def capture_error(msg, *args):
+            logged_messages.append(msg % args if args else msg)
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger.error",
+            capture_error,
+        )
+
+        from litellm.proxy._types import ProxyException
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException:
+            pass
+
+        assert len(logged_messages) >= 1
+        log_output = logged_messages[0]
+        assert "base64_data truncated" in log_output
+        assert large_base64 not in log_output
+        assert len(log_output) < 1000
+
+    async def test_no_traceback_with_base64_logged(self, monkeypatch):
+        """Ensure .exception() is NOT used (which would dump untruncated traceback)."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        large_base64 = "B" * 200_000
+        exc_msg = f'Error - data:image/jpeg;base64,{large_base64}'
+        exc = litellm.exceptions.APIConnectionError(
+            message=exc_msg, llm_provider="fal_ai", model="fal-ai/image-edit"
+        )
+
+        exception_calls = []
+
+        def capture_exception(msg, *args, **kwargs):
+            exception_calls.append(msg)
+
+        error_calls = []
+
+        def capture_error(msg, *args, **kwargs):
+            error_calls.append(msg % args if args else msg)
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger.exception",
+            capture_exception,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger.error",
+            capture_error,
+        )
+
+        from litellm.proxy._types import ProxyException
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException:
+            pass
+
+        assert len(exception_calls) == 0, (
+            "logger.exception() should not be used — it dumps untruncated traceback"
+        )
+        assert len(error_calls) >= 1
+        assert "base64_data truncated" in error_calls[0]
