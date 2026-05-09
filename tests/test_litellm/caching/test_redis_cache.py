@@ -134,6 +134,36 @@ async def test_redis_cache_async_increment_default_falls_back_when_expire_nx_uns
 
 
 @pytest.mark.asyncio
+async def test_redis_cache_async_increment_default_fallback_existing_ttl_skips_second_expire(
+    monkeypatch, redis_no_ping
+):
+    """When expire(nx=True) is unsupported and key already has a TTL, fallback
+    should not issue a second expire() call."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.__aenter__.return_value = mock_redis_instance
+    mock_redis_instance.__aexit__.return_value = None
+    mock_redis_instance.expire.side_effect = [
+        TypeError("unexpected keyword argument 'nx'"),
+    ]
+    mock_redis_instance.ttl.return_value = 42
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_increment(key="rate_limit:window", value=1)
+
+    assert mock_redis_instance.expire.await_count == 1
+    assert mock_redis_instance.expire.await_args_list[0].args == (
+        "rate_limit:window",
+        60,
+    )
+    assert mock_redis_instance.expire.await_args_list[0].kwargs == {"nx": True}
+    mock_redis_instance.ttl.assert_awaited_once_with("rate_limit:window")
+
+
+@pytest.mark.asyncio
 async def test_redis_client_init_with_socket_timeout(monkeypatch, redis_no_ping):
     monkeypatch.setenv("REDIS_HOST", "my-fake-host")
     redis_cache = RedisCache(socket_timeout=1.0)
