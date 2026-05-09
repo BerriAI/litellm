@@ -72,15 +72,11 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        resolved_key = api_key or get_secret_str("DASHSCOPE_API_KEY")
-        if not resolved_key:
-            raise ValueError(
-                "Missing API key for DashScope. Set DASHSCOPE_API_KEY environment "
-                "variable or pass api_key parameter."
-            )
+        if api_key is None:
+            raise ValueError("api_key is required for DashScope authentication")
         default_headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {resolved_key}",
+            "Authorization": f"Bearer {api_key}",
         }
         return {**default_headers, **headers}
 
