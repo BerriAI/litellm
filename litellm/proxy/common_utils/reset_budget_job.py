@@ -119,6 +119,58 @@ class ResetBudgetJob:
 
         return update_result
 
+    async def reset_budget_for_tags_linked_to_budgets(
+        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
+    ):
+        """
+        Resets the spend for tags linked to budget tiers that are being reset.
+
+        The LiteLLM_TagTable schema has no `budget_duration` column of its own —
+        tags reference a budget tier via `budget_id` and rely entirely on the
+        linked budget's reset schedule. Without this handler, the
+        `LiteLLM_BudgetTable.budget_reset_at` advances on each tick of the reset
+        job but `LiteLLM_TagTable.spend` is never zeroed, so once a tag's
+        cumulative spend exceeds the linked budget's `max_budget` it stays over
+        the threshold forever and `_tag_max_budget_check` permanently blocks
+        every request that carries that tag.
+        """
+        budget_ids = [
+            budget.budget_id
+            for budget in budgets_to_reset
+            if budget.budget_id is not None
+        ]
+        if not budget_ids:
+            return
+
+        where_clause: dict = {
+            "budget_id": {"in": budget_ids},
+            "spend": {"gt": 0},  # only reset tags that have accumulated spend
+        }
+
+        try:
+            tags = await self.prisma_client.db.litellm_tagtable.find_many(
+                where=where_clause
+            )
+        except Exception as e:
+            tags = []
+            verbose_proxy_logger.warning(
+                "Failed to fetch tags for counter invalidation: %s", e
+            )
+
+        update_result = await self.prisma_client.db.litellm_tagtable.update_many(
+            where=where_clause,
+            data={
+                "spend": 0,
+            },
+        )
+
+        for tag in tags:
+            tag_name = getattr(tag, "tag_name", None)
+            if tag_name:
+                await self._invalidate_spend_counter(f"spend:tag:{tag_name}")
+
+        return update_result
+
     async def reset_budget_for_keys_linked_to_budgets(
         self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
     ):
@@ -234,6 +286,10 @@ class ResetBudgetJob:
                 )
 
                 await self.reset_budget_for_keys_linked_to_budgets(
+                    budgets_to_reset=budgets_to_reset
+                )
+
+                await self.reset_budget_for_tags_linked_to_budgets(
                     budgets_to_reset=budgets_to_reset
                 )
 

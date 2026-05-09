@@ -52,11 +52,32 @@ class MockLiteLLMEndUserTable:
         return self._find_many_results
 
 
+class MockLiteLLMTagTable:
+    def __init__(self):
+        self.update_many_calls: List[Dict[str, Any]] = []
+        self.find_many_calls: List[Dict[str, Any]] = []
+        self._find_many_results: List[Any] = []
+
+    def set_find_many_results(self, results: List[Any]):
+        self._find_many_results = results
+
+    async def find_many(self, where: Dict[str, Any]) -> List[Any]:
+        self.find_many_calls.append({"where": where})
+        return self._find_many_results
+
+    async def update_many(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self.update_many_calls.append({"where": where, "data": data})
+        return {"count": 1}
+
+
 class MockDB:
     def __init__(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
         self.litellm_verificationtoken = MockLiteLLMVerificationToken()
         self.litellm_endusertable = MockLiteLLMEndUserTable()
+        self.litellm_tagtable = MockLiteLLMTagTable()
 
 
 class MockPrismaClient:
@@ -1205,3 +1226,154 @@ def test_reset_budget_for_keys_linked_to_budgets_invalidates_redis_counter(monke
     counter_cache.in_memory_cache.set_cache.assert_any_call(
         key="spend:key:sk-linked", value=0.0, ttl=60
     )
+
+
+# ---------------------------------------------------------------------------
+# reset_budget_for_tags_linked_to_budgets
+# Regression coverage for the bug where tags with attached budgets had their
+# spend frozen forever after the first overage — the reset job had no tag
+# handler so `LiteLLM_BudgetTable.budget_reset_at` advanced but
+# `LiteLLM_TagTable.spend` never returned to 0.
+# ---------------------------------------------------------------------------
+
+
+def test_reset_budget_for_tags_linked_to_budgets(reset_budget_job, mock_prisma_client):
+    """Tags linked to a budget tier being reset must have their spend zeroed.
+
+    Without this, the budget table's `budget_reset_at` ticks forward each cycle
+    but `LiteLLM_TagTable.spend` stays above `max_budget` permanently, so
+    `_tag_max_budget_check` keeps raising BudgetExceededError even after the
+    nominal reset time.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 0.05,
+            "budget_duration": "1d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "tag-budget-tier",
+            "created_at": now - timedelta(days=1),
+        },
+    )
+
+    # Tag whose spend is over the linked budget threshold.
+    over_budget_tag = type(
+        "TagRow",
+        (),
+        {"tag_name": "premium-customer", "spend": 0.10, "budget_id": "tag-budget-tier"},
+    )
+    mock_prisma_client.db.litellm_tagtable.set_find_many_results([over_budget_tag])
+
+    asyncio.run(
+        reset_budget_job.reset_budget_for_tags_linked_to_budgets(
+            budgets_to_reset=[test_budget]
+        )
+    )
+
+    update_calls = mock_prisma_client.db.litellm_tagtable.update_many_calls
+    assert (
+        len(update_calls) == 1
+    ), f"Expected 1 update_many call on tags, got {len(update_calls)}"
+
+    call = update_calls[0]
+    assert call["where"]["budget_id"] == {"in": ["tag-budget-tier"]}
+    # Only tags with accumulated spend should be touched (avoids no-op writes).
+    assert call["where"]["spend"] == {"gt": 0}
+    assert call["data"]["spend"] == 0
+
+
+def test_reset_budget_for_tags_linked_to_budgets_empty(
+    reset_budget_job, mock_prisma_client
+):
+    """An empty budgets list must not issue any tag query or write."""
+    asyncio.run(
+        reset_budget_job.reset_budget_for_tags_linked_to_budgets(budgets_to_reset=[])
+    )
+
+    assert mock_prisma_client.db.litellm_tagtable.update_many_calls == []
+    assert mock_prisma_client.db.litellm_tagtable.find_many_calls == []
+
+
+def test_budget_table_reset_also_resets_linked_tags(
+    reset_budget_job, mock_prisma_client
+):
+    """Integration-style test: when `reset_budget_for_litellm_budget_table`
+    runs, it must drive the new tag handler so tags clear alongside keys,
+    end-users, and team memberships."""
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 0.05,
+            "budget_duration": "1d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "tag-budget-tier",
+            "created_at": now - timedelta(days=1),
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    update_calls = mock_prisma_client.db.litellm_tagtable.update_many_calls
+    assert (
+        len(update_calls) == 1
+    ), "reset_budget_for_litellm_budget_table must also reset linked tags"
+    assert update_calls[0]["where"]["budget_id"] == {"in": ["tag-budget-tier"]}
+    assert update_calls[0]["data"]["spend"] == 0
+
+
+def test_reset_budget_for_tags_linked_to_budgets_invalidates_counter(monkeypatch):
+    """After zeroing tag spend in the DB, the per-tag spend counter must be
+    invalidated so `get_current_spend` doesn't keep reading the stale
+    pre-reset value from Redis/in-memory cache and re-blocking the tag."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "tag-budget-tier"})
+    linked_tag = type(
+        "Tag",
+        (),
+        {"tag_name": "premium-customer", "spend": 1.0, "budget_id": "tag-budget-tier"},
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[linked_tag])
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 1})
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:tag:premium-customer", value=0.0, ttl=60
+    )
+    counter_cache.redis_cache.async_set_cache.assert_any_await(
+        key="spend:tag:premium-customer", value=0.0, ttl=60
+    )
+
+
+def test_reset_budget_for_tags_linked_to_budgets_swallows_find_many_failure(
+    monkeypatch,
+):
+    """If the find_many for counter invalidation fails (e.g. transient DB
+    blip), the update_many that actually zeroes spend in the DB must still
+    run — the same fail-open contract used for keys."""
+    _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "tag-budget-tier"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(
+        side_effect=RuntimeError("transient db error")
+    )
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 0})
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    prisma_client.db.litellm_tagtable.update_many.assert_awaited_once()
