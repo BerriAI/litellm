@@ -37,8 +37,8 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
       const [open, setOpen] = useState(false);
       return (
         <div>
-          <button type="button" onClick={() => setOpen(!open)}>
-            User
+          <button type="button" aria-label="Open account menu" onClick={() => setOpen(!open)}>
+            Account
           </button>
           {open && (
             <div data-testid="user-dropdown-content">
@@ -146,15 +146,16 @@ describe("Navbar", () => {
   it("should render without crashing", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
+    expect(screen.getByRole("button", { name: /^notifications$/i })).toBeInTheDocument();
     expect(screen.getByText("Docs")).toBeInTheDocument();
-    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
   });
 
   it("should display user information in dropdown", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("test-user")).toBeInTheDocument();
@@ -193,7 +194,7 @@ describe("Navbar", () => {
     });
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("Premium")).toBeInTheDocument();
@@ -230,7 +231,7 @@ describe("Navbar", () => {
     const publicPageProps = { ...defaultProps, isPublicPage: true };
     renderWithProviders(<Navbar {...publicPageProps} />);
 
-    expect(screen.queryByText("User")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open account menu/i })).not.toBeInTheDocument();
   });
 
   it("should handle hide new features toggle", async () => {
@@ -244,7 +245,7 @@ describe("Navbar", () => {
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("test-user")).toBeInTheDocument();
@@ -269,7 +270,7 @@ describe("Navbar", () => {
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("test-user")).toBeInTheDocument();

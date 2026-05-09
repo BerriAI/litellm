@@ -37,6 +37,8 @@ vi.mock("@/utils/localStorageUtils", () => ({
 describe("UserDropdown", () => {
   const mockOnLogout = vi.fn();
 
+  const getAccountTrigger = () => screen.getByRole("button", { name: /account menu/i });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseAuthorizedImpl = () => ({
@@ -55,22 +57,23 @@ describe("UserDropdown", () => {
 
   it("should render", () => {
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
-    expect(screen.getByRole("button")).toBeInTheDocument();
+    expect(getAccountTrigger()).toBeInTheDocument();
   });
 
-  it("should display user button with User text", () => {
+  it("should surface initials and account menu affordance", () => {
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
-    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(getAccountTrigger()).toBeInTheDocument();
+    expect(screen.getByText("TE")).toBeInTheDocument();
   });
 
   it("should show user email when dropdown is opened", async () => {
     const user = userEvent.setup();
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0);
     });
   });
 
@@ -78,7 +81,7 @@ describe("UserDropdown", () => {
     const user = userEvent.setup();
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
       expect(screen.getByText("test-user-id")).toBeInTheDocument();
@@ -89,10 +92,10 @@ describe("UserDropdown", () => {
     const user = userEvent.setup();
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
-      expect(screen.getByText("Admin")).toBeInTheDocument();
+      expect(screen.getAllByText("Admin").length).toBeGreaterThan(0);
     });
   });
 
@@ -100,7 +103,7 @@ describe("UserDropdown", () => {
     const user = userEvent.setup();
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
       expect(screen.getByText("Standard")).toBeInTheDocument();
@@ -118,7 +121,7 @@ describe("UserDropdown", () => {
 
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
       expect(screen.getByText("Premium")).toBeInTheDocument();
@@ -129,10 +132,10 @@ describe("UserDropdown", () => {
     const user = userEvent.setup();
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0);
     });
 
     await user.click(screen.getByText("Logout"));
@@ -144,10 +147,10 @@ describe("UserDropdown", () => {
     const user = userEvent.setup();
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0);
     });
 
     const toggle = screen.getByLabelText("Toggle hide new feature indicators");
@@ -169,10 +172,10 @@ describe("UserDropdown", () => {
 
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0);
     });
 
     const toggle = screen.getByLabelText("Toggle hide new feature indicators");
@@ -189,10 +192,10 @@ describe("UserDropdown", () => {
     const user = userEvent.setup();
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0);
     });
 
     const toggle = screen.getByLabelText("Toggle hide all prompts");
@@ -215,10 +218,10 @@ describe("UserDropdown", () => {
 
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0);
     });
 
     const toggle = screen.getByLabelText("Toggle hide all prompts");
@@ -229,6 +232,17 @@ describe("UserDropdown", () => {
     const localStorageUtils = vi.mocked(await import("@/utils/localStorageUtils"));
     expect(localStorageUtils.removeLocalStorageItem).toHaveBeenCalledWith("disableShowPrompts");
     expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowPrompts");
+  });
+
+  it("should show Account in the trigger when user id is the default placeholder", () => {
+    mockUseAuthorizedImpl = () => ({
+      userId: "default_user_id",
+      userEmail: null as any,
+      userRole: "Admin",
+      premiumUser: false,
+    });
+    renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
+    expect(screen.getByText("Account")).toBeInTheDocument();
   });
 
   it("should display dash when user email is not available", async () => {
@@ -242,7 +256,7 @@ describe("UserDropdown", () => {
 
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
       expect(screen.getByText("-")).toBeInTheDocument();
@@ -260,7 +274,7 @@ describe("UserDropdown", () => {
 
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
       const dashElements = screen.getAllByText("-");
@@ -277,10 +291,10 @@ describe("UserDropdown", () => {
 
     renderWithProviders(<UserDropdown onLogout={mockOnLogout} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(getAccountTrigger());
 
     await waitFor(() => {
-      expect(screen.getByText("test@example.com")).toBeInTheDocument();
+      expect(screen.getAllByText("test@example.com").length).toBeGreaterThan(0);
     });
 
     const toggle = screen.getByLabelText("Toggle hide new feature indicators");
