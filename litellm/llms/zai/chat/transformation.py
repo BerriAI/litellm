@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import Any, Coroutine, List, Optional, Tuple, Union
 
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -6,6 +6,30 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 ZAI_API_BASE = "https://api.z.ai/api/paas/v4"
+
+
+def _flatten_content_parts(content: Any) -> Any:
+    """Flatten OpenAI multi-part content to a plain string.
+
+    The OpenAI spec allows tool/assistant message content as either a plain
+    string or a list of content parts (e.g. [{"type": "text", "text": "..."}]).
+    GLM's chat template checks ``m.content is string`` and silently drops
+    list-format content (same root cause as vllm-project/vllm#39614).
+    This helper normalises both forms to a plain string.
+    """
+    if isinstance(content, str) or content is None:
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                text = part.get("text")
+                if text:
+                    parts.append(text)
+            elif isinstance(part, str):
+                parts.append(part)
+        return "\n".join(parts) if parts else ""
+    return content
 
 
 class ZAIChatConfig(OpenAIGPTConfig):
@@ -56,3 +80,21 @@ class ZAIChatConfig(OpenAIGPTConfig):
             pass
 
         return base_params
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        """Flatten list-format content in tool and assistant messages before sending to ZAI.
+
+        GLM's chat template checks ``m.content is string`` and silently drops list-format
+        content (e.g. [{"type": "text", "text": "..."}]).  This ensures tool results and
+        assistant messages always reach the model as plain strings.
+
+        Issue: https://github.com/BerriAI/litellm/issues/25868
+        """
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content")
+            if role in ("tool", "assistant") and isinstance(content, list):
+                message["content"] = _flatten_content_parts(content)  # type: ignore
+        return super()._transform_messages(messages=messages, model=model, is_async=is_async)  # type: ignore
