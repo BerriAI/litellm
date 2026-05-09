@@ -253,7 +253,7 @@ async def create_response(
         )
     except Exception as e:
         # Unexpected error consuming first chunk.
-        verbose_proxy_logger.exception(
+        verbose_proxy_logger.error(
             "Error consuming first chunk from generator: %s",
             _truncate_base64_in_string(str(e)),
         )
@@ -1583,7 +1583,7 @@ class ProxyBaseLLMRequestProcessing:
         version: Optional[str] = None,
     ):
         """Raises ProxyException (OpenAI API compatible) if an exception is raised"""
-        verbose_proxy_logger.exception(
+        verbose_proxy_logger.error(
             "litellm.proxy.proxy_server._handle_llm_api_exception(): Exception occured - %s",
             _truncate_base64_in_string(str(e)),
         )
@@ -1786,7 +1786,7 @@ class ProxyBaseLLMRequestProcessing:
                 )
                 yield serialize_chunk(chunk)
         except Exception as e:
-            verbose_proxy_logger.exception(
+            verbose_proxy_logger.error(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s",
                 _truncate_base64_in_string(str(e)),
             )
