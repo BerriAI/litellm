@@ -783,15 +783,29 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                 f"Chat provider:   image -> {converted}"
                             )
                         elif item_type == "file":
-                            # Map Chat Completion file to Responses API input_file
-                            # {"type": "file", "file": {"file_data": "...", "filename": "..."}}
-                            # -> {"type": "input_file", "file_data": "...", "filename": "..."}
+                            # Map Chat Completion file to Responses API input_file.
+                            # {"type": "file", "file": {"file_id" | "file_data" | "filename" | "file_url": ...}}
+                            # -> {"type": "input_file", "file_id" | "file_data" | "filename" | "file_url": ...}
+                            # If `file_id` is an http(s) URL, route it to `file_url` instead — providers
+                            # require `file_id` to be an uploaded file identifier (e.g. "file-abc123") and
+                            # reject URLs there.
                             file_data = item.get("file", {})
                             converted = {"type": "input_file"}
                             if isinstance(file_data, dict):
-                                for key in ["file_id", "file_data", "filename"]:
+                                for key in (
+                                    "file_id",
+                                    "file_data",
+                                    "filename",
+                                    "file_url",
+                                ):
                                     if key in file_data:
                                         converted[key] = file_data[key]
+                                file_id = converted.get("file_id")
+                                if isinstance(file_id, str) and file_id.startswith(
+                                    ("https://", "http://")
+                                ):
+                                    converted.setdefault("file_url", file_id)
+                                    converted.pop("file_id", None)
                             result.append(converted)
                             verbose_logger.debug(
                                 f"Chat provider:   file -> {converted}"

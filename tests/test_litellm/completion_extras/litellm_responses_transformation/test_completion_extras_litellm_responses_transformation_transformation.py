@@ -2188,6 +2188,87 @@ def test_convert_chat_completion_file_type_with_file_id():
     assert "file_data" not in content[1]
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://pdfobject.com/pdf/sample.pdf",
+        "http://example.com/report.pdf",
+    ],
+)
+def test_convert_chat_completion_file_type_with_url_file_id_routes_to_file_url(url):
+    """
+    Chat Completion clients sometimes pass a URL in `file_id`. The Responses API
+    requires `file_id` to be an uploaded file identifier (e.g. "file-abc123") and
+    rejects URLs there, but it natively accepts `file_url`. The transformation
+    should route URL-shaped `file_id` values to `file_url` and drop `file_id`.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this PDF."},
+                {
+                    "type": "file",
+                    "file": {"file_id": url},
+                },
+            ],
+        }
+    ]
+
+    (
+        input_items,
+        _,
+    ) = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    file_item = input_items[0]["content"][1]
+    assert file_item["type"] == "input_file"
+    assert file_item["file_url"] == url
+    assert "file_id" not in file_item
+
+
+def test_convert_chat_completion_file_type_passes_through_file_url():
+    """
+    When the caller already provides `file_url` directly (Responses-API-shaped
+    payload nested inside a Chat Completion `file` block), the transformation
+    should pass it through unchanged.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    url = "https://example.com/report.pdf"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {"file_url": url, "filename": "report.pdf"},
+                },
+            ],
+        }
+    ]
+
+    (
+        input_items,
+        _,
+    ) = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    file_item = input_items[0]["content"][0]
+    assert file_item["type"] == "input_file"
+    assert file_item["file_url"] == url
+    assert file_item["filename"] == "report.pdf"
+    assert "file_id" not in file_item
+
+
 # =============================================================================
 # Tests for reasoning_items round-trip (encrypted_content preservation)
 # =============================================================================
