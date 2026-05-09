@@ -765,3 +765,43 @@ class TestOCISignerSupport:
         )
 
         assert wrapper.path_url == "/api/v1/chat"
+
+    def test_max_completion_tokens_maps_to_maxCompletionTokens(self):
+        """
+        max_completion_tokens should map to maxCompletionTokens, not maxTokens.
+
+        Regression test for https://github.com/BerriAI/litellm/issues/27429
+        """
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "max_completion_tokens": 100,
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        chat_request = transformed_request["chatRequest"]
+        assert chat_request.get("maxCompletionTokens") == 100
+        assert "maxTokens" not in chat_request
+
+    def test_max_tokens_maps_to_maxTokens(self):
+        """max_tokens (legacy param) should still map to maxTokens."""
+        config = OCIChatConfig()
+        optional_params = {
+            "oci_compartment_id": TEST_COMPARTMENT_ID,
+            "max_tokens": 200,
+        }
+        transformed_request = config.transform_request(
+            model=TEST_MODEL_NAME,
+            messages=TEST_MESSAGES,  # type: ignore
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        chat_request = transformed_request["chatRequest"]
+        assert chat_request.get("maxTokens") == 200
+        assert "maxCompletionTokens" not in chat_request
