@@ -10287,6 +10287,11 @@ class Router:
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
+        # Resolve model_group_alias so aliased names hit the correct router map
+        _resolved = self._get_model_from_alias(model)
+        if _resolved is not None:
+            model = _resolved
+
         #########################################################
         # Check if any auto-router should be used
         #########################################################
