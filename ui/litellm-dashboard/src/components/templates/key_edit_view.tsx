@@ -276,8 +276,8 @@ export function KeyEditView({
 
       // Backend rejects non-empty allowed_routes from non-admins, so re-sending
       // an unchanged value 403s a team admin. Set compare tolerates reorder.
-      const originalRoutesSet = new Set(Array.isArray(keyData.allowed_routes) ? keyData.allowed_routes : []);
-      const submittedRoutesSet = new Set(Array.isArray(values.allowed_routes) ? values.allowed_routes : []);
+      const originalRoutesSet = new Set<string>(Array.isArray(keyData.allowed_routes) ? keyData.allowed_routes : []);
+      const submittedRoutesSet = new Set<string>(Array.isArray(values.allowed_routes) ? values.allowed_routes : []);
       const allowedRoutesUnchanged =
         originalRoutesSet.size === submittedRoutesSet.size &&
         [...submittedRoutesSet].every((r) => originalRoutesSet.has(r));
