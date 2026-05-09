@@ -676,11 +676,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 **input_schema_filtered
             )
 
+            _strict = tool["function"].get("strict") or _input_schema.get("strict")
+
             _tool = AnthropicMessagesTool(
                 name=tool["function"]["name"],
                 input_schema=input_anthropic_schema,
                 type="custom",
             )
+
+            if _strict is True:
+                _tool["strict"] = True
 
             _description = tool["function"].get("description")
             if _description is not None:
