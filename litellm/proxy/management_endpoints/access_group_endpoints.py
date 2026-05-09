@@ -38,6 +38,17 @@ def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
         )
 
 
+def _require_admin_view(user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Admin Viewer parity: PROXY_ADMIN or PROXY_ADMIN_VIEW_ONLY may read."""
+    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+
+    if not _user_has_admin_view(user_api_key_dict):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+
+
 def _record_to_response(record) -> AccessGroupResponse:
     return AccessGroupResponse(
         access_group_id=record.access_group_id,
@@ -236,12 +247,11 @@ async def _patch_key_caches_add_access_group(
 ) -> None:
     """Patch cached key objects to include access_group_id."""
     for token in key_tokens:
-        cached_key = await user_api_key_cache.async_get_cache(key=token)
+        cached_key = await user_api_key_cache.async_get_cache(
+            key=token,
+            model_type=UserAPIKeyAuth,
+        )
         if cached_key is None:
-            continue
-        if isinstance(cached_key, dict):
-            cached_key = UserAPIKeyAuth(**cached_key)
-        if not isinstance(cached_key, UserAPIKeyAuth):
             continue
         if cached_key.access_group_ids is None:
             cached_key.access_group_ids = [access_group_id]
@@ -267,12 +277,11 @@ async def _patch_key_caches_remove_access_group(
 ) -> None:
     """Patch cached key objects to remove access_group_id."""
     for token in key_tokens:
-        cached_key = await user_api_key_cache.async_get_cache(key=token)
-        if cached_key is None:
-            continue
-        if isinstance(cached_key, dict):
-            cached_key = UserAPIKeyAuth(**cached_key)
-        if isinstance(cached_key, UserAPIKeyAuth) and cached_key.access_group_ids:
+        cached_key = await user_api_key_cache.async_get_cache(
+            key=token,
+            model_type=UserAPIKeyAuth,
+        )
+        if cached_key is not None and cached_key.access_group_ids:
             cached_key.access_group_ids = [
                 ag for ag in cached_key.access_group_ids if ag != access_group_id
             ]
@@ -372,7 +381,7 @@ async def create_access_group(
 async def list_access_groups(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> List[AccessGroupResponse]:
-    _require_proxy_admin(user_api_key_dict)
+    _require_admin_view(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(
         CommonProxyErrors.db_not_connected_error.value
     )
@@ -391,7 +400,7 @@ async def get_access_group(
     access_group_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> AccessGroupResponse:
-    _require_proxy_admin(user_api_key_dict)
+    _require_admin_view(user_api_key_dict)
     prisma_client = get_prisma_client_or_throw(
         CommonProxyErrors.db_not_connected_error.value
     )

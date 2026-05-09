@@ -32,7 +32,14 @@ import {
 import type { MenuProps } from "antd";
 import { ConfigProvider, Layout, Menu } from "antd";
 import { useMemo } from "react";
-import { all_admin_roles, internalUserRoles, isAdminRole, isUserTeamAdminForAnyTeam, rolesWithWriteAccess } from "../utils/roles";
+import {
+  all_admin_roles,
+  internalUserRoles,
+  isAdminRole,
+  isUserTeamAdminForAnyTeam,
+  rolesAllowedToViewWriteScopedPages,
+  rolesWithWriteAccess,
+} from "../utils/roles";
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
@@ -118,7 +125,9 @@ const menuGroups: MenuGroup[] = [
         page: "models",
         label: "Models + Endpoints",
         icon: <BlockOutlined />,
-        roles: rolesWithWriteAccess,
+        // Admin Viewer can view models read-only (write actions are
+        // hidden inside the page); Playground above stays write-only.
+        roles: rolesAllowedToViewWriteScopedPages,
       },
       {
         key: "agentic",
@@ -131,7 +140,9 @@ const menuGroups: MenuGroup[] = [
             page: "agents",
             label: "Agents",
             icon: <RobotOutlined />,
-            roles: rolesWithWriteAccess,
+            // Admin Viewer can view agents read-only (write actions are
+            // hidden inside the page); Playground above stays write-only.
+            roles: rolesAllowedToViewWriteScopedPages,
           },
           {
             key: "workflows",

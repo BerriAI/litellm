@@ -1,4 +1,4 @@
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, screen, waitFor, fireEvent } from "@testing-library/react";
 import { vi, it, expect, beforeEach, MockedFunction } from "vitest";
 import { renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
@@ -972,5 +972,95 @@ describe("refetch button", () => {
     const fetchButton = screen.getByTitle("Fetch data");
     expect(fetchButton).not.toBeDisabled();
     expect(screen.getByText("Fetch")).toBeInTheDocument();
+  });
+});
+
+describe("Status column reflects key.blocked / scim_blocked metadata", () => {
+  it("should render Active for a non-blocked key", async () => {
+    mockUseFilterLogic.mockReturnValue({
+      filters: {
+        "Team ID": "",
+        "Organization ID": "",
+        "Key Alias": "",
+        "User ID": "",
+        "Sort By": "created_at",
+        "Sort Order": "desc",
+      },
+      filteredKeys: [{ ...mockKey, blocked: false, metadata: {} }],
+      filteredTotalCount: null,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent(
+        "Active",
+      );
+    });
+  });
+
+  it("should render Blocked when key.blocked is true", async () => {
+    mockUseFilterLogic.mockReturnValue({
+      filters: {
+        "Team ID": "",
+        "Organization ID": "",
+        "Key Alias": "",
+        "User ID": "",
+        "Sort By": "created_at",
+        "Sort Order": "desc",
+      },
+      filteredKeys: [{ ...mockKey, blocked: true, metadata: {} }],
+      filteredTotalCount: null,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent(
+        "Blocked",
+      );
+    });
+    expect(screen.queryByText(/Blocked by SCIM/i)).not.toBeInTheDocument();
+  });
+
+  it("should mark a SCIM-blocked key with the SCIM tooltip reason", async () => {
+    mockUseFilterLogic.mockReturnValue({
+      filters: {
+        "Team ID": "",
+        "Organization ID": "",
+        "Key Alias": "",
+        "User ID": "",
+        "Sort By": "created_at",
+        "Sort Order": "desc",
+      },
+      filteredKeys: [
+        { ...mockKey, blocked: true, metadata: { scim_blocked: true } },
+      ],
+      filteredTotalCount: null,
+      allTeams: [mockTeam],
+      allOrganizations: [mockOrganization],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: vi.fn(),
+    });
+
+    renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
+
+    const tag = await screen.findByTestId(`key-status-${mockKey.token_id}`);
+    expect(tag).toHaveTextContent("Blocked");
+
+    act(() => {
+      fireEvent.mouseEnter(tag);
+    });
+    await waitFor(() => {
+      expect(screen.getByText(/Blocked by SCIM/i)).toBeInTheDocument();
+    });
   });
 });

@@ -1041,3 +1041,4 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # `metadata` is part of the common Anthropic Messages API shape.
     thinking: dict
     metadata: dict
+    output_config: dict

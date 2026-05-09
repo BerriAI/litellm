@@ -454,6 +454,71 @@ class TestContentFilterGuardrail:
         assert "Contact me at [EMAIL_REDACTED] for info" in full_content
 
     @pytest.mark.asyncio
+    async def test_streaming_hook_mask_checks_all_choices(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        patterns = [
+            ContentFilterPattern(
+                pattern_type="prebuilt",
+                pattern_name="email",
+                action=ContentFilterAction.MASK,
+            ),
+        ]
+
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-streaming-mask-all-choices",
+            patterns=patterns,
+            event_hook=GuardrailEventHooks.during_call,
+        )
+
+        async def mock_stream():
+            yield ModelResponseStream(
+                id="chunk1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="Contact first@ex"),
+                        index=0,
+                    ),
+                    StreamingChoices(
+                        delta=Delta(content="Email second@ex"),
+                        index=1,
+                    ),
+                ],
+                model="gpt-4",
+            )
+            yield ModelResponseStream(
+                id="chunk2",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(content="ample.com for help"),
+                        index=0,
+                        finish_reason="stop",
+                    ),
+                    StreamingChoices(
+                        delta=Delta(content="ample.com for support"),
+                        index=1,
+                        finish_reason="stop",
+                    ),
+                ],
+                model="gpt-4",
+            )
+
+        content_by_choice = {0: "", 1: ""}
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=MagicMock(),
+            response=mock_stream(),
+            request_data={},
+        ):
+            for choice in chunk.choices:
+                if choice.delta.content:
+                    content_by_choice[choice.index] += choice.delta.content
+
+        assert "first@example.com" not in content_by_choice[0]
+        assert "second@example.com" not in content_by_choice[1]
+        assert content_by_choice[0] == "Contact [EMAIL_REDACTED] for help"
+        assert content_by_choice[1] == "Email [EMAIL_REDACTED] for support"
+
+    @pytest.mark.asyncio
     async def test_streaming_hook_block(self):
         """
         Test streaming hook with BLOCK action
