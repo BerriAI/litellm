@@ -52,15 +52,15 @@ export const NotificationsBell: React.FC = () => {
 
   return (
     <Popover content={content} trigger="click" open={open} onOpenChange={setOpen} placement="bottomRight">
-      <button
-        type="button"
-        className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+      <Button
+        type="text"
+        className="!flex !h-9 !w-9 items-center justify-center !rounded-md text-gray-600 transition-colors hover:!bg-gray-100 hover:!text-gray-900"
         aria-label="Notifications"
       >
         <Badge dot={hasUnread} color="#1677ff" size="small" offset={[8, 2]}>
           <BellOutlined className="text-base" aria-hidden />
         </Badge>
-      </button>
+      </Button>
     </Popover>
   );
 };

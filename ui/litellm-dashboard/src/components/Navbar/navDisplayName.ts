@@ -8,12 +8,7 @@ export function navAccountDisplayName(userEmail: string | null, userId: string |
   if (!id) {
     return "Account";
   }
-  const lower = id.toLowerCase();
-  if (
-    lower === "default_user_id" ||
-    lower === "default-user-id" ||
-    /^default[_\s-]?user[_\s-]?id$/i.test(id)
-  ) {
+  if (/^default[_\s-]?user[_\s-]?id$/i.test(id)) {
     return "Account";
   }
   return id;

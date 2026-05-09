@@ -169,17 +169,15 @@ const Navbar: React.FC<NavbarProps> = ({
               </div>
             )}
 
-            <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
-              <div className="flex items-center gap-0.5 rounded-lg bg-gray-50 px-1 py-0 transition-colors hover:bg-gray-100">
-                <NotificationsBell />
-                {!isPublicPage && (
-                  <>
-                    <span className="mx-0.5 h-6 w-px shrink-0 bg-gray-200" aria-hidden />
-                    <UserDropdown onLogout={handleLogout} />
-                  </>
-                )}
+            {!isPublicPage && (
+              <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
+                <div className="flex items-center gap-0.5 rounded-lg bg-gray-50 px-1 py-0 transition-colors hover:bg-gray-100">
+                  <NotificationsBell />
+                  <span className="mx-0.5 h-6 w-px shrink-0 bg-gray-200" aria-hidden />
+                  <UserDropdown onLogout={handleLogout} />
+                </div>
               </div>
-            </div>
+            )}
           </div>
           {/* Dark mode toggle: keep disabled until the dashboard supports dark styles end-to-end. */}
         </div>

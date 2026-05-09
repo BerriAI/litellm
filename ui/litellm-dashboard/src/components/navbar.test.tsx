@@ -30,6 +30,7 @@ const mockUserDropdownData = vi.hoisted(() => ({
 vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
   const React = await import("react");
   const { useState } = React;
+  const { Button } = await import("antd");
   const localStorageUtils = await import("@/utils/localStorageUtils");
   return {
     default: function MockUserDropdown({ onLogout }: { onLogout: () => void }) {
@@ -37,9 +38,9 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
       const [open, setOpen] = useState(false);
       return (
         <div>
-          <button type="button" aria-label="Open account menu" onClick={() => setOpen(!open)}>
+          <Button type="text" aria-label="Open account menu" onClick={() => setOpen(!open)}>
             Account
-          </button>
+          </Button>
           {open && (
             <div data-testid="user-dropdown-content">
               <span>{userId}</span>
@@ -227,11 +228,12 @@ describe("Navbar", () => {
     mockUseThemeImpl = () => ({ logoUrl: null });
   });
 
-  it("should hide user dropdown on public pages", () => {
+  it("should hide user dropdown and notifications on public pages", () => {
     const publicPageProps = { ...defaultProps, isPublicPage: true };
     renderWithProviders(<Navbar {...publicPageProps} />);
 
     expect(screen.queryByRole("button", { name: /open account menu/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
   });
 
   it("should handle hide new features toggle", async () => {

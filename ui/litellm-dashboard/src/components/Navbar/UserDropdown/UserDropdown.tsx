@@ -19,7 +19,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import { Divider, Dropdown, Space, Switch, Tag, Tooltip, Typography } from "antd";
+import { Button, Divider, Dropdown, Space, Switch, Tag, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 
 const { Text } = Typography;
@@ -230,9 +230,9 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
         </div>
       )}
     >
-      <button
-        type="button"
-        className="flex max-w-[min(200px,34vw)] items-center gap-2 rounded-md py-0.5 pl-1 pr-2 transition-colors hover:bg-gray-100"
+      <Button
+        type="text"
+        className="!flex max-w-[min(200px,34vw)] items-center gap-2 !rounded-md !py-0.5 !pl-1 !pr-2 transition-colors hover:!bg-gray-100"
         aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
         aria-haspopup="menu"
       >
@@ -247,7 +247,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
           {displayName}
         </span>
         <DownOutlined className="hidden shrink-0 text-[10px] text-gray-400 md:inline" aria-hidden />
-      </button>
+      </Button>
     </Dropdown>
   );
 };
