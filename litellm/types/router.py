@@ -764,6 +764,7 @@ OptionalPreCallChecks = List[
         "forward_client_headers_by_model_group",
         "enforce_model_rate_limits",
         "encrypted_content_affinity",
+        "prompt_prefix_affinity",
     ]
 ]
 
