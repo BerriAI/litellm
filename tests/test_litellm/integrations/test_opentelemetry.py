@@ -4313,3 +4313,41 @@ class TestCastAsPrimitiveValueType(unittest.TestCase):
 
     def test_none_returns_empty_string(self):
         assert self.otel._cast_as_primitive_value_type(None) == ""
+
+
+class TestRecordMetricsJsonSerialization(unittest.TestCase):
+    """Tests that _record_metrics serializes dict metadata as JSON.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/27451
+    """
+
+    def test_record_metrics_serializes_spend_logs_metadata_as_json(self):
+        otel = OpenTelemetry()
+        mock_histogram = MagicMock()
+        otel._operation_duration_histogram = mock_histogram
+        otel._token_usage_histogram = None
+
+        spend_metadata = {"user": "alice", "cost": 0.05}
+        kwargs = {
+            "model": "test-model",
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "metadata": {
+                    "spend_logs_metadata": spend_metadata,
+                    "user_api_key_hash": "hash123",
+                }
+            },
+        }
+
+        otel._record_metrics(
+            kwargs=kwargs,
+            response_obj={},
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+        )
+
+        recorded_attrs = mock_histogram.record.call_args[1]["attributes"]
+        raw = recorded_attrs["metadata.spend_logs_metadata"]
+        parsed = json.loads(raw)
+        assert parsed == spend_metadata
+        assert recorded_attrs["metadata.user_api_key_hash"] == "hash123"
