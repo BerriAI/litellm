@@ -846,9 +846,16 @@ class RedisCache(BaseCache):
                 if refresh_ttl:
                     await _redis_client.expire(key, _used_ttl)
                 else:
-                    current_ttl = await _redis_client.ttl(key)
-                    if current_ttl == -1:
-                        await _redis_client.expire(key, _used_ttl)
+                    # Prefer EXPIRE NX to avoid an extra TTL round trip on the
+                    # hot increment path while preserving window semantics.
+                    try:
+                        await _redis_client.expire(key, _used_ttl, nx=True)
+                    except TypeError:
+                        # Backward-compatible fallback if the Redis client does
+                        # not support the "nx" kwarg on expire().
+                        current_ttl = await _redis_client.ttl(key)
+                        if current_ttl == -1:
+                            await _redis_client.expire(key, _used_ttl)
 
             ## LOGGING ##
             end_time = time.time()
