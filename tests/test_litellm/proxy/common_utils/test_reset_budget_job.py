@@ -52,11 +52,32 @@ class MockLiteLLMEndUserTable:
         return self._find_many_results
 
 
+class MockLiteLLMTagTable:
+    def __init__(self):
+        self.update_many_calls: List[Dict[str, Any]] = []
+        self.find_many_calls: List[Dict[str, Any]] = []
+        self._find_many_results: List[Any] = []
+
+    def set_find_many_results(self, results: List[Any]):
+        self._find_many_results = results
+
+    async def find_many(self, where: Dict[str, Any]) -> List[Any]:
+        self.find_many_calls.append({"where": where})
+        return self._find_many_results
+
+    async def update_many(
+        self, where: Dict[str, Any], data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        self.update_many_calls.append({"where": where, "data": data})
+        return {"count": len(self._find_many_results)}
+
+
 class MockDB:
     def __init__(self):
         self.litellm_teammembership = MockLiteLLMTeamMembership()
         self.litellm_verificationtoken = MockLiteLLMVerificationToken()
         self.litellm_endusertable = MockLiteLLMEndUserTable()
+        self.litellm_tagtable = MockLiteLLMTagTable()
 
 
 class MockPrismaClient:
@@ -1205,3 +1226,149 @@ def test_reset_budget_for_keys_linked_to_budgets_invalidates_redis_counter(monke
     counter_cache.in_memory_cache.set_cache.assert_any_call(
         key="spend:key:sk-linked", value=0.0, ttl=60
     )
+
+
+# ---------------------------------------------------------------------------
+# Tag budget reset (regression for #27481)
+# ---------------------------------------------------------------------------
+
+
+def _install_user_api_key_cache(monkeypatch):
+    """Stub `user_api_key_cache` on `litellm.proxy.proxy_server` so the
+    in-function import in `_invalidate_tag_cache` resolves without dragging
+    in the heavy proxy_server module."""
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock()
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.user_api_key_cache = user_api_key_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+    return user_api_key_cache
+
+
+def test_reset_budget_for_tags_linked_to_budgets(reset_budget_job, mock_prisma_client):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/27481:
+    when a budget tier with `budget_duration` expires, tags linked to that
+    budget must have their `spend` reset to 0. Without this, a tag that
+    overshoots `max_budget` once is permanently blocked across reset
+    boundaries because the budget's `budget_reset_at` advances but the tag's
+    spend column is untouched.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 0.05,
+            "budget_duration": "1d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "tenant-budget",
+            "created_at": now - timedelta(days=1),
+        },
+    )
+
+    asyncio.run(
+        reset_budget_job.reset_budget_for_tags_linked_to_budgets(
+            budgets_to_reset=[test_budget]
+        )
+    )
+
+    calls = mock_prisma_client.db.litellm_tagtable.update_many_calls
+    assert len(calls) == 1, f"Expected 1 update_many call, got {len(calls)}"
+    call = calls[0]
+    assert call["where"]["budget_id"] == {"in": ["tenant-budget"]}
+    # Only zero rows that have actually accumulated spend
+    assert call["where"]["spend"] == {"gt": 0}
+    assert call["data"]["spend"] == 0
+
+
+def test_reset_budget_for_tags_linked_to_budgets_empty(
+    reset_budget_job, mock_prisma_client
+):
+    """No budgets to reset -> no DB write, no cache bust."""
+    asyncio.run(
+        reset_budget_job.reset_budget_for_tags_linked_to_budgets(budgets_to_reset=[])
+    )
+    assert len(mock_prisma_client.db.litellm_tagtable.update_many_calls) == 0
+    assert len(mock_prisma_client.db.litellm_tagtable.find_many_calls) == 0
+
+
+def test_reset_budget_for_tags_linked_to_budgets_invalidates_cache(monkeypatch):
+    """The reset handler must drop the cached `tag:<name>` entry from
+    `user_api_key_cache` after the DB write commits, otherwise the next
+    request reads the stale over-cap value via `get_tag_objects_batch` and
+    the budget gate stays stuck.
+    """
+    cache = _install_user_api_key_cache(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_tag = type("Tag", (), {"tag_name": "tenant:acme", "budget_id": "budget-1"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[linked_tag])
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 1})
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    # DB write happens BEFORE cache bust — locked in by call ordering below.
+    prisma_client.db.litellm_tagtable.update_many.assert_awaited_once()
+    cache.async_delete_cache.assert_any_await(key="tag:tenant:acme")
+
+
+def test_reset_budget_for_tags_cache_bust_failure_does_not_break_reset(monkeypatch):
+    """If the cache-delete call raises (e.g. Redis is unreachable), the DB
+    reset still succeeds — we must not let a transient cache failure leave
+    `LiteLLM_TagTable.spend` stuck at the over-cap value.
+    """
+    cache = _install_user_api_key_cache(monkeypatch)
+    cache.async_delete_cache.side_effect = RuntimeError("redis down")
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_tag = type("Tag", (), {"tag_name": "tenant:acme", "budget_id": "budget-1"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[linked_tag])
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 1})
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    prisma_client.db.litellm_tagtable.update_many.assert_awaited_once()
+
+
+def test_budget_table_reset_also_resets_linked_tags(
+    reset_budget_job, mock_prisma_client
+):
+    """
+    Integration: reset_budget_for_litellm_budget_table dispatches to the
+    tag handler alongside teams/keys/end-users. This is the path the proxy
+    actually exercises on the polling tick.
+    """
+    now = datetime.now(timezone.utc)
+
+    test_budget = type(
+        "LiteLLM_BudgetTableFull",
+        (),
+        {
+            "max_budget": 0.05,
+            "budget_duration": "1d",
+            "budget_reset_at": now - timedelta(hours=1),
+            "budget_id": "tenant-budget",
+            "created_at": now - timedelta(days=1),
+        },
+    )
+
+    mock_prisma_client.data["budget"] = [test_budget]
+
+    asyncio.run(reset_budget_job.reset_budget_for_litellm_budget_table())
+
+    calls = mock_prisma_client.db.litellm_tagtable.update_many_calls
+    assert len(calls) == 1, (
+        "Expected reset_budget_for_litellm_budget_table to also reset tags "
+        f"linked to expiring budgets, but got {len(calls)} update_many calls"
+    )
+    assert calls[0]["where"]["budget_id"] == {"in": ["tenant-budget"]}
+    assert calls[0]["data"]["spend"] == 0

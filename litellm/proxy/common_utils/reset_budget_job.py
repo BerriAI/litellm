@@ -171,6 +171,83 @@ class ResetBudgetJob:
 
         return update_result
 
+    @staticmethod
+    async def _invalidate_tag_cache(tag_name: str) -> None:
+        """Drop the cached LiteLLM_TagTable row so the next request re-reads
+        the freshly-zeroed `spend` from the DB.
+
+        Called AFTER the DB write commits. Busting before the commit would
+        let `_tag_max_budget_check` repopulate the cache with the pre-reset
+        value via `get_tag_objects_batch`, leaving the gate stuck at the
+        over-cap state for the cache TTL.
+        """
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            await user_api_key_cache.async_delete_cache(key=f"tag:{tag_name}")
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to invalidate tag cache for %s: %s. "
+                "Budget may be over-enforced until the cache TTL elapses.",
+                tag_name,
+                e,
+            )
+
+    async def reset_budget_for_tags_linked_to_budgets(
+        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
+    ):
+        """
+        Resets `LiteLLM_TagTable.spend` for tags linked to budget tiers that
+        are being reset.
+
+        Without this handler the budget object's `budget_reset_at` advances
+        each cycle but the tag's `spend` column is never zeroed, so once a
+        tag exceeds `max_budget` every subsequent request bearing that tag
+        returns HTTP 400 `budget_exceeded` indefinitely until ops manually
+        UPDATEs the row. See https://github.com/BerriAI/litellm/issues/27481.
+
+        Cache note: `_tag_max_budget_check` reads through `get_tag_objects_batch`
+        which caches `LiteLLM_TagTable` rows under `tag:<name>` in
+        `user_api_key_cache`. The cache key is busted AFTER the DB write
+        commits, mirroring `_invalidate_spend_counter` ordering.
+        """
+        budget_ids = [
+            budget.budget_id
+            for budget in budgets_to_reset
+            if budget.budget_id is not None
+        ]
+        if not budget_ids:
+            return
+
+        where_clause: dict = {
+            "budget_id": {"in": budget_ids},
+            "spend": {"gt": 0},  # only reset tags that have accumulated spend
+        }
+
+        try:
+            tags = await self.prisma_client.db.litellm_tagtable.find_many(
+                where=where_clause
+            )
+        except Exception as e:
+            tags = []
+            verbose_proxy_logger.warning(
+                "Failed to fetch tags for cache invalidation: %s", e
+            )
+
+        update_result = await self.prisma_client.db.litellm_tagtable.update_many(
+            where=where_clause,
+            data={
+                "spend": 0,
+            },
+        )
+
+        for tag in tags:
+            tag_name = getattr(tag, "tag_name", None)
+            if tag_name:
+                await self._invalidate_tag_cache(tag_name)
+
+        return update_result
+
     async def reset_budget_for_litellm_budget_table(self):
         """
         Resets the budget for all LiteLLM End-Users (Customers), and Team Members if their budget has expired
@@ -234,6 +311,10 @@ class ResetBudgetJob:
                 )
 
                 await self.reset_budget_for_keys_linked_to_budgets(
+                    budgets_to_reset=budgets_to_reset
+                )
+
+                await self.reset_budget_for_tags_linked_to_budgets(
                     budgets_to_reset=budgets_to_reset
                 )
 
