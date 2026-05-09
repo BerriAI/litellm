@@ -4279,3 +4279,37 @@ class TestOpenTelemetrySpanDedupe(unittest.TestCase):
             2,
             f"Two distinct guardrail invocations expected, got {len(guardrail_spans)}",
         )
+
+class TestCastAsPrimitiveValueType(unittest.TestCase):
+    """Tests for _cast_as_primitive_value_type JSON serialization.
+
+    Regression tests for https://github.com/BerriAI/litellm/issues/27451
+    """
+
+    def setUp(self):
+        self.otel = OpenTelemetry()
+
+    def test_dict_serialized_as_json(self):
+        result = self.otel._cast_as_primitive_value_type({"key": "value", "n": 1})
+        parsed = json.loads(result)
+        assert parsed == {"key": "value", "n": 1}
+
+    def test_list_serialized_as_json(self):
+        result = self.otel._cast_as_primitive_value_type(["a", "b"])
+        parsed = json.loads(result)
+        assert parsed == ["a", "b"]
+
+    def test_nested_dict_serialized_as_json(self):
+        value = {"outer": {"inner": [1, 2, 3]}}
+        result = self.otel._cast_as_primitive_value_type(value)
+        parsed = json.loads(result)
+        assert parsed == value
+
+    def test_primitives_unchanged(self):
+        assert self.otel._cast_as_primitive_value_type("hello") == "hello"
+        assert self.otel._cast_as_primitive_value_type(42) == 42
+        assert self.otel._cast_as_primitive_value_type(3.14) == 3.14
+        assert self.otel._cast_as_primitive_value_type(True) is True
+
+    def test_none_returns_empty_string(self):
+        assert self.otel._cast_as_primitive_value_type(None) == ""
