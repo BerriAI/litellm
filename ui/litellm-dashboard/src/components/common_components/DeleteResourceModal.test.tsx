@@ -109,7 +109,7 @@ describe("DeleteResourceModal", () => {
     const user = userEvent.setup();
     renderWithProviders(<DeleteResourceModal {...defaultProps} requiredConfirmation="DELETE" />);
     const input = screen.getByPlaceholderText("DELETE");
-    await user.type(input, "DELET");
+    await user.type(input, "DELETE");
     const deleteButton = screen.getByRole("button", { name: /delete/i });
     expect(deleteButton).toBeDisabled();
   });

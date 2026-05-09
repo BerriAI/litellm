@@ -100,7 +100,7 @@ os.environ["ANTHROPIC_API_KEY"] = "your-anthropic-key"
 # OpenAI
 response = completion(model="openai/gpt-4o", messages=[{"role": "user", "content": "Hello!"}])
 
-# Anthropic  
+# Anthropic
 response = completion(model="anthropic/claude-sonnet-4-20250514", messages=[{"role": "user", "content": "Hello!"}])
 ```
 
@@ -407,7 +407,7 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 ### Run in Developer Mode
 #### Services
 1. Setup .env file in root
-2. Run dependant services `docker-compose up db prometheus`
+2. Run dependent services `docker-compose up db prometheus`
 
 #### Backend
 1. (In root) create virtual environment `python -m venv .venv`
