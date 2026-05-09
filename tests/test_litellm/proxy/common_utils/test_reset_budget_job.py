@@ -1463,3 +1463,26 @@ def test_reset_budget_for_tags_linked_to_budgets_invalidates_redis_counter(monke
         key="spend:tag:tenant-42", value=0.0, ttl=60
     )
     user_api_key_cache.async_delete_cache.assert_any_await(key="tag:tenant-42")
+
+
+def test_reset_budget_for_tags_retries_fetch_before_cache_invalidation(monkeypatch):
+    """A transient read failure should not skip tag source-cache invalidation."""
+    counter_cache, user_api_key_cache = _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_tag = type("Tag", (), {"tag_name": "tenant-42"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(
+        side_effect=[RuntimeError("transient read failure"), [linked_tag]]
+    )
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 1})
+
+    job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    assert prisma_client.db.litellm_tagtable.find_many.await_count == 2
+    counter_cache.in_memory_cache.set_cache.assert_any_call(
+        key="spend:tag:tenant-42", value=0.0, ttl=60
+    )
+    user_api_key_cache.async_delete_cache.assert_any_await(key="tag:tenant-42")

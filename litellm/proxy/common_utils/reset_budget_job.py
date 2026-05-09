@@ -115,13 +115,23 @@ class ResetBudgetJob:
         if extra_where:
             where.update(extra_where)
 
+        rows: List[Any] = []
         try:
             rows = await table.find_many(where=where)
         except Exception as e:
-            rows = []
             verbose_proxy_logger.warning(
-                "Failed to fetch %s for counter invalidation: %s", log_subject, e
+                "Failed to fetch %s for counter invalidation, retrying once: %s",
+                log_subject,
+                e,
             )
+            try:
+                rows = await table.find_many(where=where)
+            except Exception as retry_err:
+                verbose_proxy_logger.warning(
+                    "Failed to fetch %s for counter invalidation after retry: %s",
+                    log_subject,
+                    retry_err,
+                )
 
         update_result = await table.update_many(where=where, data={"spend": 0})
 
