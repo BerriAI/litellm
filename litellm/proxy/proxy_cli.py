@@ -905,17 +905,19 @@ def run_server(  # noqa: PLR0915
                 database_url = construct_database_url_from_env_vars()
                 if database_url:
                     os.environ["DATABASE_URL"] = database_url
-            db_connection_pool_limit = general_settings.get(
-                "database_connection_pool_limit",
-                LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
-            )
-            db_connection_timeout = general_settings.get(
-                "database_connection_timeout",
+            db_connection_pool_limit = int(
                 general_settings.get(
+                    "database_connection_pool_limit",
+                    LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
+                )
+            )
+            db_connection_timeout = general_settings.get("database_connection_timeout")
+            if db_connection_timeout is None:
+                db_connection_timeout = general_settings.get(
                     "database_connection_pool_timeout",
                     LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
-                ),
-            )
+                )
+            db_connection_timeout = int(db_connection_timeout)
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is
