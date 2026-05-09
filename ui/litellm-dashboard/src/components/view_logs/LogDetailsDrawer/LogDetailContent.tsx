@@ -38,7 +38,6 @@ const { Text } = Typography;
 
 export interface LogDetailContentProps {
   logEntry: LogEntry;
-  onOpenSettings?: () => void;
   /** When true, log details (messages/response) are still being lazy-loaded. */
   isLoadingDetails?: boolean;
   accessToken?: string | null;
@@ -52,7 +51,7 @@ export interface LogDetailContentProps {
  * Designed to be placed inside LogDetailsDrawer's right panel so it can
  * be reused for both single-log and session-mode views.
  */
-export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
+export function LogDetailContent({ logEntry, isLoadingDetails = false, accessToken }: LogDetailContentProps) {
   const metadata = logEntry.metadata || {};
   const hasError = metadata.status === "failure";
   const errorInfo = hasError ? metadata.error_information : null;
@@ -158,7 +157,7 @@ export function LogDetailContent({ logEntry, onOpenSettings, isLoadingDetails = 
       {/* Configuration Info Message */}
       {missingData && (
         <div className="mb-6">
-          <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
+          <ConfigInfoMessage show={missingData} />
         </div>
       )}
 

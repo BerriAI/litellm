@@ -369,7 +369,7 @@ def test_generic_cost_per_token_gpt55():
 
 
 def test_generic_cost_per_token_gpt55_pro():
-    """gpt-5.5-pro: responses-only model — $60/1M input, $360/1M output, $6/1M cached input."""
+    """gpt-5.5-pro: responses-only model — $30/1M input, $180/1M output, $3/1M cached input."""
     model = "gpt-5.5-pro"
     custom_llm_provider = "openai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -378,18 +378,18 @@ def test_generic_cost_per_token_gpt55_pro():
     model_cost_map = litellm.model_cost[model]
 
     # Sanity-check the map values match OpenAI's published pricing.
-    assert model_cost_map["input_cost_per_token"] == 6e-5
-    assert model_cost_map["output_cost_per_token"] == 3.6e-4
-    assert model_cost_map["cache_read_input_token_cost"] == 6e-6
+    assert model_cost_map["input_cost_per_token"] == 3e-5
+    assert model_cost_map["output_cost_per_token"] == 1.8e-4
+    assert model_cost_map["cache_read_input_token_cost"] == 3e-6
     assert model_cost_map["litellm_provider"] == "openai"
     # gpt-5.5-pro is a responses-only model (no /v1/chat/completions endpoint).
     assert model_cost_map["mode"] == "responses"
     assert "/v1/chat/completions" not in model_cost_map["supported_endpoints"]
     assert "/v1/responses" in model_cost_map["supported_endpoints"]
-    # Inherits GPT-5.4-pro's long-context window + tiered pricing (scaled 2x).
+    # Inherits GPT-5.4-pro's long-context window + tiered pricing.
     assert model_cost_map["max_input_tokens"] == 1050000
-    assert model_cost_map["input_cost_per_token_above_272k_tokens"] == 1.2e-4
-    assert model_cost_map["output_cost_per_token_above_272k_tokens"] == 5.4e-4
+    assert model_cost_map["input_cost_per_token_above_272k_tokens"] == 6e-5
+    assert model_cost_map["output_cost_per_token_above_272k_tokens"] == 2.7e-4
 
     prompt_tokens = 1000
     completion_tokens = 500
@@ -409,6 +409,46 @@ def test_generic_cost_per_token_gpt55_pro():
     assert round(completion_cost, 10) == round(
         model_cost_map["output_cost_per_token"] * completion_tokens, 10
     )
+
+
+@pytest.mark.parametrize(
+    "model,expected_none,expected_xhigh,expected_minimal",
+    [
+        # Verified against OpenAI's live API on 2026-04-24:
+        #   gpt-5.5   -> supports: none, low, medium, high, xhigh
+        #   gpt-5.5-pro -> supports: medium, high, xhigh
+        # Neither supports "minimal"; gpt-5.5-pro additionally does not support "none".
+        # The JSON must reflect this so LiteLLM rejects unsupported values locally
+        # (or drops them with drop_params=True) instead of round-tripping to OpenAI
+        # for a 400.
+        ("gpt-5.5", True, True, False),
+        ("gpt-5.5-2026-04-23", True, True, False),
+        ("gpt-5.5-pro", False, True, False),
+        ("gpt-5.5-pro-2026-04-23", False, True, False),
+    ],
+)
+def test_gpt55_reasoning_effort_flags_match_live_openai_api(
+    model, expected_none, expected_xhigh, expected_minimal
+):
+    """Pin reasoning_effort capability flags to OpenAI's actual API contract.
+
+    Observed via `POST /v1/chat/completions` with reasoning_effort=minimal:
+    ``Unsupported value: 'reasoning_effort' does not support 'minimal' with
+    this model``. gpt-5.5-pro additionally rejects 'none' and 'low'.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    m = litellm.model_cost[model]
+    assert (
+        m.get("supports_none_reasoning_effort") is expected_none
+    ), f"{model}: supports_none_reasoning_effort expected {expected_none}"
+    assert (
+        m.get("supports_xhigh_reasoning_effort") is expected_xhigh
+    ), f"{model}: supports_xhigh_reasoning_effort expected {expected_xhigh}"
+    assert (
+        m.get("supports_minimal_reasoning_effort") is expected_minimal
+    ), f"{model}: supports_minimal_reasoning_effort expected {expected_minimal}"
 
 
 @pytest.mark.parametrize(
@@ -454,8 +494,8 @@ def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(
     [
         ("azure/gpt-5.5", "chat", 5e-6, 3e-5, 5e-7),
         ("azure/gpt-5.5-2026-04-23", "chat", 5e-6, 3e-5, 5e-7),
-        ("azure/gpt-5.5-pro", "responses", 6e-5, 3.6e-4, 6e-6),
-        ("azure/gpt-5.5-pro-2026-04-23", "responses", 6e-5, 3.6e-4, 6e-6),
+        ("azure/gpt-5.5-pro", "responses", 3e-5, 1.8e-4, 3e-6),
+        ("azure/gpt-5.5-pro-2026-04-23", "responses", 3e-5, 1.8e-4, 3e-6),
     ],
 )
 def test_azure_gpt55_entries_present_with_correct_pricing(
@@ -464,7 +504,7 @@ def test_azure_gpt55_entries_present_with_correct_pricing(
     """Day-0 Azure entries for GPT-5.5 mirror the OpenAI pricing structure.
 
     Pricing parity with openai/gpt-5.5* (verified against OpenAI's pricing page
-    on 2026-04-24): $5/$30 input/output per 1M for chat, $60/$360 for pro.
+    on 2026-04-24): $5/$30 input/output per 1M for chat, $30/$180 for pro.
     Cache discount is 10% of input.
     """
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"

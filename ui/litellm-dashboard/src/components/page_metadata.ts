@@ -9,6 +9,8 @@ export const pageDescriptions: Record<string, string> = {
   "llm-playground": "Interactive playground for testing LLM requests",
   models: "Configure and manage LLM models and endpoints",
   agents: "Create and manage AI agents",
+  agentic: "Manage agentic resources: agents, workflow runs, and memory",
+  workflows: "Track and inspect durable workflow run history",
   "mcp-servers": "Configure Model Context Protocol servers",
   memory: "Inspect and manage agent memory entries stored under /v1/memory",
   guardrails: "Set up content moderation and safety guardrails",

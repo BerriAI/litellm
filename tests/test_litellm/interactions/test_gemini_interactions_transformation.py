@@ -147,6 +147,21 @@ class TestInteractionOperationUrls:
         assert "secret-key" not in url
         assert expected_suffix in url
 
+    def test_interaction_id_is_encoded_as_one_path_segment(self, config):
+        with patch(_PATCH_GET_API_KEY, return_value="secret-key"):
+            url, params = config.transform_cancel_interaction_request(
+                interaction_id="../../interactions/other?x=1#frag",
+                api_base="https://generativelanguage.googleapis.com",
+                litellm_params=GenericLiteLLMParams(api_key="secret-key"),
+                headers={},
+            )
+
+        assert (
+            url
+            == "https://generativelanguage.googleapis.com/v1beta/interactions/..%2F..%2Finteractions%2Fother%3Fx%3D1%23frag:cancel"
+        )
+        assert params == {}
+
     def test_get_interaction_raises_without_key(self, config):
         with patch(_PATCH_GET_API_KEY, return_value=None):
             with pytest.raises(ValueError, match="Google API key is required"):

@@ -53,7 +53,7 @@ const createQueryClient = () =>
 
 describe("CredentialsPanel", () => {
   it("should render", () => {
-    mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({
       data: { credentials: [] },
     });
@@ -76,7 +76,7 @@ describe("CredentialsPanel", () => {
       },
     ];
 
-    mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({
       data: { credentials },
     });
@@ -91,7 +91,7 @@ describe("CredentialsPanel", () => {
   });
 
   it("should display empty state when no credentials are provided", () => {
-    mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({
       data: { credentials: [] },
     });
@@ -106,7 +106,7 @@ describe("CredentialsPanel", () => {
   });
 
   it("should open add modal when add button is clicked", async () => {
-    mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({
       data: { credentials: [] },
     });
@@ -157,6 +157,65 @@ describe("CredentialsPanel", () => {
       expect(invalidateSpy).toHaveBeenCalledWith(
         expect.objectContaining({ queryKey: ["credentials"] }),
       );
+    });
+  });
+
+  describe("Admin Viewer write-action gating", () => {
+    // Admin Viewer can VIEW credentials but must not be able to add / edit /
+    // delete them. The page shows the credential list read-only.
+    const credentials: CredentialItem[] = [
+      {
+        credential_name: "openai-key",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "openai" },
+      },
+    ];
+
+    it("hides the Add Credential button for Admin Viewer", () => {
+      mockUseAuthorized.mockReturnValue({
+        accessToken: "test-token",
+        userRole: "Admin Viewer",
+      });
+      mockUseCredentials.mockReturnValue({
+        data: { credentials },
+        refetch: vi.fn(),
+      });
+
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <CredentialsPanel uploadProps={DEFAULT_UPLOAD_PROPS} />
+        </QueryClientProvider>,
+      );
+
+      // Credential row still renders (read parity).
+      expect(screen.getByText("openai-key")).toBeInTheDocument();
+      // But no Add Credential button (write blocked).
+      expect(
+        screen.queryByRole("button", { name: /add credential/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("hides Edit / Delete buttons on existing credentials for Admin Viewer", () => {
+      mockUseAuthorized.mockReturnValue({
+        accessToken: "test-token",
+        userRole: "Admin Viewer",
+      });
+      mockUseCredentials.mockReturnValue({
+        data: { credentials },
+        refetch: vi.fn(),
+      });
+
+      const { container } = render(
+        <QueryClientProvider client={createQueryClient()}>
+          <CredentialsPanel uploadProps={DEFAULT_UPLOAD_PROPS} />
+        </QueryClientProvider>,
+      );
+
+      // The Actions cell should be empty (no edit/delete buttons rendered).
+      // We rely on the row being visible but containing no `<button>`s in
+      // the actions column — easier-to-read assertion: the entire panel
+      // contains zero buttons in admin-viewer mode.
+      expect(container.querySelectorAll("button").length).toBe(0);
     });
   });
 });
