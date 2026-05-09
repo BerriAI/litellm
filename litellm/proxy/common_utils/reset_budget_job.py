@@ -83,6 +83,18 @@ class ResetBudgetJob:
                 "Failed to reset spend counter %s: %s", counter_key, e
             )
 
+    @staticmethod
+    async def _invalidate_source_cache(cache_key: str) -> None:
+        """Remove a cached source row so future fallbacks do not reuse stale spend."""
+        try:
+            from litellm.proxy.proxy_server import user_api_key_cache
+
+            await user_api_key_cache.async_delete_cache(key=cache_key)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to invalidate source cache %s: %s", cache_key, e
+            )
+
     async def _cascade_reset_spend_for_budget_link(
         self,
         budgets_to_reset: List[LiteLLM_BudgetTableFull],
@@ -90,6 +102,7 @@ class ResetBudgetJob:
         counter_key_fn: Callable[[Any], str],
         log_subject: str,
         extra_where: Optional[dict] = None,
+        source_cache_key_fn: Optional[Callable[[Any], str]] = None,
     ):
         """
         Generic cascade: zero spend on rows whose budget_id is in the reset set.
@@ -114,6 +127,8 @@ class ResetBudgetJob:
 
         for row in rows:
             await self._invalidate_spend_counter(counter_key_fn(row))
+            if source_cache_key_fn is not None:
+                await self._invalidate_source_cache(source_cache_key_fn(row))
 
         return update_result
 
@@ -173,6 +188,7 @@ class ResetBudgetJob:
             counter_key_fn=lambda t: f"spend:tag:{t.tag_name}",
             log_subject="tags",
             extra_where={"spend": {"gt": 0}},
+            source_cache_key_fn=lambda t: f"tag:{t.tag_name}",
         )
 
     async def reset_budget_for_litellm_budget_table(self):

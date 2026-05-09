@@ -1268,16 +1268,20 @@ def _make_counter_invalidation_job(monkeypatch):
     spend_counter_cache.redis_cache = MagicMock()
     spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
 
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock()
+
     fake_module = types.ModuleType("litellm.proxy.proxy_server")
     fake_module.spend_counter_cache = spend_counter_cache
+    fake_module.user_api_key_cache = user_api_key_cache
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
 
-    return spend_counter_cache
+    return spend_counter_cache, user_api_key_cache
 
 
 def test_reset_budget_for_team_members_invalidates_redis_counter(monkeypatch):
     """Team-member budget reset clears the Redis spend counter."""
-    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache, _ = _make_counter_invalidation_job(monkeypatch)
 
     expired_budget = type("B", (), {"budget_id": "budget-1"})
     membership = type(
@@ -1309,7 +1313,7 @@ def test_reset_budget_for_keys_invalidates_redis_counter(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
     """Key budget reset must clear the Redis spend counter."""
-    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache, _ = _make_counter_invalidation_job(monkeypatch)
 
     now = datetime.now(timezone.utc)
     mock_prisma_client.data["key"] = [
@@ -1337,7 +1341,7 @@ def test_reset_budget_for_users_invalidates_redis_counter(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
     """User budget reset must clear the Redis spend counter."""
-    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache, _ = _make_counter_invalidation_job(monkeypatch)
 
     now = datetime.now(timezone.utc)
     mock_prisma_client.data["user"] = [
@@ -1365,7 +1369,7 @@ def test_reset_budget_for_teams_invalidates_redis_counter(
     reset_budget_job, mock_prisma_client, monkeypatch
 ):
     """Team budget reset must clear the Redis spend counter."""
-    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache, _ = _make_counter_invalidation_job(monkeypatch)
 
     now = datetime.now(timezone.utc)
     mock_prisma_client.data["team"] = [
@@ -1391,7 +1395,7 @@ def test_reset_budget_for_teams_invalidates_redis_counter(
 
 def test_reset_budget_for_keys_linked_to_budgets_invalidates_redis_counter(monkeypatch):
     """Resetting keys via budget tier must clear each linked key's counter."""
-    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache, _ = _make_counter_invalidation_job(monkeypatch)
 
     expired_budget = type("B", (), {"budget_id": "budget-1"})
     linked_key = type("Key", (), {"token": "sk-linked"})
@@ -1414,7 +1418,7 @@ def test_reset_budget_for_keys_linked_to_budgets_invalidates_redis_counter(monke
 
 def test_reset_budget_for_orgs_linked_to_budgets_invalidates_redis_counter(monkeypatch):
     """Resetting orgs via budget tier must clear each linked org's counter."""
-    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache, _ = _make_counter_invalidation_job(monkeypatch)
 
     expired_budget = type("B", (), {"budget_id": "budget-1"})
     linked_org = type("Org", (), {"organization_id": "org-acme"})
@@ -1440,7 +1444,7 @@ def test_reset_budget_for_orgs_linked_to_budgets_invalidates_redis_counter(monke
 
 def test_reset_budget_for_tags_linked_to_budgets_invalidates_redis_counter(monkeypatch):
     """Resetting tags via budget tier must clear each linked tag's counter."""
-    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache, user_api_key_cache = _make_counter_invalidation_job(monkeypatch)
 
     expired_budget = type("B", (), {"budget_id": "budget-1"})
     linked_tag = type("Tag", (), {"tag_name": "tenant-42"})
@@ -1458,3 +1462,4 @@ def test_reset_budget_for_tags_linked_to_budgets_invalidates_redis_counter(monke
     counter_cache.redis_cache.async_set_cache.assert_any_await(
         key="spend:tag:tenant-42", value=0.0, ttl=60
     )
+    user_api_key_cache.async_delete_cache.assert_any_await(key="tag:tenant-42")
