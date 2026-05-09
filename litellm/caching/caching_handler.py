@@ -29,6 +29,7 @@ from typing import (
     Optional,
     Tuple,
     Union,
+    cast,
 )
 
 from pydantic import BaseModel
@@ -882,6 +883,24 @@ class LLMCachingHandler:
                 )
             else:
                 cached_result = response_obj
+
+        elif (call_type == CallTypes.anthropic_messages.value) and isinstance(
+            cached_result, dict
+        ):
+            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                FakeAnthropicMessagesStreamIterator,
+            )
+            from litellm.types.llms.anthropic_messages.anthropic_response import (
+                AnthropicMessagesResponse,
+            )
+
+            if kwargs.get("stream", False) is True:
+                cached_result = FakeAnthropicMessagesStreamIterator(
+                    response=cast(AnthropicMessagesResponse, cached_result),
+                    logging_obj=logging_obj,
+                    cache_hit=True,
+                )
+            # else: return dict as-is (it's already AnthropicMessagesResponse)
 
         if (
             hasattr(cached_result, "_hidden_params")

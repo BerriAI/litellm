@@ -8,9 +8,11 @@ to run through agentic completion hooks. If an agentic hook fires, the
 follow-up response is chained as Phase 2 of the same iterator.
 """
 
+import asyncio
 import json
 from typing import Any, AsyncIterator, Dict, List, Optional, cast
 
+import litellm
 from litellm._logging import verbose_logger
 
 
@@ -175,6 +177,7 @@ class AgenticAnthropicStreamingIterator:
         self._stream_exhausted = False
         self._hook_processing_done = False
         self._follow_up_iterator: Optional[AsyncIterator] = None
+        self._response_cached = False
 
     def __aiter__(self):
         return self
@@ -198,6 +201,70 @@ class AgenticAnthropicStreamingIterator:
 
         raise StopAsyncIteration
 
+    def _persist_to_cache(self, rebuilt_response: Dict[str, Any]) -> None:
+        """Persist the rebuilt streaming response to the LiteLLM cache."""
+        if self._response_cached:
+            return
+
+        try:
+            caching_handler = getattr(self._logging_obj, "_llm_caching_handler", None)
+            if caching_handler is None:
+                return
+
+            request_kwargs = getattr(caching_handler, "request_kwargs", None)
+            if (
+                not isinstance(request_kwargs, dict)
+                or request_kwargs.get("stream") is not True
+            ):
+                return
+
+            request_kwargs = request_kwargs.copy()
+            preset_cache_key = getattr(caching_handler, "preset_cache_key", None)
+            request_cache_key = request_kwargs.pop("cache_key", None)
+            if preset_cache_key is None:
+                preset_cache_key = request_cache_key
+
+            if request_kwargs.get("metadata") is None:
+                request_kwargs.pop("metadata", None)
+            request_kwargs.pop("custom_llm_provider", None)
+
+            if preset_cache_key is not None:
+                request_kwargs["cache_key"] = preset_cache_key
+
+            if not caching_handler._should_store_result_in_cache(
+                original_function=caching_handler.original_function,
+                kwargs=request_kwargs,
+            ):
+                return
+
+            if litellm.cache is None:
+                return
+
+            cached_response = json.dumps(rebuilt_response)
+            self._cache_write_task = asyncio.create_task(
+                litellm.cache.async_add_cache(
+                    cached_response,
+                    dynamic_cache_object=getattr(caching_handler, "dual_cache", None),
+                    **request_kwargs,
+                )
+            )
+            self._cache_write_task.add_done_callback(
+                lambda task: (
+                    verbose_logger.warning(
+                        "AgenticStreamingIterator: Cache write failed: %s",
+                        task.exception(),
+                    )
+                    if not task.cancelled() and task.exception()
+                    else None
+                )
+            )
+            self._response_cached = True
+        except Exception as e:
+            verbose_logger.warning(
+                "AgenticStreamingIterator: Failed to persist response to cache: %s",
+                str(e),
+            )
+
     async def _process_agentic_hooks(self) -> None:
         """Rebuild the Anthropic response from collected SSE bytes and call hooks."""
         if self._hook_processing_done:
@@ -214,6 +281,8 @@ class AgenticAnthropicStreamingIterator:
                     "AgenticStreamingIterator: Could not rebuild response from SSE bytes"
                 )
                 return
+
+            self._persist_to_cache(rebuilt)
 
             [
                 (
