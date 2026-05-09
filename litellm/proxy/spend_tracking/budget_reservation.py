@@ -95,11 +95,9 @@ async def reserve_budget_for_request(
         route=route,
         llm_router=llm_router,
     )
-    if reservation_cost is None:
-        reservation_cost = await _get_smallest_remaining_budget(
-            counters=counters,
-            current_spend_by_counter_key=current_spend_by_counter_key,
-        )
+    # estimate_request_max_cost still returns None when the model is unknown
+    # to the cost map (no token-priced cost fields, e.g. image/audio routes).
+    # In that case we fall back to read-time enforcement only.
     if reservation_cost is None or reservation_cost <= 0:
         return None
 
@@ -553,32 +551,6 @@ def _coerce_window(window: Any) -> dict:
     return {}
 
 
-async def _get_smallest_remaining_budget(
-    counters: List[_BudgetCounter],
-    current_spend_by_counter_key: Dict[str, float],
-) -> Optional[float]:
-    remaining_budget: Optional[float] = None
-    for counter in counters:
-        current_spend = await _get_current_counter_value(counter=counter)
-        current_spend_by_counter_key[counter.counter_key] = current_spend
-        remaining = counter.max_budget - current_spend
-        if remaining <= 0:
-            raise litellm.BudgetExceededError(
-                current_cost=current_spend,
-                max_budget=counter.max_budget,
-                message=(
-                    "Budget has been exceeded! "
-                    f"{counter.entity_type}={counter.entity_id} "
-                    f"Current cost: {current_spend}, "
-                    f"Max budget: {counter.max_budget}"
-                ),
-            )
-        remaining_budget = (
-            remaining if remaining_budget is None else min(remaining_budget, remaining)
-        )
-    return remaining_budget
-
-
 async def _reserve_counter(
     counter: _BudgetCounter,
     reservation_cost: float,
@@ -946,6 +918,9 @@ def _estimate_input_tokens(
     return None
 
 
+DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK = 16384
+
+
 def _estimate_output_tokens(
     request_body: dict,
     route: str,
@@ -954,15 +929,27 @@ def _estimate_output_tokens(
     if _is_input_only_route(route=route):
         return 0
 
+    requested: Optional[int] = None
     for key in ("max_completion_tokens", "max_tokens", "max_output_tokens"):
-        max_tokens = _to_int(request_body.get(key))
-        if max_tokens is not None:
-            return max_tokens
+        requested = _to_int(request_body.get(key))
+        if requested is not None:
+            break
 
-    # If the caller did not cap output tokens, avoid reserving a model's
-    # theoretical maximum context. The caller can still admit one request by
-    # reserving the smallest remaining budget in reserve_budget_for_request().
-    return None
+    # Clamp at min(requested-or-default, model_max-or-default). Two purposes:
+    # (1) Without an explicit cap we still need a finite reservation so the
+    #     atomic admission counter actually bounds concurrent in-flight cost
+    #     (mirrors parallel_request_limiter_v3's DEFAULT_MAX_TOKENS_ESTIMATE).
+    # (2) An adversarial caller cannot send max_tokens=999999999 to inflate
+    #     the reservation up to remaining team headroom and pin the counter
+    #     at the cap — the model can only physically emit max_output_tokens
+    #     anyway, so reserving more is both wasteful and a DoS surface.
+    model_ceiling = (
+        _to_int(model_info.get("max_output_tokens"))
+        or DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    )
+    if requested is None:
+        requested = DEFAULT_MAX_OUTPUT_TOKENS_FALLBACK
+    return min(requested, model_ceiling)
 
 
 def _count_text_tokens(model: str, text: Any) -> int:
