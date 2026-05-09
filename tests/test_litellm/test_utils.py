@@ -692,6 +692,10 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
             "type": "object",
             "properties": {
                 "supports_computer_use": {"type": "boolean"},
+                "audio_transcription_config": {
+                    "type": "string",
+                    "enum": ["azure_speech"],
+                },
                 "cache_creation_input_audio_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr": {"type": "number"},
@@ -979,6 +983,27 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         error_message = "Cost validation failed:\n" + "\n".join(violations)
         error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
         raise AssertionError(error_message)
+
+
+def test_azure_speech_audio_transcription_config_is_valid_model_cost_metadata():
+    """
+    Regression guard for Azure Speech STT model-cost metadata.
+
+    The strict model registry schema should allow the config marker used to
+    select the Azure Speech transcription transformation.
+    """
+
+    test_aaamodel_prices_and_context_window_json_is_valid()
+    prod_json = os.path.join(
+        os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json"
+    )
+    with open(prod_json, "r") as model_prices_file:
+        actual_json = json.load(model_prices_file)
+
+    assert (
+        actual_json["azure/speech/azure-stt"]["audio_transcription_config"]
+        == "azure_speech"
+    )
 
 
 def test_max_tokens_consistency():
