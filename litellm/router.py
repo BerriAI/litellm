@@ -58,6 +58,7 @@ from litellm.constants import (
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_HEALTH_CHECK_STALENESS_MULTIPLIER,
     DEFAULT_MAX_LRU_CACHE_SIZE,
+    MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -307,6 +308,8 @@ class Router:
         ] = RouterGeneralSettings(),
         deployment_affinity_ttl_seconds: int = 3600,
         model_group_affinity_config: Optional[Dict[str, List[str]]] = None,
+        prompt_prefix_affinity_tokens: int = 2048,
+        prompt_prefix_affinity_min_tokens: int = MINIMUM_PROMPT_CACHE_TOKEN_COUNT,
         ignore_invalid_deployments: bool = False,
         enable_health_check_routing: bool = False,
         health_check_staleness_threshold: Optional[int] = None,
@@ -344,6 +347,11 @@ class Router:
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
+            prompt_prefix_affinity_tokens (int): Number of canonical prompt-prefix
+                tokens used for deterministic prompt-prefix routing. Defaults to 2048.
+            prompt_prefix_affinity_min_tokens (int): Minimum canonical prompt token
+                count before prompt-prefix affinity applies. Defaults to
+                MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
         Returns:
             Router: An instance of the litellm.Router class.
@@ -636,6 +644,8 @@ class Router:
         self.routing_strategy_args = routing_strategy_args
         self.provider_budget_config = provider_budget_config
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
+        self.prompt_prefix_affinity_tokens = prompt_prefix_affinity_tokens
+        self.prompt_prefix_affinity_min_tokens = prompt_prefix_affinity_min_tokens
         self.router_budget_logger: Optional[RouterBudgetLimiting] = None
         if RouterBudgetLimiting.should_init_router_budget_limiter(
             model_list=model_list, provider_budget_config=self.provider_budget_config
@@ -1390,6 +1400,40 @@ class Router:
                 litellm.logging_callback_manager.add_litellm_callback(ec_callback)
 
         # ---------------------------------------------------------------------
+        # Prompt prefix affinity
+        # ---------------------------------------------------------------------
+        if "prompt_prefix_affinity" in optional_pre_call_checks:
+            from litellm.router_utils.pre_call_checks.prompt_prefix_affinity_check import (
+                PromptPrefixAffinityCheck,
+            )
+
+            if self.optional_callbacks is None:
+                self.optional_callbacks = []
+
+            existing_prompt_prefix_callback: Optional[PromptPrefixAffinityCheck] = None
+            for cb in self.optional_callbacks:
+                if isinstance(cb, PromptPrefixAffinityCheck):
+                    existing_prompt_prefix_callback = cb
+                    break
+
+            if existing_prompt_prefix_callback is not None:
+                existing_prompt_prefix_callback.prefix_tokens = (
+                    self.prompt_prefix_affinity_tokens
+                )
+                existing_prompt_prefix_callback.min_tokens = (
+                    self.prompt_prefix_affinity_min_tokens
+                )
+            else:
+                prompt_prefix_callback = PromptPrefixAffinityCheck(
+                    prefix_tokens=self.prompt_prefix_affinity_tokens,
+                    min_tokens=self.prompt_prefix_affinity_min_tokens,
+                )
+                self.optional_callbacks.append(prompt_prefix_callback)
+                litellm.logging_callback_manager.add_litellm_callback(
+                    prompt_prefix_callback
+                )
+
+        # ---------------------------------------------------------------------
         # Remaining optional pre-call checks
         # ---------------------------------------------------------------------
         for pre_call_check in optional_pre_call_checks:
@@ -1399,6 +1443,7 @@ class Router:
                 "responses_api_deployment_check",
                 "session_affinity",
                 "encrypted_content_affinity",
+                "prompt_prefix_affinity",
             ):
                 continue
             if pre_call_check == "prompt_caching":
