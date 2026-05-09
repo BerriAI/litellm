@@ -4799,3 +4799,28 @@ def test_map_tool_helper_strict_false_omits_field():
     result, _ = config._map_tool_helper(tool)
     assert result is not None
     assert "strict" not in result
+
+
+def test_map_tool_helper_strict_false_function_overrides_parameters_true():
+    """strict=False on function level must not be overridden by a leftover
+    strict=True in parameters."""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get weather",
+            "strict": False,
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "strict": True,
+            },
+        },
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert "strict" not in result
+    assert "strict" not in result["input_schema"]
