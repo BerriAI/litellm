@@ -121,6 +121,26 @@ def test_invalid_auth_metrics(app_with_middleware, monkeypatch):
     assert "Unauthorized access to metrics endpoint" in response.text
 
 
+def test_invalid_auth_metrics_includes_optout_hint(app_with_middleware, monkeypatch):
+    """
+    The 401 body must tell operators how to restore the previous unauthenticated
+    behavior, otherwise a Prometheus scraper that worked pre-upgrade just sees
+    "Malformed API Key" with no actionable migration path.
+    """
+    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        fake_invalid_auth,
+    )
+
+    client = TestClient(app_with_middleware)
+    response = client.get("/metrics")
+
+    assert response.status_code == 401, response.text
+    assert "require_auth_for_metrics_endpoint" in response.text
+    assert "false" in response.text
+
+
 def test_metrics_auth_uses_real_auth_when_route_is_public(
     app_with_middleware, monkeypatch
 ):
