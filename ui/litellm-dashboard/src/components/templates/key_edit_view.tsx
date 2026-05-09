@@ -274,11 +274,8 @@ export function KeyEditView({
       }
       // If it's already an array (shouldn't happen, but handle it), keep as is
 
-      // Drop allowed_routes from the patch when unchanged. Backend rejects any
-      // non-empty allowed_routes from non-proxy-admins (LIT-2681), so re-sending
-      // the existing value on a no-op save would 403. Stripping it lets the
-      // backend treat absence as "leave alone." Compare as sets so a server-side
-      // reorder of the array doesn't register as a user edit.
+      // Backend rejects non-empty allowed_routes from non-admins, so re-sending
+      // an unchanged value 403s a team admin. Set compare tolerates reorder.
       const originalRoutesSet = new Set(Array.isArray(keyData.allowed_routes) ? keyData.allowed_routes : []);
       const submittedRoutesSet = new Set(Array.isArray(values.allowed_routes) ? values.allowed_routes : []);
       const allowedRoutesUnchanged =

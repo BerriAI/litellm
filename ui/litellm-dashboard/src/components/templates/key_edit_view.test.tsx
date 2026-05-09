@@ -467,10 +467,6 @@ describe("KeyEditView", () => {
     });
   });
 
-  // LIT-2681: re-sending the original allowed_routes value on a no-op save
-  // trips the proxy-admin gate for non-admins. Verify a no-op save on an
-  // AI APIs key (allowed_routes = ["llm_api_routes"]) does not include
-  // allowed_routes in the patch.
   it("should omit allowed_routes from submit when value is unchanged", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const aiApisKeyData = {
@@ -503,9 +499,6 @@ describe("KeyEditView", () => {
     });
   });
 
-  // LIT-2681: when the key never had allowed_routes set (null / undefined), an
-  // untouched submit must also strip the field — not coast through with `[]`,
-  // which would still bypass the gate but adds noise the patch doesn't need.
   it("should omit allowed_routes from submit when keyData.allowed_routes is null and form is untouched", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const keyDataNullRoutes = {
@@ -538,8 +531,6 @@ describe("KeyEditView", () => {
     });
   });
 
-  // LIT-2681: server-side reorder of allowed_routes shouldn't register as a
-  // user edit. Use a Set-based comparison so the patch still strips correctly.
   it("should omit allowed_routes from submit when server returned routes in a different order", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const keyDataReordered = {
