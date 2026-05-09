@@ -847,6 +847,110 @@ async def test_should_skip_reservation_for_per_pixel_image_model(
     assert reservation is None
 
 
+@pytest.mark.asyncio
+async def test_should_use_token_pricing_for_chat_model_with_image_cost_field(
+    spend_counter_state,
+):
+    """Several chat and embedding models carry ``input_cost_per_image`` /
+    ``output_cost_per_image`` to price multimodal vision *input*, not image
+    generation (e.g. gemini-3.1-pro-preview, azure/gpt-realtime-*,
+    amazon.titan-embed-image-v1). _estimate_image_generation_cost must gate
+    on ``mode`` so these models still go through the token-priced path —
+    otherwise a long chat reserves a fraction of a cent instead of the true
+    token cost."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-multimodal-chat",
+        spend=0.0,
+        max_budget=10.0,
+    )
+    await key_cache.async_set_cache(key="key-multimodal-chat", value=valid_token)
+
+    # Roughly the gemini-3.1-pro-preview shape: chat-mode model that
+    # carries an output_cost_per_image alongside token pricing.
+    output_cost_per_token = 1.2e-5
+    request_body = {
+        "model": "gemini-3.1-pro-preview",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 1000,
+    }
+    expected_cost = 1000 * output_cost_per_token  # token-priced path, not 1 × $0.00012
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "chat",
+            "input_cost_per_token": 2e-6,
+            "output_cost_per_token": output_cost_per_token,
+            "output_cost_per_image": 0.00012,
+            "max_output_tokens": 64000,
+        },
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    # Token-priced path: reservation ≈ output_tokens × output_cost_per_token,
+    # plus a small input-token contribution. Must NOT collapse to the
+    # per-image price ($0.00012) which would indicate the image-gen branch
+    # incorrectly fired for this chat model.
+    assert reservation["reserved_cost"] == pytest.approx(expected_cost, rel=0.05)
+    assert reservation["reserved_cost"] > 0.001  # well above per-image price
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_reserve_image_edit_cost_per_image(
+    spend_counter_state,
+):
+    """``image_edit`` models (Flux Kontext, Stability inpaint/outpaint, etc.)
+    bill per generated image just like ``image_generation`` and must get
+    the same atomic per-image reservation."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-image-edit",
+        spend=0.0,
+        max_budget=10.0,
+    )
+    await key_cache.async_set_cache(key="key-image-edit", value=valid_token)
+
+    request_body = {"model": "stability/inpaint", "prompt": "a cat", "n": 2}
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "image_edit",
+            "output_cost_per_image": 0.05,
+        },
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/v1/images/edits",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.10)  # 2 × $0.05
+    await release_budget_reservation(reservation)
+
+
 def test_should_start_window_without_reset_at_at_duration_boundary():
     before = datetime.now(timezone.utc) - timedelta(hours=1)
 

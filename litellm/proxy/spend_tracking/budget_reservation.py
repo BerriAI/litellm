@@ -881,16 +881,20 @@ def _estimate_image_generation_cost(
     providers — OpenAI's dall-e-3 entry uses ``input_cost_per_image`` while
     aiml/dall-e-3 uses ``output_cost_per_image`` — so both are summed.
     """
-    output_cost_per_image = _to_float(model_info.get("output_cost_per_image"))
-    input_cost_per_image = _to_float(model_info.get("input_cost_per_image"))
-    is_image_gen = (
-        model_info.get("mode") == "image_generation"
-        or output_cost_per_image is not None
-        or input_cost_per_image is not None
-    )
-    if not is_image_gen:
+    # Gate strictly on `mode`. Several chat and embedding models carry
+    # ``input_cost_per_image`` / ``output_cost_per_image`` to price multimodal
+    # *vision input* (e.g. ``gemini-3.1-pro-preview``, ``azure/gpt-realtime-*``,
+    # ``amazon.titan-embed-image-v1``). Falling back to "treat as image-gen if
+    # an image cost field is present" would short-circuit the token-priced
+    # path for those models and reserve a fraction of a cent instead of the
+    # true per-token cost. All real image-generation entries in
+    # ``model_prices_and_context_window.json`` carry ``mode: image_generation``
+    # or ``mode: image_edit``, so the field-presence fallback is unnecessary.
+    if model_info.get("mode") not in ("image_generation", "image_edit"):
         return None
 
+    output_cost_per_image = _to_float(model_info.get("output_cost_per_image"))
+    input_cost_per_image = _to_float(model_info.get("input_cost_per_image"))
     cost_per_image = (output_cost_per_image or 0.0) + (input_cost_per_image or 0.0)
     if cost_per_image <= 0:
         return None
