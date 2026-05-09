@@ -739,9 +739,18 @@ async def pass_through_request(  # noqa: PLR0915
         # SigV4-signed callers (e.g. Bedrock) attach the exact bytes that were
         # signed via request.state; we must send those instead of re-encoding the
         # parsed dict (hooks mutate it, breaking the signature / Content-Length).
-        state_raw_body: Optional[Union[str, bytes]] = getattr(
-            request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None
+        # Tolerate request objects without `state` (test fixtures) and only honor
+        # values httpx accepts for `content=`.
+        _request_state = getattr(request, "state", None)
+        state_raw_body: Optional[Union[str, bytes]] = (
+            getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
+            if _request_state is not None
+            else None
         )
+        if state_raw_body is not None and not isinstance(
+            state_raw_body, (str, bytes, bytearray)
+        ):
+            state_raw_body = None
 
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
