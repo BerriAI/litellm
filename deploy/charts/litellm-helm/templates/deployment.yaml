@@ -100,6 +100,16 @@ spec:
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
             {{- end }}
+            {{- if and .Values.db.useExisting .Values.db.secret.readReplicaUrlKey }}
+            - name: DATABASE_URL_READ_REPLICA
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.readReplicaUrlKey }}
+            {{- else if .Values.db.readReplicaUrl }}
+            - name: DATABASE_URL_READ_REPLICA
+              value: {{ .Values.db.readReplicaUrl | quote }}
+            {{- end }}
             - name: PROXY_MASTER_KEY
               valueFrom:
                 secretKeyRef:
