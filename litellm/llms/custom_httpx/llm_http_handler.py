@@ -5502,6 +5502,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
 
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(
                 e=e,
@@ -5612,6 +5613,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
 
+            response.raise_for_status()
         except Exception as e:
             raise self._handle_error(
                 e=e,
