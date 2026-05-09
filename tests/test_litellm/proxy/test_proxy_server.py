@@ -1729,6 +1729,67 @@ async def test_add_proxy_budget_to_db_only_creates_user_no_keys():
 
 
 @pytest.mark.asyncio
+async def test_add_proxy_budget_to_db_backfills_budget_reset_at():
+    """
+    Test that _upsert_proxy_budget_with_reset_at_backfill issues a conditional
+    update_many with `WHERE budget_reset_at IS NULL` to backfill the column on
+    rows that pre-existed without a reset schedule. Without this, the proxy
+    admin row stays at NULL and reset_budget_for_litellm_users never matches
+    it (NULL < now() is unknown in SQL), so the global proxy budget never
+    resets.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    import litellm
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    litellm.budget_duration = "30d"
+    litellm.max_budget = 100.0
+    litellm_proxy_budget_name = "litellm-proxy-budget"
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock(return_value={"count": 1})
+
+    mock_generate_key_helper = AsyncMock(
+        return_value={
+            "user_id": litellm_proxy_budget_name,
+            "max_budget": 100.0,
+            "budget_duration": "30d",
+            "spend": 0,
+            "models": [],
+        }
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.generate_key_helper_fn",
+            mock_generate_key_helper,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+    ):
+        await ProxyStartupEvent._upsert_proxy_budget_with_reset_at_backfill(
+            litellm_proxy_budget_name
+        )
+
+    # Upsert ran with the configured budget
+    mock_generate_key_helper.assert_called_once()
+
+    # Backfill update_many ran with the conditional WHERE
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once()
+    backfill_call = mock_prisma.db.litellm_usertable.update_many.call_args
+    assert backfill_call.kwargs["where"]["user_id"] == litellm_proxy_budget_name
+    assert backfill_call.kwargs["where"]["budget_reset_at"] is None
+
+    # The backfilled value must be a real future datetime — anything else and
+    # reset_budget_for_litellm_users would still skip the row.
+    from datetime import datetime, timezone
+
+    backfilled_reset_at = backfill_call.kwargs["data"]["budget_reset_at"]
+    assert isinstance(backfilled_reset_at, datetime)
+    assert backfilled_reset_at > datetime.now(timezone.utc)
+
+
+@pytest.mark.asyncio
 async def test_custom_ui_sso_sign_in_handler_config_loading():
     """
     Test that custom_ui_sso_sign_in_handler from config gets properly loaded into the global variable
