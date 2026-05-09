@@ -133,6 +133,17 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         raw_response: httpx.Response,
     ) -> TranscriptionResponse:
         response_json = raw_response.json()
+        recognition_status = response_json.get("RecognitionStatus")
+        if recognition_status is not None and recognition_status != "Success":
+            raise AzureSpeechAudioTranscriptionException(
+                message=(
+                    "Azure AI Speech transcription failed with "
+                    f"RecognitionStatus={recognition_status}."
+                ),
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+            )
+
         text = self._extract_text(response_json)
         response = TranscriptionResponse(text=text)
         response._hidden_params = response_json

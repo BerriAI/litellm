@@ -183,6 +183,24 @@ def test_azure_speech_audio_transcription_response_transform(payload, expected_t
     assert result._hidden_params == payload
 
 
+def test_azure_speech_audio_transcription_response_raises_on_failed_status():
+    config = AzureSpeechAudioTranscriptionConfig()
+    response = httpx.Response(
+        200,
+        json={
+            "RecognitionStatus": "NoMatch",
+            "Offset": 0,
+            "Duration": 0,
+        },
+    )
+
+    with pytest.raises(
+        AzureSpeechAudioTranscriptionException,
+        match="RecognitionStatus=NoMatch",
+    ):
+        config.transform_audio_transcription_response(response)
+
+
 def test_azure_speech_transcription_routes_through_provider_config(monkeypatch):
     expected = TranscriptionResponse(text="hello")
     audio_handler = MagicMock(return_value=expected)
