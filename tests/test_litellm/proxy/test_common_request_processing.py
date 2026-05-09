@@ -2033,9 +2033,9 @@ class TestHandleLLMApiExceptionDictDetail:
 @pytest.mark.asyncio
 class TestHandleLLMApiExceptionBase64Truncation:
     """
-    Verify that _handle_llm_api_exception uses logger.error() (not .exception())
-    and applies _truncate_base64_in_string to prevent large base64 payloads from
-    bloating log output and blocking the event loop in K8s stdout environments.
+    Verify that _handle_llm_api_exception uses logger.error() with a manually
+    truncated traceback (not .exception() which dumps untruncated traceback)
+    to prevent large base64 payloads from bloating log output.
     """
 
     async def test_base64_truncated_in_log_message(self, monkeypatch):
@@ -2082,9 +2082,8 @@ class TestHandleLLMApiExceptionBase64Truncation:
         log_output = logged_messages[0]
         assert "base64_data truncated" in log_output
         assert large_base64 not in log_output
-        assert len(log_output) < 1000
 
-    async def test_no_traceback_with_base64_logged(self, monkeypatch):
+    async def test_no_exception_logger_used(self, monkeypatch):
         """Ensure .exception() is NOT used (which would dump untruncated traceback)."""
         from litellm.proxy._types import UserAPIKeyAuth
 
@@ -2135,3 +2134,48 @@ class TestHandleLLMApiExceptionBase64Truncation:
         )
         assert len(error_calls) >= 1
         assert "base64_data truncated" in error_calls[0]
+
+    async def test_traceback_preserved_but_truncated(self, monkeypatch):
+        """Traceback info should still be in the log output for debugging, but truncated."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        large_base64 = "C" * 300_000
+        exc_msg = f'Provider error - data:image/png;base64,{large_base64}'
+        exc = litellm.exceptions.APIConnectionError(
+            message=exc_msg, llm_provider="fal_ai", model="fal-ai/image-edit"
+        )
+
+        logged_messages = []
+
+        def capture_error(msg, *args):
+            logged_messages.append(msg % args if args else msg)
+
+        processor = ProxyBaseLLMRequestProcessing(data={})
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        monkeypatch.setattr(
+            "litellm.proxy.common_request_processing.verbose_proxy_logger.error",
+            capture_error,
+        )
+
+        from litellm.proxy._types import ProxyException
+
+        try:
+            await processor._handle_llm_api_exception(
+                e=exc,
+                user_api_key_dict=user_api_key_dict,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except ProxyException:
+            pass
+
+        assert len(logged_messages) >= 1
+        log_output = logged_messages[0]
+        # Traceback info is present (class name, "Traceback" keyword)
+        assert "Traceback" in log_output or "APIConnectionError" in log_output
+        # But base64 is truncated everywhere
+        assert large_base64 not in log_output
+        assert "base64_data truncated" in log_output
