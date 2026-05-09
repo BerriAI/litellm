@@ -18,6 +18,7 @@ sys.path.insert(
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     pass_through_request,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -2153,7 +2154,12 @@ async def test_create_pass_through_route_custom_body_url_target():
     endpoint_func = create_pass_through_route(
         endpoint=unique_path,
         target="https://bedrock-agent-runtime.us-east-1.amazonaws.com",
-        custom_headers={"Content-Type": "application/json"},
+        custom_headers=Headers(
+            {
+                "Authorization": "AWS4-HMAC-SHA256 signed",
+                "Content-Type": "application/json",
+            }
+        ),
         _forward_headers=True,
     )
 
@@ -2200,6 +2206,8 @@ async def test_create_pass_through_route_custom_body_url_target():
         setattr(
             mock_request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY, bedrock_body
         )
+        signed_body = json.dumps(bedrock_body)
+        setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, signed_body)
 
         await endpoint_func(
             request=mock_request,
@@ -2213,6 +2221,11 @@ async def test_create_pass_through_route_custom_body_url_target():
         # The critical assertion: custom_body takes precedence over
         # the body parsed from the raw request
         assert call_kwargs["custom_body"] == bedrock_body
+        assert call_kwargs["custom_raw_body"] == signed_body
+        assert call_kwargs["custom_headers"] == {
+            "authorization": "AWS4-HMAC-SHA256 signed",
+            "content-type": "application/json",
+        }
 
 
 @pytest.mark.asyncio

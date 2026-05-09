@@ -6,7 +6,7 @@ import posixpath
 import traceback
 from base64 import b64encode
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Mapping, Optional, Tuple, Union, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -62,6 +62,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
     PassthroughStandardLoggingPayload,
 )
 
@@ -375,6 +376,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         headers: dict,
         requested_query_params: Optional[dict] = None,
         custom_body: Optional[dict] = None,
+        custom_raw_body: Optional[Union[str, bytes]] = None,
     ) -> httpx.Response:
         """
         Make a non-streaming HTTP request
@@ -387,6 +389,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 url=url,
                 headers=headers,
                 params=requested_query_params,
+            )
+        elif custom_raw_body is not None:
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+                content=custom_raw_body,
             )
         else:
             response = await async_client.request(
@@ -406,6 +416,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         headers: dict,
         requested_query_params: Optional[dict] = None,
         _parsed_body: Optional[dict] = None,
+        custom_raw_body: Optional[Union[str, bytes]] = None,
         forward_multipart: bool = False,
     ) -> httpx.Response:
         """
@@ -419,6 +430,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 url=url,
                 headers=headers,
                 params=requested_query_params,
+            )
+        elif custom_raw_body is not None:
+            response = await async_client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
+                params=requested_query_params,
+                content=custom_raw_body,
             )
         elif (
             HttpPassThroughEndpointHelpers.is_multipart(request) is True
@@ -659,6 +678,7 @@ async def pass_through_request(  # noqa: PLR0915
     custom_headers: dict,
     user_api_key_dict: UserAPIKeyAuth,
     custom_body: Optional[dict] = None,
+    custom_raw_body: Optional[Union[str, bytes]] = None,
     forward_headers: Optional[bool] = False,
     merge_query_params: Optional[bool] = False,
     query_params: Optional[dict] = None,
@@ -677,6 +697,9 @@ async def pass_through_request(  # noqa: PLR0915
         custom_headers: The custom headers
         user_api_key_dict: The user API key dictionary
         custom_body: The custom body
+        custom_raw_body: Exact request body bytes/str for upstream (e.g. SigV4-signed).
+            When set, this is sent as ``content=...`` instead of re-encoding ``custom_body``
+            as JSON, so signatures and Content-Length stay consistent.
         forward_headers: Whether to forward headers
         merge_query_params: Whether to merge query params
         query_params: The query params
@@ -738,10 +761,12 @@ async def pass_through_request(  # noqa: PLR0915
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
         is_multipart = (
-            HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
+            HttpPassThroughEndpointHelpers.is_multipart(request)
+            and custom_body is None
+            and custom_raw_body is None
         )
 
-        if custom_body:
+        if custom_body is not None:
             _parsed_body = custom_body
         elif is_multipart:
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
@@ -883,13 +908,22 @@ async def pass_through_request(  # noqa: PLR0915
                     )
                 )
             else:
-                req = async_client.build_request(
-                    "POST",
-                    url,
-                    json=_parsed_body,
-                    params=requested_query_params,
-                    headers=headers,
-                )
+                if custom_raw_body is not None:
+                    req = async_client.build_request(
+                        "POST",
+                        url,
+                        content=custom_raw_body,
+                        params=requested_query_params,
+                        headers=headers,
+                    )
+                else:
+                    req = async_client.build_request(
+                        "POST",
+                        url,
+                        json=_parsed_body,
+                        params=requested_query_params,
+                        headers=headers,
+                    )
 
                 response = await async_client.send(req, stream=stream)
 
@@ -925,6 +959,7 @@ async def pass_through_request(  # noqa: PLR0915
                 headers=headers,
                 requested_query_params=requested_query_params,
                 _parsed_body=_parsed_body,
+                custom_raw_body=custom_raw_body,
                 forward_multipart=is_multipart,
             )
         )
@@ -1225,7 +1260,7 @@ async def _parse_request_data_by_content_type(
 def create_pass_through_route(
     endpoint,
     target: str,
-    custom_headers: Optional[dict] = None,
+    custom_headers: Optional[Mapping[str, Any]] = None,
     _forward_headers: Optional[bool] = False,
     _merge_query_params: Optional[bool] = False,
     dependencies: Optional[List] = None,
@@ -1334,9 +1369,12 @@ def create_pass_through_route(
                 )
             )
 
-            # Ensure custom_headers is a dict
+            # Ensure custom_headers is a dict. Botocore returns a HeadersDict
+            # for SigV4-prepared requests, which is a Mapping but not a dict.
             headers_dict = (
-                param_custom_headers if isinstance(param_custom_headers, dict) else {}
+                dict(param_custom_headers)
+                if isinstance(param_custom_headers, Mapping)
+                else {}
             )
 
             # Ensure query_params and custom_body are dicts or None
@@ -1350,6 +1388,11 @@ def create_pass_through_route(
             state_custom_body: Optional[dict] = getattr(
                 request.state,
                 LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
+                None,
+            )
+            state_raw_body: Optional[Union[str, bytes]] = getattr(
+                request.state,
+                LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
                 None,
             )
             final_custom_body: Optional[dict] = None
@@ -1372,6 +1415,7 @@ def create_pass_through_route(
                     ),
                     stream=is_streaming_request or stream,
                     custom_body=final_custom_body,
+                    custom_raw_body=state_raw_body,
                     cost_per_request=cast(Optional[float], param_cost_per_request),
                     custom_llm_provider=custom_llm_provider,
                     guardrails_config=cast(Optional[dict], param_guardrails),
@@ -1379,6 +1423,8 @@ def create_pass_through_route(
             finally:
                 if hasattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY):
                     delattr(request.state, LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY)
+                if hasattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY):
+                    delattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY)
 
     return endpoint_func
 
