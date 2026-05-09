@@ -59,7 +59,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
-from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+from litellm.litellm_core_utils.logging_utils import (
+    _truncate_base64_in_string,
+    truncate_base64_in_messages,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     CallbackDelete,
@@ -5829,10 +5832,10 @@ async def async_assistants_data_generator(
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occured - {}".format(
-                str(e)
-            )
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.async_assistants_data_generator(): Exception occured - %s\n%s",
+            _truncate_base64_in_string(str(e)),
+            _truncate_base64_in_string("".join(traceback.format_exception(e))),
         )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -5986,10 +5989,10 @@ async def async_data_generator(
         done_message = "[DONE]"
         yield f"data: {done_message}\n\n"
     except Exception as e:
-        verbose_proxy_logger.exception(
-            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
-                str(e)
-            )
+        verbose_proxy_logger.error(
+            "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s\n%s",
+            _truncate_base64_in_string(str(e)),
+            _truncate_base64_in_string("".join(traceback.format_exception(e))),
         )
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -6350,6 +6353,7 @@ class ProxyStartupEvent:
         from litellm.proxy.zx.zx_endpoints import (
             jobs as zx_jobs,
         )
+
         for job in zx_jobs:
             job(scheduler)
 
@@ -12809,7 +12813,10 @@ async def get_config_list(
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
+    if (
+        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+    ):
         raise HTTPException(
             status_code=400,
             detail={
@@ -14018,6 +14025,7 @@ async def get_routes():
 from litellm.proxy.zx.zx_endpoints import (
     routers as zx_routers,
 )
+
 for zx_router in zx_routers:
     app.include_router(zx_router)
 
