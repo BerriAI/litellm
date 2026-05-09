@@ -25,6 +25,7 @@ import {
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { useRegisterGuardrail } from "@/app/(dashboard)/hooks/guardrails/useRegisterGuardrail";
+import { isAdminRole } from "@/utils/roles";
 
 type GuardrailStatus = "active" | "pending" | "rejected";
 
@@ -229,6 +230,7 @@ type GuardrailCardProps = {
   guardrail: TeamGuardrail;
   isSelected: boolean;
   isHeadersExpanded: boolean;
+  isAdmin: boolean;
   onSelect: () => void;
   onToggleForwardKey: () => void;
   onToggleHeaders: () => void;
@@ -240,6 +242,7 @@ function GuardrailCard({
   guardrail: g,
   isSelected,
   isHeadersExpanded,
+  isAdmin,
   onSelect,
   onToggleForwardKey,
   onToggleHeaders,
@@ -304,7 +307,7 @@ function GuardrailCard({
             >
               {isSelected ? "Close" : "Review"}
             </button>
-            {g.status === "pending" && (
+            {isAdmin && g.status === "pending" && (
               <>
                 <button
                   type="button"
@@ -391,6 +394,7 @@ function ConfigRow({
 
 type DetailPanelProps = {
   guardrail: TeamGuardrail;
+  isAdmin: boolean;
   onClose: () => void;
   onApprove: () => void;
   onReject: () => void;
@@ -403,6 +407,7 @@ type DetailPanelProps = {
 
 function DetailPanel({
   guardrail: g,
+  isAdmin,
   onClose,
   onApprove,
   onReject,
@@ -709,7 +714,7 @@ function DetailPanel({
             <ExternalLinkIcon className="h-4 w-4" />
             Test Endpoint
           </button>
-          {g.status === "pending" && (
+          {isAdmin && g.status === "pending" && (
             <div className="flex gap-2">
               <button
                 type="button"
@@ -800,9 +805,11 @@ function ConfirmDialog({
 
 interface TeamGuardrailsTabProps {
   accessToken: string | null;
+  userRole?: string;
 }
 
-export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
+export function TeamGuardrailsTab({ accessToken, userRole }: TeamGuardrailsTabProps) {
+  const isAdmin = userRole ? isAdminRole(userRole) : false;
   const [guardrails, setGuardrails] = useState<TeamGuardrail[]>([]);
   const [summary, setSummary] = useState({
     total: 0,
@@ -1041,6 +1048,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
               guardrail={g}
               isSelected={selectedId === g.id}
               isHeadersExpanded={expandedHeaders.has(g.id)}
+              isAdmin={isAdmin}
               onSelect={() => setSelectedId(selectedId === g.id ? null : g.id)}
               onToggleForwardKey={() => toggleForwardKey(g.id)}
               onToggleHeaders={() => toggleHeaders(g.id)}
@@ -1053,6 +1061,7 @@ export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
       {selected && (
         <DetailPanel
           guardrail={selected}
+          isAdmin={isAdmin}
           onClose={() => setSelectedId(null)}
           onApprove={() =>
             setConfirmAction({ id: selected.id, action: "approve" })
