@@ -215,3 +215,7 @@ def test_azure_speech_stt_has_non_zero_input_pricing():
     pricing = json.loads(pricing_path.read_text())
 
     assert pricing["azure/speech/azure-stt"]["input_cost_per_second"] > 0
+    assert (
+        pricing["azure/speech/azure-stt"]["audio_transcription_config"]
+        == "azure_speech"
+    )
