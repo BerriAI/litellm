@@ -42,7 +42,7 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
         # DashScope's compatible-mode embeddings API accepts the same params as OpenAI.
         # `dimensions` / `encoding_format` are only honored by text-embedding-v3 / v4;
         # earlier versions silently ignore them server-side.
-        return ["dimensions", "encoding_format"]
+        return ["dimensions", "encoding_format", "user"]
 
     def map_openai_params(
         self,
