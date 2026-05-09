@@ -277,12 +277,13 @@ export function KeyEditView({
       // Drop allowed_routes from the patch when unchanged. Backend rejects any
       // non-empty allowed_routes from non-proxy-admins (LIT-2681), so re-sending
       // the existing value on a no-op save would 403. Stripping it lets the
-      // backend treat absence as "leave alone."
-      const originalAllowedRoutes = Array.isArray(keyData.allowed_routes) ? keyData.allowed_routes : [];
+      // backend treat absence as "leave alone." Compare as sets so a server-side
+      // reorder of the array doesn't register as a user edit.
+      const originalRoutesSet = new Set(Array.isArray(keyData.allowed_routes) ? keyData.allowed_routes : []);
+      const submittedRoutesSet = new Set(Array.isArray(values.allowed_routes) ? values.allowed_routes : []);
       const allowedRoutesUnchanged =
-        Array.isArray(values.allowed_routes) &&
-        values.allowed_routes.length === originalAllowedRoutes.length &&
-        values.allowed_routes.every((r: string, i: number) => r === originalAllowedRoutes[i]);
+        originalRoutesSet.size === submittedRoutesSet.size &&
+        [...submittedRoutesSet].every((r) => originalRoutesSet.has(r));
       if (allowedRoutesUnchanged) {
         delete values.allowed_routes;
       }

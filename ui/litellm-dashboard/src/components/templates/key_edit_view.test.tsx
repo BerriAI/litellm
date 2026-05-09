@@ -503,6 +503,75 @@ describe("KeyEditView", () => {
     });
   });
 
+  // LIT-2681: when the key never had allowed_routes set (null / undefined), an
+  // untouched submit must also strip the field — not coast through with `[]`,
+  // which would still bypass the gate but adds noise the patch doesn't need.
+  it("should omit allowed_routes from submit when keyData.allowed_routes is null and form is untouched", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataNullRoutes = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: null as unknown as string[],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataNullRoutes}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect("allowed_routes" in callArgs).toBe(false);
+    });
+  });
+
+  // LIT-2681: server-side reorder of allowed_routes shouldn't register as a
+  // user edit. Use a Set-based comparison so the patch still strips correctly.
+  it("should omit allowed_routes from submit when server returned routes in a different order", async () => {
+    const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+    const keyDataReordered = {
+      ...MOCK_KEY_DATA,
+      allowed_routes: ["beta_routes", "alpha_routes"],
+    };
+    renderWithProviders(
+      <KeyEditView
+        keyData={keyDataReordered}
+        onCancel={() => {}}
+        onSubmit={onSubmitMock}
+        accessToken={"test-token"}
+        userID={"test-user"}
+        userRole={"admin"}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /save changes/i })).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole("button", { name: /save changes/i });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(onSubmitMock).toHaveBeenCalled();
+      const callArgs = onSubmitMock.mock.calls[0][0];
+      expect("allowed_routes" in callArgs).toBe(false);
+    });
+  });
+
   it("should pass access_group_ids to onSubmit when saving key with access groups", async () => {
     const onSubmitMock = vi.fn().mockResolvedValue(undefined);
     const keyDataWithAccessGroups = {
