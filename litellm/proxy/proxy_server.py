@@ -15,11 +15,13 @@ import threading
 import time
 import traceback
 import warnings
+from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Deque,
     Dict,
     List,
     Literal,
@@ -6484,6 +6486,57 @@ def _restamp_streaming_chunk_model(
     return chunk, model_mismatch_logged
 
 
+def _get_prometheus_logger_for_streaming_metrics() -> Optional[Any]:
+    for callback in litellm.callbacks:
+        if hasattr(callback, "record_streaming_chunk_overhead"):
+            return callback
+    return None
+
+
+def _record_streaming_chunk_overhead(
+    *,
+    prometheus_logger: Optional[Any],
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict,
+    chunk_start_time: float,
+    is_first_chunk: bool,
+) -> None:
+    if prometheus_logger is None:
+        return
+    try:
+        prometheus_logger.record_streaming_chunk_overhead(
+            user_api_key_dict=user_api_key_dict,
+            request_data=request_data,
+            duration_seconds=time.perf_counter() - chunk_start_time,
+            is_first_chunk=is_first_chunk,
+        )
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to record streaming chunk overhead metric: %s", e
+        )
+
+
+async def _timestamp_streaming_chunks(
+    *, response: Any, chunk_start_times: Deque[float]
+) -> AsyncGenerator[Any, None]:
+    async for chunk in response:
+        chunk_start_times.append(time.perf_counter())
+        yield chunk
+
+
+def _get_timestamped_streaming_response(
+    response: Any,
+) -> Tuple[AsyncGenerator[Any, None], Deque[float]]:
+    chunk_start_times: Deque[float] = deque()
+    return (
+        _timestamp_streaming_chunks(
+            response=response,
+            chunk_start_times=chunk_start_times,
+        ),
+        chunk_start_times,
+    )
+
+
 async def async_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -6498,11 +6551,21 @@ async def async_data_generator(
         # Previously "".join(str_so_far_parts) was called every chunk, re-joining
         # the entire accumulated response. String += is O(n) amortized total.
         _str_so_far: str = ""
+        prometheus_logger = _get_prometheus_logger_for_streaming_metrics()
+        is_first_streaming_chunk = True
+        timestamped_response, chunk_start_times = _get_timestamped_streaming_response(
+            response
+        )
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
-            response=response,
+            response=timestamped_response,
             request_data=request_data,
         ):
+            chunk_start_time = (
+                chunk_start_times.popleft()
+                if chunk_start_times
+                else time.perf_counter()
+            )
             ### CALL HOOKS ### - modify outgoing data
             chunk = await proxy_logging_obj.async_post_call_streaming_hook(
                 user_api_key_dict=user_api_key_dict,
@@ -6530,14 +6593,21 @@ async def async_data_generator(
 
             try:
                 yield f"data: {chunk}\n\n"
+                _record_streaming_chunk_overhead(
+                    prometheus_logger=prometheus_logger,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                    chunk_start_time=chunk_start_time,
+                    is_first_chunk=is_first_streaming_chunk,
+                )
+                is_first_streaming_chunk = False
             except Exception as e:
                 yield f"data: {str(e)}\n\n"
 
         # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
             yield error_message
-        done_message = "[DONE]"
-        yield f"data: {done_message}\n\n"
+        yield "data: [DONE]\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(

@@ -104,6 +104,7 @@ class ResponseMetadata:
             overhead_ms = round(total_response_time_ms - llm_api_duration_ms, 4)
             self._update_hidden_params(
                 {
+                    "llm_api_duration_ms": round(llm_api_duration_ms, 4),
                     "litellm_overhead_time_ms": overhead_ms,
                 }
             )

@@ -189,6 +189,11 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_llm_api_latency_metric",
     "litellm_llm_api_time_to_first_token_metric",
     "litellm_request_total_latency_metric",
+    "litellm_upstream_latency_seconds",
+    "litellm_gateway_latency_seconds",
+    "litellm_gateway_overhead_seconds",
+    "litellm_stream_first_chunk_overhead_latency_metric",
+    "litellm_stream_chunk_overhead_latency_metric",
     "litellm_overhead_latency_metric",
     "litellm_remaining_requests_metric",
     "litellm_remaining_tokens_metric",
@@ -289,6 +294,10 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
+    litellm_upstream_latency_seconds = litellm_request_total_latency_metric
+    litellm_gateway_latency_seconds = litellm_request_total_latency_metric
+    litellm_gateway_overhead_seconds = litellm_request_total_latency_metric
+
     litellm_request_queue_time_seconds = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -300,6 +309,23 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
+
+    _stream_chunk_overhead_labels = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.ROUTE.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+    ]
+    litellm_stream_first_chunk_overhead_latency_metric = _stream_chunk_overhead_labels
+    litellm_stream_chunk_overhead_latency_metric = _stream_chunk_overhead_labels
 
     # Guardrail metrics - these use custom labels (guardrail_name, status, error_type, hook_type)
     # which are not part of UserAPIKeyLabelNames
@@ -351,15 +377,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
     ]
 
-    litellm_overhead_latency_metric = [
-        UserAPIKeyLabelNames.MODEL_GROUP.value,
-        UserAPIKeyLabelNames.API_PROVIDER.value,
-        UserAPIKeyLabelNames.API_BASE.value,
-        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
-        UserAPIKeyLabelNames.API_KEY_HASH.value,
-        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
-        UserAPIKeyLabelNames.MODEL_ID.value,
-    ]
+    litellm_overhead_latency_metric = litellm_request_total_latency_metric
 
     litellm_remaining_requests_metric = [
         UserAPIKeyLabelNames.MODEL_GROUP.value,
@@ -652,6 +670,12 @@ class PrometheusMetricLabels:
             "litellm_llm_api_latency_metric",
             "litellm_llm_api_time_to_first_token_metric",
             "litellm_request_total_latency_metric",
+            "litellm_upstream_latency_seconds",
+            "litellm_gateway_latency_seconds",
+            "litellm_gateway_overhead_seconds",
+            "litellm_overhead_latency_metric",
+            "litellm_stream_first_chunk_overhead_latency_metric",
+            "litellm_stream_chunk_overhead_latency_metric",
             "litellm_request_queue_time_seconds",
             "litellm_proxy_total_requests_metric",
             "litellm_proxy_failed_requests_metric",
