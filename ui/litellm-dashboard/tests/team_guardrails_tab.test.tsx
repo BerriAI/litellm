@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderWithProviders, screen } from "./test-utils";
 import { TeamGuardrailsTab } from "../src/components/guardrails/TeamGuardrailsTab";
+import useAuthorized from "../src/app/(dashboard)/hooks/useAuthorized";
 
 vi.mock("../src/components/networking", () => ({
   listGuardrailSubmissions: vi.fn(),
@@ -20,6 +21,10 @@ vi.mock("../src/components/common_components/team_dropdown", () => ({
   default: () => null,
 }));
 
+vi.mock("../src/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: vi.fn(),
+}));
+
 import { listGuardrailSubmissions } from "../src/components/networking";
 
 const pendingSubmission = {
@@ -37,7 +42,19 @@ const pendingSubmission = {
   submitted_at: "2026-05-09T00:00:00Z",
 };
 
+const baseAuth = {
+  token: "test-token",
+  accessToken: "test-token",
+  userId: "user-1",
+  userEmail: "user@example.com",
+  premiumUser: false,
+  disabledPersonalKeyCreation: null,
+  showSSOBanner: false,
+};
+
 describe("TeamGuardrailsTab — approve/reject role gate", () => {
+  const mockUseAuthorized = vi.mocked(useAuthorized);
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listGuardrailSubmissions).mockResolvedValue({
@@ -47,11 +64,9 @@ describe("TeamGuardrailsTab — approve/reject role gate", () => {
   });
 
   it("hides Approve and Reject buttons for an internal user on a pending submission", async () => {
-    renderWithProviders(
-      <TeamGuardrailsTab accessToken="test-token" userRole="Internal User" />
-    );
+    mockUseAuthorized.mockReturnValue({ ...baseAuth, userRole: "Internal User" });
+    renderWithProviders(<TeamGuardrailsTab accessToken="test-token" />);
 
-    // Wait for the submission row to render
     await screen.findByText("test-pending-guardrail");
 
     expect(screen.queryByRole("button", { name: /approve/i })).not.toBeInTheDocument();
@@ -59,9 +74,8 @@ describe("TeamGuardrailsTab — approve/reject role gate", () => {
   });
 
   it("shows Approve and Reject buttons for an admin on a pending submission", async () => {
-    renderWithProviders(
-      <TeamGuardrailsTab accessToken="test-token" userRole="Admin" />
-    );
+    mockUseAuthorized.mockReturnValue({ ...baseAuth, userRole: "Admin" });
+    renderWithProviders(<TeamGuardrailsTab accessToken="test-token" />);
 
     await screen.findByText("test-pending-guardrail");
 
@@ -70,6 +84,7 @@ describe("TeamGuardrailsTab — approve/reject role gate", () => {
   });
 
   it("hides Approve and Reject buttons when userRole is undefined (defaults to non-admin)", async () => {
+    mockUseAuthorized.mockReturnValue({ ...baseAuth, userRole: undefined });
     renderWithProviders(<TeamGuardrailsTab accessToken="test-token" />);
 
     await screen.findByText("test-pending-guardrail");

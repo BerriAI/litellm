@@ -25,6 +25,7 @@ import {
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import { useRegisterGuardrail } from "@/app/(dashboard)/hooks/guardrails/useRegisterGuardrail";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isAdminRole } from "@/utils/roles";
 
 type GuardrailStatus = "active" | "pending" | "rejected";
@@ -805,10 +806,10 @@ function ConfirmDialog({
 
 interface TeamGuardrailsTabProps {
   accessToken: string | null;
-  userRole?: string;
 }
 
-export function TeamGuardrailsTab({ accessToken, userRole }: TeamGuardrailsTabProps) {
+export function TeamGuardrailsTab({ accessToken }: TeamGuardrailsTabProps) {
+  const { userRole } = useAuthorized();
   const isAdmin = userRole ? isAdminRole(userRole) : false;
   const [guardrails, setGuardrails] = useState<TeamGuardrail[]>([]);
   const [summary, setSummary] = useState({
