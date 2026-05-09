@@ -239,6 +239,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
     KEY_BULK_UPDATE = "/key/bulk_update"
+    TEAM_KEY_BULK_UPDATE = "/team/key/bulk_update"
     KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
     # info and health routes
@@ -540,6 +541,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
