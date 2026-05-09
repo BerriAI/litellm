@@ -171,6 +171,60 @@ class ResetBudgetJob:
 
         return update_result
 
+    async def reset_budget_for_tags_linked_to_budgets(
+        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
+    ):
+        """
+        Resets the spend for tags linked to budget tiers that are being reset.
+
+        ``LiteLLM_TagTable.spend`` is the fallback value used by
+        ``_tag_max_budget_check`` when computing tag spend, so a stale value here
+        keeps a tag permanently over budget after its first overage. The reset
+        job has historically resets keys/users/teams/end-users on every cycle —
+        tags were missing the equivalent handler, so their ``spend`` column was
+        never zeroed even though ``budget_reset_at`` advanced. See
+        BerriAI/litellm#27481.
+
+        Only tags with accumulated spend (``spend > 0``) are touched, so a
+        ``find_many`` over an idle pool of tags is cheap.
+        """
+        budget_ids = [
+            budget.budget_id
+            for budget in budgets_to_reset
+            if budget.budget_id is not None
+        ]
+        if not budget_ids:
+            return
+
+        where_clause: dict = {
+            "budget_id": {"in": budget_ids},
+            "spend": {"gt": 0},
+        }
+
+        try:
+            tags = await self.prisma_client.db.litellm_tagtable.find_many(
+                where=where_clause
+            )
+        except Exception as e:
+            tags = []
+            verbose_proxy_logger.warning(
+                "Failed to fetch tags for counter invalidation: %s", e
+            )
+
+        update_result = await self.prisma_client.db.litellm_tagtable.update_many(
+            where=where_clause,
+            data={
+                "spend": 0,
+            },
+        )
+
+        for tag in tags:
+            tag_name = getattr(tag, "tag_name", None)
+            if tag_name:
+                await self._invalidate_spend_counter(f"spend:tag:{tag_name}")
+
+        return update_result
+
     async def reset_budget_for_litellm_budget_table(self):
         """
         Resets the budget for all LiteLLM End-Users (Customers), and Team Members if their budget has expired
@@ -234,6 +288,10 @@ class ResetBudgetJob:
                 )
 
                 await self.reset_budget_for_keys_linked_to_budgets(
+                    budgets_to_reset=budgets_to_reset
+                )
+
+                await self.reset_budget_for_tags_linked_to_budgets(
                     budgets_to_reset=budgets_to_reset
                 )
 
