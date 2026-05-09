@@ -19,6 +19,7 @@ import redis.asyncio as async_redis  # type: ignore
 
 from litellm import get_secret, get_secret_str
 from litellm._redis_credential_provider import (
+    AzureADCredentialProvider,
     GCPIAMCredentialProvider,
     _generate_gcp_iam_access_token,
 )
@@ -210,13 +211,12 @@ def _generate_azure_ad_redis_token(
     azure_client_secret: Optional[str] = None,
 ) -> str:
     """
-    Generate Azure AD access token for Redis authentication.
-
-    Used by async paths (cluster, standard, connection pool) where a one-shot
-    token is needed. Creates a credential, fetches one token, and returns it.
-
-    For the sync path, prefer ``create_azure_ad_redis_connect_func`` which
-    keeps the credential alive across connections for automatic token refresh.
+    One-shot helper that builds a credential and fetches a single Azure AD
+    access token for Redis. Each call rebuilds the credential and performs a
+    network round-trip, so it should not be used in steady-state Redis flows
+    — the sync (``create_azure_ad_redis_connect_func``) and async paths
+    (``AzureADCredentialProvider``) keep the credential alive across
+    connections so the Azure SDK's internal cache + silent refresh apply.
     """
     credential = _build_azure_credential(
         azure_client_id=azure_client_id,
@@ -277,6 +277,11 @@ def create_azure_ad_redis_connect_func(
         if str_if_bytes(auth_response) != "OK":
             raise AuthenticationError("Azure AD authentication failed for Redis")
 
+    # Attach the live credential object so async paths can wrap it in
+    # AzureADCredentialProvider for refresh-aware token retrieval. The raw
+    # client_id/tenant_id/secret are intentionally NOT exposed here — the
+    # credential closure already holds them.
+    ad_connect._azure_credential = credential  # type: ignore[attr-defined]
     return ad_connect
 
 
@@ -411,11 +416,12 @@ def _get_redis_client_logic(**env_overrides):
             azure_tenant_id=_azure_tenant_id,
             azure_client_secret=_azure_client_secret,
         )
-        # Store Azure config on the function for async cluster/pool access
+        # Marker for async paths to detect Azure AD auth. The live credential
+        # object is attached separately as `_azure_credential` by
+        # `create_azure_ad_redis_connect_func`; the raw client_id/tenant_id/secret
+        # are intentionally NOT exposed on the function to avoid leaking
+        # credentials via inspection or logging.
         redis_kwargs["redis_connect_func"]._azure_redis_ad_token = True  # type: ignore[attr-defined]
-        redis_kwargs["redis_connect_func"]._azure_client_id = _azure_client_id  # type: ignore[attr-defined]
-        redis_kwargs["redis_connect_func"]._azure_tenant_id = _azure_tenant_id  # type: ignore[attr-defined]
-        redis_kwargs["redis_connect_func"]._azure_client_secret = _azure_client_secret  # type: ignore[attr-defined]
 
     # Always remove Azure-specific kwargs that shouldn't be passed to Redis client
     redis_kwargs.pop("azure_redis_ad_token", None)
@@ -568,34 +574,14 @@ def get_redis_async_client(  # noqa: PLR0915
             cluster_kwargs["credential_provider"] = GCPIAMCredentialProvider(
                 redis_connect_func._gcp_service_account
             )
-        # Handle Azure AD authentication for async clusters
-        # NOTE: Token is static for the lifetime of this cluster client; client
-        # must be recreated when it expires (~1 hour).
-        elif redis_connect_func and hasattr(
-            redis_connect_func, "_azure_redis_ad_token"
-        ):
-            _az_client_id = getattr(redis_connect_func, "_azure_client_id", None)
-            _az_tenant_id = getattr(redis_connect_func, "_azure_tenant_id", None)
-            _az_client_secret = getattr(
-                redis_connect_func, "_azure_client_secret", None
+        # Handle Azure AD authentication for async clusters via CredentialProvider
+        # so the credential's internal cache + silent refresh runs per connection
+        # (mirrors GCP IAM above; avoids static-token-baked-in-pool expiry).
+        elif redis_connect_func and hasattr(redis_connect_func, "_azure_credential"):
+            cluster_kwargs["credential_provider"] = AzureADCredentialProvider(
+                redis_connect_func._azure_credential,
+                username=os.environ.get("REDIS_USERNAME") or None,
             )
-            try:
-                access_token = _generate_azure_ad_redis_token(
-                    azure_client_id=_az_client_id,
-                    azure_tenant_id=_az_tenant_id,
-                    azure_client_secret=_az_client_secret,
-                )
-                cluster_kwargs["password"] = access_token
-                _username = os.environ.get("REDIS_USERNAME", "")
-                if _username:
-                    cluster_kwargs["username"] = _username
-            except Exception as e:
-                verbose_logger.error(f"Failed to generate Azure AD access token: {e}")
-                from redis.exceptions import AuthenticationError
-
-                raise AuthenticationError(
-                    "Failed to generate Azure AD access token for Redis"
-                )
 
         new_startup_nodes: List[ClusterNode] = []
 
@@ -630,42 +616,20 @@ def get_redis_async_client(  # noqa: PLR0915
     if "sentinel_nodes" in redis_kwargs and "service_name" in redis_kwargs:
         return _init_async_redis_sentinel(redis_kwargs)
 
-    # Handle Azure AD / GCP IAM authentication for standard async Redis (non-cluster)
-    # The async client doesn't support redis_connect_func, so generate token upfront
-    # and set as password (same approach as async cluster path above).
+    # Wrap GCP / Azure AD auth in a CredentialProvider for the standard async
+    # Redis client. The async client doesn't support redis_connect_func, but it
+    # does honour credential_provider — which is called per connection, so the
+    # underlying SDK can refresh tokens silently before they expire.
     redis_connect_func = redis_kwargs.pop("redis_connect_func", None)
-    if redis_connect_func and hasattr(redis_connect_func, "_azure_redis_ad_token"):
-        _az_client_id = getattr(redis_connect_func, "_azure_client_id", None)
-        _az_tenant_id = getattr(redis_connect_func, "_azure_tenant_id", None)
-        _az_client_secret = getattr(redis_connect_func, "_azure_client_secret", None)
-        try:
-            access_token = _generate_azure_ad_redis_token(
-                azure_client_id=_az_client_id,
-                azure_tenant_id=_az_tenant_id,
-                azure_client_secret=_az_client_secret,
-            )
-            redis_kwargs["password"] = access_token
-            _username = os.environ.get("REDIS_USERNAME", "")
-            if _username:
-                redis_kwargs["username"] = _username
-        except Exception as e:
-            verbose_logger.error(f"Failed to generate Azure AD access token: {e}")
-            from redis.exceptions import AuthenticationError
-
-            raise AuthenticationError(
-                "Failed to generate Azure AD access token for Redis"
-            )
+    if redis_connect_func and hasattr(redis_connect_func, "_azure_credential"):
+        redis_kwargs["credential_provider"] = AzureADCredentialProvider(
+            redis_connect_func._azure_credential,
+            username=os.environ.get("REDIS_USERNAME") or None,
+        )
     elif redis_connect_func and hasattr(redis_connect_func, "_gcp_service_account"):
-        try:
-            access_token = _generate_gcp_iam_access_token(
-                redis_connect_func._gcp_service_account
-            )
-            redis_kwargs["password"] = access_token
-        except Exception as e:
-            verbose_logger.error(f"Failed to generate GCP IAM access token: {e}")
-            from redis.exceptions import AuthenticationError
-
-            raise AuthenticationError("Failed to generate GCP IAM access token")
+        redis_kwargs["credential_provider"] = GCPIAMCredentialProvider(
+            redis_connect_func._gcp_service_account
+        )
 
     _pretty_print_redis_config(redis_kwargs=redis_kwargs)
 
@@ -701,40 +665,19 @@ def get_redis_connection_pool(
                 )
         return async_redis.BlockingConnectionPool.from_url(**pool_kwargs)
 
-    # Handle Azure AD / GCP IAM auth for connection pool — async pools don't
-    # support redis_connect_func, so resolve the token now and set as password.
+    # Wrap GCP / Azure AD auth in a CredentialProvider so pool-managed
+    # connections re-fetch tokens via the SDK's internal cache + silent refresh
+    # rather than reusing a single token captured at pool creation.
     redis_connect_func = redis_kwargs.pop("redis_connect_func", None)
-    if redis_connect_func and hasattr(redis_connect_func, "_azure_redis_ad_token"):
-        _az_client_id = getattr(redis_connect_func, "_azure_client_id", None)
-        _az_tenant_id = getattr(redis_connect_func, "_azure_tenant_id", None)
-        _az_client_secret = getattr(redis_connect_func, "_azure_client_secret", None)
-        try:
-            access_token = _generate_azure_ad_redis_token(
-                azure_client_id=_az_client_id,
-                azure_tenant_id=_az_tenant_id,
-                azure_client_secret=_az_client_secret,
-            )
-            redis_kwargs["password"] = access_token
-        except Exception as e:
-            verbose_logger.error(f"Failed to generate Azure AD token for pool: {e}")
-            from redis.exceptions import AuthenticationError
-
-            raise AuthenticationError(
-                "Failed to generate Azure AD access token for Redis connection pool"
-            )
+    if redis_connect_func and hasattr(redis_connect_func, "_azure_credential"):
+        redis_kwargs["credential_provider"] = AzureADCredentialProvider(
+            redis_connect_func._azure_credential,
+            username=os.environ.get("REDIS_USERNAME") or None,
+        )
     elif redis_connect_func and hasattr(redis_connect_func, "_gcp_service_account"):
-        try:
-            access_token = _generate_gcp_iam_access_token(
-                redis_connect_func._gcp_service_account
-            )
-            redis_kwargs["password"] = access_token
-        except Exception as e:
-            verbose_logger.error(f"Failed to generate GCP IAM token for pool: {e}")
-            from redis.exceptions import AuthenticationError
-
-            raise AuthenticationError(
-                "Failed to generate GCP IAM access token for Redis connection pool"
-            )
+        redis_kwargs["credential_provider"] = GCPIAMCredentialProvider(
+            redis_connect_func._gcp_service_account
+        )
 
     connection_class = async_redis.Connection
     if "ssl" in redis_kwargs:
