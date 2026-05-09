@@ -1508,14 +1508,34 @@ class BaseAWSLLM:
         sigv4.add_auth(request)
 
         request_headers_dict = dict(request.headers)
-        # Add back original headers after signing. Only headers in SignedHeaders
-        # are integrity-protected; forwarded headers (x-forwarded-*) must remain unsigned.
+        # Replay caller headers only when they are not bound to the fresh SigV4 signature.
+        authorization_header = next(
+            (
+                str(header_value)
+                for header_name, header_value in request_headers_dict.items()
+                if header_name.lower() == "authorization" and header_value is not None
+            ),
+            "",
+        )
+        signed_header_names = {"authorization", "host"}
+        for auth_part in authorization_header.split(","):
+            auth_part = auth_part.strip()
+            if auth_part.startswith("SignedHeaders="):
+                # SigV4 binds these header names to the current body; replaying stale
+                # retry headers would make AWS verify a different canonical request.
+                signed_header_names.update(
+                    signed_header.strip().lower()
+                    for signed_header in auth_part.removeprefix("SignedHeaders=").split(
+                        ";"
+                    )
+                    if signed_header.strip()
+                )
+                break
         for header_name, header_value in headers.items():
-            if header_value is not None:
-                request_headers_dict[header_name] = header_value
-        if (
-            headers is not None and "Authorization" in headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request_headers_dict["Authorization"] = headers["Authorization"]
+            if header_value is None:
+                continue
+            if header_name.lower() in signed_header_names:
+                continue
+            request_headers_dict[header_name] = header_value
 
         return request_headers_dict, request.body

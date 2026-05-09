@@ -74,6 +74,15 @@ def _os_environ_without_aws_keys() -> Dict[str, str]:
     return {k: v for k, v in os.environ.items() if not k.startswith("AWS_")}
 
 
+def _get_header_value_case_insensitive(
+    headers: Dict[str, Any], header_name: str
+) -> Any:
+    for key, value in headers.items():
+        if key.lower() == header_name.lower():
+            return value
+    raise AssertionError(f"Missing header {header_name}; found {list(headers.keys())}")
+
+
 def test_ambient_env_credentials_use_iam_cache_across_instances():
     """Else-branch env path uses shared iam_cache; second call on another instance does not refetch."""
     base_a = BaseAWSLLM()
@@ -537,6 +546,73 @@ def test_sign_request_with_sigv4():
         assert result_headers["Authorization"] != "Bearer test_token"
         assert result_headers["Content-Type"] == "application/json"
         assert result_body == mock_request.body
+
+
+def test_sign_request_replays_only_unsigned_original_headers():
+    llm = BaseAWSLLM()
+    mock_credentials = Credentials("test_key", "test_secret", "test_token")
+    stale_authorization = (
+        "AWS4-HMAC-SHA256 Credential=old, "
+        "SignedHeaders=content-type;host;x-amz-date, Signature=old"
+    )
+    stale_amz_date = "19990101T000000Z"
+    stale_security_token = "old_token"
+    headers = {
+        "Authorization": stale_authorization,
+        "x-amz-date": stale_amz_date,
+        "x-amz-security-token": stale_security_token,
+        "X-Forwarded-For": "203.0.113.10",
+        "X-Custom-Header": "caller-value",
+    }
+
+    with (
+        patch("litellm.llms.bedrock.base_aws_llm.get_secret_str", return_value=None),
+        patch.object(llm, "get_credentials", return_value=mock_credentials),
+        patch.object(llm, "_get_aws_region_name", return_value="us-west-2"),
+    ):
+        result_headers, result_body = llm._sign_request(
+            service_name="bedrock",
+            headers=headers,
+            optional_params={
+                "aws_access_key_id": "test_key",
+                "aws_secret_access_key": "test_secret",
+                "aws_region_name": "us-west-2",
+            },
+            request_data={"prompt": "test"},
+            api_base="https://bedrock-runtime.us-west-2.amazonaws.com/model/test/invoke",
+        )
+
+    authorization = _get_header_value_case_insensitive(result_headers, "authorization")
+    amz_date = _get_header_value_case_insensitive(result_headers, "x-amz-date")
+    security_token = _get_header_value_case_insensitive(
+        result_headers, "x-amz-security-token"
+    )
+
+    assert authorization != stale_authorization
+    assert authorization.startswith("AWS4-HMAC-SHA256")
+    assert "SignedHeaders=" in authorization
+    assert "x-amz-date" in authorization
+    assert "x-amz-security-token" in authorization
+    assert amz_date != stale_amz_date
+    assert security_token != stale_security_token
+    assert all(
+        value != stale_authorization
+        for key, value in result_headers.items()
+        if key.lower() == "authorization"
+    )
+    assert all(
+        value != stale_amz_date
+        for key, value in result_headers.items()
+        if key.lower() == "x-amz-date"
+    )
+    assert all(
+        value != stale_security_token
+        for key, value in result_headers.items()
+        if key.lower() == "x-amz-security-token"
+    )
+    assert result_headers["X-Forwarded-For"] == "203.0.113.10"
+    assert result_headers["X-Custom-Header"] == "caller-value"
+    assert result_body is not None
 
 
 def test_sign_request_with_api_key_bearer_token():
