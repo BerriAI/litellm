@@ -2232,6 +2232,43 @@ def test_convert_chat_completion_file_type_with_url_file_id_routes_to_file_url(u
     assert "file_id" not in file_item
 
 
+def test_convert_chat_completion_file_type_url_file_id_wins_over_existing_file_url():
+    """
+    If a caller provides both `file_url` and a URL-shaped `file_id`, the URL
+    from `file_id` is the explicit instruction we honour — it overwrites any
+    pre-existing `file_url` rather than being silently dropped.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    file_id_url = "https://mirror.example.com/doc.pdf"
+    other_url = "https://canonical.example.com/doc.pdf"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {"file_id": file_id_url, "file_url": other_url},
+                },
+            ],
+        }
+    ]
+
+    (
+        input_items,
+        _,
+    ) = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    file_item = input_items[0]["content"][0]
+    assert file_item["type"] == "input_file"
+    assert file_item["file_url"] == file_id_url
+    assert "file_id" not in file_item
+
+
 def test_convert_chat_completion_file_type_passes_through_file_url():
     """
     When the caller already provides `file_url` directly (Responses-API-shaped

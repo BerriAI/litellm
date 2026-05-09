@@ -712,6 +712,36 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return image_param
 
+    @staticmethod
+    def _convert_content_file_to_input_file(item: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Convert a Chat Completion `file` content block to a Responses API
+        `input_file` block.
+
+        Chat Completion shape:
+            {"type": "file",
+             "file": {"file_id" | "file_data" | "filename" | "file_url": ...}}
+        Responses API `input_file` accepts `file_id`, `file_data`, `file_url`,
+        and optional `filename`.
+
+        If `file_id` is an http(s) URL, route it to `file_url` (overwriting any
+        previously-set value) — providers (OpenAI, Azure) reject URLs in
+        `file_id` and require an uploaded file identifier such as
+        `file-abc123`. The URL the caller placed in `file_id` wins on
+        conflict so it is never silently dropped.
+        """
+        file_data = item.get("file") if isinstance(item, dict) else None
+        converted: Dict[str, Any] = {"type": "input_file"}
+        if isinstance(file_data, dict):
+            for key in ("file_id", "file_data", "filename", "file_url"):
+                if key in file_data:
+                    converted[key] = file_data[key]
+            file_id = converted.get("file_id")
+            if isinstance(file_id, str) and file_id.startswith(("https://", "http://")):
+                converted["file_url"] = file_id
+                converted.pop("file_id", None)
+        return converted
+
     def _convert_content_to_responses_format(
         self,
         content: Optional[
@@ -783,29 +813,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                 f"Chat provider:   image -> {converted}"
                             )
                         elif item_type == "file":
-                            # Map Chat Completion file to Responses API input_file.
-                            # {"type": "file", "file": {"file_id" | "file_data" | "filename" | "file_url": ...}}
-                            # -> {"type": "input_file", "file_id" | "file_data" | "filename" | "file_url": ...}
-                            # If `file_id` is an http(s) URL, route it to `file_url` instead — providers
-                            # require `file_id` to be an uploaded file identifier (e.g. "file-abc123") and
-                            # reject URLs there.
-                            file_data = item.get("file", {})
-                            converted = {"type": "input_file"}
-                            if isinstance(file_data, dict):
-                                for key in (
-                                    "file_id",
-                                    "file_data",
-                                    "filename",
-                                    "file_url",
-                                ):
-                                    if key in file_data:
-                                        converted[key] = file_data[key]
-                                file_id = converted.get("file_id")
-                                if isinstance(file_id, str) and file_id.startswith(
-                                    ("https://", "http://")
-                                ):
-                                    converted.setdefault("file_url", file_id)
-                                    converted.pop("file_id", None)
+                            converted = self._convert_content_file_to_input_file(
+                                item
+                            )
                             result.append(converted)
                             verbose_logger.debug(
                                 f"Chat provider:   file -> {converted}"
