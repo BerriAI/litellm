@@ -1070,7 +1070,7 @@ class TestRequestExtraHeaders:
 
     @pytest.mark.asyncio
     async def test_extra_headers_merged_with_static_headers(self):
-        """Request extra headers are merged on top of static (baked-in) headers."""
+        """Forwarded headers are passed through alongside non-conflicting static headers."""
         operation = {}
         func = create_tool_function(
             path="/data",
@@ -1095,6 +1095,63 @@ class TestRequestExtraHeaders:
             headers_sent = call_args[1]["headers"]
             assert headers_sent.get("X-Static") == "static-value"
             assert headers_sent.get("X-TOKEN") == "dynamic-value"
+
+    @pytest.mark.asyncio
+    async def test_static_headers_win_over_forwarded_on_conflict(self):
+        """Static (operator) headers must override forwarded (caller) headers on name conflict."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Tenant": "operator-tenant"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"X-Tenant": "caller-spoofed"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-Tenant") == "operator-tenant"
+            assert "caller-spoofed" not in headers_sent.values()
+
+    @pytest.mark.asyncio
+    async def test_static_headers_win_case_insensitively(self):
+        """Forwarded header with different casing must not bypass the static-wins rule."""
+        operation = {}
+        func = create_tool_function(
+            path="/data",
+            method="get",
+            operation=operation,
+            base_url="https://api.example.com",
+            headers={"X-Tenant": "operator-tenant"},
+        )
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("get", "ok")
+            mock_client.return_value = async_client
+
+            token = _request_extra_headers.set({"x-tenant": "caller-spoofed"})
+            try:
+                result = await func()
+            finally:
+                _request_extra_headers.reset(token)
+
+            assert result == "ok"
+            call_args = async_client.get.call_args
+            headers_sent = call_args[1]["headers"]
+            assert headers_sent.get("X-Tenant") == "operator-tenant"
+            assert "x-tenant" not in headers_sent
+            assert "caller-spoofed" not in headers_sent.values()
 
     @pytest.mark.asyncio
     async def test_auth_header_still_overrides_extra_headers(self):
