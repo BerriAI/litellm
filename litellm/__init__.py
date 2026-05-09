@@ -206,6 +206,7 @@ add_user_information_to_llm_headers: Optional[bool] = (
 )
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 skip_system_message_in_guardrail: bool = False
+skip_tool_message_in_guardrail: bool = False
 ### end of callbacks #############
 
 email: Optional[str] = (

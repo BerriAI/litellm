@@ -482,6 +482,11 @@ class InMemoryGuardrailHandler:
                 "skip_system_message_in_guardrail",
                 getattr(litellm_params, "skip_system_message_in_guardrail", None),
             )
+            setattr(
+                custom_guardrail_callback,
+                "skip_tool_message_in_guardrail",
+                getattr(litellm_params, "skip_tool_message_in_guardrail", None),
+            )
 
         parsed_guardrail = Guardrail(
             guardrail_id=guardrail.get("guardrail_id"),
