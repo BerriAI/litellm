@@ -8368,6 +8368,12 @@ class ProviderConfigManager:
             )
 
             return VolcEngineEmbeddingConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.embed.transformation import (
+                DashScopeEmbeddingConfig,
+            )
+
+            return DashScopeEmbeddingConfig()
         elif litellm.LlmProviders.OVHCLOUD == provider:
             return litellm.OVHCloudEmbeddingConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
