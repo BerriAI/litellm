@@ -55,6 +55,8 @@ def _make_router_with_alias(
         router.auto_routers[target_group] = mock_sub_router
     elif router_type == "quality":
         router.quality_routers[target_group] = mock_sub_router
+    elif router_type == "adaptive":
+        router.adaptive_routers[target_group] = mock_sub_router
 
     return router
 
@@ -121,6 +123,26 @@ class TestPreRoutingHookAliasResolution:
 
         assert result is not None
         mock = router.quality_routers["quality-router-group"]
+        mock.async_pre_routing_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_alias_resolves_to_adaptive_router(self):
+        """An aliased model name should match the adaptive_router for the
+        resolved group name."""
+        router = _make_router_with_alias(
+            alias_name="adaptive",
+            target_group="adaptive-router-group",
+            router_type="adaptive",
+        )
+
+        result = await router.async_pre_routing_hook(
+            model="adaptive",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        assert result is not None
+        mock = router.adaptive_routers["adaptive-router-group"]
         mock.async_pre_routing_hook.assert_awaited_once()
 
     @pytest.mark.asyncio
