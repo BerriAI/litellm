@@ -1386,7 +1386,7 @@ export const teamInfoCall = async (accessToken: string, teamID: string | null) =
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/team/info` : `/team/info`;
     if (teamID) {
-      url = `${url}?team_id=${teamID}`;
+      url = `${url}?team_id=${encodeURIComponent(teamID)}`;
     }
     console.log("in teamInfoCall");
     const response = await fetch(url, {

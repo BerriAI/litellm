@@ -303,7 +303,7 @@ async def test_chat_completion():
             api_key=key_gen["key"],
             api_version="2024-02-15-preview",
         )
-        with pytest.raises(openai.AuthenticationError) as e:
+        with pytest.raises(openai.PermissionDeniedError) as e:
             response = await azure_client.chat.completions.create(
                 model="gpt-4",
                 messages=[{"role": "user", "content": "Hello!"}],
