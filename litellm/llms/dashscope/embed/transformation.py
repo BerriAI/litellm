@@ -57,8 +57,9 @@ class DashScopeEmbeddingConfig(BaseEmbeddingConfig):
                 continue
             if k in supported:
                 optional_params[k] = v
-            elif not drop_params:
-                raise ValueError(f"Unsupported parameter for DashScope embeddings: {k}")
+            # unsupported params are dropped when drop_params=True;
+            # the upstream _check_valid_arg already raised UnsupportedParamsError
+            # for drop_params=False before this method is called.
         return optional_params
 
     def validate_environment(
