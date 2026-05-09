@@ -3582,29 +3582,14 @@ class Router:
                 request_kwargs=kwargs,
             )
             self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
-            data = deployment["litellm_params"].copy()
-            data["model"]
-            for k, v in self.default_litellm_params.items():
-                if (
-                    k not in kwargs
-                ):  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
-
-            potential_model_client = self._get_client(
-                deployment=deployment, kwargs=kwargs, client_type="async"
+            self._update_kwargs_with_deployment(
+                deployment=deployment, kwargs=kwargs, function_name="aspeech"
             )
-            # check if provided keys == client keys #
-            dynamic_api_key = kwargs.get("api_key", None)
-            if (
-                dynamic_api_key is not None
-                and potential_model_client is not None
-                and dynamic_api_key != potential_model_client.api_key
-            ):
-                model_client = None
-            else:
-                model_client = potential_model_client
+            data = deployment["litellm_params"].copy()
+
+            model_client = self._get_async_openai_model_client(
+                deployment=deployment, kwargs=kwargs
+            )
 
             response = await litellm.aspeech(
                 **{
