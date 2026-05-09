@@ -1900,6 +1900,28 @@ async def vertex_discovery_proxy_route(
 
 
 @router.api_route(
+    "/vertex_ai-{location}/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["Vertex AI Pass-through", "pass-through"],
+    include_in_schema=False,
+)
+async def vertex_proxy_route_with_location(
+    location: str,
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """nginx regex `/vertex_ai-{location}/{path}` → `/vertex_ai/{path}`, location is discarded."""
+    ai_platform_handler = get_vertex_pass_through_handler(call_type="aiplatform")
+    return await _base_vertex_proxy_route(
+        endpoint=endpoint,
+        request=request,
+        fastapi_response=fastapi_response,
+        get_vertex_pass_through_handler=ai_platform_handler,
+        user_api_key_dict=user_api_key_dict,
+    )
+@router.api_route(
     "/vertex-ai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["Vertex AI Pass-through", "pass-through"],
