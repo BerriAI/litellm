@@ -813,9 +813,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                                 f"Chat provider:   image -> {converted}"
                             )
                         elif item_type == "file":
-                            converted = self._convert_content_file_to_input_file(
-                                item
-                            )
+                            converted = self._convert_content_file_to_input_file(item)
                             result.append(converted)
                             verbose_logger.debug(
                                 f"Chat provider:   file -> {converted}"
