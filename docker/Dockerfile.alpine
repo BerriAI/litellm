@@ -14,7 +14,7 @@ WORKDIR /app
 COPY --from=uvbin /uv /usr/local/bin/uv
 COPY --from=uvbin /uvx /usr/local/bin/uvx
 
-RUN apk add --no-cache gcc python3-dev musl-dev nodejs npm libsndfile
+RUN apk add --no-cache bash gcc python3-dev musl-dev nodejs npm libsndfile
 
 ENV PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
@@ -37,6 +37,9 @@ RUN uv sync --frozen --no-install-project --no-install-workspace --no-default-gr
 
 # Copy full source tree
 COPY . .
+
+# Build Admin UI before final sync
+RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Install project and workspace packages (fast - deps already cached)
 RUN uv sync --frozen --no-default-groups --no-editable \
