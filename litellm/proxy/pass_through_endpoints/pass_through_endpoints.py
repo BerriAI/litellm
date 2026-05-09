@@ -376,7 +376,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         headers: dict,
         requested_query_params: Optional[dict] = None,
         custom_body: Optional[dict] = None,
-        custom_raw_body: Optional[Union[str, bytes]] = None,
     ) -> httpx.Response:
         """
         Make a non-streaming HTTP request
@@ -389,14 +388,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 url=url,
                 headers=headers,
                 params=requested_query_params,
-            )
-        elif custom_raw_body is not None:
-            response = await async_client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                params=requested_query_params,
-                content=custom_raw_body,
             )
         else:
             response = await async_client.request(
@@ -416,7 +407,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         headers: dict,
         requested_query_params: Optional[dict] = None,
         _parsed_body: Optional[dict] = None,
-        custom_raw_body: Optional[Union[str, bytes]] = None,
         forward_multipart: bool = False,
     ) -> httpx.Response:
         """
@@ -430,14 +420,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                 url=url,
                 headers=headers,
                 params=requested_query_params,
-            )
-        elif custom_raw_body is not None:
-            response = await async_client.request(
-                method=request.method,
-                url=url,
-                headers=headers,
-                params=requested_query_params,
-                content=custom_raw_body,
             )
         elif (
             HttpPassThroughEndpointHelpers.is_multipart(request) is True
@@ -678,7 +660,6 @@ async def pass_through_request(  # noqa: PLR0915
     custom_headers: dict,
     user_api_key_dict: UserAPIKeyAuth,
     custom_body: Optional[dict] = None,
-    custom_raw_body: Optional[Union[str, bytes]] = None,
     forward_headers: Optional[bool] = False,
     merge_query_params: Optional[bool] = False,
     query_params: Optional[dict] = None,
@@ -697,9 +678,6 @@ async def pass_through_request(  # noqa: PLR0915
         custom_headers: The custom headers
         user_api_key_dict: The user API key dictionary
         custom_body: The custom body
-        custom_raw_body: Exact request body bytes/str for upstream (e.g. SigV4-signed).
-            When set, this is sent as ``content=...`` instead of re-encoding ``custom_body``
-            as JSON, so signatures and Content-Length stay consistent.
         forward_headers: Whether to forward headers
         merge_query_params: Whether to merge query params
         query_params: The query params
@@ -758,15 +736,20 @@ async def pass_through_request(  # noqa: PLR0915
             str(url)
         )
 
+        # SigV4-signed callers (e.g. Bedrock) attach the exact bytes that were
+        # signed via request.state; we must send those instead of re-encoding the
+        # parsed dict (hooks mutate it, breaking the signature / Content-Length).
+        state_raw_body: Optional[Union[str, bytes]] = getattr(
+            request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None
+        )
+
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
         is_multipart = (
-            HttpPassThroughEndpointHelpers.is_multipart(request)
-            and custom_body is None
-            and custom_raw_body is None
+            HttpPassThroughEndpointHelpers.is_multipart(request) and not custom_body
         )
 
-        if custom_body is not None:
+        if custom_body:
             _parsed_body = custom_body
         elif is_multipart:
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
@@ -908,22 +891,20 @@ async def pass_through_request(  # noqa: PLR0915
                     )
                 )
             else:
-                if custom_raw_body is not None:
-                    req = async_client.build_request(
-                        "POST",
-                        url,
-                        content=custom_raw_body,
-                        params=requested_query_params,
-                        headers=headers,
-                    )
-                else:
-                    req = async_client.build_request(
-                        "POST",
-                        url,
-                        json=_parsed_body,
-                        params=requested_query_params,
-                        headers=headers,
-                    )
+                # SigV4-signed callers (Bedrock) supply the exact pre-signed bytes;
+                # otherwise httpx encodes the parsed JSON dict as before.
+                body_kwargs: Dict[str, Any] = (
+                    {"content": state_raw_body}
+                    if state_raw_body is not None
+                    else {"json": _parsed_body}
+                )
+                req = async_client.build_request(
+                    "POST",
+                    url,
+                    params=requested_query_params,
+                    headers=headers,
+                    **body_kwargs,
+                )
 
                 response = await async_client.send(req, stream=stream)
 
@@ -951,18 +932,28 @@ async def pass_through_request(  # noqa: PLR0915
                 status_code=response.status_code,
             )
 
-        response = (
-            await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
-                request=request,
-                async_client=async_client,
+        if state_raw_body is not None:
+            # SigV4-signed callers (Bedrock) require the exact pre-signed bytes
+            # to be forwarded so the signature/Content-Length stay valid.
+            response = await async_client.request(
+                method=request.method,
                 url=url,
                 headers=headers,
-                requested_query_params=requested_query_params,
-                _parsed_body=_parsed_body,
-                custom_raw_body=custom_raw_body,
-                forward_multipart=is_multipart,
+                params=requested_query_params,
+                content=state_raw_body,
             )
-        )
+        else:
+            response = (
+                await HttpPassThroughEndpointHelpers.non_streaming_http_request_handler(
+                    request=request,
+                    async_client=async_client,
+                    url=url,
+                    headers=headers,
+                    requested_query_params=requested_query_params,
+                    _parsed_body=_parsed_body,
+                    forward_multipart=is_multipart,
+                )
+            )
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
         if _is_streaming_response(response) is True:
@@ -1390,11 +1381,6 @@ def create_pass_through_route(
                 LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
                 None,
             )
-            state_raw_body: Optional[Union[str, bytes]] = getattr(
-                request.state,
-                LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
-                None,
-            )
             final_custom_body: Optional[dict] = None
             if isinstance(state_custom_body, dict):
                 final_custom_body = state_custom_body
@@ -1415,7 +1401,6 @@ def create_pass_through_route(
                     ),
                     stream=is_streaming_request or stream,
                     custom_body=final_custom_body,
-                    custom_raw_body=state_raw_body,
                     cost_per_request=cast(Optional[float], param_cost_per_request),
                     custom_llm_provider=custom_llm_provider,
                     guardrails_config=cast(Optional[dict], param_guardrails),
