@@ -699,6 +699,154 @@ async def test_should_clamp_reservation_to_model_ceiling_when_caller_overrequest
     await release_budget_reservation(reservation)
 
 
+@pytest.mark.asyncio
+async def test_should_reserve_image_generation_cost_per_image(
+    spend_counter_state,
+):
+    """Image-generation requests reserve `n × per-image cost` so concurrent
+    requests against a depleted budget cannot all bypass the admission gate.
+    The OpenAI ``dall-e-3`` entry exposes the per-image price as
+    ``input_cost_per_image`` (a naming quirk), while other providers use
+    ``output_cost_per_image`` — both must be honored."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-image-gen",
+        spend=0.0,
+        max_budget=10.0,
+    )
+    await key_cache.async_set_cache(key="key-image-gen", value=valid_token)
+
+    request_body = {"model": "dall-e-3", "prompt": "a cat", "n": 3}
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "image_generation",
+            "input_cost_per_image": 0.04,
+        },
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/v1/images/generations",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.12)  # 3 × $0.04
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_reject_concurrent_image_request_against_depleted_budget(
+    spend_counter_state,
+):
+    """Greptile P1 regression: with image-gen reservation in place, a second
+    concurrent image request against a budget already pinned at the cap by
+    the first reservation must raise BudgetExceededError instead of
+    silently reaching the provider."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-image-deplete",
+        spend=0.0,
+        team_id="team-image-deplete",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-image-deplete",
+        max_budget=0.04,
+        spend=0.0,
+    )
+    await key_cache.async_set_cache(
+        key=f"team_id:{team_object.team_id}",
+        value=team_object,
+    )
+
+    request_body = {"model": "dall-e-3", "prompt": "a cat"}
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "image_generation",
+            "input_cost_per_image": 0.04,
+        },
+    ):
+        first = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/v1/images/generations",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=team_object,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        assert first is not None
+
+        with pytest.raises(litellm.BudgetExceededError):
+            await reserve_budget_for_request(
+                request_body=request_body,
+                route="/v1/images/generations",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=team_object,
+                user_object=None,
+                prisma_client=None,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    await release_budget_reservation(first)
+
+
+@pytest.mark.asyncio
+async def test_should_skip_reservation_for_per_pixel_image_model(
+    spend_counter_state,
+):
+    """DALL-E 2-style per-pixel pricing depends on the requested ``size``,
+    which we don't decode here. Fall through to read-time enforcement
+    rather than guess."""
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-image-per-pixel",
+        spend=0.0,
+        max_budget=1.0,
+    )
+    await key_cache.async_set_cache(key="key-image-per-pixel", value=valid_token)
+
+    request_body = {"model": "dall-e-2", "prompt": "a cat", "size": "256x256"}
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "image_generation",
+            "input_cost_per_pixel": 2.4414e-07,
+            "output_cost_per_pixel": 0.0,
+        },
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/v1/images/generations",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is None
+
+
 def test_should_start_window_without_reset_at_at_duration_boundary():
     before = datetime.now(timezone.utc) - timedelta(hours=1)
 

@@ -827,6 +827,13 @@ def _estimate_request_max_cost_for_model(
     if model_info is None:
         return None
 
+    image_cost = _estimate_image_generation_cost(
+        request_body=request_body,
+        model_info=model_info,
+    )
+    if image_cost is not None:
+        return image_cost
+
     input_cost_per_token = _to_float(model_info.get("input_cost_per_token"))
     output_cost_per_token = _to_float(model_info.get("output_cost_per_token"))
     input_tokens = _estimate_input_tokens(
@@ -856,6 +863,40 @@ def _estimate_request_max_cost_for_model(
         return None
 
     return cost
+
+
+def _estimate_image_generation_cost(
+    request_body: dict,
+    model_info: Dict[str, Any],
+) -> Optional[float]:
+    """
+    Reserve `n × per-image cost` for image-generation requests so concurrent
+    requests against a depleted budget cannot all slip past the admission gate
+    onto the provider. Token-based pricing (e.g. gpt-image-1) is handled by
+    the chat-route token path; per-pixel and size/quality-tiered pricing
+    (DALL-E 2 size variants, premium tiers) are not handled here and fall
+    through to read-time enforcement.
+
+    The "output" vs "input" cost-per-image naming is inconsistent across
+    providers — OpenAI's dall-e-3 entry uses ``input_cost_per_image`` while
+    aiml/dall-e-3 uses ``output_cost_per_image`` — so both are summed.
+    """
+    output_cost_per_image = _to_float(model_info.get("output_cost_per_image"))
+    input_cost_per_image = _to_float(model_info.get("input_cost_per_image"))
+    is_image_gen = (
+        model_info.get("mode") == "image_generation"
+        or output_cost_per_image is not None
+        or input_cost_per_image is not None
+    )
+    if not is_image_gen:
+        return None
+
+    cost_per_image = (output_cost_per_image or 0.0) + (input_cost_per_image or 0.0)
+    if cost_per_image <= 0:
+        return None
+
+    n = _to_int(request_body.get("n")) or 1
+    return cost_per_image * max(n, 1)
 
 
 def _get_model_cost_info(
