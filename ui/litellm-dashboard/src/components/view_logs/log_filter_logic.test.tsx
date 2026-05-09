@@ -428,6 +428,38 @@ describe("useLogFilterLogic", () => {
     );
   });
 
+  it("should indicate that backend filtering is in progress while waiting for API results", async () => {
+    let resolveSearch: (value: PaginatedResponse) => void = () => {};
+    vi.mocked(uiSpendLogsCall).mockReturnValue(
+      new Promise<PaginatedResponse>((resolve) => {
+        resolveSearch = resolve;
+      }),
+    );
+    const logs = createPaginatedResponse([createLogEntry({ request_id: "client-req" })]);
+    const { result } = renderHook(() => useLogFilterLogic({ ...defaultProps, logs }), { wrapper });
+
+    act(() => {
+      result.current.handleFilterChange({ "Key Alias": "alias-1" });
+    });
+
+    await waitFor(
+      () => {
+        expect(uiSpendLogsCall).toHaveBeenCalled();
+      },
+      { timeout: 500 },
+    );
+
+    expect(result.current).toHaveProperty("isFilteringResults", true);
+
+    await act(async () => {
+      resolveSearch(createPaginatedResponse([createLogEntry({ request_id: "backend-req" })]));
+    });
+
+    await waitFor(() => {
+      expect(result.current).toHaveProperty("isFilteringResults", false);
+    });
+  });
+
   it("should call uiSpendLogsCall with request_id when Request ID filter is set", async () => {
     vi.mocked(uiSpendLogsCall).mockResolvedValue(
       createPaginatedResponse([createLogEntry({ request_id: "req-xyz" })]),

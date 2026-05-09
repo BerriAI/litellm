@@ -5,6 +5,7 @@ import SpendLogsTable, { RequestViewer } from "./index";
 import type { LogEntry } from "./columns";
 import type { Row } from "@tanstack/react-table";
 import { renderWithProviders } from "../../../tests/test-utils";
+import { useLogFilterLogic } from "./log_filter_logic";
 
 const mockHandleFilterResetFromHook = vi.fn();
 vi.mock("./log_filter_logic", async (importOriginal) => {
@@ -20,9 +21,12 @@ vi.mock("./log_filter_logic", async (importOriginal) => {
         page_size: 50,
         total_pages: 1,
       },
+      isFilteringResults: false,
+      hasBackendFilters: false,
       allTeams: [],
       handleFilterChange: vi.fn(),
       handleFilterReset: mockHandleFilterResetFromHook,
+      refetchWithFilters: vi.fn(),
     })),
   };
 });
@@ -237,5 +241,31 @@ describe("SpendLogsTable", () => {
       const inputsAfterReset = document.querySelectorAll('input[type="datetime-local"]');
       expect(inputsAfterReset.length).toBe(0);
     });
+  });
+
+  it("should show a filtering indicator while backend log filters are pending", () => {
+    vi.mocked(useLogFilterLogic).mockReturnValue({
+      filters: {},
+      filteredLogs: {
+        data: [],
+        total: 0,
+        page: 1,
+        page_size: 50,
+        total_pages: 1,
+      },
+      isFilteringResults: true,
+      hasBackendFilters: true,
+      allTeams: [],
+      handleFilterChange: vi.fn(),
+      handleFilterReset: mockHandleFilterResetFromHook,
+      refetchWithFilters: vi.fn(),
+    });
+
+    renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+    expect(screen.getByText("Filtering logs...")).toBeInTheDocument();
+    expect(screen.queryByText("No logs found")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Fetching/i })).toBeDisabled();
+    expect(screen.getByText(/Showing \.\.\. - \.\.\. of \.\.\. results/i)).toBeInTheDocument();
   });
 });
