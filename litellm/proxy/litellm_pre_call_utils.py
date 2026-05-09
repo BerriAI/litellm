@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import re
 import time
 from collections import OrderedDict
@@ -794,8 +795,17 @@ class LiteLLMProxyRequestSetup:
                 )
             )
             for k, v in litellm_logging_metadata_headers.items():
-                if v is not None:
+                if v is None:
+                    continue
+                # httpx requires header values to be str or bytes; coerce numbers/bools
+                # to str and JSON-encode dict/list (e.g. user_api_key_spend is float,
+                # user_api_key_auth_metadata is dict). See #27458.
+                if isinstance(v, (dict, list)):
+                    returned_headers["x-litellm-{}".format(k)] = json.dumps(v)
+                elif isinstance(v, (str, bytes)):
                     returned_headers["x-litellm-{}".format(k)] = v
+                else:
+                    returned_headers["x-litellm-{}".format(k)] = str(v)
 
         return returned_headers
 
