@@ -110,6 +110,25 @@ def test_wandb_model_api_pricing_entries():
         assert model_info["output_cost_per_token"] == output_cost
 
 
+def test_openrouter_qwen36_plus_model_info():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_info = litellm.model_cost.get("openrouter/qwen/qwen3.6-plus")
+
+    assert model_info is not None
+    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["mode"] == "chat"
+    assert model_info["max_input_tokens"] == 1000000
+    assert model_info["max_output_tokens"] == 65536
+    assert model_info["input_cost_per_token"] == 3.25e-07
+    assert model_info["output_cost_per_token"] == 1.95e-06
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_tool_choice"] is True
+    assert model_info["supports_reasoning"] is True
+    assert model_info["supports_vision"] is True
+
+
 def test_cost_calculator_with_usage(monkeypatch):
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")

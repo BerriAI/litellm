@@ -6129,3 +6129,163 @@ class TestPKCEStateCookieBinding:
         # State-cookie check passed, so the function got past the early
         # ProxyException raise and produced an SSO result object.
         assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_debug_sso_callback_renders_full_jwt_claims():
+    """
+    /sso/debug/callback should render the complete set of claims returned by the
+    IdP — both the raw userinfo response and the decoded access-token JWT — in
+    addition to the proxy-parsed OpenID fields. Bearer tokens must be stripped
+    even if a non-conforming IdP places them in its userinfo response.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import debug_sso_callback
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://proxy.example.com/"
+    mock_request.cookies = {}
+    mock_request.query_params = {}
+
+    parsed_openid = CustomOpenID(
+        id="user_123",
+        email="philip@example.com",
+        first_name="Philip",
+        last_name="Schwartz",
+        display_name="Philip Schwartz",
+        provider="generic",
+        team_ids=["ord-engineering-high"],
+        user_role=None,
+    )
+
+    raw_userinfo_with_leaked_token = {
+        "sub": "user_123",
+        "email": "philip@example.com",
+        "team_id": "ord-engineering-high",
+        "team_alias": "ord-engineering-high",
+        "teams": ["ord-engineering-high"],
+        "roles": ["litellm.api.user"],
+        # Defense-in-depth: a non-conforming IdP could shove a bearer token
+        # into userinfo. The debug endpoint must strip it before rendering.
+        "access_token": "should-not-render",
+        "id_token": "should-not-render-either",
+    }
+
+    access_token_payload = {
+        "sub": "user_123",
+        "scope": "openid profile email",
+        "groups": ["litellm-users"],
+    }
+
+    async def fake_get_generic_sso_response(**kwargs):
+        return parsed_openid, raw_userinfo_with_leaked_token, access_token_payload
+
+    with (
+        patch.dict(
+            os.environ,
+            {"GENERIC_CLIENT_ID": "test_client_id"},
+            clear=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_generic_sso_response",
+            side_effect=fake_get_generic_sso_response,
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),
+    ):
+        # Microsoft / Google envs may leak in from other tests — ensure only
+        # the generic path runs.
+        for var in ("MICROSOFT_CLIENT_ID", "GOOGLE_CLIENT_ID"):
+            os.environ.pop(var, None)
+        response = await debug_sso_callback(mock_request)
+
+    body = response.body.decode()
+
+    # The embedded JSON payload drives the rendered page. Extract and parse it
+    # so we can assert on shape, not on cosmetic HTML details.
+    marker = "const ssoData = "
+    start = body.index(marker) + len(marker)
+    end = body.index(";", start)
+    while body[end - 1] not in "}]":  # handle ';' inside string values
+        end = body.index(";", end + 1)
+    payload = json.loads(body[start:end])
+
+    assert set(payload.keys()) == {
+        "parsed_by_proxy",
+        "raw_claims",
+        "access_token_claims",
+    }
+
+    # Parsed OpenID fields are shown
+    assert payload["parsed_by_proxy"]["email"] == "philip@example.com"
+    assert payload["parsed_by_proxy"]["id"] == "user_123"
+
+    # Raw IdP claims surface fields the OpenID model drops (the original LIT-2838 ask)
+    assert payload["raw_claims"]["team_id"] == "ord-engineering-high"
+    assert payload["raw_claims"]["team_alias"] == "ord-engineering-high"
+    assert payload["raw_claims"]["teams"] == ["ord-engineering-high"]
+    assert payload["raw_claims"]["roles"] == ["litellm.api.user"]
+
+    # Defense-in-depth: bearer tokens must never appear in the rendered HTML
+    assert "access_token" not in payload["raw_claims"]
+    assert "id_token" not in payload["raw_claims"]
+    assert "should-not-render" not in body
+
+    # Decoded access-token JWT claims are surfaced
+    assert payload["access_token_claims"]["groups"] == ["litellm-users"]
+
+
+@pytest.mark.asyncio
+async def test_debug_sso_callback_handles_missing_raw_response():
+    """
+    Microsoft and Google paths don't return a raw response or access-token
+    payload. The debug endpoint must still render successfully with empty
+    sections instead of crashing.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import debug_sso_callback
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://proxy.example.com/"
+    mock_request.cookies = {}
+    mock_request.query_params = {}
+
+    parsed_openid = CustomOpenID(
+        id="user_456",
+        email="user@example.com",
+        first_name="Some",
+        last_name="User",
+        display_name="Some User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    async def fake_microsoft_callback(**kwargs):
+        return parsed_openid
+
+    with (
+        patch.dict(
+            os.environ,
+            {"MICROSOFT_CLIENT_ID": "test_microsoft_id"},
+            clear=False,
+        ),
+        patch.object(
+            MicrosoftSSOHandler,
+            "get_microsoft_callback_response",
+            side_effect=fake_microsoft_callback,
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.jwt_handler", MagicMock(spec=JWTHandler)),
+    ):
+        for var in ("GENERIC_CLIENT_ID", "GOOGLE_CLIENT_ID"):
+            os.environ.pop(var, None)
+        response = await debug_sso_callback(mock_request)
+
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert '"raw_claims": {}' in body
+    assert '"access_token_claims": {}' in body
+    assert "user@example.com" in body

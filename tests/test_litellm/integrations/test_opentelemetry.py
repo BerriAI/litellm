@@ -442,6 +442,109 @@ class TestOpenTelemetryDualHandlerIsolation(unittest.TestCase):
         )
 
 
+class TestOpenTelemetryCaptureMessageContent(unittest.TestCase):
+    """OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT and the
+    OpenTelemetryConfig.capture_message_content programmatic override
+    drive what the handler captures in spans vs events."""
+
+    @staticmethod
+    def _make(env=None, config_value=None, message_logging=True):
+        env_dict = (
+            {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": env}
+            if env is not None
+            else {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""}
+        )
+        with patch.dict(os.environ, env_dict):
+            handler = OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console", capture_message_content=config_value
+                )
+            )
+            handler.message_logging = message_logging
+            return handler, handler._resolve_capture_mode()
+
+    def test_no_explicit_setting_falls_back_to_message_logging_true(self):
+        _, mode = self._make()
+        self.assertEqual(mode, "SPAN_AND_EVENT")
+
+    def test_no_explicit_setting_falls_back_to_message_logging_false(self):
+        _, mode = self._make(message_logging=False)
+        self.assertEqual(mode, "NO_CONTENT")
+
+    def test_env_var_no_content(self):
+        _, mode = self._make(env="NO_CONTENT")
+        self.assertEqual(mode, "NO_CONTENT")
+
+    def test_env_var_span_only(self):
+        _, mode = self._make(env="SPAN_ONLY")
+        self.assertEqual(mode, "SPAN_ONLY")
+
+    def test_env_var_event_only(self):
+        _, mode = self._make(env="EVENT_ONLY")
+        self.assertEqual(mode, "EVENT_ONLY")
+
+    def test_env_var_span_and_event(self):
+        _, mode = self._make(env="SPAN_AND_EVENT")
+        self.assertEqual(mode, "SPAN_AND_EVENT")
+
+    def test_env_var_legacy_true_maps_to_event_only(self):
+        _, mode = self._make(env="true")
+        self.assertEqual(mode, "EVENT_ONLY")
+
+    def test_env_var_legacy_false_maps_to_no_content(self):
+        for env in ("false", "0"):
+            with self.subTest(env=env):
+                _, mode = self._make(env=env)
+                self.assertEqual(mode, "NO_CONTENT")
+
+    def test_env_var_unknown_value_falls_through_to_legacy(self):
+        _, mode = self._make(env="garbage", message_logging=True)
+        self.assertEqual(mode, "SPAN_AND_EVENT")
+
+    def test_config_field_overrides_env(self):
+        _, mode = self._make(env="EVENT_ONLY", config_value="SPAN_ONLY")
+        self.assertEqual(mode, "SPAN_ONLY")
+
+    def test_turn_off_message_logging_forces_no_content(self):
+        with patch("litellm.turn_off_message_logging", True):
+            _, mode = self._make(env="SPAN_AND_EVENT", message_logging=True)
+            self.assertEqual(mode, "NO_CONTENT")
+
+    def test_capture_in_span_and_event_predicates(self):
+        cases = {
+            "NO_CONTENT": (False, False),
+            "SPAN_ONLY": (True, False),
+            "EVENT_ONLY": (False, True),
+            "SPAN_AND_EVENT": (True, True),
+        }
+        for mode, (in_span, in_event) in cases.items():
+            handler, _ = self._make(env=mode)
+            self.assertEqual(handler._capture_in_span(), in_span, msg=mode)
+            self.assertEqual(handler._capture_in_event(), in_event, msg=mode)
+
+    def test_two_handlers_can_have_different_modes(self):
+        # FIL's stated requirement: one handler strips content, the other keeps it.
+        with patch.dict(
+            os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""}
+        ):
+            stripped = OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console", capture_message_content="NO_CONTENT"
+                )
+            )
+            kept = OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console", capture_message_content="SPAN_AND_EVENT"
+                )
+            )
+        self.assertEqual(stripped._resolve_capture_mode(), "NO_CONTENT")
+        self.assertEqual(kept._resolve_capture_mode(), "SPAN_AND_EVENT")
+        self.assertFalse(stripped._capture_in_span())
+        self.assertFalse(stripped._capture_in_event())
+        self.assertTrue(kept._capture_in_span())
+        self.assertTrue(kept._capture_in_event())
+
+
 class TestOpenTelemetry(unittest.TestCase):
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0
@@ -1067,6 +1170,7 @@ class TestOpenTelemetry(unittest.TestCase):
         result = otel._get_span_name(kwargs)
         self.assertEqual(result, LITELLM_REQUEST_SPAN_NAME)
 
+    @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
     @patch("litellm.turn_off_message_logging", False)
     def test_maybe_log_raw_request_creates_span(self):
         """Test _maybe_log_raw_request creates span when logging enabled"""
@@ -2193,6 +2297,19 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
     See: https://github.com/BerriAI/litellm/issues/17794
     """
+
+    def setUp(self):
+        # Insulate from a shell-set OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+        # so these tests exercise the legacy default path (message_logging=True).
+        self._prev = os.environ.pop(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+        )
+
+    def tearDown(self):
+        if self._prev is not None:
+            os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+                self._prev
+            )
 
     def test_input_messages_uses_parts_structure(self):
         """

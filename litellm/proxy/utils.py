@@ -113,7 +113,11 @@ from litellm.proxy.db.exception_handler import (
     call_with_db_reconnect_retry,
 )
 from litellm.proxy.db.log_db_metrics import log_db_metrics
-from litellm.proxy.db.prisma_client import PrismaWrapper
+from litellm.proxy.db.prisma_client import (
+    PrismaWrapper,
+    parse_iam_endpoint_from_url,
+)
+from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
@@ -2274,6 +2278,13 @@ class ProxyLogging:
         Covers:
         1. /chat/completions
         """
+        from litellm.proxy.proxy_server import llm_router
+
+        # Merge model-level guardrails before checking which guardrails to run
+        request_data = _check_and_merge_model_level_guardrails(
+            data=request_data, llm_router=llm_router
+        )
+
         current_response = response
 
         for callback in litellm.callbacks:
@@ -2562,24 +2573,101 @@ class PrismaClient:
             raise Exception(
                 "Unable to find Prisma binaries. Please run 'prisma generate' first."
             )
+        iam_flag = (
+            self.iam_token_db_auth if self.iam_token_db_auth is not None else False
+        )
+        # When read-replica routing is on, tag log lines with [writer]/[reader]
+        # so the two wrappers' interleaved IAM refresh logs can be told apart.
+        # Single-DB deployments get an empty prefix (logs unchanged).
+        read_replica_url = os.getenv("DATABASE_URL_READ_REPLICA")
+        writer_log_prefix = "[writer]" if read_replica_url else ""
         if http_client is not None:
-            self.db = PrismaWrapper(
+            writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(http=http_client),
-                iam_token_db_auth=(
-                    self.iam_token_db_auth
-                    if self.iam_token_db_auth is not None
-                    else False
-                ),
+                iam_token_db_auth=iam_flag,
+                log_prefix=writer_log_prefix,
             )
         else:
-            self.db = PrismaWrapper(
+            writer_wrapper = PrismaWrapper(
                 original_prisma=Prisma(),
-                iam_token_db_auth=(
-                    self.iam_token_db_auth
-                    if self.iam_token_db_auth is not None
-                    else False
-                ),
-            )  # Client to connect to Prisma db
+                iam_token_db_auth=iam_flag,
+                log_prefix=writer_log_prefix,
+            )
+
+        # Optional read-replica routing. When DATABASE_URL_READ_REPLICA is set,
+        # reads (find_*, count, group_by, query_raw/_first) are routed to the
+        # reader endpoint and writes stay on the writer. Falls back to the
+        # writer-only wrapper when the env var is unset, preserving existing
+        # single-DB deployments.
+        self.db: Union[PrismaWrapper, RoutingPrismaWrapper]
+        if read_replica_url:
+            try:
+                # If IAM auth is enabled, the reader refreshes its own token on
+                # the same cadence as the writer. We parse the static endpoint
+                # pieces (host/port/user/db) once from the reader URL — only
+                # the IAM token rotates after that.
+                reader_iam_endpoint = (
+                    parse_iam_endpoint_from_url(read_replica_url) if iam_flag else None
+                )
+                # Mint a fresh IAM token for the reader BEFORE constructing the
+                # Prisma client. Mirrors what `proxy_cli.py` already does for
+                # the writer (proxy_cli.py:812-832) — without this, the reader
+                # Prisma is built with whatever placeholder URL the user
+                # supplied (no real token), and the first query falls through
+                # to the synchronous fallback path in
+                # `PrismaWrapper.__getattr__`, which deadlocks the event loop
+                # and times out after 30s.
+                if iam_flag and reader_iam_endpoint is not None:
+                    from litellm.proxy.auth.rds_iam_token import (
+                        generate_iam_auth_token,
+                    )
+
+                    reader_token = generate_iam_auth_token(
+                        db_host=reader_iam_endpoint.host,
+                        db_port=reader_iam_endpoint.port,
+                        db_user=reader_iam_endpoint.user,
+                    )
+                    read_replica_url = reader_iam_endpoint.build_url(reader_token)
+                    os.environ["DATABASE_URL_READ_REPLICA"] = read_replica_url
+                reader_kwargs: Dict[str, Any] = {
+                    "datasource": {"url": read_replica_url}
+                }
+                if http_client is not None:
+                    reader_prisma = Prisma(http=http_client, **reader_kwargs)
+                else:
+                    reader_prisma = Prisma(**reader_kwargs)
+                reader_wrapper = PrismaWrapper(
+                    original_prisma=reader_prisma,
+                    iam_token_db_auth=iam_flag,
+                    db_url_env_var="DATABASE_URL_READ_REPLICA",
+                    iam_endpoint=reader_iam_endpoint,
+                    recreate_uses_datasource=True,
+                    log_prefix="[reader]",
+                )
+                self.db = RoutingPrismaWrapper(
+                    writer=writer_wrapper, reader=reader_wrapper
+                )
+                verbose_proxy_logger.info(
+                    "PrismaClient: read-replica routing enabled via DATABASE_URL_READ_REPLICA"
+                    + (" (with IAM token auto-refresh)" if iam_flag else "")
+                )
+            except Exception as e:
+                # Reader is opt-in; never let its construction fail proxy
+                # startup. Mirrors the runtime contract from
+                # `RoutingPrismaWrapper.connect`: reader-side failures are
+                # logged and we keep serving traffic via the writer alone.
+                # This recovers from transient AWS STS hiccups during the
+                # reader IAM token mint, malformed DATABASE_URL_READ_REPLICA,
+                # and Prisma construction errors. Operator restart is required
+                # to retry read-routing once the underlying issue is resolved.
+                verbose_proxy_logger.warning(
+                    "Failed to initialize read replica Prisma client: %s. "
+                    "Falling back to writer-only mode (no read routing) until proxy restart.",
+                    e,
+                )
+                self.db = writer_wrapper
+        else:
+            self.db = writer_wrapper  # Client to connect to Prisma db
         self._db_reconnect_lock = asyncio.Lock()
         self._db_health_watchdog_task: Optional[asyncio.Task] = None
         self._db_last_reconnect_attempt_ts: float = 0.0
@@ -2616,6 +2704,13 @@ class PrismaClient:
         self._engine_confirmed_dead: bool = False
         self._engine_wait_thread: Optional[threading.Thread] = None
         verbose_proxy_logger.debug("Success - Created Prisma Client")
+
+    @property
+    def writer_db(self) -> PrismaWrapper:
+        """Underlying writer Prisma wrapper, regardless of read-replica routing."""
+        if isinstance(self.db, RoutingPrismaWrapper):
+            return self.db.writer
+        return self.db
 
     def get_request_status(
         self, payload: Union[dict, SpendLogsPayload]
@@ -4265,7 +4360,10 @@ class PrismaClient:
                 self._cleanup_engine_watcher()
                 await self.db.recreate_prisma_client(db_url)
                 await self._start_engine_watcher()
-                await self.db.query_raw("SELECT 1")
+                # Smoke-test the writer specifically; query_raw on the routing
+                # wrapper sends to the reader, which would not validate the
+                # newly-recreated writer engine.
+                await self.writer_db.query_raw("SELECT 1")
 
             await asyncio.wait_for(_do_direct_reconnect(), timeout=effective_timeout)
 

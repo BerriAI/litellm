@@ -388,6 +388,7 @@ anthropic_beta_headers_url: str = os.getenv(
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
