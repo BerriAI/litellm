@@ -634,10 +634,7 @@ class ResetBudgetJob:
 
         # --- Keys ---
         try:
-            all_keys = await self.prisma_client.db.litellm_verificationtoken.find_many(
-                where={"budget_limits": {"not": None}},  # type: ignore[arg-type]
-                select={"token": True, "budget_limits": True},  # type: ignore[arg-type]
-            )
+            all_keys = await self.prisma_client.db.litellm_verificationtoken.find_many()
             for key in all_keys:
                 raw = key.budget_limits  # type: ignore[attr-defined]
                 if not raw:
@@ -664,10 +661,7 @@ class ResetBudgetJob:
 
         # --- Teams ---
         try:
-            all_teams = await self.prisma_client.db.litellm_teamtable.find_many(
-                where={"budget_limits": {"not": None}},  # type: ignore[arg-type]
-                select={"team_id": True, "budget_limits": True},  # type: ignore[arg-type]
-            )
+            all_teams = await self.prisma_client.db.litellm_teamtable.find_many()
             for team in all_teams:
                 raw = team.budget_limits  # type: ignore[attr-defined]
                 if not raw:
