@@ -9,6 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.exceptions import ContentPolicyViolationError
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     exception_type,
@@ -375,3 +376,62 @@ class TestExtractAndRaiseLitellmException:
         )
 
         assert result is None
+
+
+class TestExceptionMappingBase64Truncation:
+    """
+    Verify that exception_type truncates base64 in error_str so that
+    mapped exceptions don't carry MB-level payloads in their message.
+    """
+
+    def test_content_policy_violation_with_base64_truncated(self):
+        """Fal.ai content_policy_violation with large base64 should be truncated in the raised exception."""
+        large_b64 = "A" * 500_000
+        error_msg = (
+            f'{{"detail":[{{"type":"content_policy_violation",'
+            f'"input":"data:image/png;base64,{large_b64}"}}]}}'
+        )
+
+        class FakeException(Exception):
+            def __init__(self, msg):
+                self.message = msg
+                self.status_code = 400
+                super().__init__(msg)
+
+        exc = FakeException(error_msg)
+
+        with pytest.raises(ContentPolicyViolationError) as exc_info:
+            exception_type(
+                model="fal-ai/image-edit",
+                original_exception=exc,
+                custom_llm_provider="fal_ai",
+            )
+
+        raised_msg = str(exc_info.value)
+        assert "base64_data truncated" in raised_msg
+        assert large_b64 not in raised_msg
+        assert len(raised_msg) < 1000
+
+    def test_generic_error_with_base64_truncated(self):
+        """Generic provider error containing base64 should also be truncated."""
+        large_b64 = "B" * 300_000
+        error_msg = f'Some error with image data:image/jpeg;base64,{large_b64} end'
+
+        class FakeException(Exception):
+            def __init__(self, msg):
+                self.message = msg
+                self.status_code = 500
+                super().__init__(msg)
+
+        exc = FakeException(error_msg)
+
+        with pytest.raises(Exception) as exc_info:
+            exception_type(
+                model="fal-ai/image-edit",
+                original_exception=exc,
+                custom_llm_provider="fal_ai",
+            )
+
+        raised_msg = str(exc_info.value)
+        assert large_b64 not in raised_msg
+        assert "base64_data truncated" in raised_msg
