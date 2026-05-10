@@ -1074,6 +1074,20 @@ class MCPServerManager:
         filtered, _ = self.filter_server_ids_by_ip_with_info(server_ids, client_ip)
         return filtered
 
+    def _resolve_unknown_client_ip(
+        self, client_ip: Union[str, "_InternalRequest", None]
+    ) -> Union[str, "_InternalRequest", None]:
+        """Promote unknown ``client_ip=None`` to ``INTERNAL_REQUEST`` when the
+        operator has explicitly opted in via
+        ``general_settings.mcp_allow_unknown_client_ip: true``. Lets
+        deployments behind ASGI middleware where ``request.client`` is
+        legitimately ``None`` opt back to the previous fail-open behavior."""
+        if client_ip is None:
+            general_settings = self._get_general_settings()
+            if general_settings.get("mcp_allow_unknown_client_ip", False):
+                return INTERNAL_REQUEST
+        return client_ip
+
     def filter_server_ids_by_ip_with_info(
         self,
         server_ids: List[str],
@@ -1090,6 +1104,7 @@ class MCPServerManager:
         (admin debug, registry maintenance) should pass
         ``INTERNAL_REQUEST`` to bypass IP gating.
         """
+        client_ip = self._resolve_unknown_client_ip(client_ip)
         if client_ip is INTERNAL_REQUEST:
             return server_ids, 0
         if client_ip is None:
@@ -3108,11 +3123,15 @@ class MCPServerManager:
           IP via ``IPAddressUtils.get_mcp_client_ip(request)`` and reject the
           request when extraction fails. Earlier behaviour treated ``None`` as
           "no filter," which let external callers reach internal-only servers
-          when IP extraction silently failed.
+          when IP extraction silently failed. Operators behind ASGI middleware
+          or load-balancer setups where ``request.client`` is legitimately
+          ``None`` can opt back to the previous fail-open behaviour by setting
+          ``general_settings.mcp_allow_unknown_client_ip: true``.
         - If the server has ``available_on_public_internet=True``, it's
           always accessible.
         - Otherwise, only internal/private IPs can access it.
         """
+        client_ip = self._resolve_unknown_client_ip(client_ip)
         if client_ip is INTERNAL_REQUEST:
             return True
         if client_ip is None:
@@ -3279,6 +3298,7 @@ class MCPServerManager:
                        External request handlers must pass a real IP.
         """
         registry = self.get_registry()
+        client_ip = self._resolve_unknown_client_ip(client_ip)
         if client_ip is INTERNAL_REQUEST:
             return registry
         if client_ip is None:

@@ -100,6 +100,20 @@ class TestMCPServerIPFiltering:
             ["priv"], client_ip=INTERNAL_REQUEST
         ) == ["priv"]
 
+    @patch("litellm.public_mcp_servers", [])
+    @patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"mcp_allow_unknown_client_ip": True},
+    )
+    def test_unknown_client_ip_opt_out_restores_fail_open(self):
+        # Operators behind ASGI middleware where request.client is legitimately
+        # None can opt back to the pre-fix fail-open behavior with explicit
+        # consent via general_settings.mcp_allow_unknown_client_ip: true.
+        priv = _make_server("priv", available_on_public_internet=False)
+        manager = _make_manager([priv])
+
+        assert manager.filter_server_ids_by_ip(["priv"], client_ip=None) == ["priv"]
+
 
 class TestFilterServerIdsByIpWithInfo:
     """Tests that filter_server_ids_by_ip_with_info returns accurate block counts."""
