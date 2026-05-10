@@ -4058,6 +4058,7 @@ def test_add_headers_to_llm_call_coerces_non_string_values():
         max_budget=100.0,
         team_id="team-1",
         user_id="user-1",
+        metadata={"env": "staging", "tier": "premium"},
     )
     headers = Headers(raw=[])
     original = litellm.add_user_information_to_llm_headers
@@ -4073,5 +4074,10 @@ def test_add_headers_to_llm_call_coerces_non_string_values():
             ), f"Header {k!r} has type {type(v).__name__}, expected str"
         assert result["x-litellm-user_api_key_spend"] == "42.5"
         assert result["x-litellm-user_api_key_max_budget"] == "100.0"
+        # Dict metadata must be JSON, not Python repr
+        auth_meta = result.get("x-litellm-user_api_key_auth_metadata")
+        if auth_meta is not None:
+            parsed = json.loads(auth_meta)
+            assert parsed == {"env": "staging", "tier": "premium"}
     finally:
         litellm.add_user_information_to_llm_headers = original

@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import re
 import time
 from collections import OrderedDict
@@ -795,7 +796,9 @@ class LiteLLMProxyRequestSetup:
             )
             for k, v in litellm_logging_metadata_headers.items():
                 if v is not None:
-                    returned_headers["x-litellm-{}".format(k)] = str(v)
+                    returned_headers["x-litellm-{}".format(k)] = (
+                        json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+                    )
 
         return returned_headers
 
