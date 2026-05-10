@@ -4448,9 +4448,9 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=None,
         description="Expected JWT aud claim. Falls back to JWT_AUDIENCE.",
     )
-    issuer: Optional[Union[str, List[str]]] = Field(
+    issuer: Optional[str] = Field(
         default=None,
-        description="Expected JWT iss claim. Falls back to JWT_ISSUER.",
+        description="Expected JWT iss claim. Falls back to JWT_ISSUER. Must be a single string — PyJWT performs strict string equality on the 'iss' claim.",
     )
     public_allowed_routes: List[str] = ["public_routes"]
     enforce_rbac: bool = False

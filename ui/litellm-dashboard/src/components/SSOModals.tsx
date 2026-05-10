@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Modal, Form, Input, Button as Button2, Select, Checkbox } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
+import { detectSSOProvider } from "./Settings/AdminSettings/SSOSettings/utils";
 import NotificationsManager from "./molecules/notifications_manager";
 import { parseErrorMessage } from "./shared/errorUtils";
 
@@ -114,22 +115,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         try {
           const ssoData = await getSSOSettings(accessToken);
           if (ssoData && ssoData.values) {
-            // Determine which SSO provider is configured
-            let selectedProvider = null;
-            if (ssoData.values.google_client_id) {
-              selectedProvider = "google";
-            } else if (ssoData.values.microsoft_client_id) {
-              selectedProvider = "microsoft";
-            } else if (ssoData.values.okta_client_id) {
-              selectedProvider = "okta";
-            } else if (ssoData.values.generic_client_id) {
-              // Backward compatibility: older Okta UI settings were stored as generic OIDC endpoints.
-              if (ssoData.values.generic_authorization_endpoint?.includes("okta")) {
-                selectedProvider = "okta";
-              } else {
-                selectedProvider = "generic";
-              }
-            }
+            const selectedProvider = detectSSOProvider(ssoData.values);
 
             // Extract role mappings if they exist
             let roleMappingFields = {};
