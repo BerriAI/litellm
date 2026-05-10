@@ -725,6 +725,18 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def return_default_done_events(
         self, litellm_complete_object: ModelResponse
     ) -> Optional[BaseLiteLLMOpenAIResponseObject]:
+        message_content = (
+            getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
+        )
+        if (
+            self.sent_content_part_added_event is False
+            and self._cached_item_id is None
+            and not message_content
+        ):
+            self.sent_output_text_done_event = True
+            self.sent_output_content_part_done_event = True
+            self.sent_output_item_done_event = True
+            return None
         if self.sent_output_text_done_event is False:
             self.sent_output_text_done_event = True
             return self.create_output_text_done_event(litellm_complete_object)
