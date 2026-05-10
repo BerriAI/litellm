@@ -2268,6 +2268,73 @@ async def test_virtual_key_budget_check_fallback_no_counter():
 
 
 @pytest.mark.asyncio
+async def test_max_budget_enforced_after_spend_reset():
+    """
+    Regression test for issue #27300: max_budget must be re-enforced after a
+    monthly (or any-period) spend reset.
+
+    Sequence:
+    1. Key is exhausted (spend == max_budget) — pre-reset request is blocked.
+    2. Budget reset zeroes the DB row and the spend counter.
+    3. First post-reset request (cost=5.0) is allowed — counter reads 0.
+    4. After accumulating 5.0 + 6.0 = 11.0 of post-reset spend the counter
+       exceeds max_budget and the next request is blocked again.
+    """
+    from litellm.proxy.utils import ProxyLogging
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token-budget-reset-27300",
+        spend=10.0,
+        max_budget=10.0,
+        user_id="test-user",
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    # Step 1: budget exhausted — request blocked before reset
+    async def mock_spend_exhausted(counter_key, fallback_spend):
+        return 10.0
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_spend_exhausted):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        assert exc_info.value.current_cost == 10.0
+        assert exc_info.value.max_budget == 10.0
+
+    # Step 2: simulate budget reset — DB row and counter both zeroed
+    valid_token.spend = 0.0
+
+    # Step 3: first post-reset request succeeds (counter reads 0)
+    async def mock_spend_post_reset(counter_key, fallback_spend):
+        return 0.0
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_spend_post_reset):
+        # Must NOT raise — budget period restarted
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    # Step 4: post-reset spend accumulates past max_budget — blocked again
+    # 5.0 (first request) + 6.0 (second request) = 11.0 > max_budget=10.0
+    async def mock_spend_over_limit(counter_key, fallback_spend):
+        return 11.0
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_spend_over_limit):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        assert exc_info.value.current_cost == 11.0
+        assert exc_info.value.max_budget == 10.0
+
+
+@pytest.mark.asyncio
 async def test_team_budget_check_reads_from_spend_counter():
     """Team budget check should use get_current_spend when counter exists."""
     from litellm.proxy.utils import ProxyLogging
