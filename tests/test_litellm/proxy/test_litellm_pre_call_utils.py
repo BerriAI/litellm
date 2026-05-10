@@ -4110,7 +4110,14 @@ class TestApplyClientTagPolicyPreAuth:
         # Existing tags first, dedupe header tags
         assert data["metadata"]["tags"] == ["env:prod", "team:platform", "tenant:acme"]
 
-    def test_strips_body_tags_when_not_opted_in(self):
+    def test_preserves_body_tags_when_not_opted_in(self):
+        # Pre-auth must NOT strip body-supplied tags for non-opted-in keys.
+        # _tag_max_budget_check (inside common_checks) enforces per-tag
+        # budgets on whatever tags it sees in request_data, and pre-PR
+        # behavior was that body tags hit that check regardless of
+        # allow_client_tags. The post-auth strip in add_litellm_data_to_request
+        # cleans them up before they leave the proxy — that's covered by a
+        # separate regression test.
         request_mock = _build_request_mock_with_headers(
             {"x-litellm-tags": "tenant:acme"}
         )
@@ -4132,9 +4139,9 @@ class TestApplyClientTagPolicyPreAuth:
             user_api_key_dict=user_api_key_dict,
         )
 
-        assert "tags" not in data
-        assert "tags" not in data["metadata"]
-        assert "tags" not in data["litellm_metadata"]
+        assert data["tags"] == ["root-tag"]
+        assert data["metadata"]["tags"] == ["meta-tag"]
+        assert data["litellm_metadata"]["tags"] == ["litellm-meta-tag"]
 
     def test_does_not_merge_header_tags_when_not_opted_in(self):
         # Even with the header set, no opt-in means the header is ignored

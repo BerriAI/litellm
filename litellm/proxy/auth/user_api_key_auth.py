@@ -67,6 +67,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -1939,13 +1940,10 @@ async def _run_centralized_common_checks(
         llm_router=llm_router,
     )
 
-    # Merge x-litellm-tags (or strip body tags when the key/team has not
-    # opted in via allow_client_tags) into request_data BEFORE common_checks
-    # runs. _tag_max_budget_check inside common_checks only inspects
-    # request_data; without this pre-merge, header-supplied tags bypass
-    # tag-budget enforcement.
-    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-
+    # Merge x-litellm-tags into request_data BEFORE common_checks runs.
+    # _tag_max_budget_check inside common_checks only inspects request_data;
+    # without this pre-merge, header-supplied tags bypass tag-budget
+    # enforcement.
     LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
         request=request,
         request_data=request_data,

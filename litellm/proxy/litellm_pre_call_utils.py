@@ -1217,15 +1217,12 @@ class LiteLLMProxyRequestSetup:
                 break
 
         if not _admin_allow_client_tags:
-            # Strip any caller-supplied tags so the budget gate doesn't act
-            # on tags this key/team isn't authorized to set. Matches the
-            # post-auth strip in add_litellm_data_to_request.
-            for _meta_key in ("metadata", "litellm_metadata"):
-                _user_meta = request_data.get(_meta_key)
-                if isinstance(_user_meta, dict) and "tags" in _user_meta:
-                    _user_meta.pop("tags", None)
-            if "tags" in request_data:
-                request_data.pop("tags", None)
+            # Don't strip body-supplied tags here — pre-PR behavior was that
+            # _tag_max_budget_check (inside common_checks) saw and enforced
+            # per-tag budgets on body tags regardless of allow_client_tags.
+            # Stripping pre-auth would silently disable that enforcement.
+            # The post-auth strip in add_litellm_data_to_request still
+            # removes unauthorized tags before they leave the proxy.
             return
 
         headers = _safe_get_request_headers(request=request)
