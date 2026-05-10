@@ -1102,3 +1102,30 @@ class TestCustomGuardrailSpendLogMatchRedaction:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
         assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"
+
+
+class TestIsGuardrailIntervention:
+    """Test _is_guardrail_intervention correctly classifies exceptions."""
+
+    def test_guardrail_raised_exception_is_intervention(self):
+        """GuardrailRaisedException must be classified as guardrail_intervened, not guardrail_failed_to_respond"""
+        from litellm.exceptions import GuardrailRaisedException
+
+        e = GuardrailRaisedException(
+            message="PII detected", guardrail_name="privacy-filter"
+        )
+        assert CustomGuardrail._is_guardrail_intervention(e) is True
+
+    def test_modify_response_exception_is_intervention(self):
+        """ModifyResponseException must still be classified as guardrail_intervened"""
+        from litellm.exceptions import ModifyResponseException
+
+        e = ModifyResponseException(
+            message="blocked", model="gpt-4", request_data={}, guardrail_name="test"
+        )
+        assert CustomGuardrail._is_guardrail_intervention(e) is True
+
+    def test_generic_exception_is_not_intervention(self):
+        """A plain Exception must NOT be classified as guardrail intervention"""
+        e = Exception("some random error")
+        assert CustomGuardrail._is_guardrail_intervention(e) is False
