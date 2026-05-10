@@ -3692,6 +3692,31 @@ def test_map_tool_helper_empty_parameters_get_default():
     assert result["input_schema"].get("properties") == {}
 
 
+def test_map_tool_helper_responses_custom_tool_without_function_schema():
+    """
+    OpenAI Responses custom tools are legal with top-level name/description and
+    no Chat Completions `function` wrapper. Anthropic still needs an object
+    input_schema, so LiteLLM should supply the default schema instead of raising
+    KeyError.
+    """
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "custom",
+        "name": "apply_patch",
+        "description": "Apply a free-form patch",
+        "format": {"type": "text"},
+    }
+
+    result, _ = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["type"] == "custom"
+    assert result["name"] == "apply_patch"
+    assert result["description"] == "Apply a free-form patch"
+    assert result["input_schema"]["type"] == "object"
+    assert result["input_schema"].get("properties") == {}
+
+
 def test_extract_response_content_thinking_block_null_thinking():
     """
     Test that thinking blocks are not dropped when the 'thinking' field is null
