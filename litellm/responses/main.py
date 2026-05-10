@@ -1044,10 +1044,13 @@ def responses(
         if custom_llm_provider is None:
             responses_api_provider_config = None
         else:
+            # Get api_base from litellm_params or kwargs to check for domestic endpoints
+            _api_base_to_check = litellm_params.api_base or kwargs.get("api_base")
             responses_api_provider_config = (
                 ProviderConfigManager.get_provider_responses_api_config(
                     model=model,
                     provider=custom_llm_provider,
+                    api_base=_api_base_to_check,
                 )
             )
 

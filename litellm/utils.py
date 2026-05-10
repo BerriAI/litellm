@@ -8101,6 +8101,32 @@ class ProviderConfigManager:
     _PROVIDER_CONFIG_MAP: Optional[dict[LlmProviders, tuple[Callable, bool]]] = None
 
     @staticmethod
+    def _is_domestic_model_endpoint(api_base: Optional[str]) -> bool:
+        """
+        Check if the api_base is a domestic (Chinese) model provider endpoint.
+        Domestic endpoints don't support OpenAI's native Responses API format,
+        and should use Chat Completions API conversion instead.
+
+        Args:
+            api_base: API endpoint URL
+
+        Returns:
+            bool: True if it's a domestic endpoint that needs compatibility handling
+        """
+        if not api_base:
+            return False
+
+        domestic_endpoints = [
+            "dashscope.aliyuncs.com",  # Alibaba DashScope
+            "ark.cn-beijing.volces.com",  # Volcengine (ByteDance)
+            "api.minimaxi.com",  # MiniMax official
+            "xiaomimimo.com",  # Xiaomi MiMo
+            "api.deepseek.com",  # DeepSeek official
+        ]
+
+        return any(endpoint in str(api_base) for endpoint in domestic_endpoints)
+
+    @staticmethod
     def _build_provider_config_map() -> dict[LlmProviders, tuple[Callable, bool]]:
         """Build the provider-to-config mapping dictionary.
 
@@ -8591,6 +8617,7 @@ class ProviderConfigManager:
     def get_provider_responses_api_config(
         provider: Union[LlmProviders, str],
         model: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Optional[BaseResponsesAPIConfig]:
         from litellm.llms.openai_like.dynamic_config import (
             create_responses_config_class,
@@ -8615,7 +8642,7 @@ class ProviderConfigManager:
 
         # Check Python classes first (custom overrides take priority)
         result = ProviderConfigManager._get_python_responses_api_config(
-            provider_enum, model
+            provider_enum, model, api_base
         )
         if result is not None:
             return result
@@ -8634,12 +8661,17 @@ class ProviderConfigManager:
     def _get_python_responses_api_config(
         provider: Optional[LlmProviders],
         model: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Optional[BaseResponsesAPIConfig]:
         """Check for Python-class-based responses API configs (custom overrides)."""
         if provider is None:
             return None
 
+        # For OpenAI provider, check if api_base is a domestic endpoint
+        # Domestic endpoints don't support native Responses API, force Chat Completions conversion
         if litellm.LlmProviders.OPENAI == provider:
+            if api_base and ProviderConfigManager._is_domestic_model_endpoint(api_base):
+                return None  # Force Chat Completions conversion for domestic endpoints
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
             # Check if it's an O-series model
