@@ -83,6 +83,29 @@ class ResetBudgetJob:
                 "Failed to reset spend counter %s: %s", counter_key, e
             )
 
+    async def _invalidate_source_cache(self, source_cache_key: str) -> None:
+        """Drop a cached entity so the next budget check re-reads spend from DB.
+
+        Without this, a row whose spend was just zeroed in DB can still be
+        served from user_api_key_cache (e.g. ``tag:<name>``) with the
+        pre-reset spend value, which is consulted as the cold-start /
+        DB-unavailable fallback in get_current_spend(). Run this AFTER the
+        DB write commits, mirroring _invalidate_spend_counter.
+        """
+        if self.proxy_logging_obj is None:
+            return
+        user_api_key_cache = self.proxy_logging_obj.call_details.get(
+            "user_api_key_cache"
+        )
+        if user_api_key_cache is None:
+            return
+        try:
+            await user_api_key_cache.async_delete_cache(key=source_cache_key)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to invalidate source cache key %s: %s", source_cache_key, e
+            )
+
     async def _cascade_reset_spend_for_budget_link(
         self,
         budgets_to_reset: List[LiteLLM_BudgetTableFull],
@@ -90,9 +113,14 @@ class ResetBudgetJob:
         counter_key_fn: Callable[[Any], str],
         log_subject: str,
         extra_where: Optional[dict] = None,
+        source_cache_key_fn: Optional[Callable[[Any], str]] = None,
     ):
         """
         Generic cascade: zero spend on rows whose budget_id is in the reset set.
+
+        When ``source_cache_key_fn`` is supplied, the corresponding entry in
+        user_api_key_cache is also evicted so the next request re-reads the
+        zeroed spend from DB rather than the stale cached object.
         """
         budget_ids = [b.budget_id for b in budgets_to_reset if b.budget_id is not None]
         if not budget_ids:
@@ -114,6 +142,8 @@ class ResetBudgetJob:
 
         for row in rows:
             await self._invalidate_spend_counter(counter_key_fn(row))
+            if source_cache_key_fn is not None:
+                await self._invalidate_source_cache(source_cache_key_fn(row))
 
         return update_result
 
@@ -166,6 +196,14 @@ class ResetBudgetJob:
     ):
         """
         Resets the spend for tags linked to budget tiers that are being reset.
+
+        Also evicts the cached LiteLLM_TagTable object at ``tag:<name>`` in
+        user_api_key_cache. The auth-time tag budget check (see
+        ``_tag_max_budget_check`` in litellm/proxy/auth/auth_checks.py) reads
+        ``tag_object.spend`` as the DB-unavailable fallback in
+        ``get_current_spend``; if that cached object survives a reset it can
+        keep blocking otherwise-unblocked tenants under cold-start /
+        Redis-down scenarios.
         """
         return await self._cascade_reset_spend_for_budget_link(
             budgets_to_reset=budgets_to_reset,
@@ -173,6 +211,7 @@ class ResetBudgetJob:
             counter_key_fn=lambda t: f"spend:tag:{t.tag_name}",
             log_subject="tags",
             extra_where={"spend": {"gt": 0}},
+            source_cache_key_fn=lambda t: f"tag:{t.tag_name}",
         )
 
     async def reset_budget_for_litellm_budget_table(self):
