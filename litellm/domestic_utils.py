@@ -27,13 +27,13 @@ def is_domestic_model(model_name: Optional[str]) -> bool:
 
     # Domestic model name patterns (covers both raw names and prefixed names like "openai/MiniMax-M2.7")
     domestic_patterns = [
-        "qwen",      # Alibaba Qwen series
-        "glm",       # Zhipu GLM series
-        "doubao",    # Volcengine (ByteDance) Doubao series
-        "minimax",   # MiniMax series
-        "mimo",      # Xiaomi MiMo series
+        "qwen",  # Alibaba Qwen series
+        "glm",  # Zhipu GLM series
+        "doubao",  # Volcengine (ByteDance) Doubao series
+        "minimax",  # MiniMax series
+        "mimo",  # Xiaomi MiMo series
         "deepseek",  # DeepSeek series
-        "kimi",      # Moonshot Kimi series
+        "kimi",  # Moonshot Kimi series
     ]
 
     return any(pattern in model_lower for pattern in domestic_patterns)
@@ -66,7 +66,9 @@ def is_domestic_endpoint(api_base: Optional[str]) -> bool:
     return any(endpoint in str(api_base) for endpoint in domestic_endpoints)
 
 
-def is_domestic_model_or_endpoint(model_name: Optional[str], api_base: Optional[str] = None) -> bool:
+def is_domestic_model_or_endpoint(
+    model_name: Optional[str], api_base: Optional[str] = None
+) -> bool:
     """
     Check if either model name or endpoint indicates a domestic model.
     This covers both cases:
