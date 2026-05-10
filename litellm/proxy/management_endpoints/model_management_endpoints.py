@@ -808,25 +808,27 @@ async def delete_model(
                     data={"models": existing_team_row.models},
                 )
 
-        # Remove deleted model from all teams that reference it by name
-        try:
-            affected_teams = await prisma_client.db.litellm_teamtable.find_many(
-                where={"models": {"has": model_params.model_name}}
-            )
-            for team in affected_teams:
-                updated_models = [
-                    m for m in team.models if m != model_params.model_name
-                ]
-                await prisma_client.db.litellm_teamtable.update(
-                    where={"team_id": team.team_id},
-                    data={"models": updated_models},
+        # Remove deleted global model from all teams that reference it by name.
+        # Only for non-team-scoped models; team-scoped cleanup is handled above.
+        if model_params.model_info.team_id is None:
+            try:
+                affected_teams = await prisma_client.db.litellm_teamtable.find_many(
+                    where={"models": {"has": model_params.model_name}}
                 )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Failed to remove model %s from teams: %s",
-                model_params.model_name,
-                e,
-            )
+                for team in affected_teams:
+                    updated_models = [
+                        m for m in team.models if m != model_params.model_name
+                    ]
+                    await prisma_client.db.litellm_teamtable.update(
+                        where={"team_id": team.team_id},
+                        data={"models": updated_models},
+                    )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Failed to remove model %s from teams: %s",
+                    model_params.model_name,
+                    e,
+                )
 
         # update DB
         if store_model_in_db is True:
