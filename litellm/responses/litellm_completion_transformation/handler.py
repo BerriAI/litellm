@@ -60,13 +60,14 @@ class LiteLLMCompletionTransformationHandler:
 
         completion_args = {}
         completion_args.update(kwargs)
+        # 过滤国内模型不支持的参数 (Codex CLI 0.130.0 兼容修复)
+        completion_args.pop("client_metadata", None)
         completion_args.update(litellm_completion_request)
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = litellm.completion(
-            **litellm_completion_request,
-            **kwargs,
+            **completion_args,
         )
 
         if isinstance(litellm_completion_response, ModelResponse):
@@ -111,6 +112,8 @@ class LiteLLMCompletionTransformationHandler:
 
         acompletion_args = {}
         acompletion_args.update(kwargs)
+        # 过滤国内模型不支持的参数 (Codex CLI 0.130.0 兼容修复)
+        acompletion_args.pop("client_metadata", None)
         acompletion_args.update(litellm_completion_request)
 
         litellm_completion_response: Union[

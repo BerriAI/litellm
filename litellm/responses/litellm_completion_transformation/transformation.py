@@ -80,6 +80,35 @@ class ChatCompletionSession(TypedDict, total=False):
 
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
+    def _clean_schema(obj: Any) -> Any:
+        """
+        递归清除 JSON Schema 中国内模型不支持的字段 (Codex CLI 0.130.0 兼容修复)
+
+        国内模型(豆包/GLM/MiniMax/MiMo)不支持:
+        - strict: 严格模式
+        - additionalProperties: JSON Schema 扩展属性
+
+        借鉴 codex_deepseek_proxy 项目的设计
+        """
+        if not isinstance(obj, dict):
+            return obj
+        cleaned: Dict[str, Any] = {}
+        for k, v in obj.items():
+            if k in ("additionalProperties", "strict"):
+                continue  # 跳过这些字段
+            if isinstance(v, dict):
+                cleaned[k] = LiteLLMCompletionResponsesConfig._clean_schema(v)
+            elif isinstance(v, list):
+                cleaned[k] = [
+                    LiteLLMCompletionResponsesConfig._clean_schema(i)
+                    if isinstance(i, dict) else i
+                    for i in v
+                ]
+            else:
+                cleaned[k] = v
+        return cleaned
+
+    @staticmethod
     def get_supported_openai_params(model: str) -> list:
         """
         LiteLLM Adapter from OpenAI Responses API to Chat Completion API supports a subset of OpenAI Responses API params
@@ -1365,6 +1394,18 @@ class LiteLLMCompletionResponsesConfig:
         ] = []
         web_search_options: Optional[OpenAIWebSearchOptions] = None
         for tool in tools:
+            # 过滤国内模型不支持的 tool 类型 (Codex CLI 0.130.0 兼容修复)
+            # local_shell 是 Codex 内置工具类型，国内模型只支持 type: "function"
+            unsupported_tool_types = [
+                "local_shell",
+                "code_interpreter",
+                "file_search",
+                "computer_use",
+                "image_generation",
+            ]
+            if tool.get("type") in unsupported_tool_types:
+                continue  # 跳过不支持的 tool 类型
+
             if tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
             elif (
@@ -1388,13 +1429,15 @@ class LiteLLMCompletionResponsesConfig:
                 parameters = dict(typed_tool.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
+                # 清理 schema 中国内模型不支持的字段 (Codex CLI 0.130.0 兼容修复)
+                parameters = LiteLLMCompletionResponsesConfig._clean_schema(parameters)
                 chat_completion_tool: Dict[str, Any] = {
                     "type": "function",
                     "function": {
                         "name": typed_tool.get("name") or "",
                         "description": typed_tool.get("description") or "",
                         "parameters": parameters,
-                        "strict": typed_tool.get("strict", False) or False,
+                        # strict 字段已在 parameters 中被 _clean_schema 清理，这里不再设置
                     },
                 }
                 if tool.get("cache_control"):
