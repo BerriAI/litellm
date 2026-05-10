@@ -1091,10 +1091,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             and chunk.choices[0].delta.reasoning_content
         ):
             reasoning_content = chunk.choices[0].delta.reasoning_content
+            reasoning_item_id = (
+                self._reasoning_item_id
+                or self._cached_reasoning_item_id
+                or self._cached_item_id
+                or (chunk.id if chunk.id else None)
+                or f"rs_{uuid.uuid4()}"
+            )
 
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
-                item_id=f"rs_{hash(str(reasoning_content))}",
+                item_id=reasoning_item_id,
                 output_index=0,
                 delta=reasoning_content,
             )
