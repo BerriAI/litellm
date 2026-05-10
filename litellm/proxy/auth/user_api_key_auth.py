@@ -1939,6 +1939,19 @@ async def _run_centralized_common_checks(
         llm_router=llm_router,
     )
 
+    # Merge x-litellm-tags (or strip body tags when the key/team has not
+    # opted in via allow_client_tags) into request_data BEFORE common_checks
+    # runs. _tag_max_budget_check inside common_checks only inspects
+    # request_data; without this pre-merge, header-supplied tags bypass
+    # tag-budget enforcement.
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    LiteLLMProxyRequestSetup.apply_client_tag_policy_pre_auth(
+        request=request,
+        request_data=request_data,
+        user_api_key_dict=user_api_key_auth_obj,
+    )
+
     _ = await common_checks(
         request=request,
         request_body=request_data,
