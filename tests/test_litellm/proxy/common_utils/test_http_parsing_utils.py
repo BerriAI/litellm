@@ -703,11 +703,15 @@ class TestMergeHeaderTagsIntoRequestBody:
         )
         assert request_body["metadata"]["tags"] == ["a", "b"]
 
-    def test_should_leave_string_metadata_untouched(self):
-        # multipart/form-data and extra_body callers can deliver metadata as
-        # a JSON string. Mutating it would change the request shape; the
-        # downstream add_request_tag_to_metadata still merges header tags
-        # after the string is parsed to a dict.
+    def test_should_reify_parseable_json_string_metadata_and_merge(self):
+        # SECURITY-CRITICAL: a caller passing `metadata: "{}"` plus an
+        # over-budget x-litellm-tags header was bypassing the auth-time
+        # budget gate (helper bailed → no body tags → no enforcement)
+        # while add_litellm_data_to_request still parsed the string and
+        # merged the header tag for routing/spend. Header tags must be
+        # visible to get_tags_from_request_body in this case too. The
+        # mutation is local to the auth context — downstream re-reads
+        # from the request cache and still sees the original string.
         request_body = {
             "model": "gpt-4",
             "metadata": '{"tags": ["existing"]}',
@@ -716,7 +720,69 @@ class TestMergeHeaderTagsIntoRequestBody:
             request_body=request_body,
             headers={"x-litellm-tags": "from-header"},
         )
-        assert request_body["metadata"] == '{"tags": ["existing"]}'
+        assert request_body["metadata"] == {
+            "tags": ["existing", "from-header"],
+        }
+
+    def test_should_reify_empty_json_object_metadata_and_merge(self):
+        # Direct repro of the bot-flagged bypass: metadata="{}" + header tag.
+        request_body = {"model": "gpt-4", "metadata": "{}"}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "over-budget-tag"},
+        )
+        assert request_body["metadata"] == {"tags": ["over-budget-tag"]}
+        # And the round-trip via get_tags_from_request_body must surface it
+        # so _tag_max_budget_check can act on it.
+        assert get_tags_from_request_body(request_body=request_body) == [
+            "over-budget-tag"
+        ]
+
+    def test_should_fall_back_to_root_tags_for_unparseable_metadata_string(self):
+        # Unparseable JSON: can't safely reify to dict. Fall back to
+        # root-level `tags` so the budget gate still sees the header tag.
+        # add_litellm_data_to_request strips root tags when not opted in.
+        request_body = {"model": "gpt-4", "metadata": "not json{"}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "from-header"},
+        )
+        assert request_body["metadata"] == "not json{"
+        assert request_body["tags"] == ["from-header"]
+        assert get_tags_from_request_body(request_body=request_body) == ["from-header"]
+
+    def test_should_fall_back_to_root_tags_for_non_dict_json_string(self):
+        # Parseable JSON but not a dict ("42", "[]", etc.). Same fallback.
+        request_body = {"model": "gpt-4", "metadata": "[1, 2, 3]"}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "from-header"},
+        )
+        assert request_body["metadata"] == "[1, 2, 3]"
+        assert request_body["tags"] == ["from-header"]
+
+    def test_should_fall_back_to_root_tags_for_non_dict_non_string_metadata(self):
+        # Defensive: list/scalar metadata values shouldn't crash and shouldn't
+        # silently drop the header tag.
+        request_body = {"model": "gpt-4", "metadata": [1, 2, 3]}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "from-header"},
+        )
+        assert request_body["metadata"] == [1, 2, 3]
+        assert request_body["tags"] == ["from-header"]
+
+    def test_should_dedupe_root_tags_fallback_against_existing_root_tags(self):
+        request_body = {
+            "model": "gpt-4",
+            "metadata": "not json{",
+            "tags": ["existing", "from-header"],
+        }
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "from-header,new-one"},
+        )
+        assert request_body["tags"] == ["existing", "from-header", "new-one"]
 
     def test_should_create_metadata_dict_when_missing(self):
         request_body = {"model": "gpt-4"}

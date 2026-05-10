@@ -2418,6 +2418,112 @@ async def test_tag_budget_check_enforces_when_header_tags_pre_merged():
 
 
 @pytest.mark.asyncio
+async def test_tag_budget_check_enforces_when_header_tag_combined_with_string_metadata():
+    """SECURITY-CRITICAL regression: metadata as a JSON string (e.g. "{}")
+    plus an over-budget x-litellm-tags header was bypassing the auth-time
+    budget gate.
+
+    Reproduction of the bypass the merge helper must close:
+    1. Caller sends `metadata: "{}"` (multipart/form-data or extra_body).
+    2. x-litellm-tags header carries an over-budget tag.
+    3. Without the JSON-string reify branch, the helper bailed out, the
+       budget gate saw no tags, and add_litellm_data_to_request later
+       parsed the string and merged the header tag for routing/spend.
+    """
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        merge_header_tags_into_request_body,
+    )
+    from litellm.proxy.utils import ProxyLogging
+
+    tag_object = LiteLLM_TagTable(
+        tag_name="over-budget-tag",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:tag:over-budget-tag":
+            return 1.0
+        return fallback_spend
+
+    request_body: dict = {"model": "gpt-4", "metadata": "{}"}
+    merge_header_tags_into_request_body(
+        request_body=request_body,
+        headers={"x-litellm-tags": "over-budget-tag"},
+    )
+    # Metadata reified to dict; tag visible to get_tags_from_request_body.
+    assert request_body["metadata"] == {"tags": ["over-budget-tag"]}
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+            new_callable=AsyncMock,
+            return_value={"over-budget-tag": tag_object},
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _tag_max_budget_check(
+                request_body=request_body,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+        assert exc_info.value.current_cost == 1.0
+        assert exc_info.value.max_budget == 0.10
+
+
+@pytest.mark.asyncio
+async def test_tag_budget_check_enforces_when_header_tag_combined_with_unparseable_metadata():
+    """For metadata that isn't a parseable JSON object (unparseable string,
+    list, scalar), the helper falls back to root-level `tags`.
+    `_tag_max_budget_check` must still see the header tag via
+    get_tags_from_request_body's root-tags branch.
+    """
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        merge_header_tags_into_request_body,
+    )
+    from litellm.proxy.utils import ProxyLogging
+
+    tag_object = LiteLLM_TagTable(
+        tag_name="over-budget-tag",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:tag:over-budget-tag":
+            return 1.0
+        return fallback_spend
+
+    request_body: dict = {"model": "gpt-4", "metadata": "garbage{not json"}
+    merge_header_tags_into_request_body(
+        request_body=request_body,
+        headers={"x-litellm-tags": "over-budget-tag"},
+    )
+    assert request_body["tags"] == ["over-budget-tag"]
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+            new_callable=AsyncMock,
+            return_value={"over-budget-tag": tag_object},
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _tag_max_budget_check(
+                request_body=request_body,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+        assert exc_info.value.current_cost == 1.0
+
+
+@pytest.mark.asyncio
 async def test_tag_budget_check_enforces_on_union_of_header_and_body_tags():
     """Header and body tags together: both must be evaluated."""
     from litellm.proxy.common_utils.http_parsing_utils import (

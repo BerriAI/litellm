@@ -465,11 +465,26 @@ def _parse_x_litellm_tags_header(raw: Any) -> List[str]:
     return []
 
 
+def _dedupe_extend_tags(existing: Any, additions: List[str]) -> List[str]:
+    """Return a list containing ``existing`` (if list) followed by every
+    string in ``additions`` not already present. Order-preserving so test
+    expectations and audit logs stay deterministic.
+    """
+    if isinstance(existing, list):
+        merged = list(existing)
+    else:
+        merged = []
+    for tag in additions:
+        if tag not in merged:
+            merged.append(tag)
+    return merged
+
+
 def merge_header_tags_into_request_body(
     request_body: dict, headers: Mapping[str, Any]
 ) -> None:
     """Mutate ``request_body`` in place to fold ``x-litellm-tags`` into
-    ``metadata.tags`` so auth-time tag-aware checks see one source of truth.
+    the request body so auth-time tag-aware checks see one source of truth.
 
     Why this exists:
     - ``_tag_max_budget_check`` (auth) and ``budget_reservation`` read tags
@@ -487,15 +502,25 @@ def merge_header_tags_into_request_body(
     strip and are removed for callers without the opt-in. Duplicating the
     opt-in check at this layer would create two places to keep in sync.
 
-    Edge cases:
-    - JSON-string ``metadata`` (multipart/form-data, ``extra_body``): bail
-      out without mutation. Matches ``_coerce_metadata_to_dict`` semantics
-      used by other auth-time bouncers — they read but don't mutate the
-      string form. The downstream ``add_request_tag_to_metadata`` still
-      handles header tags after metadata is parsed to a dict.
-    - Missing ``metadata`` key: create an empty dict so the merge has a
-      home. The strip downstream handles cleanup if the caller is not
-      allowed to set tags.
+    Metadata shape handling — every shape must end up with header tags
+    visible to ``get_tags_from_request_body``; otherwise ``metadata: "{}"``
+    plus an over-budget header tag silently bypasses budget enforcement
+    while ``add_litellm_data_to_request`` later parses the string and
+    attributes spend to the merged tag (the original GHSA-class bug, just
+    triggered by a different request shape):
+
+    - Dict (or missing): merge into ``metadata["tags"]`` directly.
+    - JSON-string parseable to dict (multipart/form-data, ``extra_body``):
+      replace the string with the parsed dict on this local copy of the
+      body and merge into ``metadata["tags"]``. The mutation is local to
+      the auth context — downstream handlers re-read the body from
+      ``request.scope["parsed_body"]`` cache, which still holds the
+      original string, so request shape is preserved end-to-end.
+    - Anything else (unparseable string, list, scalar): write header tags
+      to root-level ``request_body["tags"]``. ``get_tags_from_request_body``
+      combines root and metadata tags, and the root-level strip in
+      ``add_litellm_data_to_request`` removes them when the caller is not
+      opted in.
     """
     raw = headers.get("x-litellm-tags") if headers else None
     header_tags = _parse_x_litellm_tags_header(raw)
@@ -503,24 +528,37 @@ def merge_header_tags_into_request_body(
         return
 
     metadata = request_body.get("metadata")
-    if metadata is None:
+
+    if isinstance(metadata, str):
+        from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+
+        parsed = safe_json_loads(metadata)
+        if isinstance(parsed, dict):
+            # Reify string metadata to dict so the merge below has a home
+            # and so downstream auth gates (_reject_clientside_metadata_
+            # tags_check, _guardrail_modification_check) see a normal
+            # dict shape. Local mutation only — see docstring.
+            metadata = parsed
+            request_body["metadata"] = metadata
+        else:
+            # Unparseable / non-dict JSON string. Fall back to root tags
+            # so the budget gate still sees them.
+            request_body["tags"] = _dedupe_extend_tags(
+                request_body.get("tags"), header_tags
+            )
+            return
+    elif metadata is None:
         metadata = {}
         request_body["metadata"] = metadata
     elif not isinstance(metadata, dict):
-        # JSON-string or other non-dict shape — leave alone, downstream
-        # parses and merges via add_request_tag_to_metadata.
+        # Unexpected shape (list, scalar, etc.). Same root-tags fallback
+        # so we never silently drop the header on the floor.
+        request_body["tags"] = _dedupe_extend_tags(
+            request_body.get("tags"), header_tags
+        )
         return
 
-    existing = metadata.get("tags")
-    if not isinstance(existing, list):
-        existing = []
-    # Preserve order: existing body tags first, then header tags not already
-    # present. Avoids set() to keep ordering deterministic for tests/logs.
-    merged = list(existing)
-    for tag in header_tags:
-        if tag not in merged:
-            merged.append(tag)
-    metadata["tags"] = merged
+    metadata["tags"] = _dedupe_extend_tags(metadata.get("tags"), header_tags)
 
 
 def populate_request_with_path_params(request_data: dict, request: Request) -> dict:
