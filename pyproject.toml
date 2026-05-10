@@ -290,6 +290,17 @@ tests_dir = [
 also_copy = [
     "litellm/",
 ]
+# Disable rerun/parallel plugins for mutation runs:
+# - pytest-retry triggers an `INTERNALERROR: no option named 'filtered_exceptions'`
+#   when invoked via mutmut's in-process `pytest.main()` call.
+# - rerunning a "failed" test on a mutant would mask which mutants are killed
+#   vs. survive, so reruns are wrong for mutation testing regardless.
+# - xdist is unnecessary inside mutmut (mutmut handles its own parallelism).
+pytest_add_cli_args = [
+    "-p", "no:retry",
+    "-p", "no:rerunfailures",
+    "-p", "no:xdist",
+]
 
 [tool.coverage.run]
 source = ["litellm"]
