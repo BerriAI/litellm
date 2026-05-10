@@ -294,6 +294,8 @@ def _get_wildcard_models(
                 return_wildcard_routes
             ):  # will add the wildcard route to the list eg: anthropic/*.
                 all_wildcard_models.append(model)
+                # Also remove from unique_models to avoid duplicate
+                models_to_remove.add(model)
 
             ## get litellm params from model
             if llm_router is not None:
@@ -307,6 +309,10 @@ def _get_wildcard_models(
                             ),
                         )
                         all_wildcard_models.extend(wildcard_models)
+                    # Always remove wildcard from unique_models when return_wildcard_routes=False
+                    # since we're returning the expanded models instead
+                    if not return_wildcard_routes:
+                        models_to_remove.add(model)
                 else:
                     # Router has no deployment for this wildcard (e.g., BYOK team models)
                     # Fall back to expanding from known provider models
