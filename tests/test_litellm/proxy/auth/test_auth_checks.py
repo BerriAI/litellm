@@ -2359,6 +2359,122 @@ async def test_tag_budget_check_reads_from_spend_counter():
 
 
 @pytest.mark.asyncio
+async def test_tag_budget_check_enforces_when_header_tags_pre_merged():
+    """Regression: x-litellm-tags header tags must be enforced by the
+    auth-time tag budget gate.
+
+    Previously _tag_max_budget_check only read body tags, so requests that
+    passed tags via the documented `x-litellm-tags` header bypassed
+    enforcement and silently exceeded budgets. The fix folds header tags
+    into request_body["metadata"]["tags"] in user_api_key_auth, before
+    common_checks runs. This test exercises that contract from the auth
+    function's perspective: given a body that already has the header tags
+    merged in, enforcement fires.
+    """
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        merge_header_tags_into_request_body,
+    )
+    from litellm.proxy.utils import ProxyLogging
+
+    tag_object = LiteLLM_TagTable(
+        tag_name="tenant:acme",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.10),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:tag:tenant:acme":
+            return 0.25
+        return fallback_spend
+
+    # Mirror what user_api_key_auth does at request entry: read the body
+    # (no body tags) and fold the x-litellm-tags header into it.
+    request_body: dict = {"model": "gpt-4"}
+    merge_header_tags_into_request_body(
+        request_body=request_body,
+        headers={"x-litellm-tags": "tenant:acme"},
+    )
+    assert request_body["metadata"]["tags"] == ["tenant:acme"]
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+            new_callable=AsyncMock,
+            return_value={"tenant:acme": tag_object},
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _tag_max_budget_check(
+                request_body=request_body,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+        assert exc_info.value.current_cost == 0.25
+        assert exc_info.value.max_budget == 0.10
+        assert "tenant:acme" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_tag_budget_check_enforces_on_union_of_header_and_body_tags():
+    """Header and body tags together: both must be evaluated."""
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        merge_header_tags_into_request_body,
+    )
+    from litellm.proxy.utils import ProxyLogging
+
+    body_tag = LiteLLM_TagTable(
+        tag_name="from-body",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=10.0),
+    )
+    header_tag = LiteLLM_TagTable(
+        tag_name="from-header",
+        spend=0.0,
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=0.01),
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == "spend:tag:from-header":
+            return 5.0
+        if counter_key == "spend:tag:from-body":
+            return 0.0
+        return fallback_spend
+
+    request_body: dict = {
+        "model": "gpt-4",
+        "metadata": {"tags": ["from-body"]},
+    }
+    merge_header_tags_into_request_body(
+        request_body=request_body,
+        headers={"x-litellm-tags": "from-header"},
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_tag_objects_batch",
+            new_callable=AsyncMock,
+            return_value={
+                "from-body": body_tag,
+                "from-header": header_tag,
+            },
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _tag_max_budget_check(
+                request_body=request_body,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=None),
+                valid_token=UserAPIKeyAuth(token="test-token"),
+            )
+        assert "from-header" in exc_info.value.message
+
+
+@pytest.mark.asyncio
 async def test_team_member_budget_check_reads_from_spend_counter():
     """Team member budget check should use get_current_spend when counter exists."""
     from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TeamMembership

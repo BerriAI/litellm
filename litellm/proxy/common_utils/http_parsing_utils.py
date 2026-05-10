@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Collection, Dict, List, Optional
+from typing import Any, Collection, Dict, List, Mapping, Optional
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -449,6 +449,78 @@ def get_tags_from_request_body(request_body: dict) -> List[str]:
         combined_tags.extend(tags_in_request_body)
     ######################################
     return [tag for tag in combined_tags if isinstance(tag, str)]
+
+
+def _parse_x_litellm_tags_header(raw: Any) -> List[str]:
+    """Normalize the ``x-litellm-tags`` header value into a list of strings.
+
+    Accepts the same shapes as ``add_request_tag_to_metadata``:
+    - comma-separated string (e.g. ``"a,b,c"``)
+    - already-parsed list of strings
+    """
+    if isinstance(raw, str):
+        return [t.strip() for t in raw.split(",") if t.strip()]
+    if isinstance(raw, list):
+        return [t for t in raw if isinstance(t, str)]
+    return []
+
+
+def merge_header_tags_into_request_body(
+    request_body: dict, headers: Mapping[str, Any]
+) -> None:
+    """Mutate ``request_body`` in place to fold ``x-litellm-tags`` into
+    ``metadata.tags`` so auth-time tag-aware checks see one source of truth.
+
+    Why this exists:
+    - ``_tag_max_budget_check`` (auth) and ``budget_reservation`` read tags
+      via ``get_tags_from_request_body``, which only inspects the body.
+    - ``add_request_tag_to_metadata`` does the header→metadata merge, but it
+      runs inside ``add_litellm_data_to_request`` *after* the auth chain has
+      already finished. That means tag-budget enforcement was bypassed for
+      header-tagged requests (header → no body tags at auth time → silent
+      pass).
+
+    Security model preserved by *not* gating on ``allow_client_tags`` here:
+    the strip in ``add_litellm_data_to_request`` already removes
+    ``metadata.tags``, ``litellm_metadata.tags``, and root ``tags`` when the
+    key/team is not opted in. Header tags merged here flow through that same
+    strip and are removed for callers without the opt-in. Duplicating the
+    opt-in check at this layer would create two places to keep in sync.
+
+    Edge cases:
+    - JSON-string ``metadata`` (multipart/form-data, ``extra_body``): bail
+      out without mutation. Matches ``_coerce_metadata_to_dict`` semantics
+      used by other auth-time bouncers — they read but don't mutate the
+      string form. The downstream ``add_request_tag_to_metadata`` still
+      handles header tags after metadata is parsed to a dict.
+    - Missing ``metadata`` key: create an empty dict so the merge has a
+      home. The strip downstream handles cleanup if the caller is not
+      allowed to set tags.
+    """
+    raw = headers.get("x-litellm-tags") if headers else None
+    header_tags = _parse_x_litellm_tags_header(raw)
+    if not header_tags:
+        return
+
+    metadata = request_body.get("metadata")
+    if metadata is None:
+        metadata = {}
+        request_body["metadata"] = metadata
+    elif not isinstance(metadata, dict):
+        # JSON-string or other non-dict shape — leave alone, downstream
+        # parses and merges via add_request_tag_to_metadata.
+        return
+
+    existing = metadata.get("tags")
+    if not isinstance(existing, list):
+        existing = []
+    # Preserve order: existing body tags first, then header tags not already
+    # present. Avoids set() to keep ordering deterministic for tests/logs.
+    merged = list(existing)
+    for tag in header_tags:
+        if tag not in merged:
+            merged.append(tag)
+    metadata["tags"] = merged
 
 
 def populate_request_with_path_params(request_data: dict, request: Request) -> dict:

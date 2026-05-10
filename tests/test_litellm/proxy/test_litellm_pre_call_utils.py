@@ -917,6 +917,68 @@ async def test_add_litellm_data_to_request_ignores_x_litellm_tags_header_without
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_pre_merged_header_tags_without_permission():
+    """Regression guard for the auth-time header→metadata.tags merge.
+
+    user_api_key_auth folds x-litellm-tags into request_body["metadata"]["tags"]
+    so auth-time tag-aware checks (_tag_max_budget_check, etc.) see them.
+    The allow_client_tags strip in add_litellm_data_to_request must continue
+    to remove those pre-merged tags when the key/team has not opted in.
+    Otherwise header tags would leak into routing/spend attribution despite
+    the strip — exactly the kind of bypass the original strip was added to
+    close.
+
+    This test simulates the post-auth state of `data` (header tags already
+    folded into metadata) and asserts the existing strip still wipes them.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "x-litellm-tags": "restricted-tier,victim-team",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    # Simulate what user_api_key_auth produced via
+    # merge_header_tags_into_request_body before delegating to the endpoint.
+    data = {
+        "model": "gpt-3.5-turbo",
+        "metadata": {"tags": ["restricted-tier", "victim-team"]},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="hashed-key",
+        metadata={},
+        team_metadata={},
+        spend=0.0,
+        max_budget=100.0,
+        model_max_budget={},
+        team_spend=0.0,
+        team_max_budget=200.0,
+    )
+
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=request_mock,
+        user_api_key_dict=user_api_key_dict,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    # Tags must be stripped — both sources end up in the same metadata.tags
+    # slot, and the allow_client_tags=False path deletes that slot wholesale.
+    assert "tags" not in (updated.get("metadata") or {})
+
+
+@pytest.mark.asyncio
 async def test_add_litellm_data_to_request_ignores_root_level_tags_without_permission():
     """Regression: root-level `data["tags"]` bypassed the body-metadata
     tag strip. Root-level tags must also be gated by `allow_client_tags`."""

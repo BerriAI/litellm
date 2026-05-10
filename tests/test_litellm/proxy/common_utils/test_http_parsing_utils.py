@@ -24,6 +24,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
+    merge_header_tags_into_request_body,
     populate_request_with_path_params,
 )
 
@@ -611,6 +612,146 @@ def test_get_tags_from_request_body_with_null_metadata():
 
     assert result == []
     assert isinstance(result, list)
+
+
+class TestMergeHeaderTagsIntoRequestBody:
+    """Tests for merge_header_tags_into_request_body.
+
+    The helper is the auth-time bridge that lets _tag_max_budget_check (and
+    other tag-aware auth checks) see x-litellm-tags header values, which
+    were previously only merged downstream in add_litellm_data_to_request.
+    """
+
+    def test_should_merge_comma_separated_header_into_metadata_tags(self):
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "tenant:acme,priority:high"},
+        )
+        assert request_body["metadata"]["tags"] == [
+            "tenant:acme",
+            "priority:high",
+        ]
+
+    def test_should_merge_list_header_into_metadata_tags(self):
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": ["tenant:acme", "priority:high"]},
+        )
+        assert request_body["metadata"]["tags"] == [
+            "tenant:acme",
+            "priority:high",
+        ]
+
+    def test_should_dedupe_when_header_tag_already_in_body(self):
+        request_body = {
+            "model": "gpt-4",
+            "metadata": {"tags": ["tenant:acme", "existing"]},
+        }
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "tenant:acme,priority:high"},
+        )
+        assert request_body["metadata"]["tags"] == [
+            "tenant:acme",
+            "existing",
+            "priority:high",
+        ]
+
+    def test_should_no_op_when_header_absent(self):
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(request_body=request_body, headers={})
+        assert "metadata" not in request_body
+
+    def test_should_no_op_when_header_value_empty_string(self):
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(
+            request_body=request_body, headers={"x-litellm-tags": ""}
+        )
+        assert "metadata" not in request_body
+
+    def test_should_no_op_when_header_value_unsupported_type(self):
+        # ints/dicts/None should be ignored, not raise.
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(
+            request_body=request_body, headers={"x-litellm-tags": 42}
+        )
+        assert "metadata" not in request_body
+
+    def test_should_strip_whitespace_in_comma_separated_tags(self):
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "  a  ,  b  ,  c  "},
+        )
+        assert request_body["metadata"]["tags"] == ["a", "b", "c"]
+
+    def test_should_drop_empty_segments_in_comma_separated_tags(self):
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "a,,b,"},
+        )
+        assert request_body["metadata"]["tags"] == ["a", "b"]
+
+    def test_should_filter_non_string_entries_in_list_header(self):
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": ["a", 1, None, "b"]},
+        )
+        assert request_body["metadata"]["tags"] == ["a", "b"]
+
+    def test_should_leave_string_metadata_untouched(self):
+        # multipart/form-data and extra_body callers can deliver metadata as
+        # a JSON string. Mutating it would change the request shape; the
+        # downstream add_request_tag_to_metadata still merges header tags
+        # after the string is parsed to a dict.
+        request_body = {
+            "model": "gpt-4",
+            "metadata": '{"tags": ["existing"]}',
+        }
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "from-header"},
+        )
+        assert request_body["metadata"] == '{"tags": ["existing"]}'
+
+    def test_should_create_metadata_dict_when_missing(self):
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(
+            request_body=request_body, headers={"x-litellm-tags": "a"}
+        )
+        assert request_body["metadata"] == {"tags": ["a"]}
+
+    def test_should_replace_non_list_metadata_tags_value(self):
+        # If metadata.tags is already a non-list shape (dict, str), the
+        # helper writes a fresh list with just the header tags. The
+        # original non-list value is dropped — get_tags_from_request_body
+        # already ignores non-list shapes, so dropping is safe.
+        request_body = {
+            "model": "gpt-4",
+            "metadata": {"tags": {"unexpected": "shape"}},
+        }
+        merge_header_tags_into_request_body(
+            request_body=request_body, headers={"x-litellm-tags": "a,b"}
+        )
+        assert request_body["metadata"]["tags"] == ["a", "b"]
+
+    def test_should_handle_none_headers(self):
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(request_body=request_body, headers={})
+        assert "metadata" not in request_body
+
+    def test_should_be_visible_to_get_tags_from_request_body(self):
+        # Round-trip: this is the contract auth-time consumers depend on.
+        request_body = {"model": "gpt-4"}
+        merge_header_tags_into_request_body(
+            request_body=request_body,
+            headers={"x-litellm-tags": "from-header"},
+        )
+        assert get_tags_from_request_body(request_body=request_body) == ["from-header"]
 
 
 def test_populate_request_with_path_params_adds_query_params():

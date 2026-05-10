@@ -64,6 +64,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
     _safe_get_request_query_params,
+    merge_header_tags_into_request_body,
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
@@ -2053,6 +2054,16 @@ async def user_api_key_auth(
     request_data = await _read_request_body(request=request)
     request_data = populate_request_with_path_params(
         request_data=request_data, request=request
+    )
+    # Fold `x-litellm-tags` header into request_body["metadata"]["tags"] so
+    # auth-time tag-aware checks (_tag_max_budget_check, budget_reservation,
+    # _reject_clientside_metadata_tags_check) see header-supplied tags as
+    # part of the request body. The allow_client_tags strip in
+    # add_litellm_data_to_request remains the single gatekeeper for whether
+    # those tags survive into routing/spend.
+    merge_header_tags_into_request_body(
+        request_body=request_data,
+        headers=_safe_get_request_headers(request=request),
     )
     route: str = get_request_route(request=request)
     ## CHECK IF ROUTE IS ALLOWED
