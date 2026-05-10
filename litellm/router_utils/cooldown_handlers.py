@@ -54,13 +54,9 @@ def _is_cooldown_required(
         bool: True if a cooldown is required, False otherwise.
     """
     try:
-        ignored_strings = ["APIConnectionError"]
-        if (
-            exception_str is not None
-        ):  # don't cooldown on litellm api connection errors errors
-            for ignored_string in ignored_strings:
-                if ignored_string in exception_str:
-                    return False
+        # Connection errors mean the selected deployment was unreachable. Let
+        # the normal status-code and allowed-fails logic decide whether to
+        # cool it down so retries can fail over to another deployment.
 
         if isinstance(exception_status, str):
             if len(exception_status) == 0:
