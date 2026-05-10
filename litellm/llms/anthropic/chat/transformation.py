@@ -645,13 +645,36 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         mcp_server: Optional[AnthropicMcpServerTool] = None
 
         if tool["type"] == "function" or tool["type"] == "custom":
-            _input_schema: dict = tool["function"].get(
-                "parameters",
-                {
-                    "type": "object",
-                    "properties": {},
-                },
-            )
+            _function = tool.get("function")
+            if isinstance(_function, dict):
+                _tool_name = _function["name"]
+                _description = _function.get("description")
+                _input_schema: dict = _function.get(
+                    "parameters",
+                    {
+                        "type": "object",
+                        "properties": {},
+                    },
+                )
+            else:
+                _tool_name = tool.get("name")
+                if not isinstance(_tool_name, str) or not _tool_name:
+                    raise ValueError("Missing required parameter: name")
+                _description = tool.get("description")
+                # OpenAI Responses custom tools use top-level name/description and
+                # optional free-form `format`, not a Chat Completions `function`
+                # schema. Anthropic tools require an object input_schema, so use
+                # an empty object schema when no JSON schema is provided.
+                _input_schema = cast(
+                    dict,
+                    tool.get(
+                        "input_schema",
+                        {
+                            "type": "object",
+                            "properties": {},
+                        },
+                    ),
+                )
 
             # Anthropic requires input_schema.type to be "object". Normalize
             # schemas from external sources (MCP servers, OpenAI callers) that
@@ -661,7 +684,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "_map_tool_helper: coercing input_schema type from %r to "
                     "'object' for Anthropic compatibility (tool: %s)",
                     _input_schema.get("type"),
-                    tool["function"].get("name"),
+                    _tool_name,
                 )
                 _input_schema = dict(_input_schema)  # avoid mutating caller's dict
                 _input_schema["type"] = "object"
@@ -677,12 +700,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
             _tool = AnthropicMessagesTool(
-                name=tool["function"]["name"],
+                name=_tool_name,
                 input_schema=input_anthropic_schema,
                 type="custom",
             )
 
-            _description = tool["function"].get("description")
             if _description is not None:
                 _tool["description"] = _description
 
