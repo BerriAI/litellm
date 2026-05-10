@@ -2537,17 +2537,25 @@ class TestOutboundOAuthURLValidation:
                 "http://127.0.0.1:8080/token", role="token"
             )
         assert exc_info.value.status_code == 400
-        assert "token" in str(exc_info.value.detail)
+        detail = str(exc_info.value.detail)
+        assert "token" in detail
+        # The /token endpoint is unauthenticated — leaking the resolved IP
+        # would hand reconnaissance to the caller. Detail must stay generic.
+        assert "127.0.0.1" not in detail
+        assert "blocked address" in detail
 
     def test_validator_rejects_rfc1918_url(self):
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             _validate_mcp_oauth_outbound_url,
         )
 
-        with pytest.raises(HTTPException):
+        with pytest.raises(HTTPException) as exc_info:
             _validate_mcp_oauth_outbound_url(
                 "http://192.168.1.10/oauth/register", role="registration"
             )
+        detail = str(exc_info.value.detail)
+        assert "192.168.1.10" not in detail
+        assert "registration" in detail
 
     def test_validator_passes_when_validation_disabled(self):
         # Operators who explicitly opt out via litellm.user_url_validation = False

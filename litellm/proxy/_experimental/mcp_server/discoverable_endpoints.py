@@ -46,9 +46,21 @@ def _validate_mcp_oauth_outbound_url(
     try:
         return validate_url(url)
     except SSRFError as exc:
+        # The /token and /register endpoints are reachable without an API key,
+        # so the error response goes to an unauthenticated caller. The raw
+        # SSRFError message includes the resolved IP — leaking it would tell
+        # the caller exactly which internal address the operator's IdP lives at,
+        # which is the reconnaissance the SSRF guard is meant to deny. Log the
+        # real reason for operators and return a generic message to the caller.
+        verbose_logger.warning(
+            "MCP OAuth %s URL blocked by SSRF validation: %s", role, exc
+        )
         raise HTTPException(
             status_code=400,
-            detail=f"Configured MCP {role} URL is not safe to call: {exc}",
+            detail=(
+                f"Configured MCP {role} URL is not safe to call: "
+                "the destination resolves to a blocked address."
+            ),
         )
 
 
