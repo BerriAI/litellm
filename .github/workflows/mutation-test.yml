@@ -1,23 +1,17 @@
 name: "Mutation Test (manual)"
 
-# Smoke test for mutation testing. Manually triggered only — never on PR/push.
-# Runs mutmut against the scope configured in [tool.mutmut] in pyproject.toml
-# (currently a single file, ~186 LOC). Expected runtime: ~5-15 minutes.
+# Manually-triggered mutation testing. Runs mutmut against the scope
+# configured in [tool.mutmut] in pyproject.toml (currently the
+# litellm/proxy/management_endpoints/ folder). Intended cadence is roughly
+# weekly — clicked from the Actions tab when someone wants a fresh report.
 #
-# Uploads the mutmut cache + a text summary as a workflow artifact. Failures
+# Uploads a structured `mutation-report.md` (Meta ACH-style: original +
+# mutated function with `# MUTANT START`/`# MUTANT END` delimiters + the
+# existing tests + a task instruction) as a workflow artifact. Failures
 # do not block anything because nothing depends on this workflow.
 
 on:
-  # Manual trigger only. Intended cadence is roughly weekly — clicked from the
-  # Actions tab UI when someone wants a fresh mutation report.
   workflow_dispatch:
-  # TEMPORARY: lets us iterate on this workflow before it lands on the default
-  # branch (workflow_dispatch only fires once the file is on the default
-  # branch). Remove this push: block before merging — final state should be
-  # workflow_dispatch only.
-  push:
-    branches:
-      - litellm_mutation_test_smoke
 
 permissions:
   contents: read
@@ -30,7 +24,9 @@ jobs:
   mutation:
     name: Run mutmut
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Whole-folder mutation against ~15 files / ~7.5k LOC can take hours.
+    # 350 minutes is just under the GitHub-hosted job cap of 360 minutes.
+    timeout-minutes: 350
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -130,6 +126,6 @@ jobs:
             mutmut-run.log
             mutants/mutmut-stats.json
             mutants/mutmut-cicd-stats.json
-            mutants/litellm/proxy/management_endpoints/router_settings_endpoints.py
+            mutants/litellm/proxy/management_endpoints/**/*.py
           if-no-files-found: warn
           retention-days: 14

@@ -282,10 +282,10 @@ filterwarnings = [
 # `also_copy = ["litellm/"]` is required because mutmut runs in a `mutants/`
 # sandbox and the test conftest imports from across the litellm package.
 paths_to_mutate = [
-    "litellm/proxy/management_endpoints/router_settings_endpoints.py",
+    "litellm/proxy/management_endpoints/",
 ]
 tests_dir = [
-    "tests/test_litellm/proxy/management_endpoints/test_router_settings_endpoints.py",
+    "tests/test_litellm/proxy/management_endpoints/",
 ]
 also_copy = [
     "litellm/",
