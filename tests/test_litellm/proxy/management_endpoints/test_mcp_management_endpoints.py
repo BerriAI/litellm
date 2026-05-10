@@ -1366,6 +1366,67 @@ class TestTemporaryMCPSessionEndpoints:
         assert exc_info.value.status_code == 404
 
     @pytest.mark.asyncio
+    async def test_get_cached_temporary_mcp_server_id_lookup_applies_ip_gate(self):
+        """
+        /server/oauth/{server_id}/{authorize,token,register} resolves the
+        server via _get_cached_temporary_mcp_server_or_404, which used to do
+        get_mcp_server_by_id(server_id) OR get_mcp_server_by_name(...). The
+        id-lookup branch did not apply IP gating, letting an external caller
+        hit an internal-only server by UUID. The fix gates the id-lookup
+        result before falling back to name lookup.
+        """
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _InternalRequest,
+        )
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _get_cached_temporary_mcp_server_or_404,
+        )
+
+        internal_only_server = generate_mock_mcp_server_config_record(
+            server_id="internal-only", name="Internal Only"
+        )
+        internal_only_server.available_on_public_internet = False
+        admin_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get_mcp_server_by_id.return_value = internal_only_server
+        mock_manager.get_mcp_server_by_name.return_value = None
+
+        # External IP: gate denies, both id and name lookups should miss → 404.
+        def _gate(server, client_ip):
+            if isinstance(client_ip, _InternalRequest):
+                return True
+            return False  # external IP, server is internal-only
+
+        mock_manager._is_server_accessible_from_ip.side_effect = _gate
+        external_request = _make_mock_request(ip="8.8.8.8")
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_cached_temporary_mcp_server",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _get_cached_temporary_mcp_server_or_404(
+                    "internal-only", admin_auth, request=external_request
+                )
+
+        assert (
+            exc_info.value.status_code == 404
+        ), "External caller must NOT be able to reach internal-only server by UUID"
+        # Gate must have been consulted on the id-lookup result.
+        mock_manager._is_server_accessible_from_ip.assert_any_call(
+            internal_only_server, "8.8.8.8"
+        )
+
+    @pytest.mark.asyncio
     async def test_get_cached_temporary_mcp_server_non_admin_denied(self):
         """Non-admin without access to the server gets 403, not the server."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
