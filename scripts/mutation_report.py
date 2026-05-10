@@ -77,21 +77,35 @@ def module_to_file(module_path: str) -> Path | None:
 
 def find_function_in_file(
     file_path: Path, function_name: str
-) -> tuple[int, int, str] | None:
+) -> tuple[int, int, str, list[int]] | None:
+    """Find a top-level or nested function by name; returns the first match.
+
+    Returns ``(start_line, end_line, source, all_match_lines)`` or ``None``.
+    ``all_match_lines`` is the start line of every function (any nesting
+    level) in the file with this name. When ``len(all_match_lines) > 1`` the
+    file defines the same name in multiple places (e.g., a module-level
+    helper and a class method) — mutmut's mutant identifier does not carry
+    class context, so we can't determine which definition was mutated.
+    Callers surface a disambiguation note in that case.
+    """
     src = file_path.read_text()
     tree = ast.parse(src)
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == function_name
-        ):
-            lines = src.splitlines()
-            return (
-                node.lineno,
-                node.end_lineno,
-                "\n".join(lines[node.lineno - 1 : node.end_lineno]),
-            )
-    return None
+    matches = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    ]
+    if not matches:
+        return None
+    first = matches[0]
+    lines = src.splitlines()
+    return (
+        first.lineno,
+        first.end_lineno,
+        "\n".join(lines[first.lineno - 1 : first.end_lineno]),
+        [m.lineno for m in matches],
+    )
 
 
 def collect_test_files(tests_dir: list[str]) -> list[Path]:
@@ -274,9 +288,21 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
             out.append("")
             found = find_function_in_file(file_path, function_name)
             if found:
-                start, end, fn_src = found
+                start, end, fn_src, all_lines = found
                 out.append(f"### Original function (lines {start}-{end})")
                 out.append("")
+                if len(all_lines) > 1:
+                    line_list = ", ".join(str(line) for line in all_lines)
+                    out.append(
+                        f"> **Note:** {len(all_lines)} functions named "
+                        f"`{function_name}` are defined in this file at lines "
+                        f"{line_list}. Showing the first match. mutmut's "
+                        f"mutant identifier does not carry class context, so "
+                        f"the body below may not correspond to the function "
+                        f"that was actually mutated — verify manually before "
+                        f"writing the killing test."
+                    )
+                    out.append("")
                 out.append("```python")
                 out.append(fn_src)
                 out.append("```")
