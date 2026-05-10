@@ -3207,7 +3207,9 @@ class MCPServerManager:
         return result
 
     def get_mcp_server_by_name(
-        self, server_name: str, client_ip: Optional[str] = None
+        self,
+        server_name: str,
+        client_ip: Union[str, _InternalRequest, None] = None,
     ) -> Optional[MCPServer]:
         """
         Get the MCP Server from the server name.
@@ -3219,33 +3221,33 @@ class MCPServerManager:
 
         Args:
             server_name: The server name to look up.
-            client_ip: Optional client IP for access control. When provided,
-                       non-public servers are hidden from external IPs.
-                       ``None`` is treated as "internal context, no IP gating"
-                       to preserve the existing contract for internal callers
-                       (auth, debug, registry maintenance). External request
-                       handlers should pass a real IP.
+            client_ip: External request IP for IP-based access control, or
+                       ``INTERNAL_REQUEST`` for internal callers (admin debug,
+                       registry maintenance) that intentionally bypass IP
+                       gating. ``None`` fails closed: external request handlers
+                       must extract a real IP via
+                       ``IPAddressUtils.get_mcp_client_ip(request)``. Earlier
+                       behaviour silently bypassed gating on ``None``, which
+                       let request handlers that forgot to pass an IP reach
+                       internal-only servers.
         """
-        # The gate fails closed on None; preserve the wrapper's existing
-        # "None means internal" convention by routing through the sentinel.
-        gate_arg = INTERNAL_REQUEST if client_ip is None else client_ip
         registry = self.get_registry()
         # Pass 1: Match by alias (highest priority)
         for server in registry.values():
             if server.alias == server_name:
-                if not self._is_server_accessible_from_ip(server, gate_arg):
+                if not self._is_server_accessible_from_ip(server, client_ip):
                     return None
                 return server
         # Pass 2: Match by server_name
         for server in registry.values():
             if server.server_name == server_name:
-                if not self._is_server_accessible_from_ip(server, gate_arg):
+                if not self._is_server_accessible_from_ip(server, client_ip):
                     return None
                 return server
         # Pass 3: Match by name (lowest priority)
         for server in registry.values():
             if server.name == server_name:
-                if not self._is_server_accessible_from_ip(server, gate_arg):
+                if not self._is_server_accessible_from_ip(server, client_ip):
                     return None
                 return server
         return None

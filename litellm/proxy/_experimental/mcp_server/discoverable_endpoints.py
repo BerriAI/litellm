@@ -423,10 +423,14 @@ async def exchange_token_with_server(
     target_url, host_header = _validate_mcp_oauth_outbound_url(
         mcp_server.token_url, role="token"
     )
+    # Disable redirect-following so a malicious 30x from the validated host
+    # can't bounce the proxy to an internal target — validate_url only
+    # checked the initial URL.
     response = await async_client.post(
         target_url,
         headers={"Accept": "application/json", "Host": host_header},
         data=token_data,
+        follow_redirects=False,
     )
 
     response.raise_for_status()
@@ -531,10 +535,14 @@ async def register_client_with_server(
     target_url, host_header = _validate_mcp_oauth_outbound_url(
         mcp_server.registration_url, role="registration"
     )
+    # Disable redirect-following so a malicious 30x from the validated host
+    # can't bounce the proxy to an internal target — validate_url only
+    # checked the initial URL.
     response = await async_client.post(
         target_url,
         headers={**headers, "Host": host_header},
         json=register_data,
+        follow_redirects=False,
     )
     response.raise_for_status()
 

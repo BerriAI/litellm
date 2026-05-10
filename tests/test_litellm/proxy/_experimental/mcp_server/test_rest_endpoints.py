@@ -595,7 +595,9 @@ class TestListToolsRestAPI:
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
             "get_mcp_server_by_name",
-            lambda name: stub_server if name == "my-server" else None,
+            lambda name, client_ip=None, **kwargs: (
+                stub_server if name == "my-server" else None
+            ),
             raising=False,
         )
         monkeypatch.setattr(
@@ -658,7 +660,9 @@ class TestListToolsRestAPI:
         monkeypatch.setattr(
             rest_endpoints.global_mcp_server_manager,
             "get_mcp_server_by_name",
-            lambda name: stub_server if name == "restricted-server" else None,
+            lambda name, client_ip=None, **kwargs: (
+                stub_server if name == "restricted-server" else None
+            ),
             raising=False,
         )
         monkeypatch.setattr(

@@ -380,7 +380,9 @@ if MCP_AVAILABLE:
         # Resolve a server name to its UUID if needed
         _name_resolved = None
         if server_id not in allowed_server_ids:
-            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(
+                server_id, client_ip=rest_client_ip
+            )
             if _name_resolved is not None and _name_resolved.server_id in set(
                 allowed_server_ids
             ):
@@ -482,7 +484,9 @@ if MCP_AVAILABLE:
         # Resolve a server name to its UUID if needed
         _name_resolved = None
         if server_id not in allowed_server_ids:
-            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(
+                server_id, client_ip=rest_client_ip
+            )
             if _name_resolved is not None and _name_resolved.server_id in set(
                 allowed_server_ids
             ):

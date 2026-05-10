@@ -6,19 +6,19 @@ import pytest
 from fastapi import HTTPException
 
 
-# Fixture to mock IP address check for all MCP tests
-# This prevents tests from failing due to IP-based access control
+# Fixture to bypass MCP IP-based access control for all OAuth flow tests.
+# Mock requests don't carry a real client IP context; the bypass uses the
+# explicit INTERNAL_REQUEST sentinel because passing None now fails closed
+# in the gate function (see MCPServerManager._is_server_accessible_from_ip).
 @pytest.fixture(autouse=True)
 def mock_mcp_client_ip():
-    """Mock IPAddressUtils.get_mcp_client_ip to return None for all tests.
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        INTERNAL_REQUEST,
+    )
 
-    This bypasses IP-based access control in tests, since the MCP server's
-    available_on_public_internet defaults to False and mock requests don't
-    have proper client IP context.
-    """
     with patch(
         "litellm.proxy._experimental.mcp_server.discoverable_endpoints.IPAddressUtils.get_mcp_client_ip",
-        return_value=None,
+        return_value=INTERNAL_REQUEST,
     ):
         yield
 
@@ -91,6 +91,7 @@ async def test_authorize_endpoint_includes_response_type():
 
     # Mock request
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -156,6 +157,7 @@ async def test_authorize_endpoint_preserves_existing_query_params():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -223,6 +225,7 @@ async def test_authorize_endpoint_forwards_pkce_parameters():
 
     # Mock request
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm-proxy.example.com/"
     mock_request.headers = {}
 
@@ -294,6 +297,7 @@ async def test_token_endpoint_forwards_code_verifier():
 
     # Mock request
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm-proxy.example.com/"
     mock_request.headers = {}
 
@@ -371,6 +375,7 @@ async def test_register_client_without_mcp_server_name_returns_dummy():
     global_mcp_server_manager.registry.clear()
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://proxy.litellm.example/"
     mock_request.headers = {}
     with patch(
@@ -419,6 +424,7 @@ async def test_register_client_returns_existing_server_credentials():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://proxy.litellm.example/"
     mock_request.headers = {}
 
@@ -474,6 +480,7 @@ async def test_register_client_remote_registration_success():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://proxy.litellm.example/"
     mock_request.headers = {}
 
@@ -581,6 +588,7 @@ async def test_authorize_endpoint_respects_x_forwarded_proto():
 
     # Mock request with http base_url but X-Forwarded-Proto: https
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "http://litellm.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
 
@@ -649,6 +657,7 @@ async def test_token_endpoint_respects_x_forwarded_proto():
 
     # Mock request with http base_url but X-Forwarded-Proto: https
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "http://litellm-proxy.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
 
@@ -727,6 +736,7 @@ async def test_oauth_protected_resource_respects_x_forwarded_proto():
 
     # Mock request with http base_url but X-Forwarded-Proto: https
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "http://litellm.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
 
@@ -782,6 +792,7 @@ async def test_oauth_authorization_server_respects_x_forwarded_proto():
 
     # Mock request with http base_url but X-Forwarded-Proto: https
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "http://litellm.example.com/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
 
@@ -820,6 +831,7 @@ async def test_register_client_respects_x_forwarded_proto():
 
     # Mock request with http base_url but X-Forwarded-Proto: https
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "http://proxy.litellm.example/"  # HTTP
     mock_request.headers = {"X-Forwarded-Proto": "https"}  # Behind HTTPS proxy
 
@@ -879,6 +891,7 @@ async def test_authorize_endpoint_respects_x_forwarded_host():
     # Internal: http://localhost:8888/github/mcp
     # External: https://proxy.example.com/github/mcp
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "http://localhost:8888/github/mcp"
     mock_request.headers = {
         "X-Forwarded-Proto": "https",
@@ -951,6 +964,7 @@ async def test_token_endpoint_respects_x_forwarded_host():
 
     # Mock request simulating nginx proxy without port in host
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "http://localhost:8888/github/mcp"
     mock_request.headers = {
         "X-Forwarded-Proto": "https",
@@ -1131,6 +1145,7 @@ def test_get_request_base_url_comprehensive(
         pytest.skip("MCP discoverable endpoints not available")
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = base_url
 
     headers = {}
@@ -1217,6 +1232,7 @@ def test_get_request_base_url_xff_trust_gate(
         pytest.skip("MCP discoverable endpoints not available")
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "http://localhost:4000/"
     mock_request.client = MagicMock()
     mock_request.client.host = direct_ip
@@ -1261,6 +1277,7 @@ def test_xff_misconfig_warning_emitted_once(caplog):
     ip_address_utils._warned_xff_without_trusted_ranges = False
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "http://localhost:4000/"
     mock_request.client = MagicMock()
     mock_request.client.host = "203.0.113.5"
@@ -1331,6 +1348,7 @@ async def test_oauth_protected_resource_returns_empty_scopes_when_none():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -1385,6 +1403,7 @@ async def test_oauth_authorization_server_returns_empty_scopes_when_none():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -1453,6 +1472,7 @@ async def test_authorize_root_resolves_single_oauth2_server():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
@@ -1506,6 +1526,7 @@ async def test_authorize_root_fails_with_multiple_oauth2_servers():
     global_mcp_server_manager.registry[server2.server_id] = server2
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
@@ -1544,6 +1565,7 @@ async def test_authorize_root_does_not_resolve_private_server_for_external_clien
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
@@ -1585,6 +1607,7 @@ async def test_token_root_resolves_single_oauth2_server():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
@@ -1650,6 +1673,7 @@ async def test_token_root_does_not_resolve_private_server_for_external_client():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
@@ -1694,6 +1718,7 @@ async def test_register_root_resolves_single_oauth2_server():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
@@ -1731,6 +1756,7 @@ async def test_register_root_does_not_resolve_private_server_for_external_client
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
@@ -1773,6 +1799,7 @@ async def test_discovery_root_includes_server_name_prefix():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
@@ -1813,6 +1840,7 @@ async def test_discovery_root_does_not_expose_private_server_for_external_client
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://llm.example.com/"
     mock_request.headers = {}
 
@@ -2014,6 +2042,7 @@ async def test_oauth_authorize_includes_scopes_from_server_config():
     )
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -2072,6 +2101,7 @@ async def test_oauth_authorize_prefers_request_scope_over_server_config():
     )
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -2141,6 +2171,7 @@ async def test_token_endpoint_refresh_token_grant():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://proxy.litellm.example/"
     mock_request.headers = {}
 
@@ -2275,6 +2306,7 @@ async def test_authorize_endpoint_rejects_non_loopback_redirect_uri():
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -2322,6 +2354,7 @@ async def test_authorize_endpoint_accepts_ipv4_loopback_range_and_ipv6_full_form
     global_mcp_server_manager.registry[oauth2_server.server_id] = oauth2_server
 
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
@@ -2451,6 +2484,7 @@ async def test_token_endpoint_sets_no_store_cache_control():
         token_url="https://provider.com/oauth/token",
     )
     mock_request = MagicMock(spec=Request)
+    mock_request.client = MagicMock(host="127.0.0.1")
     mock_request.base_url = "https://litellm.example.com/"
     mock_request.headers = {}
 
