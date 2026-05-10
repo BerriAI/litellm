@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.domestic_utils import is_domestic_model_or_endpoint
+from litellm.llms.domestic.domestic_utils import is_domestic_model_or_endpoint
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )

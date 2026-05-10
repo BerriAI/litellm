@@ -5,7 +5,7 @@ Handler for transforming responses api requests to litellm.completion requests
 from typing import Any, Coroutine, Dict, Optional, Union
 
 import litellm
-from litellm.domestic_utils import is_domestic_model_or_endpoint
+from litellm.llms.domestic.domestic_utils import is_domestic_model_or_endpoint
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )

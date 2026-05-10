@@ -4,7 +4,7 @@ Tests for domestic_utils.py - Chinese model compatibility detection
 
 import pytest
 
-from litellm.domestic_utils import (
+from litellm.llms.domestic.domestic_utils import (
     is_domestic_model,
     is_domestic_endpoint,
     is_domestic_model_or_endpoint,
