@@ -97,6 +97,7 @@ from litellm.types.utils import (
     CostBreakdown,
     CostResponseTypes,
     CustomPricingLiteLLMParams,
+    DYNAMIC_PROMPT_MANAGEMENT_PARAMS,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
     GuardrailStatus,
@@ -684,7 +685,7 @@ class Logging(LiteLLMLoggingBaseClass):
         eg. AnthropicCacheControlHook and BedrockKnowledgeBaseHook both don't require a `prompt_id` to be passed in, they are triggered by dynamic params
         """
         for param in non_default_params:
-            if param in DynamicPromptManagementParamLiteral.list_all_params():
+            if param in DYNAMIC_PROMPT_MANAGEMENT_PARAMS:
                 return True
 
         #############################################################################

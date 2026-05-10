@@ -19,6 +19,27 @@ def test_hidden_params_response_ms():
     assert hidden_params_dict.get("_response_ms") == 100
 
 
+def test_dynamic_prompt_management_list_all_params_preserves_enum_order():
+    from litellm.types.utils import DynamicPromptManagementParamLiteral
+
+    assert DynamicPromptManagementParamLiteral.list_all_params() == [
+        "cache_control_injection_points",
+        "knowledge_bases",
+        "vector_store_ids",
+    ]
+
+
+def test_dynamic_prompt_management_params_frozenset():
+    from litellm.types.utils import DYNAMIC_PROMPT_MANAGEMENT_PARAMS
+
+    assert "cache_control_injection_points" in DYNAMIC_PROMPT_MANAGEMENT_PARAMS
+    assert "knowledge_bases" in DYNAMIC_PROMPT_MANAGEMENT_PARAMS
+    assert "vector_store_ids" in DYNAMIC_PROMPT_MANAGEMENT_PARAMS
+    assert "temperature" not in DYNAMIC_PROMPT_MANAGEMENT_PARAMS
+    assert "max_tokens" not in DYNAMIC_PROMPT_MANAGEMENT_PARAMS
+    assert isinstance(DYNAMIC_PROMPT_MANAGEMENT_PARAMS, frozenset)
+
+
 def test_chat_completion_delta_tool_call():
     from litellm.types.utils import ChatCompletionDeltaToolCall, Function
 
