@@ -1422,6 +1422,7 @@ class LiteLLMCompletionResponsesConfig:
             if is_domestic_model:
                 unsupported_tool_types = [
                     "local_shell",       # Codex CLI 内置 Shell 工具
+                    "namespace",         # Codex CLI 0.130.0 工具命名空间
                     "code_interpreter",  # OpenAI Code Interpreter
                     "file_search",       # OpenAI File Search
                     "computer_use",      # Anthropic Computer Use
@@ -1480,6 +1481,11 @@ class LiteLLMCompletionResponsesConfig:
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
             else:
+                # 对于国内模型，只保留 function 和 mcp 类型，其他类型全部过滤
+                # 避免 unknown 类型被发送给国内模型导致错误
+                if is_domestic_model:
+                    # 国内模型只支持 function 和 mcp 类型
+                    continue  # 跳过不支持的工具类型
                 chat_completion_tools.append(
                     cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
                 )
