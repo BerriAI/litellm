@@ -91,13 +91,58 @@ jobs:
           # trampolined files are imported instead of the installed copy.
           PYTHONPATH: ${{ github.workspace }}/mutants
         run: |
+          set -o pipefail
           mkdir -p mutants
-          uv run --no-sync --with mutmut==3.5.0 mutmut run
+          uv run --no-sync --with mutmut==3.5.0 mutmut run 2>&1 | tee mutmut-run.log
 
-      - name: Show mutmut results
+      # Build a detailed report: per-survivor diffs from `mutmut show`, plus
+      # the killed/survived/total summary from `mutmut export-cicd-stats`.
+      # Written to both an artifact and the run-page summary so results are
+      # visible without downloading anything.
+      - name: Generate detailed mutation report
         if: always()
         run: |
-          uv run --no-sync --with mutmut==3.5.0 mutmut results | tee mutmut-results.txt
+          set +e
+          uv run --no-sync --with mutmut==3.5.0 mutmut export-cicd-stats > /dev/null 2>&1
+          uv run --no-sync --with mutmut==3.5.0 mutmut results > mutmut-results.txt 2>&1
+
+          {
+            echo "# Mutation Test Report"
+            echo ""
+            echo "## Summary"
+            echo ""
+            if [ -f mutants/mutmut-cicd-stats.json ]; then
+              echo '```json'
+              cat mutants/mutmut-cicd-stats.json
+              echo '```'
+            else
+              echo "(mutmut-cicd-stats.json not generated)"
+            fi
+            echo ""
+            echo "## Run progress (tail)"
+            echo ""
+            echo '```'
+            tail -30 mutmut-run.log || true
+            echo '```'
+            echo ""
+            echo "## Surviving mutants (test gaps)"
+            echo ""
+            survivors=$(awk '/survived/ {gsub(/:$/,"",$1); print $1}' mutmut-results.txt)
+            if [ -z "$survivors" ]; then
+              echo "_None — every mutant was killed by the test suite._"
+            else
+              for m in $survivors; do
+                echo "### \`$m\`"
+                echo ""
+                echo '```diff'
+                uv run --no-sync --with mutmut==3.5.0 mutmut show "$m" 2>&1 || echo "(mutmut show failed for $m)"
+                echo '```'
+                echo ""
+              done
+            fi
+          } > mutmut-report.md
+
+          cat mutmut-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload mutmut artifacts
         if: always()
@@ -105,8 +150,11 @@ jobs:
         with:
           name: mutmut-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
+            mutmut-report.md
             mutmut-results.txt
-            mutmut-stats.json
-            mutmut-cache.json
+            mutmut-run.log
+            mutants/mutmut-stats.json
+            mutants/mutmut-cicd-stats.json
+            mutants/litellm/proxy/management_endpoints/router_settings_endpoints.py
           if-no-files-found: warn
           retention-days: 14
