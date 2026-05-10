@@ -46,6 +46,15 @@ def _is_a2a_agent_model(model_name: Any) -> bool:
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
+def _drop_empty_chat_tools(data: dict, route_type: str) -> None:
+    """Treat an empty chat tools list the same as omitting tools."""
+    if route_type != "acompletion":
+        return
+    if data.get("tools") == []:
+        data.pop("tools", None)
+        data.pop("tool_choice", None)
+
+
 ROUTE_ENDPOINT_MAPPING = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
@@ -344,6 +353,7 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
     Common helper to route the request
     """
     await add_shared_session_to_data(data)
+    _drop_empty_chat_tools(data=data, route_type=route_type)
 
     # Strip router-internal mock_testing_* flags. Combined with an
     # unauthorized fallback in ``router_settings_override`` they let a
