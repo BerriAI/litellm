@@ -101,8 +101,8 @@ async def test_pre_call_redacts_messages_and_caches_session():
         global_cache,
     )
     assert out["messages"][0]["content"] == "hi [EMAIL_1]"
-    assert global_cache.get_cache("peyeeye_session:call-1") == "ses_abc"
-    global_cache.delete_cache("peyeeye_session:call-1")
+    assert global_cache.get_cache("peyeeye_session:x:call-1") == "ses_abc"
+    global_cache.delete_cache("peyeeye_session:x:call-1")
 
 
 @pytest.mark.asyncio
@@ -131,8 +131,8 @@ async def test_pre_call_stateless_returns_skey():
     )
     sent_body = g.async_handler.post.call_args.kwargs["json"]
     assert sent_body["session"] == "stateless"
-    assert global_cache.get_cache("peyeeye_session:call-2") == "skey_xyz"
-    global_cache.delete_cache("peyeeye_session:call-2")
+    assert global_cache.get_cache("peyeeye_session:x:call-2") == "skey_xyz"
+    global_cache.delete_cache("peyeeye_session:x:call-2")
 
 
 @pytest.mark.asyncio
@@ -190,7 +190,7 @@ async def test_pre_and_post_call_roundtrip_uses_shared_cache():
     )
     assert out.choices[0].message.content == "Reply to alice@acme.com"
     g.async_handler.delete.assert_awaited()
-    assert global_cache.get_cache("peyeeye_session:rt-1") is None
+    assert global_cache.get_cache("peyeeye_session:x:rt-1") is None
 
 
 @pytest.mark.asyncio
@@ -281,6 +281,150 @@ async def test_pre_call_raises_on_length_mismatch():
         await g.async_pre_call_hook(
             UserAPIKeyAuth(api_key="x"), cache, data, "completion"
         )
+
+
+@pytest.mark.asyncio
+async def test_cache_key_isolated_per_authenticated_key():
+    """Two callers sharing a litellm_call_id must not share a session entry."""
+    from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
+        global_cache,
+    )
+
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g.async_handler = MagicMock()
+    g.async_handler.post = AsyncMock(
+        side_effect=[
+            _ok({"text": ["[EMAIL_1]"], "session_id": "ses_attacker"}),
+            _ok({"text": ["[EMAIL_1]"], "session_id": "ses_victim"}),
+        ]
+    )
+
+    cache = DualCache()
+    shared_call_id = "shared-call-id"
+    await g.async_pre_call_hook(
+        UserAPIKeyAuth(api_key="attacker"),
+        cache,
+        {"messages": [{"role": "user", "content": "alice@acme.com"}],
+         "litellm_call_id": shared_call_id},
+        "completion",
+    )
+    await g.async_pre_call_hook(
+        UserAPIKeyAuth(api_key="victim"),
+        cache,
+        {"messages": [{"role": "user", "content": "bob@acme.com"}],
+         "litellm_call_id": shared_call_id},
+        "completion",
+    )
+
+    assert global_cache.get_cache(f"peyeeye_session:attacker:{shared_call_id}") == "ses_attacker"
+    assert global_cache.get_cache(f"peyeeye_session:victim:{shared_call_id}") == "ses_victim"
+    global_cache.delete_cache(f"peyeeye_session:attacker:{shared_call_id}")
+    global_cache.delete_cache(f"peyeeye_session:victim:{shared_call_id}")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_redacts_tool_call_arguments():
+    """tool_calls[].function.arguments must not bypass redaction."""
+    from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
+        global_cache,
+    )
+
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g.async_handler = MagicMock()
+    g.async_handler.post = AsyncMock(
+        return_value=_ok(
+            {
+                "text": [
+                    "hi [EMAIL_1]",
+                    '{"to":"[EMAIL_1]"}',
+                    '{"to":"[EMAIL_2]"}',
+                ],
+                "session_id": "ses_tc",
+            }
+        )
+    )
+
+    cache = DualCache()
+    data = {
+        "messages": [
+            {"role": "user", "content": "hi alice@acme.com"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "send_email",
+                            "arguments": '{"to":"alice@acme.com"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "function_call": {
+                    "name": "send_email",
+                    "arguments": '{"to":"bob@acme.com"}',
+                },
+            },
+        ],
+        "litellm_call_id": "tc-1",
+    }
+    out = await g.async_pre_call_hook(
+        UserAPIKeyAuth(api_key="x"), cache, data, "completion"
+    )
+
+    sent = g.async_handler.post.call_args.kwargs["json"]["text"]
+    assert "alice@acme.com" in sent[0]
+    assert "alice@acme.com" in sent[1]
+    assert "bob@acme.com" in sent[2]
+
+    assert out["messages"][1]["tool_calls"][0]["function"]["arguments"] == '{"to":"[EMAIL_1]"}'
+    assert out["messages"][2]["function_call"]["arguments"] == '{"to":"[EMAIL_2]"}'
+    global_cache.delete_cache("peyeeye_session:x:tc-1")
+
+
+@pytest.mark.asyncio
+async def test_post_call_rehydrates_tool_call_arguments():
+    """If the model echoes placeholders into tool_call args, swap them back."""
+    from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
+        global_cache,
+    )
+
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g.async_handler = MagicMock()
+    g.async_handler.post = AsyncMock(
+        return_value=_ok(
+            {"text": '{"to":"alice@acme.com"}', "replaced": 1}
+        )
+    )
+    g.async_handler.delete = AsyncMock()
+
+    user = UserAPIKeyAuth(api_key="x")
+    global_cache.set_cache("peyeeye_session:x:tc-out", "ses_tc", ttl=60)
+
+    response = litellm.ModelResponse()
+    msg = litellm.utils.Message(content=None, role="assistant")
+    msg.tool_calls = [
+        litellm.utils.ChatCompletionMessageToolCall(
+            id="call_1",
+            type="function",
+            function=litellm.utils.Function(
+                name="send_email", arguments='{"to":"[EMAIL_1]"}'
+            ),
+        )
+    ]
+    response.choices = [
+        litellm.utils.Choices(finish_reason="stop", index=0, message=msg)
+    ]
+
+    out = await g.async_post_call_success_hook(
+        {"litellm_call_id": "tc-out"}, user, response
+    )
+    assert out.choices[0].message.tool_calls[0].function.arguments == '{"to":"alice@acme.com"}'
 
 
 @pytest.mark.asyncio
