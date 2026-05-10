@@ -350,7 +350,10 @@ def cost_per_token(  # noqa: PLR0915
             ):  # use region based pricing, if it's available
                 model_with_provider = model_with_provider_and_region
     else:
-        _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        try:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        except Exception:
+            return 0.0, 0.0
     model_without_prefix = model
     model_parts = model.split("/", 1)
     if len(model_parts) > 1:
@@ -545,9 +548,12 @@ def cost_per_token(  # noqa: PLR0915
             service_tier=service_tier,
         )
     else:
-        model_info = _cached_get_model_info_helper(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
+        try:
+            model_info = _cached_get_model_info_helper(
+                model=model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception:
+            return 0.0, 0.0
 
         if (model_info.get("input_cost_per_token") or 0.0) > 0 or (
             model_info.get("output_cost_per_token") or 0.0
