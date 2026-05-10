@@ -1401,6 +1401,7 @@ class TestDeleteModelCascadeTeams:
         mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
             return_value=db_row
         )
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
         mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
         mock_prisma.db.litellm_teamtable = AsyncMock()
         mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
@@ -1499,6 +1500,63 @@ class TestDeleteModelCascadeTeams:
 
             # The cascade find_many should NOT be called for team-scoped models
             mock_prisma.db.litellm_teamtable.find_many.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delete_skips_cascade_when_other_deployment_exists(self):
+        """When another deployment shares the same model_name, don't remove from teams."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+            ModelInfoDelete,
+        )
+
+        model_id = "deployment-1"
+        admin_user = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="gpt-4",
+            litellm_params={"model": "openai/gpt-4", "api_key": "key-1"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        other_deployment = MagicMock()
+        other_deployment.model_id = "deployment-2"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[other_deployment]
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable.update = AsyncMock()
+
+        _PS = "litellm.proxy.proxy_server"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+        ):
+            await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+            # Should not query teams since another deployment exists
+            mock_prisma.db.litellm_teamtable.find_many.assert_not_called()
+            mock_prisma.db.litellm_teamtable.update.assert_not_called()
 
 
 class TestGetTeamDeployments:

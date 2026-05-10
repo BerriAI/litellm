@@ -810,19 +810,30 @@ async def delete_model(
 
         # Remove deleted global model from all teams that reference it by name.
         # Only for non-team-scoped models; team-scoped cleanup is handled above.
+        # Skip if another deployment still uses the same model_name (load-balancing).
         if model_params.model_info.team_id is None:
             try:
-                affected_teams = await prisma_client.db.litellm_teamtable.find_many(
-                    where={"models": {"has": model_params.model_name}}
-                )
-                for team in affected_teams:
-                    updated_models = [
-                        m for m in team.models if m != model_params.model_name
-                    ]
-                    await prisma_client.db.litellm_teamtable.update(
-                        where={"team_id": team.team_id},
-                        data={"models": updated_models},
+                other_deployments = (
+                    await prisma_client.db.litellm_proxymodeltable.find_many(
+                        where={
+                            "model_name": model_params.model_name,
+                            "model_id": {"not": model_info.id},
+                        },
+                        take=1,
                     )
+                )
+                if not other_deployments:
+                    affected_teams = await prisma_client.db.litellm_teamtable.find_many(
+                        where={"models": {"has": model_params.model_name}}
+                    )
+                    for team in affected_teams:
+                        updated_models = [
+                            m for m in team.models if m != model_params.model_name
+                        ]
+                        await prisma_client.db.litellm_teamtable.update(
+                            where={"team_id": team.team_id},
+                            data={"models": updated_models},
+                        )
             except Exception as e:
                 verbose_proxy_logger.warning(
                     "Failed to remove model %s from teams: %s",
