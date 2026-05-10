@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, HTTPException, Request
@@ -28,7 +28,9 @@ from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
-def _validate_mcp_oauth_outbound_url(url: str, role: str) -> tuple[str, str]:
+def _validate_mcp_oauth_outbound_url(
+    url: str, role: Literal["token", "registration"]
+) -> tuple[str, str]:
     """Validate an admin-configured OAuth URL before the proxy makes a request to
     it. The /token, /register and similar endpoints are reachable without a
     LiteLLM API key (they sit in the middle of an OAuth handshake), so an

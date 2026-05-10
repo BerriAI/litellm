@@ -3083,7 +3083,7 @@ class MCPServerManager:
     def _is_server_accessible_from_ip(
         self,
         server: MCPServer,
-        client_ip: "Optional[str] | _InternalRequest",
+        client_ip: Union[str, _InternalRequest, None],
     ) -> bool:
         """
         Check if a server is accessible from the given client IP.
@@ -3224,8 +3224,8 @@ class MCPServerManager:
                        (auth, debug, registry maintenance). External request
                        handlers should pass a real IP.
         """
-        # Translate the wrapper-level "None means internal" convention into the
-        # gate function's explicit sentinel so it doesn't fail closed.
+        # The gate fails closed on None; preserve the wrapper's existing
+        # "None means internal" convention by routing through the sentinel.
         gate_arg = INTERNAL_REQUEST if client_ip is None else client_ip
         registry = self.get_registry()
         # Pass 1: Match by alias (highest priority)

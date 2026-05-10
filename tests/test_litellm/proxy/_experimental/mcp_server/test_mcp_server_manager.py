@@ -3343,54 +3343,39 @@ class TestIPGatingFailClosed:
             available_on_public_internet=True,
         )
 
-    def test_none_client_ip_fails_closed_for_internal_server(self):
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            MCPServerManager,
-        )
-
-        manager = MCPServerManager()
-        assert (
-            manager._is_server_accessible_from_ip(self._internal_server(), None)
-            is False
-        )
-
-    def test_none_client_ip_fails_closed_for_public_server(self):
-        # Even public servers fail closed when client_ip is None — the missing
-        # IP signals an external request that couldn't be attributed, not an
-        # internal call site. Internal callers must use INTERNAL_REQUEST.
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            MCPServerManager,
-        )
-
-        manager = MCPServerManager()
-        assert (
-            manager._is_server_accessible_from_ip(self._public_server(), None) is False
-        )
-
-    def test_internal_request_sentinel_bypasses_gating(self):
+    @pytest.mark.parametrize(
+        "server_kind,client_ip_kind,expected",
+        [
+            # None fails closed regardless of server visibility — missing IP
+            # signals an external request that couldn't be attributed.
+            ("internal", "none", False),
+            ("public", "none", False),
+            # INTERNAL_REQUEST bypasses gating for both visibilities.
+            ("internal", "internal_request", True),
+            ("public", "internal_request", True),
+            # Real external IP applies the existing visibility rules.
+            ("internal", "external", False),
+            ("public", "external", True),
+        ],
+    )
+    def test_gate_contract(self, server_kind, client_ip_kind, expected):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             INTERNAL_REQUEST,
             MCPServerManager,
         )
 
         manager = MCPServerManager()
-        assert (
-            manager._is_server_accessible_from_ip(
-                self._internal_server(), INTERNAL_REQUEST
-            )
-            is True
+        server = (
+            self._internal_server()
+            if server_kind == "internal"
+            else self._public_server()
         )
-
-    def test_public_server_accessible_from_external_ip(self):
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            MCPServerManager,
-        )
-
-        manager = MCPServerManager()
-        assert (
-            manager._is_server_accessible_from_ip(self._public_server(), "8.8.8.8")
-            is True
-        )
+        client_ip = {
+            "none": None,
+            "internal_request": INTERNAL_REQUEST,
+            "external": "8.8.8.8",
+        }[client_ip_kind]
+        assert manager._is_server_accessible_from_ip(server, client_ip) is expected
 
     def test_get_mcp_server_by_name_preserves_internal_contract(self):
         # Internal callers historically passed client_ip=None to mean "no IP
