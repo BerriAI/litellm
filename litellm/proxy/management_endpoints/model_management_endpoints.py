@@ -836,7 +836,8 @@ async def delete_model(
                         )
             except Exception as e:
                 verbose_proxy_logger.warning(
-                    "Failed to remove model %s from teams: %s",
+                    "Failed to remove model %s from all teams: %s. "
+                    "Some teams may still reference this model.",
                     model_params.model_name,
                     e,
                 )
