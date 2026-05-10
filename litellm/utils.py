@@ -8101,17 +8101,46 @@ class ProviderConfigManager:
     _PROVIDER_CONFIG_MAP: Optional[dict[LlmProviders, tuple[Callable, bool]]] = None
 
     @staticmethod
-    def _is_domestic_model_endpoint(api_base: Optional[str]) -> bool:
+    def _is_domestic_model(model_name: Optional[str]) -> bool:
+        """
+        Check if the model is a domestic (Chinese) model based on its name.
+        Domestic models don't support OpenAI's native Responses API format
+        and certain Codex CLI specific parameters/tools.
+
+        Args:
+            model_name: Model name (e.g., "qwen3.5-plus", "MiniMax-M2.7", "openai/MiniMax-M2.7")
+
+        Returns:
+            bool: True if it's a domestic model that needs compatibility handling
+        """
+        if not model_name:
+            return False
+
+        model_lower = model_name.lower()
+
+        # Domestic model name patterns (covers both raw names and prefixed names like "openai/MiniMax-M2.7")
+        domestic_patterns = [
+            "qwen",      # Alibaba Qwen series
+            "glm",       # Zhipu GLM series
+            "doubao",    # Volcengine (ByteDance) Doubao series
+            "minimax",   # MiniMax series
+            "mimo",      # Xiaomi MiMo series
+            "deepseek",  # DeepSeek series
+        ]
+
+        return any(pattern in model_lower for pattern in domestic_patterns)
+
+    @staticmethod
+    def _is_domestic_endpoint(api_base: Optional[str]) -> bool:
         """
         Check if the api_base is a domestic (Chinese) model provider endpoint.
-        Domestic endpoints don't support OpenAI's native Responses API format,
-        and should use Chat Completions API conversion instead.
+        Used as fallback when model name doesn't contain domestic pattern.
 
         Args:
             api_base: API endpoint URL
 
         Returns:
-            bool: True if it's a domestic endpoint that needs compatibility handling
+            bool: True if it's a domestic endpoint
         """
         if not api_base:
             return False
@@ -8125,6 +8154,27 @@ class ProviderConfigManager:
         ]
 
         return any(endpoint in str(api_base) for endpoint in domestic_endpoints)
+
+    @staticmethod
+    def _is_domestic_model_or_endpoint(model_name: Optional[str], api_base: Optional[str] = None) -> bool:
+        """
+        Check if either model name or endpoint indicates a domestic model.
+        This covers both cases:
+        1. Model name contains domestic pattern (e.g., "MiniMax-M2.7", "openai/qwen3.5-plus")
+        2. Endpoint is domestic provider (when model name is just group name like "codex-model")
+
+        Args:
+            model_name: Model name
+            api_base: API endpoint URL (optional)
+
+        Returns:
+            bool: True if it's a domestic model/endpoint
+        """
+        if ProviderConfigManager._is_domestic_model(model_name):
+            return True
+        if api_base and ProviderConfigManager._is_domestic_endpoint(api_base):
+            return True
+        return False
 
     @staticmethod
     def _build_provider_config_map() -> dict[LlmProviders, tuple[Callable, bool]]:
@@ -8667,11 +8717,11 @@ class ProviderConfigManager:
         if provider is None:
             return None
 
-        # For OpenAI provider, check if api_base is a domestic endpoint
-        # Domestic endpoints don't support native Responses API, force Chat Completions conversion
+        # For OpenAI provider, check if model or endpoint is domestic
+        # Domestic models don't support native Responses API, force Chat Completions conversion
         if litellm.LlmProviders.OPENAI == provider:
-            if api_base and ProviderConfigManager._is_domestic_model_endpoint(api_base):
-                return None  # Force Chat Completions conversion for domestic endpoints
+            if ProviderConfigManager._is_domestic_model_or_endpoint(model, api_base):
+                return None  # Force Chat Completions conversion for domestic models
             return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
             # Check if it's an O-series model

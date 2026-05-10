@@ -197,14 +197,16 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
-        # 获取 api_base 用于判断是否是国内模型 endpoint
-        api_base: Optional[str] = kwargs.get("api_base")
+        # 获取 model 和 api_base 用于判断是否是国内模型
+        model_name: Optional[str] = responses_api_request.get("model") or kwargs.get("model")
+        api_base: Optional[str] = kwargs.get("api_base") or responses_api_request.get("api_base")
 
         (
             tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
             responses_api_request.get("tools") or [],  # type: ignore
+            model_name=model_name,
             api_base=api_base,
         )
 
@@ -1389,6 +1391,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+        model_name: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Tuple[
         Optional[List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]]],
@@ -1399,13 +1402,14 @@ class LiteLLMCompletionResponsesConfig:
 
         Args:
             tools: List of tools from Responses API request
-            api_base: API endpoint URL, used to determine if domestic model filtering should apply
+            model_name: Model name, used to determine if domestic model filtering should apply
+            api_base: API endpoint URL, fallback check when model_name is just a group name
         """
         if tools is None:
             return [], None
 
-        # 判断是否是国内模型 endpoint，需要特殊处理
-        is_domestic_endpoint = ProviderConfigManager._is_domestic_model_endpoint(api_base)
+        # 判断是否是国内模型，需要特殊处理（双重检查：model名 + endpoint）
+        is_domestic_model = ProviderConfigManager._is_domestic_model_or_endpoint(model_name, api_base)
 
         chat_completion_tools: List[
             Union[ChatCompletionToolParam, OpenAIMcpServerTool]
@@ -1415,7 +1419,7 @@ class LiteLLMCompletionResponsesConfig:
         for tool in tools:
             # 只对国内模型 endpoint 过滤不支持的工具类型
             # 国内模型只支持 type: "function"，不支持 Codex/OpenAI 特有的工具类型
-            if is_domestic_endpoint:
+            if is_domestic_model:
                 unsupported_tool_types = [
                     "local_shell",       # Codex CLI 内置 Shell 工具
                     "code_interpreter",  # OpenAI Code Interpreter
@@ -1452,7 +1456,7 @@ class LiteLLMCompletionResponsesConfig:
 
                 # 只对国内模型 endpoint 清理 schema 中不支持的字段
                 # 国内模型不支持 strict 和 additionalProperties，OpenAI structured outputs 需要这些字段
-                if is_domestic_endpoint:
+                if is_domestic_model:
                     parameters = LiteLLMCompletionResponsesConfig._clean_schema(parameters)
 
                 chat_completion_tool: Dict[str, Any] = {

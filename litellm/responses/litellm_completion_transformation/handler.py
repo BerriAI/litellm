@@ -62,10 +62,11 @@ class LiteLLMCompletionTransformationHandler:
         completion_args = {}
         completion_args.update(kwargs)
 
-        # 只对国内模型 endpoint 过滤 client_metadata (Codex CLI 0.130.0 兼容修复)
+        # 只对国内模型过滤 client_metadata (Codex CLI 0.130.0 兼容修复)
         # 国内模型不支持 Codex CLI 特有的 client_metadata 参数
+        # 双重检查：model名 + api_base endpoint
         api_base = kwargs.get("api_base") or litellm_completion_request.get("api_base")
-        if ProviderConfigManager._is_domestic_model_endpoint(api_base):
+        if ProviderConfigManager._is_domestic_model_or_endpoint(model, api_base):
             completion_args.pop("client_metadata", None)
 
         completion_args.update(litellm_completion_request)
@@ -119,10 +120,12 @@ class LiteLLMCompletionTransformationHandler:
         acompletion_args = {}
         acompletion_args.update(kwargs)
 
-        # 只对国内模型 endpoint 过滤 client_metadata (Codex CLI 0.130.0 兼容修复)
+        # 只对国内模型过滤 client_metadata (Codex CLI 0.130.0 兼容修复)
         # 国内模型不支持 Codex CLI 特有的 client_metadata 参数
-        api_base = kwargs.get("api_base") or litellm_completion_request.get("api_base")
-        if ProviderConfigManager._is_domestic_model_endpoint(api_base):
+        # 双重检查：model名 + api_base endpoint
+        model_name = litellm_completion_request.get("model")
+        api_base = litellm_completion_request.get("api_base") or kwargs.get("api_base")
+        if ProviderConfigManager._is_domestic_model_or_endpoint(model_name, api_base):
             acompletion_args.pop("client_metadata", None)
 
         acompletion_args.update(litellm_completion_request)
