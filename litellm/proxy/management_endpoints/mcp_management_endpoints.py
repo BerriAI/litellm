@@ -1557,9 +1557,18 @@ if MCP_AVAILABLE:
         if server is None:
             # Fall back to real DB/config server (e.g. for the user-side OAuth flow
             # which calls these endpoints with a real server_id, not a temp session id).
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+                INTERNAL_REQUEST,
+            )
             from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
-            client_ip = IPAddressUtils.get_mcp_client_ip(request) if request else None
+            # Programmatic callers (no Request) bypass the IP gate explicitly.
+            # Real HTTP callers go through the normal extraction path.
+            client_ip = (
+                IPAddressUtils.get_mcp_client_ip(request)
+                if request
+                else INTERNAL_REQUEST
+            )
             server = global_mcp_server_manager.get_mcp_server_by_id(
                 server_id
             ) or global_mcp_server_manager.get_mcp_server_by_name(

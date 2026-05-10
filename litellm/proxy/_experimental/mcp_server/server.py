@@ -885,15 +885,28 @@ if MCP_AVAILABLE:
             allowed_mcp_server_ids,
         )
         if _ip_blocked > 0:
-            verbose_logger.debug(
-                "MCP IP filtering: %d server(s) are not accessible from client IP %s "
-                "because they are restricted to internal networks. "
-                "No tools from those servers will be returned. "
-                "To expose a server externally, set 'available_on_public_internet: true' "
-                "in its configuration.",
-                _ip_blocked,
-                client_ip,
-            )
+            if client_ip is None:
+                # IP extraction failed (no X-Forwarded-* header, missing
+                # trusted-proxy config, etc.). Fail-closed at the gate
+                # silently dropped the servers — tell the operator to fix
+                # IP forwarding, NOT to expose the server publicly.
+                verbose_logger.debug(
+                    "MCP IP filtering: %d server(s) hidden because client IP "
+                    "could not be determined for this request. Fix request-IP "
+                    "extraction (X-Forwarded-For + trusted_proxies) so the "
+                    "gate can evaluate access.",
+                    _ip_blocked,
+                )
+            else:
+                verbose_logger.debug(
+                    "MCP IP filtering: %d server(s) are not accessible from "
+                    "client IP %s because they are restricted to internal "
+                    "networks. No tools from those servers will be returned. "
+                    "To expose a server externally, set "
+                    "'available_on_public_internet: true' in its configuration.",
+                    _ip_blocked,
+                    client_ip,
+                )
         allowed_mcp_servers: List[MCPServer] = []
         for allowed_mcp_server_id in allowed_mcp_server_ids:
             mcp_server = global_mcp_server_manager.get_mcp_server_by_id(

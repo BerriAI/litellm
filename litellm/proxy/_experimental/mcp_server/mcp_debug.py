@@ -293,6 +293,7 @@ class MCPDebug:
             MCPRequestHandler,
         )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
             global_mcp_server_manager,
         )
 
@@ -300,9 +301,14 @@ class MCPDebug:
         server_auth_type: Optional[str] = None
         auth_resolution = "no-auth"
 
+        # Debug-header generation is passive observability — access control was
+        # already enforced upstream when the tool list was fetched. If the
+        # caller couldn't extract a client IP, don't drop the debug metadata;
+        # bypass the IP gate explicitly.
+        gate_arg = client_ip if client_ip is not None else INTERNAL_REQUEST
         for server_name in mcp_servers or []:
             server = global_mcp_server_manager.get_mcp_server_by_name(
-                server_name, client_ip=client_ip
+                server_name, client_ip=gate_arg
             )
             if server:
                 server_url = server.url
