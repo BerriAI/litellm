@@ -8,11 +8,13 @@ name: "Mutation Test (manual)"
 # do not block anything because nothing depends on this workflow.
 
 on:
+  # Manual trigger only. Intended cadence is roughly weekly — clicked from the
+  # Actions tab UI when someone wants a fresh mutation report.
   workflow_dispatch:
   # TEMPORARY: lets us iterate on this workflow before it lands on the default
-  # branch (workflow_dispatch only works once the file is on default). Remove
-  # this push: block before merging — final state should be workflow_dispatch
-  # only.
+  # branch (workflow_dispatch only fires once the file is on the default
+  # branch). Remove this push: block before merging — final state should be
+  # workflow_dispatch only.
   push:
     branches:
       - litellm_mutation_test_smoke
