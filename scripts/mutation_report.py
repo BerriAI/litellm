@@ -55,8 +55,15 @@ def get_mutmut_show(mutant_name: str) -> str:
 
 
 def parse_mutant_name(name: str) -> tuple[str, str, str]:
-    """Parse `<dotted.module>.x__<function>__mutmut_<N>` -> (module, function, N)."""
-    m = re.match(r"^(.+)\.x__(.+)__mutmut_(\d+)$", name)
+    """Parse `<dotted.module>.x_<function>__mutmut_<N>` -> (module, function, N).
+
+    mutmut prefixes mutated functions with `x_` (single underscore). For a
+    function named `foo`, mutants are `x_foo__mutmut_N`. For a function named
+    `_foo` (leading underscore), the mutant becomes `x__foo__mutmut_N` — so
+    the regex matches a single underscore after `x` and captures everything
+    (including any leading underscores) up to `__mutmut_<N>`.
+    """
+    m = re.match(r"^(.+)\.x_(.+)__mutmut_(\d+)$", name)
     if not m:
         return name, name, "?"
     return m.group(1), m.group(2), m.group(3)
