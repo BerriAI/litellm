@@ -4043,3 +4043,35 @@ def test_get_guardrail_from_metadata_reads_litellm_metadata_when_no_metadata():
     assert result == [
         "my-guardrail"
     ], f"Expected guardrails from litellm_metadata fallback, got: {result}"
+
+
+def test_add_headers_to_llm_call_coerces_non_string_values():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/27458
+    Float values (spend, max_budget) in user metadata must be coerced to
+    strings before being set as HTTP headers. httpx rejects non-str/bytes
+    header values with TypeError.
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        token="sk-test",
+        spend=42.5,
+        max_budget=100.0,
+        team_id="team-1",
+        user_id="user-1",
+    )
+    headers = Headers(raw=[])
+    original = litellm.add_user_information_to_llm_headers
+    litellm.add_user_information_to_llm_headers = True
+    try:
+        result = LiteLLMProxyRequestSetup.add_headers_to_llm_call(
+            headers=headers,
+            user_api_key_dict=user_api_key_dict,
+        )
+        for k, v in result.items():
+            assert isinstance(
+                v, str
+            ), f"Header {k!r} has type {type(v).__name__}, expected str"
+        assert result["x-litellm-user_api_key_spend"] == "42.5"
+        assert result["x-litellm-user_api_key_max_budget"] == "100.0"
+    finally:
+        litellm.add_user_information_to_llm_headers = original
