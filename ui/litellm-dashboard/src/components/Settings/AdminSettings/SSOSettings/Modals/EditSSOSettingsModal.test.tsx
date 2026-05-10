@@ -90,6 +90,14 @@ const createGenericSSOData = (overrides: Record<string, any> = {}) =>
     ...overrides,
   });
 
+const createOktaSSOData = (overrides: Record<string, any> = {}) =>
+  createSSOData({
+    okta_client_id: "test-okta-id",
+    okta_client_secret: "test-okta-secret",
+    okta_issuer: "https://okta.example.com/oauth2/default",
+    ...overrides,
+  });
+
 const createRoleMappingsSSOData = (overrides: Record<string, any> = {}) =>
   createGoogleSSOData({
     role_mappings: {
@@ -182,6 +190,17 @@ vi.mock("@/components/shared/errorUtils", () => ({
 }));
 
 vi.mock("../utils", () => ({
+  detectSSOProvider: vi.fn((values: Record<string, any>) => {
+    if (values.google_client_id) return "google";
+    if (values.microsoft_client_id) return "microsoft";
+    if (values.okta_client_id) return "okta";
+    if (values.generic_client_id) {
+      return values.generic_authorization_endpoint?.includes("okta")
+        ? "okta"
+        : "generic";
+    }
+    return null;
+  }),
   processSSOSettingsPayload: vi.fn(),
 }));
 
@@ -398,20 +417,14 @@ describe("EditSSOSettingsModal", () => {
 
       testProviderDetection("Microsoft", createMicrosoftSSOData(), SSO_PROVIDERS.MICROSOFT);
 
-      testProviderDetection(
-        "Okta",
-        createGenericSSOData({
-          authorization_endpoint: "https://okta.example.com/oauth2/authorize",
-        }),
-        SSO_PROVIDERS.OKTA,
-      );
+      testProviderDetection("Okta", createOktaSSOData(), SSO_PROVIDERS.OKTA);
 
       testProviderDetection(
-        "Auth0 (detected as Okta)",
+        "Auth0 generic endpoint",
         createGenericSSOData({
           authorization_endpoint: "https://auth0.example.com/authorize",
         }),
-        SSO_PROVIDERS.OKTA, // Auth0 URLs are detected as Okta provider
+        SSO_PROVIDERS.GENERIC,
       );
 
       testProviderDetection("generic", createGenericSSOData(), SSO_PROVIDERS.GENERIC);

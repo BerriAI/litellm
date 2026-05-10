@@ -703,6 +703,18 @@ async def get_sso_settings():
             "microsoft_client_secret", None
         ),
         microsoft_tenant=decrypted_sso_settings_dict.get("microsoft_tenant", None),
+        okta_client_id=decrypted_sso_settings_dict.get("okta_client_id", None),
+        okta_client_secret=decrypted_sso_settings_dict.get("okta_client_secret", None),
+        okta_issuer=decrypted_sso_settings_dict.get("okta_issuer", None),
+        okta_authorization_endpoint=decrypted_sso_settings_dict.get(
+            "okta_authorization_endpoint", None
+        ),
+        okta_token_endpoint=decrypted_sso_settings_dict.get(
+            "okta_token_endpoint", None
+        ),
+        okta_userinfo_endpoint=decrypted_sso_settings_dict.get(
+            "okta_userinfo_endpoint", None
+        ),
         generic_client_id=decrypted_sso_settings_dict.get("generic_client_id", None),
         generic_client_secret=decrypted_sso_settings_dict.get(
             "generic_client_secret", None
@@ -789,6 +801,12 @@ async def update_sso_settings(sso_config: SSOConfig):
         "microsoft_client_id": "MICROSOFT_CLIENT_ID",
         "microsoft_client_secret": "MICROSOFT_CLIENT_SECRET",
         "microsoft_tenant": "MICROSOFT_TENANT",
+        "okta_client_id": "OKTA_CLIENT_ID",
+        "okta_client_secret": "OKTA_CLIENT_SECRET",
+        "okta_issuer": "OKTA_ISSUER",
+        "okta_authorization_endpoint": "OKTA_AUTHORIZATION_ENDPOINT",
+        "okta_token_endpoint": "OKTA_TOKEN_ENDPOINT",
+        "okta_userinfo_endpoint": "OKTA_USERINFO_ENDPOINT",
         "generic_client_id": "GENERIC_CLIENT_ID",
         "generic_client_secret": "GENERIC_CLIENT_SECRET",
         "generic_authorization_endpoint": "GENERIC_AUTHORIZATION_ENDPOINT",
@@ -814,7 +832,7 @@ async def update_sso_settings(sso_config: SSOConfig):
         if field_name in env_var_mapping:
             env_var_name = env_var_mapping[field_name]
             if value:
-                os.environ[env_var_name] = value
+                os.environ[env_var_name] = str(value)
             else:
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)

@@ -1429,6 +1429,7 @@ class TestProxySettingEndpoints:
         env_var_entry.param_value = json.dumps(
             {
                 "GOOGLE_CLIENT_ID": "old_google_id",
+                "OKTA_CLIENT_ID": "old_okta_id",
                 "GENERIC_TOKEN_ENDPOINT": "old_endpoint",
                 "UNCHANGED_ENV": "keep_me",
             }
@@ -1458,6 +1459,7 @@ class TestProxySettingEndpoints:
         update_call = mock_prisma.db.litellm_config.update.call_args
         updated_env_vars = json.loads(update_call.kwargs["data"]["param_value"])
         assert "GOOGLE_CLIENT_ID" not in updated_env_vars
+        assert "OKTA_CLIENT_ID" not in updated_env_vars
         assert "GENERIC_TOKEN_ENDPOINT" not in updated_env_vars
         assert updated_env_vars["UNCHANGED_ENV"] == "keep_me"
 

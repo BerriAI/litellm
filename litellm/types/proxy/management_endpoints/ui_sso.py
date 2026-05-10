@@ -129,7 +129,33 @@ class SSOConfig(LiteLLMPydanticObjectBase):
         description="Microsoft Azure Tenant ID for SSO authentication",
     )
 
-    # Generic/Okta SSO
+    # Okta SSO
+    okta_client_id: Optional[str] = Field(
+        default=None,
+        description="Okta OAuth Client ID for SSO authentication",
+    )
+    okta_client_secret: Optional[str] = Field(
+        default=None,
+        description="Okta OAuth Client Secret for SSO authentication",
+    )
+    okta_issuer: Optional[str] = Field(
+        default=None,
+        description="Okta authorization server issuer URL, e.g. https://your-domain.okta.com/oauth2/default",
+    )
+    okta_authorization_endpoint: Optional[str] = Field(
+        default=None,
+        description="Optional Okta authorization endpoint override",
+    )
+    okta_token_endpoint: Optional[str] = Field(
+        default=None,
+        description="Optional Okta token endpoint override",
+    )
+    okta_userinfo_endpoint: Optional[str] = Field(
+        default=None,
+        description="Optional Okta userinfo endpoint override",
+    )
+
+    # Generic SSO
     generic_client_id: Optional[str] = Field(
         default=None,
         description="Generic OAuth Client ID for SSO authentication (used for Okta and other providers)",

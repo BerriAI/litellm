@@ -46,25 +46,17 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
   },
   okta: {
     envVarMap: {
-      generic_client_id: "GENERIC_CLIENT_ID",
-      generic_client_secret: "GENERIC_CLIENT_SECRET",
-      generic_authorization_endpoint: "GENERIC_AUTHORIZATION_ENDPOINT",
-      generic_token_endpoint: "GENERIC_TOKEN_ENDPOINT",
-      generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
+      okta_client_id: "OKTA_CLIENT_ID",
+      okta_client_secret: "OKTA_CLIENT_SECRET",
+      okta_issuer: "OKTA_ISSUER",
     },
     fields: [
-      { label: "Generic Client ID", name: "generic_client_id" },
-      { label: "Generic Client Secret", name: "generic_client_secret" },
+      { label: "Okta Client ID", name: "okta_client_id" },
+      { label: "Okta Client Secret", name: "okta_client_secret" },
       {
-        label: "Authorization Endpoint",
-        name: "generic_authorization_endpoint",
-        placeholder: "https://your-domain/authorize",
-      },
-      { label: "Token Endpoint", name: "generic_token_endpoint", placeholder: "https://your-domain/token" },
-      {
-        label: "Userinfo Endpoint",
-        name: "generic_userinfo_endpoint",
-        placeholder: "https://your-domain/userinfo",
+        label: "Okta Issuer",
+        name: "okta_issuer",
+        placeholder: "https://your-domain.okta.com/oauth2/default",
       },
     ],
   },

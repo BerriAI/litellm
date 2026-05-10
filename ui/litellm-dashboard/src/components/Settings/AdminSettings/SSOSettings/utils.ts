@@ -44,7 +44,7 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
     };
 
     payload.role_mappings = {
-      provider: "generic",
+      provider,
       group_claim,
       default_role: defaultRoleMapping[default_role] || "internal_user",
       roles: {
@@ -71,12 +71,10 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
 export const detectSSOProvider = (values: SSOSettingsValues): string | null => {
   if (values.google_client_id) return "google";
   if (values.microsoft_client_id) return "microsoft";
+  if (values.okta_client_id) return "okta";
   if (values.generic_client_id) {
-    // Check if it looks like Okta/Auth0 based on endpoints
-    if (
-      values.generic_authorization_endpoint?.includes("okta") ||
-      values.generic_authorization_endpoint?.includes("auth0")
-    ) {
+    // Backward compatibility: older Okta UI settings were stored as generic OIDC endpoints.
+    if (values.generic_authorization_endpoint?.includes("okta")) {
       return "okta";
     }
     return "generic";

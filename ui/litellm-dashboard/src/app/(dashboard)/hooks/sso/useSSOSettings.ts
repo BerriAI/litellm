@@ -19,6 +19,12 @@ export interface SSOSettingsValues {
   microsoft_client_id: string | null;
   microsoft_client_secret: string | null;
   microsoft_tenant: string | null;
+  okta_client_id: string | null;
+  okta_client_secret: string | null;
+  okta_issuer: string | null;
+  okta_authorization_endpoint: string | null;
+  okta_token_endpoint: string | null;
+  okta_userinfo_endpoint: string | null;
   generic_client_id: string | null;
   generic_client_secret: string | null;
   generic_authorization_endpoint: string | null;

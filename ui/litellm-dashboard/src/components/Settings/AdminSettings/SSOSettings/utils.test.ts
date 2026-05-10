@@ -392,6 +392,7 @@ describe("processSSOSettingsPayload", () => {
         team_ids_jwt_field: "teams",
       });
       expect(result.role_mappings).toBeDefined();
+      expect(result.role_mappings.provider).toBe("okta");
       expect(result.role_mappings.group_claim).toBe("groups");
     });
   });

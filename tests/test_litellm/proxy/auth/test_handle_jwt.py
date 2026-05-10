@@ -2185,6 +2185,85 @@ async def test_resolve_jwks_url_raises_if_no_jwks_uri_in_discovery_doc():
         await handler._resolve_jwks_url(discovery_url)
 
 
+@pytest.mark.asyncio
+async def test_get_public_key_uses_litellm_jwtauth_public_key_url(monkeypatch):
+    """JWT public key URL can be configured in litellm_jwtauth, not only env."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.caching.dual_cache import DualCache
+
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    handler = JWTHandler()
+    jwks_url = "https://example.okta.com/oauth2/default/v1/keys"
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(public_key_url=jwks_url),
+    )
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "keys": [{"kid": "okta-key", "kty": "RSA", "n": "abc", "e": "AQAB"}]
+    }
+    handler.http_handler.get = AsyncMock(return_value=mock_response)
+
+    public_key = await handler.get_public_key(kid="okta-key")
+
+    assert public_key["kid"] == "okta-key"
+    handler.http_handler.get.assert_called_once_with(jwks_url)
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_uses_litellm_jwtauth_audience_and_issuer(monkeypatch):
+    """Okta id_tokens should validate aud/iss from litellm_jwtauth config."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import jwt as pyjwt
+
+    from litellm.caching.dual_cache import DualCache
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_ISSUER", raising=False)
+
+    handler = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            public_key_url="https://example.okta.com/oauth2/default/v1/keys",
+            audience="okta-client-id",
+            issuer="https://example.okta.com/oauth2/default",
+        ),
+    )
+    token = pyjwt.encode(
+        {"sub": "okta-user"},
+        "secret",
+        algorithm="HS256",
+        headers={"kid": "okta-key"},
+    )
+
+    with (
+        patch.object(
+            handler,
+            "get_public_key",
+            new_callable=AsyncMock,
+            return_value={"kid": "okta-key", "kty": "RSA", "n": "abc", "e": "AQAB"},
+        ),
+        patch("litellm.proxy.auth.handle_jwt.PyJWK.from_dict") as mock_jwk_from_dict,
+        patch("litellm.proxy.auth.handle_jwt.jwt.decode") as mock_decode,
+    ):
+        mock_jwk_from_dict.return_value = MagicMock(key="public-key")
+        mock_decode.return_value = {"sub": "okta-user"}
+
+        payload = await handler.auth_jwt(token)
+
+    assert payload == {"sub": "okta-user"}
+    decode_kwargs = mock_decode.call_args.kwargs
+    assert decode_kwargs["audience"] == "okta-client-id"
+    assert decode_kwargs["issuer"] == "https://example.okta.com/oauth2/default"
+
+
 # ---------------------------------------------------------------------------
 # Fix 2: handle array values in team_id_jwt_field (e.g. AAD "roles" claim)
 # ---------------------------------------------------------------------------
