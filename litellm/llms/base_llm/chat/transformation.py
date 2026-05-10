@@ -110,10 +110,21 @@ class BaseConfig(ABC):
         return type_to_response_format_param(response_format=response_format)
 
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
-        return (
-            non_default_params.get("thinking", {}).get("type") == "enabled"
-            or non_default_params.get("reasoning_effort") is not None
-        )
+        """Return True when any non-disabled thinking mode is active.
+
+        Covers ``type="enabled"`` (standard), ``type="adaptive"`` (Claude Code /
+        model-chooses-whether-to-think), and any future Anthropic thinking types.
+        When thinking is active, callers must NOT force ``tool_choice`` to a
+        specific tool — Anthropic rejects that combination with a 400.
+        Fixes #26334.
+        """
+        thinking = non_default_params.get("thinking")
+        if thinking is not None and isinstance(thinking, dict):
+            thinking_type = thinking.get("type")
+            # Any explicit non-disabled type counts as thinking enabled.
+            if thinking_type is not None and thinking_type != "disabled":
+                return True
+        return non_default_params.get("reasoning_effort") is not None
 
     def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
         """
