@@ -5,7 +5,9 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -24,6 +26,26 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.utils import get_server_root_path
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+def _validate_mcp_oauth_outbound_url(url: str, role: str) -> tuple[str, str]:
+    """Validate an admin-configured OAuth URL before the proxy makes a request to
+    it. The /token, /register and similar endpoints are reachable without a
+    LiteLLM API key (they sit in the middle of an OAuth handshake), so an
+    unauthenticated caller can trigger the proxy to POST to whatever host the
+    admin configured. Resolve and validate the host before sending so an
+    operator who points an MCP server at an internal IdP doesn't unintentionally
+    expose it as an SSRF probe via the proxy."""
+    if not getattr(litellm, "user_url_validation", True):
+        return url, urlparse(url).hostname or ""
+    try:
+        return validate_url(url)
+    except SSRFError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Configured MCP {role} URL is not safe to call: {exc}",
+        )
+
 
 router = APIRouter(
     tags=["mcp"],
@@ -393,9 +415,12 @@ async def exchange_token_with_server(
             token_data["code_verifier"] = code_verifier
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+    target_url, host_header = _validate_mcp_oauth_outbound_url(
+        mcp_server.token_url, role="token"
+    )
     response = await async_client.post(
-        mcp_server.token_url,
-        headers={"Accept": "application/json"},
+        target_url,
+        headers={"Accept": "application/json", "Host": host_header},
         data=token_data,
     )
 
@@ -498,9 +523,12 @@ async def register_client_with_server(
     async_client = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.Oauth2Register
     )
+    target_url, host_header = _validate_mcp_oauth_outbound_url(
+        mcp_server.registration_url, role="registration"
+    )
     response = await async_client.post(
-        mcp_server.registration_url,
-        headers=headers,
+        target_url,
+        headers={**headers, "Host": host_header},
         json=register_data,
     )
     response.raise_for_status()

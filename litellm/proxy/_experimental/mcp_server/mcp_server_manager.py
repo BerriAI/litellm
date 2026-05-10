@@ -166,6 +166,21 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
         return data
 
 
+class _InternalRequest:
+    """Sentinel passed in place of a client IP to indicate that the call site
+    is internal (background reload, registry maintenance, admin debug) and
+    should bypass IP-based access control. External request handlers must pass
+    a real IP string instead — passing ``None`` now fails closed."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        return "INTERNAL_REQUEST"
+
+
+INTERNAL_REQUEST = _InternalRequest()
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -3066,17 +3081,28 @@ class MCPServerManager:
             return {}
 
     def _is_server_accessible_from_ip(
-        self, server: MCPServer, client_ip: Optional[str]
+        self,
+        server: MCPServer,
+        client_ip: "Optional[str] | _InternalRequest",
     ) -> bool:
         """
         Check if a server is accessible from the given client IP.
 
-        - If client_ip is None, no IP filtering is applied (internal callers).
-        - If the server has available_on_public_internet=True, it's always accessible.
+        - ``INTERNAL_REQUEST`` bypasses IP filtering (internal callers, admin
+          debug, registry maintenance).
+        - ``None`` fails closed: external request handlers must extract a real
+          IP via ``IPAddressUtils.get_mcp_client_ip(request)`` and reject the
+          request when extraction fails. Earlier behaviour treated ``None`` as
+          "no filter," which let external callers reach internal-only servers
+          when IP extraction silently failed.
+        - If the server has ``available_on_public_internet=True``, it's
+          always accessible.
         - Otherwise, only internal/private IPs can access it.
         """
-        if client_ip is None:
+        if client_ip is INTERNAL_REQUEST:
             return True
+        if client_ip is None:
+            return False
         if server.available_on_public_internet:
             return True
         # Check backwards compat: litellm.public_mcp_servers
@@ -3193,24 +3219,31 @@ class MCPServerManager:
             server_name: The server name to look up.
             client_ip: Optional client IP for access control. When provided,
                        non-public servers are hidden from external IPs.
+                       ``None`` is treated as "internal context, no IP gating"
+                       to preserve the existing contract for internal callers
+                       (auth, debug, registry maintenance). External request
+                       handlers should pass a real IP.
         """
+        # Translate the wrapper-level "None means internal" convention into the
+        # gate function's explicit sentinel so it doesn't fail closed.
+        gate_arg = INTERNAL_REQUEST if client_ip is None else client_ip
         registry = self.get_registry()
         # Pass 1: Match by alias (highest priority)
         for server in registry.values():
             if server.alias == server_name:
-                if not self._is_server_accessible_from_ip(server, client_ip):
+                if not self._is_server_accessible_from_ip(server, gate_arg):
                     return None
                 return server
         # Pass 2: Match by server_name
         for server in registry.values():
             if server.server_name == server_name:
-                if not self._is_server_accessible_from_ip(server, client_ip):
+                if not self._is_server_accessible_from_ip(server, gate_arg):
                     return None
                 return server
         # Pass 3: Match by name (lowest priority)
         for server in registry.values():
             if server.name == server_name:
-                if not self._is_server_accessible_from_ip(server, client_ip):
+                if not self._is_server_accessible_from_ip(server, gate_arg):
                     return None
                 return server
         return None

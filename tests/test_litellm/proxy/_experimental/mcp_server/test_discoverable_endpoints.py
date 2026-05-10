@@ -503,6 +503,13 @@ async def test_register_client_remote_registration_success():
                 "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
                 return_value=mock_async_client,
             ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.discoverable_endpoints.validate_url",
+                return_value=(
+                    "https://provider.example/oauth/register",
+                    "provider.example",
+                ),
+            ),
         ):
             response = await register_client(
                 request=mock_request, mcp_server_name=oauth2_server.server_name
@@ -522,6 +529,7 @@ async def test_register_client_remote_registration_success():
     assert call_args.kwargs["headers"] == {
         "Content-Type": "application/json",
         "Accept": "application/json",
+        "Host": "provider.example",
     }
     assert call_args.kwargs["json"]["redirect_uris"] == [
         "https://proxy.litellm.example/callback"
@@ -2473,3 +2481,73 @@ async def test_token_endpoint_sets_no_store_cache_control():
 
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["pragma"] == "no-cache"
+
+
+class TestOutboundOAuthURLValidation:
+    """
+    /token and /register can be hit without a LiteLLM API key (the caller is
+    mid-OAuth-handshake). They forward the request to whatever URL the admin
+    configured for the MCP server. Lock the new contract: the outbound URL is
+    SSRF-validated via litellm_core_utils.url_utils.validate_url before any
+    proxy POST, so an admin-configured internal IdP can't be probed by an
+    unauthenticated caller through the proxy.
+    """
+
+    def test_validator_rejects_internal_url(self):
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _validate_mcp_oauth_outbound_url,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_mcp_oauth_outbound_url(
+                "http://127.0.0.1:8080/token", role="token"
+            )
+        assert exc_info.value.status_code == 400
+        assert "token" in str(exc_info.value.detail)
+
+    def test_validator_rejects_rfc1918_url(self):
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _validate_mcp_oauth_outbound_url,
+        )
+
+        with pytest.raises(HTTPException):
+            _validate_mcp_oauth_outbound_url(
+                "http://192.168.1.10/oauth/register", role="registration"
+            )
+
+    def test_validator_passes_when_validation_disabled(self):
+        # Operators who explicitly opt out via litellm.user_url_validation = False
+        # still get the URL passed through unchanged.
+        import litellm
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _validate_mcp_oauth_outbound_url,
+        )
+
+        original = getattr(litellm, "user_url_validation", True)
+        try:
+            litellm.user_url_validation = False
+            url, host = _validate_mcp_oauth_outbound_url(
+                "http://10.0.0.1:5000/token", role="token"
+            )
+            assert url == "http://10.0.0.1:5000/token"
+            assert host == "10.0.0.1"
+        finally:
+            litellm.user_url_validation = original
+
+    def test_validator_accepts_public_url(self):
+        # The public-URL acceptance path does live DNS resolution, which is
+        # flaky in CI. Patch validate_url to confirm the helper passes the
+        # validated tuple through.
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _validate_mcp_oauth_outbound_url,
+        )
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.validate_url",
+            return_value=("https://provider.example/token", "provider.example"),
+        ):
+            url, host = _validate_mcp_oauth_outbound_url(
+                "https://provider.example/token", role="token"
+            )
+        assert url == "https://provider.example/token"
+        assert host == "provider.example"

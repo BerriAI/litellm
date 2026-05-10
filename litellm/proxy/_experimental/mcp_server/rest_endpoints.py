@@ -393,7 +393,6 @@ if MCP_AVAILABLE:
             )
             if (
                 _server is not None
-                and rest_client_ip is not None
                 and not global_mcp_server_manager._is_server_accessible_from_ip(
                     _server, rest_client_ip
                 )
@@ -483,7 +482,6 @@ if MCP_AVAILABLE:
             )
             if (
                 _server is not None
-                and rest_client_ip is not None
                 and not global_mcp_server_manager._is_server_accessible_from_ip(
                     _server, rest_client_ip
                 )

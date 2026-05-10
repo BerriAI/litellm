@@ -3311,5 +3311,105 @@ class TestOAuthDiscoverySSRFGuard:
         mock_client.get.assert_not_called()
 
 
+class TestIPGatingFailClosed:
+    """
+    The IP-gating helper used to fail open when ``client_ip`` was ``None``,
+    which let request handlers that couldn't determine a client IP reach
+    internal-only MCP servers. Lock the new contract: ``None`` fails closed,
+    ``INTERNAL_REQUEST`` bypasses gating, real IPs apply the existing rules.
+    """
+
+    def _internal_server(self):
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        return MCPServer(
+            server_id="internal-1",
+            name="internal",
+            server_name="internal",
+            transport=MCPTransport.http,
+            url="https://internal.local/mcp",
+            available_on_public_internet=False,
+        )
+
+    def _public_server(self):
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+        return MCPServer(
+            server_id="public-1",
+            name="public",
+            server_name="public",
+            transport=MCPTransport.http,
+            url="https://public.example/mcp",
+            available_on_public_internet=True,
+        )
+
+    def test_none_client_ip_fails_closed_for_internal_server(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        assert (
+            manager._is_server_accessible_from_ip(self._internal_server(), None)
+            is False
+        )
+
+    def test_none_client_ip_fails_closed_for_public_server(self):
+        # Even public servers fail closed when client_ip is None — the missing
+        # IP signals an external request that couldn't be attributed, not an
+        # internal call site. Internal callers must use INTERNAL_REQUEST.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        assert (
+            manager._is_server_accessible_from_ip(self._public_server(), None) is False
+        )
+
+    def test_internal_request_sentinel_bypasses_gating(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        assert (
+            manager._is_server_accessible_from_ip(
+                self._internal_server(), INTERNAL_REQUEST
+            )
+            is True
+        )
+
+    def test_public_server_accessible_from_external_ip(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        assert (
+            manager._is_server_accessible_from_ip(self._public_server(), "8.8.8.8")
+            is True
+        )
+
+    def test_get_mcp_server_by_name_preserves_internal_contract(self):
+        # Internal callers historically passed client_ip=None to mean "no IP
+        # gating." get_mcp_server_by_name translates None → INTERNAL_REQUEST
+        # so those callers keep working after the gate change.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        server = self._internal_server()
+        manager.registry[server.server_id] = server
+
+        result = manager.get_mcp_server_by_name("internal", client_ip=None)
+        assert result is server
+
+        result = manager.get_mcp_server_by_name("internal", client_ip="8.8.8.8")
+        assert result is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
