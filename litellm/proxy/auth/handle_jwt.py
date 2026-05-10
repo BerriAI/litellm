@@ -875,7 +875,9 @@ class JWTAuthManager:
             return True
 
         if model in role_based_models or any(
-            fnmatch.fnmatch(model, pattern) for pattern in role_based_models
+            fnmatch.fnmatch(model, pattern)
+            for pattern in role_based_models
+            if "*" in pattern
         ):
             return True
 

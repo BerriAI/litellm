@@ -2731,3 +2731,36 @@ class TestCanRbacRoleCallModelWildcard:
                 model="openai-gpt-4",
             )
         assert exc_info.value.status_code == 403
+
+    def test_fnmatch_metacharacters_treated_literally(self):
+        """Model names with ? or [...] are exact aliases, not wildcard patterns."""
+        perms = [
+            RoleBasedPermissions(
+                role=LitellmUserRoles.INTERNAL_USER,
+                models=["prod-[eu]", "model-v2?"],
+            ),
+        ]
+        # Exact match works
+        assert JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings=self._settings(perms),
+            model="prod-[eu]",
+        )
+        assert JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings=self._settings(perms),
+            model="model-v2?",
+        )
+        # fnmatch would have matched these, but they should be rejected
+        with pytest.raises(HTTPException):
+            JWTAuthManager.can_rbac_role_call_model(
+                rbac_role=LitellmUserRoles.INTERNAL_USER,
+                general_settings=self._settings(perms),
+                model="prod-e",
+            )
+        with pytest.raises(HTTPException):
+            JWTAuthManager.can_rbac_role_call_model(
+                rbac_role=LitellmUserRoles.INTERNAL_USER,
+                general_settings=self._settings(perms),
+                model="model-v2x",
+            )
