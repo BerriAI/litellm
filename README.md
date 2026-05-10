@@ -13,14 +13,37 @@ OpenAI Codex CLI 使用 **Responses API** 协议，而国内模型（豆包、GL
 | `handler.py` | 过滤 `client_metadata` 参数（Codex CLI 发送，国内模型不接受） |
 | `transformation.py` | 添加 `_clean_schema()` 清理 `strict`/`additionalProperties`；过滤 `local_shell` 等不支持的工具类型 |
 
-## 支持模型
+## 支持模型（已通过 Codex CLI 测试）
 
-| 模型 | Provider | 状态 |
-|------|----------|------|
-| doubao-seed-2.0-pro | 豆包 | ✅ |
-| glm-5 | 智谱 | ✅ |
-| MiniMax-M2.7 | MiniMax | ✅ |
+### 阿里云 DashScope
+| 模型 | Provider | 测试结果 |
+|------|----------|----------|
+| qwen3.5-plus | 阿里云 | ✅ |
+| qwen3-max-2026-01-23 | 阿里云 | ✅ |
+| qwen3-coder-next | 阿里云 | ✅ |
+| qwen3-coder-plus | 阿里云 | ✅ |
+| glm-4.7 | 智谱 (阿里云) | ✅ |
+| kimi-k2.5 | Moonshot (阿里云) | ✅ |
+| glm-5 | 智谱 (阿里云) | ✅ |
+
+### 火山引擎 Volcengine
+| 模型 | Provider | 测试结果 |
+|------|----------|----------|
+| Doubao-Seed-2.0-pro | 豆包 | ✅ |
+| Doubao-Seed-2.0-lite | 豆包 | ✅ |
+| GLM-5.1 | 智谱 (火山) | ✅ |
+| Kimi-K2.6 | Moonshot (火山) | ✅ |
+| DeepSeek-V3.2 | DeepSeek (火山) | ✅ |
+
+### 官方 API
+| 模型 | Provider | 测试结果 |
+|------|----------|----------|
+| MiniMax-M2.7 | MiniMax 官方 | ✅ |
 | mimo-v2.5-pro | 小米 MiMo | ✅ |
+| deepseek-v4-flash | DeepSeek 官方 | ✅ |
+| deepseek-v4-pro | DeepSeek 官方 | ✅ |
+
+**共 16 个模型全部通过 Codex CLI Responses API 测试。**
 
 ---
 
