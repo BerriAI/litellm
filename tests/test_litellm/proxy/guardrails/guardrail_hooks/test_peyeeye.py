@@ -428,6 +428,87 @@ async def test_post_call_rehydrates_tool_call_arguments():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_redacts_text_completion_prompt():
+    """text_completion `prompt` (str or list[str]) must be redacted."""
+    from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
+        global_cache,
+    )
+
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g.async_handler = MagicMock()
+    g.async_handler.post = AsyncMock(
+        return_value=_ok(
+            {
+                "text": ["hi [EMAIL_1]", "ping [EMAIL_2]"],
+                "session_id": "ses_p",
+            }
+        )
+    )
+
+    cache = DualCache()
+    data = {
+        "prompt": ["hi alice@acme.com", "ping bob@acme.com"],
+        "litellm_call_id": "p-1",
+    }
+    out = await g.async_pre_call_hook(
+        UserAPIKeyAuth(api_key="x"), cache, data, "text_completion"
+    )
+    assert out["prompt"] == ["hi [EMAIL_1]", "ping [EMAIL_2]"]
+    global_cache.delete_cache("peyeeye_session:x:p-1")
+
+
+@pytest.mark.asyncio
+async def test_pre_call_redacts_embeddings_input():
+    """embeddings `input` (str or list[str]) must be redacted."""
+    from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
+        global_cache,
+    )
+
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g.async_handler = MagicMock()
+    g.async_handler.post = AsyncMock(
+        return_value=_ok({"text": ["[EMAIL_1]"], "session_id": "ses_e"})
+    )
+
+    cache = DualCache()
+    data = {"input": "alice@acme.com", "litellm_call_id": "e-1"}
+    out = await g.async_pre_call_hook(
+        UserAPIKeyAuth(api_key="x"), cache, data, "embeddings"
+    )
+    assert out["input"] == "[EMAIL_1]"
+    global_cache.delete_cache("peyeeye_session:x:e-1")
+
+
+@pytest.mark.asyncio
+async def test_post_call_rehydrates_text_completion_response():
+    """TextCompletionResponse.choices[].text must be rehydrated."""
+    from litellm.proxy.guardrails.guardrail_hooks.peyeeye.peyeeye import (
+        global_cache,
+    )
+
+    g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
+    g.async_handler = MagicMock()
+    g.async_handler.post = AsyncMock(
+        return_value=_ok({"text": "Reply to alice@acme.com", "replaced": 1})
+    )
+    g.async_handler.delete = AsyncMock()
+
+    user = UserAPIKeyAuth(api_key="x")
+    global_cache.set_cache("peyeeye_session:x:tc-2", "ses_tc", ttl=60)
+
+    response = litellm.TextCompletionResponse()
+    response.choices = [
+        litellm.utils.TextChoices(
+            finish_reason="stop", index=0, text="Reply to [EMAIL_1]"
+        )
+    ]
+    out = await g.async_post_call_success_hook(
+        {"litellm_call_id": "tc-2"}, user, response
+    )
+    assert out.choices[0].text == "Reply to alice@acme.com"
+
+
+@pytest.mark.asyncio
 async def test_pre_call_raises_on_unexpected_response_shape():
     """If /v1/redact returns neither str nor list for `text`, refuse to forward."""
     g = PEyeEyeGuardrail(peyeeye_api_key="pk", guardrail_name="t")
