@@ -20,6 +20,12 @@ common categories: instruction override, system prompt exfiltration,
 role-play jailbreak, base64-wrapped payloads, MCP tool override, and
 `file://` SSRF references. The full ruleset lives in the ATR repository.
 
+The hook scans both legacy string `content` and OpenAI structured
+content parts (`[{"type": "text", "text": "..."}]`), concatenating
+the text fields before pattern matching. This keeps the screen
+intact when an attacker splits a payload across multiple text parts.
+Non-text parts (image_url, input_audio, etc.) are ignored.
+
 ## Wire it up
 
 Add a guardrail entry to your proxy config:

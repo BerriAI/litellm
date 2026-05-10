@@ -78,11 +78,38 @@ ATR_INSPIRED_PATTERNS = [
 
 
 class ATRDetectionGuardrail(CustomGuardrail):
-    """Block requests that hit any ATR-inspired threat pattern."""
+    """Block requests that hit any ATR-inspired threat pattern.
+
+    Scans both legacy string content and OpenAI structured content parts
+    (list of {"type": "text", "text": "..."} entries), so a payload split
+    across multiple text parts is concatenated before pattern matching.
+    Non-text parts (image_url, input_audio, etc.) are ignored.
+    """
 
     def __init__(self, **kwargs):
         self.optional_params = kwargs
         super().__init__(**kwargs)
+
+    @staticmethod
+    def _extract_text(content) -> str:
+        """Return scannable text from any OpenAI-shaped message content.
+
+        Supports: string, list of strings, list of structured parts
+        (dicts with type == "text" and a "text" string field). Anything
+        else returns "".
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict):
+                    if part.get("type") == "text" and isinstance(part.get("text"), str):
+                        parts.append(part["text"])
+            return "\n".join(parts)
+        return ""
 
     @staticmethod
     def _scan(text: str):
@@ -99,10 +126,10 @@ class ATRDetectionGuardrail(CustomGuardrail):
         call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
         for message in data.get("messages") or []:
-            content = message.get("content")
-            if not isinstance(content, str):
+            text = self._extract_text(message.get("content"))
+            if not text:
                 continue
-            hit = self._scan(content)
+            hit = self._scan(text)
             if hit is None:
                 continue
             rule_id, label = hit
