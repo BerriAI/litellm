@@ -82,6 +82,21 @@ def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandl
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
+def _strip_env_quotes(value: str) -> str:
+    """
+    Strip surrounding double or single quotes from an env var value.
+
+    Docker ``--env-file`` passes literal quote characters (e.g. ``"https://..."``)
+    instead of stripping them the way most dotenv parsers do. This normalises
+    the value so callers always receive the bare string.
+    """
+    if len(value) >= 2 and (
+        (value[0] == '"' and value[-1] == '"') or (value[0] == "'" and value[-1] == "'")
+    ):
+        return value[1:-1]
+    return value
+
+
 def str_to_bool(value: Optional[str]) -> Optional[bool]:
     """
     Converts a string to a boolean if it's a recognized boolean string.
@@ -318,6 +333,8 @@ def get_secret(  # noqa: PLR0915
                 return secret
         else:
             secret = os.environ.get(secret_name)
+            if secret is not None:
+                secret = _strip_env_quotes(secret)
             secret_value_as_bool = str_to_bool(secret) if secret is not None else None
             if secret_value_as_bool is not None and isinstance(
                 secret_value_as_bool, bool

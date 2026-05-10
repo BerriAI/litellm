@@ -4,7 +4,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from litellm.secret_managers.main import get_secret, normalize_nonempty_secret_str
+from litellm.secret_managers.main import (
+    _strip_env_quotes,
+    get_secret,
+    normalize_nonempty_secret_str,
+)
 
 # Set up logging for debugging
 logging.basicConfig(level=logging.DEBUG)
@@ -267,3 +271,65 @@ def test_unsupported_oidc_provider():
 )
 def test_normalize_nonempty_secret_str(raw, expected):
     assert normalize_nonempty_secret_str(raw) == expected
+
+
+# ── _strip_env_quotes ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # double-quoted values (Docker --env-file style)
+        ('"https://example.com"', "https://example.com"),
+        ('"sk-abc123"', "sk-abc123"),
+        # single-quoted values
+        ("'https://example.com'", "https://example.com"),
+        ("'sk-abc123'", "sk-abc123"),
+        # already bare — unchanged
+        ("https://example.com", "https://example.com"),
+        ("sk-abc123", "sk-abc123"),
+        # mismatched quotes — unchanged
+        ("\"mismatched'", "\"mismatched'"),
+        ("'mismatched\"", "'mismatched\""),
+        # single-char strings — unchanged (need at least 2 chars to strip)
+        ('"', '"'),
+        ("'", "'"),
+        # empty string — unchanged
+        ("", ""),
+        # empty quoted string → empty string
+        ('""', ""),
+        ("''", ""),
+    ],
+)
+def test_strip_env_quotes(raw, expected):
+    assert _strip_env_quotes(raw) == expected
+
+
+def test_get_secret_strips_double_quotes_from_env(monkeypatch):
+    """get_secret() must strip surrounding double quotes — GitHub issue #27591."""
+    monkeypatch.setenv(
+        "TEST_AZURE_API_BASE", '"https://my-endpoint.services.ai.azure.com/openai/v1"'
+    )
+    result = get_secret("TEST_AZURE_API_BASE")
+    assert result == "https://my-endpoint.services.ai.azure.com/openai/v1"
+
+
+def test_get_secret_strips_single_quotes_from_env(monkeypatch):
+    """get_secret() must strip surrounding single quotes — GitHub issue #27591."""
+    monkeypatch.setenv("TEST_AZURE_API_KEY", "'sk-test-key-abc123'")
+    result = get_secret("TEST_AZURE_API_KEY")
+    assert result == "sk-test-key-abc123"
+
+
+def test_get_secret_os_environ_prefix_strips_quotes(monkeypatch):
+    """get_secret() resolves the os.environ/ prefix and then strips quotes."""
+    monkeypatch.setenv("TEST_QUOTED_URL", '"https://quoted.example.com"')
+    result = get_secret("os.environ/TEST_QUOTED_URL")
+    assert result == "https://quoted.example.com"
+
+
+def test_get_secret_bare_value_unchanged(monkeypatch):
+    """get_secret() must not modify values that are not surrounded by quotes."""
+    monkeypatch.setenv("TEST_BARE_KEY", "sk-bare-value")
+    result = get_secret("TEST_BARE_KEY")
+    assert result == "sk-bare-value"
