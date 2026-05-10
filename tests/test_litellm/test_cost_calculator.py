@@ -2067,3 +2067,17 @@ def test_cost_per_token_returns_zero_for_unknown_model():
     """
     result = cost_per_token(model="fake-model-xyz-123")
     assert result == (0.0, 0.0)
+
+
+def test_cost_per_token_returns_zero_with_explicit_provider():
+    """
+    cost_per_token() must return (0.0, 0.0) when a known provider is supplied
+    but the model is not in the cost map (GitHub issue #27581).
+    """
+    result = litellm.cost_per_token(
+        model="fake-model-xyz-123",
+        custom_llm_provider="openai",
+        prompt_tokens=10,
+        completion_tokens=5,
+    )
+    assert result == (0.0, 0.0)
