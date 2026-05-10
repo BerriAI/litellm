@@ -1280,3 +1280,51 @@ class TestAnthropicThinkingSignatureSelfHeal:
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
         assert data["messages"] == []
+
+
+class TestGetAnthropicBetaListContextManagement:
+    """
+    Regression tests for https://github.com/BerriAI/litellm/issues/27532
+    get_anthropic_beta_list must include compact/context-management betas
+    when context_management is in optional_params, so Bedrock InvokeModel
+    receives the required anthropic_beta field.
+    """
+
+    def test_compact_edit_adds_compact_beta(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        info = AnthropicModelInfo()
+        betas = info.get_anthropic_beta_list(
+            model="claude-sonnet-4-6",
+            optional_params={
+                "context_management": {
+                    "edits": [{"type": "compact_20260112"}],
+                }
+            },
+        )
+        assert "compact-2026-01-12" in betas
+
+    def test_non_compact_edit_adds_context_management_beta(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        info = AnthropicModelInfo()
+        betas = info.get_anthropic_beta_list(
+            model="claude-sonnet-4-6",
+            optional_params={
+                "context_management": {
+                    "edits": [{"type": "summarize"}],
+                }
+            },
+        )
+        assert "context-management-2025-06-27" in betas
+
+    def test_no_context_management_no_extra_betas(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        info = AnthropicModelInfo()
+        betas = info.get_anthropic_beta_list(
+            model="claude-sonnet-4-6",
+            optional_params={"max_tokens": 100},
+        )
+        assert "compact-2026-01-12" not in betas
+        assert "context-management-2025-06-27" not in betas
