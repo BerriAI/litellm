@@ -57,6 +57,7 @@ from litellm.types.utils import (
     ModelResponse,
     Usage,
 )
+from litellm.utils import ProviderConfigManager
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
@@ -76,31 +77,6 @@ class ChatCompletionSession(TypedDict, total=False):
 
 
 ########### End of Initialize Classes used for Responses API  ###########
-
-
-def _is_domestic_model_endpoint(api_base: Optional[str]) -> bool:
-    """
-    判断是否是国内模型 provider endpoint。
-    国内模型不支持某些 Codex CLI 特有的参数和工具类型。
-
-    Args:
-        api_base: API endpoint URL
-
-    Returns:
-        bool: True 表示是国内模型 endpoint，需要做兼容处理
-    """
-    if not api_base:
-        return False
-
-    domestic_endpoints = [
-        "dashscope.aliyuncs.com",  # 阿里云 DashScope
-        "ark.cn-beijing.volces.com",  # 火山引擎 Volcengine
-        "api.minimaxi.com",  # MiniMax 官方
-        "xiaomimimo.com",  # 小米 MiMo
-        "api.deepseek.com",  # DeepSeek 官方
-    ]
-
-    return any(endpoint in str(api_base) for endpoint in domestic_endpoints)
 
 
 class LiteLLMCompletionResponsesConfig:
@@ -1425,7 +1401,7 @@ class LiteLLMCompletionResponsesConfig:
             return [], None
 
         # 判断是否是国内模型 endpoint，需要特殊处理
-        is_domestic_endpoint = _is_domestic_model_endpoint(api_base)
+        is_domestic_endpoint = ProviderConfigManager._is_domestic_model_endpoint(api_base)
 
         chat_completion_tools: List[
             Union[ChatCompletionToolParam, OpenAIMcpServerTool]
