@@ -11,6 +11,7 @@ from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
+from litellm.domestic_utils import is_domestic_model_or_endpoint
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
@@ -79,6 +80,35 @@ class ChatCompletionSession(TypedDict, total=False):
 
 
 class LiteLLMCompletionResponsesConfig:
+    @staticmethod
+    def _clean_schema(obj: Any) -> Any:
+        """
+        递归清除 JSON Schema 中国内模型不支持的字段。
+
+        国内模型(豆包/GLM/MiniMax/MiMo/DeepSeek)不支持:
+        - strict: 严格模式
+        - additionalProperties: JSON Schema 扩展属性
+
+        借鉴 codex_deepseek_proxy 项目的设计
+        """
+        if not isinstance(obj, dict):
+            return obj
+        cleaned: Dict[str, Any] = {}
+        for k, v in obj.items():
+            if k in ("additionalProperties", "strict"):
+                continue  # 跳过这些字段
+            if isinstance(v, dict):
+                cleaned[k] = LiteLLMCompletionResponsesConfig._clean_schema(v)
+            elif isinstance(v, list):
+                cleaned[k] = [
+                    LiteLLMCompletionResponsesConfig._clean_schema(i)
+                    if isinstance(i, dict) else i
+                    for i in v
+                ]
+            else:
+                cleaned[k] = v
+        return cleaned
+
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
         """
@@ -167,11 +197,17 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        # 获取 model 和 api_base 用于判断是否是国内模型
+        model_name: Optional[str] = responses_api_request.get("model") or kwargs.get("model")
+        api_base: Optional[str] = kwargs.get("api_base") or responses_api_request.get("api_base")
+
         (
             tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []  # type: ignore
+            responses_api_request.get("tools") or [],  # type: ignore
+            model_name=model_name,
+            api_base=api_base,
         )
 
         response_format = None
@@ -1351,26 +1387,57 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+        model_name: Optional[str] = None,
+        api_base: Optional[str] = None,
     ) -> Tuple[
-        List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
+        Optional[List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]]],
         Optional[OpenAIWebSearchOptions],
     ]:
         """
         Transform a Responses API tools into a Chat Completion tools
+
+        Args:
+            tools: List of tools from Responses API request
+            model_name: Model name, used to determine if domestic model filtering should apply
+            api_base: API endpoint URL, fallback check when model_name is just a group name
         """
         if tools is None:
             return [], None
+
+        # 判断是否是国内模型，需要特殊处理（双重检查：model名 + endpoint）
+        is_domestic_model = is_domestic_model_or_endpoint(model_name, api_base)
+
         chat_completion_tools: List[
             Union[ChatCompletionToolParam, OpenAIMcpServerTool]
         ] = []
         web_search_options: Optional[OpenAIWebSearchOptions] = None
+
         for tool in tools:
+            # 只对国内模型 endpoint 过滤不支持的工具类型
+            # 国内模型只支持 type: "function"，不支持 Codex/OpenAI 特有的工具类型
+            if is_domestic_model:
+                unsupported_tool_types = [
+                    "local_shell",       # Codex CLI 内置 Shell 工具
+                    "namespace",         # Codex CLI 0.130.0 工具命名空间
+                    "code_interpreter",  # OpenAI Code Interpreter
+                    "file_search",       # OpenAI File Search
+                    "computer_use",      # Anthropic Computer Use
+                    "image_generation",  # OpenAI Image Generation
+                ]
+                if tool.get("type") in unsupported_tool_types:
+                    continue  # 跳过不支持的 tool 类型
+
+            # MCP 和 web_search 类型：国内模型不支持，需要过滤
             if tool.get("type") == "mcp":
+                if is_domestic_model:
+                    continue  # 国内模型不支持 MCP 协议
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
             elif (
                 tool.get("type") == "web_search_preview"
                 or tool.get("type") == "web_search"
             ):
+                if is_domestic_model:
+                    continue  # 国内模型不支持 web search
                 _search_context_size: Literal["low", "medium", "high"] = cast(
                     Literal["low", "medium", "high"], tool.get("search_context_size")
                 )
@@ -1388,31 +1455,54 @@ class LiteLLMCompletionResponsesConfig:
                 parameters = dict(typed_tool.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
-                chat_completion_tool: Dict[str, Any] = {
-                    "type": "function",
-                    "function": {
-                        "name": typed_tool.get("name") or "",
-                        "description": typed_tool.get("description") or "",
-                        "parameters": parameters,
-                        "strict": typed_tool.get("strict", False) or False,
-                    },
-                }
-                if tool.get("cache_control"):
-                    chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
-                if tool.get("defer_loading"):
-                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
-                if tool.get("allowed_callers"):
-                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
-                if tool.get("input_examples"):
-                    chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
+
+                # 只对国内模型 endpoint 清理 schema 中不支持的字段
+                # 国内模型不支持 strict 和 additionalProperties，OpenAI structured outputs 需要这些字段
+                if is_domestic_model:
+                    parameters = LiteLLMCompletionResponsesConfig._clean_schema(parameters)
+                    # 国内模型不支持 strict 和额外字段，只传递基础信息
+                    chat_completion_tool: Dict[str, Any] = {
+                        "type": "function",
+                        "function": {
+                            "name": typed_tool.get("name") or "",
+                            "description": typed_tool.get("description") or "",
+                            "parameters": parameters,
+                        },
+                    }
+                else:
+                    # 国际模型支持完整参数
+                    chat_completion_tool: Dict[str, Any] = {
+                        "type": "function",
+                        "function": {
+                            "name": typed_tool.get("name") or "",
+                            "description": typed_tool.get("description") or "",
+                            "parameters": parameters,
+                            "strict": typed_tool.get("strict", False) or False,
+                        },
+                    }
+                    if tool.get("cache_control"):
+                        chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
+                    if tool.get("defer_loading"):
+                        chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
+                    if tool.get("allowed_callers"):
+                        chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
+                    if tool.get("input_examples"):
+                        chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
                 chat_completion_tools.append(
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
             else:
+                # 对于国内模型，只保留 function 和 mcp 类型，其他类型全部过滤
+                # 避免 unknown 类型被发送给国内模型导致错误
+                if is_domestic_model:
+                    # 国内模型只支持 function 和 mcp 类型
+                    continue  # 跳过不支持的工具类型
                 chat_completion_tools.append(
                     cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
                 )
-        return chat_completion_tools, web_search_options
+        # 如果 tools 数组为空，返回 None 表示不传递 tools 参数
+        # 避免空的 tools 数组被发送给不支持空 tools 的国内模型
+        return chat_completion_tools if chat_completion_tools else None, web_search_options
 
     @staticmethod
     def transform_chat_completion_tool_params_to_responses_api_tools(
