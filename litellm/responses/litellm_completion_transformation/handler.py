@@ -5,6 +5,7 @@ Handler for transforming responses api requests to litellm.completion requests
 from typing import Any, Coroutine, Dict, Optional, Union
 
 import litellm
+from litellm.domestic_utils import is_domestic_model_or_endpoint
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -18,7 +19,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import ModelResponse
-from litellm.utils import ProviderConfigManager
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -66,7 +66,7 @@ class LiteLLMCompletionTransformationHandler:
         # 国内模型不支持 Codex CLI 特有的 client_metadata 参数
         # 双重检查：model名 + api_base endpoint
         api_base = kwargs.get("api_base") or litellm_completion_request.get("api_base")
-        if ProviderConfigManager._is_domestic_model_or_endpoint(model, api_base):
+        if is_domestic_model_or_endpoint(model, api_base):
             completion_args.pop("client_metadata", None)
 
         completion_args.update(litellm_completion_request)
@@ -125,7 +125,7 @@ class LiteLLMCompletionTransformationHandler:
         # 双重检查：model名 + api_base endpoint
         model_name = litellm_completion_request.get("model")
         api_base = litellm_completion_request.get("api_base") or kwargs.get("api_base")
-        if ProviderConfigManager._is_domestic_model_or_endpoint(model_name, api_base):
+        if is_domestic_model_or_endpoint(model_name, api_base):
             acompletion_args.pop("client_metadata", None)
 
         acompletion_args.update(litellm_completion_request)

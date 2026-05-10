@@ -11,6 +11,7 @@ from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
+from litellm.domestic_utils import is_domestic_model_or_endpoint
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
@@ -57,7 +58,6 @@ from litellm.types.utils import (
     ModelResponse,
     Usage,
 )
-from litellm.utils import ProviderConfigManager
 
 ########### Initialize Classes used for Responses API  ###########
 TOOL_CALLS_CACHE = InMemoryCache()
@@ -1405,7 +1405,7 @@ class LiteLLMCompletionResponsesConfig:
             return [], None
 
         # 判断是否是国内模型，需要特殊处理（双重检查：model名 + endpoint）
-        is_domestic_model = ProviderConfigManager._is_domestic_model_or_endpoint(model_name, api_base)
+        is_domestic_model = is_domestic_model_or_endpoint(model_name, api_base)
 
         chat_completion_tools: List[
             Union[ChatCompletionToolParam, OpenAIMcpServerTool]
