@@ -1387,7 +1387,7 @@ class LiteLLMCompletionResponsesConfig:
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
         api_base: Optional[str] = None,
     ) -> Tuple[
-        List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
+        Optional[List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]]],
         Optional[OpenAIWebSearchOptions],
     ]:
         """
@@ -1475,7 +1475,9 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tools.append(
                     cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
                 )
-        return chat_completion_tools, web_search_options
+        # 如果 tools 数组为空，返回 None 表示不传递 tools 参数
+        # 避免空的 tools 数组被发送给不支持空 tools 的国内模型
+        return chat_completion_tools if chat_completion_tools else None, web_search_options
 
     @staticmethod
     def transform_chat_completion_tool_params_to_responses_api_tools(
