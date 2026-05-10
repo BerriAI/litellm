@@ -729,7 +729,7 @@ async def google_login(
         return HTMLResponse(content=html_form, status_code=200)
 
 
-def generic_response_convertor(
+def generic_response_convertor(  # noqa: PLR0915
     response,
     jwt_handler: JWTHandler,
     sso_jwt_handler: Optional[JWTHandler] = None,
@@ -2156,7 +2156,7 @@ async def get_ui_settings(request: Request):
     tags=["experimental"],
     dependencies=[Depends(user_api_key_auth)],
 )
-async def sso_readiness():
+async def sso_readiness():  # noqa: PLR0915
     """
     Health endpoint for checking SSO readiness.
     Checks if the configured SSO provider has all required environment variables set in memory.
