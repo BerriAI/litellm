@@ -97,54 +97,27 @@ jobs:
           mkdir -p mutants
           uv run --no-sync --with mutmut==3.5.0 mutmut run 2>&1 | tee mutmut-run.log
 
-      # Build a detailed report: per-survivor diffs from `mutmut show`, plus
-      # the killed/survived/total summary from `mutmut export-cicd-stats`.
-      # Written to both an artifact and the run-page summary so results are
-      # visible without downloading anything.
+      # Generate the structured report. The script embeds the enclosing
+      # function source for each survivor (via Python AST) and includes the
+      # existing test files, so an LLM agent has enough context to write
+      # killing tests without further file lookups. Modeled on Meta's ACH
+      # prompt template (arXiv 2501.12862).
       - name: Generate detailed mutation report
         if: always()
         run: |
           set +e
           uv run --no-sync --with mutmut==3.5.0 mutmut export-cicd-stats > /dev/null 2>&1
           uv run --no-sync --with mutmut==3.5.0 mutmut results > mutmut-results.txt 2>&1
-
+          uv run --no-sync python scripts/mutation_report.py
+          # The full report can be very long for big test files; the run-page
+          # summary cuts off at 1 MB. Append the head of the report (summary
+          # + survivor list) and link out to the artifact for the full body.
           {
-            echo "# Mutation Test Report"
+            head -c 900000 mutation-report.md
             echo ""
-            echo "## Summary"
             echo ""
-            if [ -f mutants/mutmut-cicd-stats.json ]; then
-              echo '```json'
-              cat mutants/mutmut-cicd-stats.json
-              echo '```'
-            else
-              echo "(mutmut-cicd-stats.json not generated)"
-            fi
-            echo ""
-            echo "## Run progress (tail)"
-            echo ""
-            echo '```'
-            tail -30 mutmut-run.log || true
-            echo '```'
-            echo ""
-            echo "## Surviving mutants (test gaps)"
-            echo ""
-            survivors=$(awk '/survived/ {gsub(/:$/,"",$1); print $1}' mutmut-results.txt)
-            if [ -z "$survivors" ]; then
-              echo "_None — every mutant was killed by the test suite._"
-            else
-              for m in $survivors; do
-                echo "### \`$m\`"
-                echo ""
-                echo '```diff'
-                uv run --no-sync --with mutmut==3.5.0 mutmut show "$m" 2>&1 || echo "(mutmut show failed for $m)"
-                echo '```'
-                echo ""
-              done
-            fi
-          } > mutmut-report.md
-
-          cat mutmut-report.md >> "$GITHUB_STEP_SUMMARY"
+            echo "_Full report (with embedded function bodies and test files) is in the workflow artifact._"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload mutmut artifacts
         if: always()
@@ -152,7 +125,7 @@ jobs:
         with:
           name: mutmut-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            mutmut-report.md
+            mutation-report.md
             mutmut-results.txt
             mutmut-run.log
             mutants/mutmut-stats.json
