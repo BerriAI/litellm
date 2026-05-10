@@ -3,6 +3,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from fastapi import HTTPException
+
 from litellm.proxy._types import (
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
@@ -13,6 +15,7 @@ from litellm.proxy._types import (
     Member,
     ProxyErrorTypes,
     ProxyException,
+    RoleBasedPermissions,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 
@@ -2680,3 +2683,51 @@ def test_build_decode_kwargs_no_warning_when_scoped(
         if "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
     ]
     assert matching == []
+
+
+class TestCanRbacRoleCallModelWildcard:
+    """Wildcard patterns in role_permissions.models should match model names."""
+
+    def _settings(self, permissions):
+        return {"role_permissions": permissions}
+
+    def test_wildcard_prefix_matches(self):
+        perms = [
+            RoleBasedPermissions(
+                role=LitellmUserRoles.INTERNAL_USER,
+                models=["bedrock-claude-*"],
+            ),
+        ]
+        assert JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings=self._settings(perms),
+            model="bedrock-claude-draft-rep-sonnet",
+        )
+
+    def test_star_matches_any_model(self):
+        perms = [
+            RoleBasedPermissions(
+                role=LitellmUserRoles.PROXY_ADMIN,
+                models=["*"],
+            ),
+        ]
+        assert JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.PROXY_ADMIN,
+            general_settings=self._settings(perms),
+            model="any-model-name",
+        )
+
+    def test_non_matching_wildcard_raises(self):
+        perms = [
+            RoleBasedPermissions(
+                role=LitellmUserRoles.INTERNAL_USER,
+                models=["bedrock-claude-*"],
+            ),
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            JWTAuthManager.can_rbac_role_call_model(
+                rbac_role=LitellmUserRoles.INTERNAL_USER,
+                general_settings=self._settings(perms),
+                model="openai-gpt-4",
+            )
+        assert exc_info.value.status_code == 403
