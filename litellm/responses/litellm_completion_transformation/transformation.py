@@ -78,13 +78,38 @@ class ChatCompletionSession(TypedDict, total=False):
 ########### End of Initialize Classes used for Responses API  ###########
 
 
+def _is_domestic_model_endpoint(api_base: Optional[str]) -> bool:
+    """
+    判断是否是国内模型 provider endpoint。
+    国内模型不支持某些 Codex CLI 特有的参数和工具类型。
+
+    Args:
+        api_base: API endpoint URL
+
+    Returns:
+        bool: True 表示是国内模型 endpoint，需要做兼容处理
+    """
+    if not api_base:
+        return False
+
+    domestic_endpoints = [
+        "dashscope.aliyuncs.com",  # 阿里云 DashScope
+        "ark.cn-beijing.volces.com",  # 火山引擎 Volcengine
+        "api.minimaxi.com",  # MiniMax 官方
+        "xiaomimimo.com",  # 小米 MiMo
+        "api.deepseek.com",  # DeepSeek 官方
+    ]
+
+    return any(endpoint in str(api_base) for endpoint in domestic_endpoints)
+
+
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _clean_schema(obj: Any) -> Any:
         """
-        递归清除 JSON Schema 中国内模型不支持的字段 (Codex CLI 0.130.0 兼容修复)
+        递归清除 JSON Schema 中国内模型不支持的字段。
 
-        国内模型(豆包/GLM/MiniMax/MiMo)不支持:
+        国内模型(豆包/GLM/MiniMax/MiMo/DeepSeek)不支持:
         - strict: 严格模式
         - additionalProperties: JSON Schema 扩展属性
 
@@ -196,11 +221,15 @@ class LiteLLMCompletionResponsesConfig:
         """
         Transform a Responses API request into a Chat Completion request
         """
+        # 获取 api_base 用于判断是否是国内模型 endpoint
+        api_base: Optional[str] = kwargs.get("api_base")
+
         (
             tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []  # type: ignore
+            responses_api_request.get("tools") or [],  # type: ignore
+            api_base=api_base,
         )
 
         response_format = None
@@ -1384,31 +1413,42 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+        api_base: Optional[str] = None,
     ) -> Tuple[
         List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
         Optional[OpenAIWebSearchOptions],
     ]:
         """
         Transform a Responses API tools into a Chat Completion tools
+
+        Args:
+            tools: List of tools from Responses API request
+            api_base: API endpoint URL, used to determine if domestic model filtering should apply
         """
         if tools is None:
             return [], None
+
+        # 判断是否是国内模型 endpoint，需要特殊处理
+        is_domestic_endpoint = _is_domestic_model_endpoint(api_base)
+
         chat_completion_tools: List[
             Union[ChatCompletionToolParam, OpenAIMcpServerTool]
         ] = []
         web_search_options: Optional[OpenAIWebSearchOptions] = None
+
         for tool in tools:
-            # 过滤国内模型不支持的 tool 类型 (Codex CLI 0.130.0 兼容修复)
-            # local_shell 是 Codex 内置工具类型，国内模型只支持 type: "function"
-            unsupported_tool_types = [
-                "local_shell",
-                "code_interpreter",
-                "file_search",
-                "computer_use",
-                "image_generation",
-            ]
-            if tool.get("type") in unsupported_tool_types:
-                continue  # 跳过不支持的 tool 类型
+            # 只对国内模型 endpoint 过滤不支持的工具类型
+            # 国内模型只支持 type: "function"，不支持 Codex/OpenAI 特有的工具类型
+            if is_domestic_endpoint:
+                unsupported_tool_types = [
+                    "local_shell",       # Codex CLI 内置 Shell 工具
+                    "code_interpreter",  # OpenAI Code Interpreter
+                    "file_search",       # OpenAI File Search
+                    "computer_use",      # Anthropic Computer Use
+                    "image_generation",  # OpenAI Image Generation
+                ]
+                if tool.get("type") in unsupported_tool_types:
+                    continue  # 跳过不支持的 tool 类型
 
             if tool.get("type") == "mcp":
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
@@ -1433,15 +1473,19 @@ class LiteLLMCompletionResponsesConfig:
                 parameters = dict(typed_tool.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:
                     parameters["type"] = "object"
-                # 清理 schema 中国内模型不支持的字段 (Codex CLI 0.130.0 兼容修复)
-                parameters = LiteLLMCompletionResponsesConfig._clean_schema(parameters)
+
+                # 只对国内模型 endpoint 清理 schema 中不支持的字段
+                # 国内模型不支持 strict 和 additionalProperties，OpenAI structured outputs 需要这些字段
+                if is_domestic_endpoint:
+                    parameters = LiteLLMCompletionResponsesConfig._clean_schema(parameters)
+
                 chat_completion_tool: Dict[str, Any] = {
                     "type": "function",
                     "function": {
                         "name": typed_tool.get("name") or "",
                         "description": typed_tool.get("description") or "",
                         "parameters": parameters,
-                        # strict 字段已在 parameters 中被 _clean_schema 清理，这里不再设置
+                        "strict": typed_tool.get("strict", False) or False,
                     },
                 }
                 if tool.get("cache_control"):
