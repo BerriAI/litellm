@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tomllib
 from collections import defaultdict
+from difflib import SequenceMatcher
 from pathlib import Path
 from textwrap import dedent
 
@@ -102,6 +103,103 @@ def collect_test_files(tests_dir: list[str]) -> list[Path]:
         elif p.is_dir():
             found.extend(sorted(p.rglob("test_*.py")))
     return found
+
+
+def _indent_of(line: str) -> str:
+    return line[: len(line) - len(line.lstrip())]
+
+
+def render_meta_style_mutant(
+    module_path: str, function_name: str, mutant_num: str
+) -> str | None:
+    """Render the mutated function with `# MUTANT START`/`# MUTANT END` delimiters.
+
+    Reads `mutants/<module>.py` (the trampoline file mutmut emits), finds
+    `x_<func>__mutmut_orig` and `x_<func>__mutmut_<N>`, and renders the
+    mutated version with the lines that differ from `__mutmut_orig` wrapped
+    in `# MUTANT START`/`# MUTANT END` comments — the format from Meta's
+    ACH paper (arXiv 2501.12862, Table 1).
+
+    The function header is rewritten to use the original function name so
+    the agent sees the source as it would appear in the file (rather than
+    mutmut's internal `x_*__mutmut_<N>` name).
+
+    Returns None if the trampoline file or either function cannot be found
+    (the caller falls back to the unified diff).
+    """
+    trampoline = ROOT / "mutants" / Path(*module_path.split(".")).with_suffix(".py")
+    if not trampoline.exists():
+        return None
+
+    src = trampoline.read_text()
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+    file_lines = src.splitlines()
+
+    orig_def = f"x_{function_name}__mutmut_orig"
+    mutant_def = f"x_{function_name}__mutmut_{mutant_num}"
+
+    orig_node = mutated_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == orig_def:
+                orig_node = node
+            elif node.name == mutant_def:
+                mutated_node = node
+
+    if orig_node is None or mutated_node is None:
+        return None
+
+    orig_lines = file_lines[orig_node.lineno - 1 : orig_node.end_lineno]
+    mutated_lines = file_lines[mutated_node.lineno - 1 : mutated_node.end_lineno]
+    if not orig_lines or not mutated_lines:
+        return None
+
+    # Rewrite the def line to use the original (non-trampolined) function name
+    # so the agent sees the function as it appears in the source file.
+    orig_lines[0] = orig_lines[0].replace(orig_def, function_name, 1)
+    mutated_lines[0] = mutated_lines[0].replace(mutant_def, function_name, 1)
+
+    matcher = SequenceMatcher(a=orig_lines, b=mutated_lines)
+    out: list[str] = []
+    in_diff = False
+
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        if op == "equal":
+            if in_diff:
+                # Close the block at the indent of the line just inside it.
+                indent = _indent_of(out[-1]) if out else ""
+                out.append(f"{indent}# MUTANT END")
+                in_diff = False
+            out.extend(mutated_lines[j1:j2])
+        else:
+            if not in_diff:
+                # Open the block at the indent of the first differing line.
+                if j1 < len(mutated_lines):
+                    indent = _indent_of(mutated_lines[j1])
+                elif i1 < len(orig_lines):
+                    indent = _indent_of(orig_lines[i1])
+                else:
+                    indent = ""
+                out.append(f"{indent}# MUTANT START")
+                in_diff = True
+            if op == "delete":
+                # Mutation removed lines — surface what was deleted as a
+                # comment so the agent can see the intent of the change.
+                for deleted in orig_lines[i1:i2]:
+                    indent = _indent_of(deleted)
+                    out.append(f"{indent}# (deleted by mutation): {deleted.lstrip()}")
+            else:
+                # replace / insert: take from mutated_lines
+                out.extend(mutated_lines[j1:j2])
+
+    if in_diff:
+        indent = _indent_of(out[-1]) if out else ""
+        out.append(f"{indent}# MUTANT END")
+
+    return "\n".join(out)
 
 
 def render(config: dict, survivors: list[str], stats: dict | None) -> str:
@@ -192,10 +290,33 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
         for i, (mutant_name, mutant_num) in enumerate(items, 1):
             out.append(f"#### Mutation {i} of {len(items)} — `{mutant_name}`")
             out.append("")
-            out.append("```diff")
-            out.append(get_mutmut_show(mutant_name))
-            out.append("```")
-            out.append("")
+            meta_style = render_meta_style_mutant(
+                module_path, function_name, mutant_num
+            )
+            if meta_style is not None:
+                out.append(
+                    "Mutated function (the bug is delimited by "
+                    "`# MUTANT START` / `# MUTANT END`):"
+                )
+                out.append("")
+                out.append("```python")
+                out.append(meta_style)
+                out.append("```")
+                out.append("")
+                out.append("<details><summary>Unified diff (`mutmut show`)</summary>")
+                out.append("")
+                out.append("```diff")
+                out.append(get_mutmut_show(mutant_name))
+                out.append("```")
+                out.append("")
+                out.append("</details>")
+                out.append("")
+            else:
+                # Fallback: trampoline file or function lookup failed.
+                out.append("```diff")
+                out.append(get_mutmut_show(mutant_name))
+                out.append("```")
+                out.append("")
 
     test_files = collect_test_files(config.get("tests_dir", []))
     if test_files:
