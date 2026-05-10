@@ -29,7 +29,11 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
 )
-from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
+from litellm.proxy._types import (
+    LiteLLM_MCPServerTable,
+    MCPApprovalStatus,
+    MCPTransport,
+)
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 
@@ -3309,6 +3313,83 @@ class TestOAuthDiscoverySSRFGuard:
 
         assert result is None
         mock_client.get.assert_not_called()
+
+
+class TestApprovalStatusGate:
+    """
+    Regression tests for GHSA-gm4g-h72v-jhc3.
+
+    The runtime registry must only contain servers an admin has approved.
+    A non-admin can submit a pending stdio MCP server with an attacker-chosen
+    command/args; before this gate, an admin opening the per-row endpoint
+    triggered ``add_server`` + ``health_check_server``, which spawned the
+    attacker's process under the proxy. The data-layer gate in
+    ``add_server`` / ``update_server`` blocks pending and rejected rows
+    from entering the registry regardless of which caller passes them in.
+    """
+
+    def _make_server(self, server_id: str, approval_status):
+        return LiteLLM_MCPServerTable(
+            server_id=server_id,
+            alias=f"server_{server_id}",
+            description="test",
+            url=None,
+            transport=MCPTransport.stdio,
+            command="python",
+            args=["-c", "print('attacker payload')"],
+            env={},
+            approval_status=approval_status,
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+
+    @pytest.mark.parametrize(
+        "approval_status,expect_in_registry",
+        [
+            (MCPApprovalStatus.pending_review, False),
+            (MCPApprovalStatus.rejected, False),
+            (MCPApprovalStatus.active, True),
+            # Legacy rows: NULL predates the approval workflow; "approved" is
+            # a legacy alias for "active" still present in older deployments.
+            # Both must continue to load to match the DB-level filter in
+            # reload_servers_from_database().
+            (None, True),
+            ("approved", True),
+        ],
+    )
+    async def test_add_server_respects_approval_status(
+        self, approval_status, expect_in_registry
+    ):
+        manager = MCPServerManager()
+        server_id = f"sid-{approval_status}"
+        await manager.add_server(self._make_server(server_id, approval_status))
+        assert (server_id in manager.registry) is expect_in_registry
+
+    async def test_update_server_evicts_when_transitioned_away_from_active(self):
+        # An admin updates a previously-active server to rejected (or pending).
+        # The stale registry entry must be evicted so subsequent tool calls
+        # and health probes can't reach it.
+        manager = MCPServerManager()
+        await manager.add_server(
+            self._make_server("evict-me", MCPApprovalStatus.active)
+        )
+        assert "evict-me" in manager.registry
+
+        await manager.update_server(
+            self._make_server("evict-me", MCPApprovalStatus.rejected)
+        )
+        assert "evict-me" not in manager.registry
+
+    async def test_update_server_noop_for_unregistered_pending(self):
+        # update_server called with a pending row that was never registered
+        # should silently return without adding it. Locks in the early-return
+        # so a future refactor can't accidentally route the pending row to
+        # build_mcp_server_from_table.
+        manager = MCPServerManager()
+        await manager.update_server(
+            self._make_server("never-seen", MCPApprovalStatus.pending_review)
+        )
+        assert "never-seen" not in manager.registry
 
 
 if __name__ == "__main__":
