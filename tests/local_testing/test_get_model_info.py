@@ -459,3 +459,76 @@ def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch):
         supports_function_calling("testmodel-abc", custom_llm_provider="test_provider")
         is True
     )
+
+
+def test_get_model_info_fireworks_kimi_k2p6(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    info = litellm.get_model_info(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k2p6",
+        custom_llm_provider="fireworks_ai",
+    )
+    assert info["input_cost_per_token"] == 9.5e-07
+    assert info["cache_read_input_token_cost"] == 1.6e-07
+    assert info["output_cost_per_token"] == 4e-06
+    assert info["litellm_provider"] == "fireworks_ai"
+
+
+def test_get_model_info_fireworks_kimi_k2p6_turbo(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    info = litellm.get_model_info(
+        model="fireworks_ai/accounts/fireworks/models/kimi-k2p6-turbo",
+        custom_llm_provider="fireworks_ai",
+    )
+    assert info["input_cost_per_token"] == 2e-06
+    assert info["cache_read_input_token_cost"] == 3e-07
+    assert info["output_cost_per_token"] == 8e-06
+    assert info["litellm_provider"] == "fireworks_ai"
+
+
+def test_get_model_info_fireworks_deepseek_v4_pro(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    info = litellm.get_model_info(
+        model="fireworks_ai/accounts/fireworks/models/deepseek-v4-pro",
+        custom_llm_provider="fireworks_ai",
+    )
+    assert info["input_cost_per_token"] == 1.74e-06
+    assert info["cache_read_input_token_cost"] == 1.45e-07
+    assert info["output_cost_per_token"] == 3.48e-06
+    assert info["litellm_provider"] == "fireworks_ai"
+
+
+def test_get_model_info_fireworks_glm_5p1(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    info = litellm.get_model_info(
+        model="fireworks_ai/accounts/fireworks/models/glm-5p1",
+        custom_llm_provider="fireworks_ai",
+    )
+    assert info["input_cost_per_token"] == 1.4e-06
+    assert info["cache_read_input_token_cost"] == 2.6e-07
+    assert info["output_cost_per_token"] == 4.4e-06
+    assert info["litellm_provider"] == "fireworks_ai"
+
+
+def test_get_model_info_fireworks_short_aliases(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    aliases = [
+        "fireworks_ai/kimi-k2p6",
+        "fireworks_ai/kimi-k2p6-turbo",
+        "fireworks_ai/deepseek-v4-pro",
+        "fireworks_ai/glm-5p1",
+        "fireworks_ai/glm-5p1-fast",
+        "fireworks_ai/glm-5",
+        "fireworks_ai/minimax-m2p7",
+        "fireworks_ai/minimax-m2p5",
+        "fireworks_ai/qwen3-vl-30b-a3b",
+    ]
+    for alias in aliases:
+        info = litellm.get_model_info(model=alias, custom_llm_provider="fireworks_ai")
+        assert info["litellm_provider"] == "fireworks_ai"
+        assert info["input_cost_per_token"] > 0
