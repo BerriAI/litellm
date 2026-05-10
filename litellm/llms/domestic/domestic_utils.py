@@ -3,9 +3,30 @@
 
 独立模块，避免循环导入问题。
 用于判断请求是否来自国内模型 provider，需要兼容处理。
+
+退出选项：
+- 设置环境变量 LITELLM_DISABLE_DOMESTIC_COMPATIBILITY=true 可完全禁用兼容过滤
+- 这允许用户即使模型名包含 "deepseek" 等关键词，也能使用完整的 OpenAI 参数
 """
 
+import os
 from typing import Optional
+
+
+def _is_domestic_compatibility_disabled() -> bool:
+    """
+    Check if domestic compatibility filtering is explicitly disabled via environment variable.
+    This provides an opt-out mechanism for users who want full OpenAI compatibility
+    even for models that match domestic patterns.
+
+    Returns:
+        bool: True if domestic compatibility is disabled
+    """
+    return os.environ.get("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", "").lower() in (
+        "true",
+        "1",
+        "yes",
+    )
 
 
 def is_domestic_model(model_name: Optional[str]) -> bool:
@@ -20,6 +41,10 @@ def is_domestic_model(model_name: Optional[str]) -> bool:
     Returns:
         bool: True if it's a domestic model that needs compatibility handling
     """
+    # 退出选项：如果用户明确禁用兼容过滤，返回 False
+    if _is_domestic_compatibility_disabled():
+        return False
+
     if not model_name:
         return False
 
@@ -50,6 +75,10 @@ def is_domestic_endpoint(api_base: Optional[str]) -> bool:
     Returns:
         bool: True if it's a domestic endpoint
     """
+    # 退出选项：如果用户明确禁用兼容过滤，返回 False
+    if _is_domestic_compatibility_disabled():
+        return False
+
     if not api_base:
         return False
 
