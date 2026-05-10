@@ -2124,3 +2124,95 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
         f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
         "STOP enum was not normalised through map_finish_reason()."
     )
+
+
+@pytest.mark.parametrize(
+    "finish_reason", ["stop", "tool_calls", "length", "content_filter"]
+)
+def test_chunk_creator_passes_through_model_response_stream(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    finish_reason: str,
+):
+    """
+    chunk_creator must pass ModelResponseStream chunks from custom providers
+    straight through and preserve finish_reason exactly — not force-cast to GChunk.
+    Regression test for issue #27389.
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="Hello", role="assistant"),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is not None
+    assert initialized_custom_stream_wrapper.received_finish_reason == finish_reason
+
+
+def test_chunk_creator_drops_empty_finish_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    A ModelResponseStream chunk with finish_reason but no content should return
+    None so finish_reason_handler() synthesises the final chunk — mirrors GChunk
+    behaviour via is_chunk_non_empty.
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=""),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is None
+    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+
+
+def test_chunk_creator_stops_iteration_on_trailing_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    After received_finish_reason is set, any empty trailing chunk (e.g. provider
+    metadata flush) must raise StopIteration to end the stream cleanly.
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    initialized_custom_stream_wrapper.received_finish_reason = "stop"
+    litellm._custom_providers.append("my-custom-provider")
+
+    trailing_chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=None),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    with pytest.raises(StopIteration):
+        initialized_custom_stream_wrapper.chunk_creator(chunk=trailing_chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")

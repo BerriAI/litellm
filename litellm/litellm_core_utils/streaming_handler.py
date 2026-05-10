@@ -1128,6 +1128,21 @@ class CustomStreamWrapper:
             completion_obj: Dict[str, Any] = {"content": ""}
             from litellm.types.utils import GenericStreamingChunk as GChunk
 
+            if isinstance(chunk, ModelResponseStream):
+                _has_content = bool(
+                    chunk.choices
+                    and chunk.choices[0].delta is not None
+                    and chunk.choices[0].delta.content
+                )
+                if self.received_finish_reason is not None:
+                    if not _has_content:
+                        raise StopIteration
+                if chunk.choices and chunk.choices[0].finish_reason:
+                    self.received_finish_reason = chunk.choices[0].finish_reason
+                    if not _has_content:
+                        return None
+                return chunk
+
             if (
                 isinstance(chunk, dict)
                 and generic_chunk_has_all_required_fields(
