@@ -739,9 +739,13 @@ class CustomGuardrail(CustomLogger):
         Guardrails signal intentional blocks by raising:
         - HTTPException with status 400 (content policy violation)
         - ModifyResponseException (passthrough mode violation)
+        - GuardrailRaisedException (generic guardrail API block)
         """
 
+        from litellm.exceptions import GuardrailRaisedException
         if isinstance(e, ModifyResponseException):
+            return True
+        if isinstance(e, GuardrailRaisedException):
             return True
         if (
             HTTPException is not None
@@ -750,7 +754,6 @@ class CustomGuardrail(CustomLogger):
         ):
             return True
         return False
-
     def _process_error(
         self,
         e: Exception,
