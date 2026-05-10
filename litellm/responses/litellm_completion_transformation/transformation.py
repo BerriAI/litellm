@@ -101,8 +101,11 @@ class LiteLLMCompletionResponsesConfig:
                 cleaned[k] = LiteLLMCompletionResponsesConfig._clean_schema(v)
             elif isinstance(v, list):
                 cleaned[k] = [
-                    LiteLLMCompletionResponsesConfig._clean_schema(i)
-                    if isinstance(i, dict) else i
+                    (
+                        LiteLLMCompletionResponsesConfig._clean_schema(i)
+                        if isinstance(i, dict)
+                        else i
+                    )
                     for i in v
                 ]
             else:
@@ -198,8 +201,12 @@ class LiteLLMCompletionResponsesConfig:
         Transform a Responses API request into a Chat Completion request
         """
         # 获取 model 和 api_base 用于判断是否是国内模型
-        model_name: Optional[str] = responses_api_request.get("model") or kwargs.get("model")
-        api_base: Optional[str] = kwargs.get("api_base") or responses_api_request.get("api_base")
+        model_name: Optional[str] = responses_api_request.get("model") or kwargs.get(
+            "model"
+        )
+        api_base: Optional[str] = kwargs.get("api_base") or responses_api_request.get(
+            "api_base"
+        )
 
         (
             tools,
@@ -1417,11 +1424,11 @@ class LiteLLMCompletionResponsesConfig:
             # 国内模型只支持 type: "function"，不支持 Codex/OpenAI 特有的工具类型
             if is_domestic_model:
                 unsupported_tool_types = [
-                    "local_shell",       # Codex CLI 内置 Shell 工具
-                    "namespace",         # Codex CLI 0.130.0 工具命名空间
+                    "local_shell",  # Codex CLI 内置 Shell 工具
+                    "namespace",  # Codex CLI 0.130.0 工具命名空间
                     "code_interpreter",  # OpenAI Code Interpreter
-                    "file_search",       # OpenAI File Search
-                    "computer_use",      # Anthropic Computer Use
+                    "file_search",  # OpenAI File Search
+                    "computer_use",  # Anthropic Computer Use
                     "image_generation",  # OpenAI Image Generation
                 ]
                 if tool.get("type") in unsupported_tool_types:
@@ -1459,7 +1466,9 @@ class LiteLLMCompletionResponsesConfig:
                 # 只对国内模型 endpoint 清理 schema 中不支持的字段
                 # 国内模型不支持 strict 和 additionalProperties，OpenAI structured outputs 需要这些字段
                 if is_domestic_model:
-                    parameters = LiteLLMCompletionResponsesConfig._clean_schema(parameters)
+                    parameters = LiteLLMCompletionResponsesConfig._clean_schema(
+                        parameters
+                    )
                     # 国内模型不支持 strict 和额外字段，只传递基础信息
                     chat_completion_tool: Dict[str, Any] = {
                         "type": "function",
@@ -1502,7 +1511,9 @@ class LiteLLMCompletionResponsesConfig:
                 )
         # 如果 tools 数组为空，返回 None 表示不传递 tools 参数
         # 避免空的 tools 数组被发送给不支持空 tools 的国内模型
-        return chat_completion_tools if chat_completion_tools else None, web_search_options
+        return (
+            chat_completion_tools if chat_completion_tools else None
+        ), web_search_options
 
     @staticmethod
     def transform_chat_completion_tool_params_to_responses_api_tools(
