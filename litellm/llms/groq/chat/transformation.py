@@ -144,6 +144,11 @@ class GroqChatConfig(OpenAILikeChatConfig):
                 for k, v in _message.items():
                     if v is not None:
                         new_message[k] = v  # type: ignore
+                # `provider_specific_fields` is a litellm-internal field (carries
+                # tool call metadata across turns) that Groq (and other strict
+                # OpenAI-compatible providers) reject as an unrecognised property.
+                # Strip it here so it never reaches the wire. Fixes #25595.
+                new_message.pop("provider_specific_fields", None)  # type: ignore[misc]
                 messages[idx] = new_message
 
         if is_async:
