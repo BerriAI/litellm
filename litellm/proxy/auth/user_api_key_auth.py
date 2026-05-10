@@ -1107,7 +1107,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     raise ProxyException(
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                         type=ProxyErrorTypes.expired_key,
-                        code=400,
+                        code=status.HTTP_401_UNAUTHORIZED,
                         param=abbreviate_api_key(api_key=api_key),
                     )
             valid_token = update_valid_token_with_end_user_params(
@@ -1432,7 +1432,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     raise ProxyException(
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                         type=ProxyErrorTypes.expired_key,
-                        code=400,
+                        code=status.HTTP_401_UNAUTHORIZED,
                         param=abbreviate_api_key(api_key=api_key),
                     )
 
@@ -2417,7 +2417,7 @@ async def _run_post_custom_auth_checks(
             raise ProxyException(
                 message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                 type=ProxyErrorTypes.expired_key,
-                code=400,
+                code=status.HTTP_401_UNAUTHORIZED,
                 param=(
                     abbreviate_api_key(api_key=valid_token.token)
                     if valid_token.token

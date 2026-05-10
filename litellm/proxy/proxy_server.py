@@ -211,6 +211,7 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     _REALTIME_BODY_CACHE_SIZE,
@@ -6750,26 +6751,63 @@ class ProxyStartupEvent:
                 "budget_duration not set on Proxy. budget_duration is required to use max_budget."
             )
 
-        # add proxy budget to db in the user table
         asyncio.create_task(
-            generate_key_helper_fn(  # type: ignore
-                request_type="user",
-                table_name="user",
-                user_id=litellm_proxy_budget_name,
-                duration=None,
-                models=[],
-                aliases={},
-                config={},
-                spend=0,
-                max_budget=litellm.max_budget,
-                budget_duration=litellm.budget_duration,
-                query_type="update_data",
-                update_key_values={
-                    "max_budget": litellm.max_budget,
-                    "budget_duration": litellm.budget_duration,
-                },
-            )
+            cls._upsert_proxy_budget_with_reset_at_backfill(litellm_proxy_budget_name)
         )
+
+    @classmethod
+    async def _upsert_proxy_budget_with_reset_at_backfill(
+        cls, litellm_proxy_budget_name: str
+    ) -> None:
+        """
+        Upsert the proxy admin user row with the configured max_budget /
+        budget_duration, then backfill budget_reset_at if currently NULL.
+
+        The backfill uses `WHERE budget_reset_at IS NULL` so it only fires
+        when the row pre-existed without a reset schedule (e.g. row created
+        via a different path before the proxy budget was configured). On
+        subsequent restarts it no-ops, so an active reset window is never
+        slid forward.
+        """
+        await generate_key_helper_fn(  # type: ignore
+            request_type="user",
+            table_name="user",
+            user_id=litellm_proxy_budget_name,
+            duration=None,
+            models=[],
+            aliases={},
+            config={},
+            spend=0,
+            max_budget=litellm.max_budget,
+            budget_duration=litellm.budget_duration,
+            query_type="update_data",
+            update_key_values={
+                "max_budget": litellm.max_budget,
+                "budget_duration": litellm.budget_duration,
+            },
+        )
+
+        # Without this, the upsert leaves budget_reset_at=NULL on rows that
+        # took the UPDATE path, and reset_budget_for_litellm_users never
+        # matches them (NULL < now() is unknown in SQL) — so the proxy-wide
+        # spend cap blocks forever once it's hit.
+        if prisma_client is not None and litellm.budget_duration is not None:
+            try:
+                await prisma_client.db.litellm_usertable.update_many(
+                    where={
+                        "user_id": litellm_proxy_budget_name,
+                        "budget_reset_at": None,
+                    },
+                    data={
+                        "budget_reset_at": get_budget_reset_time(
+                            budget_duration=litellm.budget_duration
+                        )
+                    },
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Failed to backfill budget_reset_at on proxy admin row: %s", e
+                )
 
     @classmethod
     async def _warm_global_spend_cache(

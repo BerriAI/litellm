@@ -99,7 +99,7 @@ async def test_model_access_patterns(key_models, test_model, expect_success):
             # Assert error structure and values
             assert _error_body["type"] == "key_model_access_denied"
             assert _error_body["param"] == "model"
-            assert _error_body["code"] == "401"
+            assert _error_body["code"] == "403"
             assert "key not allowed to access model" in _error_body["message"]
 
 
@@ -297,7 +297,7 @@ def _validate_model_access_exception(
     # Assert error structure and values
     assert _error_body["type"] == expected_type
     assert _error_body["param"] == "model"
-    assert _error_body["code"] == "401"
+    assert _error_body["code"] == "403"
     if expected_type == "key_model_access_denied":
         assert "key not allowed to access model" in _error_body["message"]
     elif expected_type == "team_model_access_denied":

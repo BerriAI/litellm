@@ -3405,7 +3405,7 @@ requires-dist = [
     { name = "gunicorn", marker = "extra == 'proxy'", specifier = "==23.0.0" },
     { name = "httpx", specifier = ">=0.28.0,<1.0" },
     { name = "importlib-metadata", specifier = ">=8.0.0,<9.0" },
-    { name = "jinja2", specifier = ">=3.1.0,<4.0" },
+    { name = "jinja2", specifier = ">=3.1.6,<4.0" },
     { name = "jsonschema", specifier = ">=4.0.0,<5.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = "==2.59.7" },
     { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },
