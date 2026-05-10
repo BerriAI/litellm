@@ -1060,28 +1060,42 @@ class MCPServerManager:
         return toolset
 
     def filter_server_ids_by_ip(
-        self, server_ids: List[str], client_ip: Optional[str]
+        self,
+        server_ids: List[str],
+        client_ip: Union[str, "_InternalRequest", None],
     ) -> List[str]:
         """
         Filter server IDs by client IP — external callers only see public servers.
 
-        Returns server_ids unchanged when client_ip is None (no filtering).
+        See ``filter_server_ids_by_ip_with_info`` for the contract on
+        ``client_ip``: ``None`` fails closed, ``INTERNAL_REQUEST`` bypasses
+        gating, real IPs apply the existing rules.
         """
         filtered, _ = self.filter_server_ids_by_ip_with_info(server_ids, client_ip)
         return filtered
 
     def filter_server_ids_by_ip_with_info(
-        self, server_ids: List[str], client_ip: Optional[str]
+        self,
+        server_ids: List[str],
+        client_ip: Union[str, "_InternalRequest", None],
     ) -> Tuple[List[str], int]:
         """
         Filter server IDs by client IP — external callers only see public servers.
 
-        Returns (filtered_ids, ip_blocked_count) where ip_blocked_count is the number
-        of servers that were blocked because the client IP is not allowed to access them.
-        Returns server_ids unchanged (with 0 blocked) when client_ip is None.
+        Returns (filtered_ids, ip_blocked_count) where ip_blocked_count is the
+        number of servers that were blocked because the client IP is not
+        allowed to access them. ``None`` fails closed: external request
+        handlers must extract a real IP via
+        ``IPAddressUtils.get_mcp_client_ip(request)``. Internal callers
+        (admin debug, registry maintenance) should pass
+        ``INTERNAL_REQUEST`` to bypass IP gating.
         """
-        if client_ip is None:
+        if client_ip is INTERNAL_REQUEST:
             return server_ids, 0
+        if client_ip is None:
+            # Fail closed: don't expose internal-only servers when the IP
+            # couldn't be attributed.
+            return [], len(server_ids)
         allowed = []
         blocked = 0
         for sid in server_ids:
@@ -3253,18 +3267,22 @@ class MCPServerManager:
         return None
 
     def get_filtered_registry(
-        self, client_ip: Optional[str] = None
+        self, client_ip: Union[str, "_InternalRequest", None] = None
     ) -> Dict[str, MCPServer]:
         """
         Get registry filtered by client IP access control.
 
         Args:
-            client_ip: Optional client IP. When provided, non-public servers
-                       are hidden from external IPs. When None, returns all servers.
+            client_ip: Real client IP (filter applied), ``INTERNAL_REQUEST``
+                       (return full registry, internal callers only), or
+                       ``None`` (fails closed: returns empty registry).
+                       External request handlers must pass a real IP.
         """
         registry = self.get_registry()
-        if client_ip is None:
+        if client_ip is INTERNAL_REQUEST:
             return registry
+        if client_ip is None:
+            return {}
         return {
             k: v
             for k, v in registry.items()

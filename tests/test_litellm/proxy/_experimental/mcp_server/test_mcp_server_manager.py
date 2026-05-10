@@ -3377,6 +3377,52 @@ class TestIPGatingFailClosed:
         }[client_ip_kind]
         assert manager._is_server_accessible_from_ip(server, client_ip) is expected
 
+    def test_get_filtered_registry_fails_closed_on_none(self):
+        # The wrapper used to return the full registry on None client_ip,
+        # which let unauth callers (e.g. _resolve_oauth2_server_for_root_endpoints
+        # when get_mcp_client_ip returned None) auto-select internal-only
+        # servers. Now fails closed; INTERNAL_REQUEST is the explicit bypass.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        server = self._internal_server()
+        manager.registry[server.server_id] = server
+
+        assert manager.get_filtered_registry() == {}
+        assert manager.get_filtered_registry(client_ip=None) == {}
+        assert manager.get_filtered_registry(client_ip="8.8.8.8") == {}
+        assert manager.get_filtered_registry(client_ip=INTERNAL_REQUEST) == {
+            server.server_id: server
+        }
+
+    def test_filter_server_ids_by_ip_fails_closed_on_none(self):
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+            MCPServerManager,
+        )
+
+        manager = MCPServerManager()
+        server = self._internal_server()
+        manager.registry[server.server_id] = server
+        sids = [server.server_id]
+
+        # None fails closed: zero allowed, all reported as blocked.
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(sids, None)
+        assert (allowed, blocked) == ([], 1)
+
+        # External IP applies filter — internal server blocked.
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(sids, "8.8.8.8")
+        assert (allowed, blocked) == ([], 1)
+
+        # INTERNAL_REQUEST bypasses gating.
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            sids, INTERNAL_REQUEST
+        )
+        assert (allowed, blocked) == (sids, 0)
+
     def test_get_mcp_server_by_name_fails_closed_on_none(self):
         # External request handlers must extract a real client IP. Passing
         # None silently bypassed gating before; now it fails closed.
