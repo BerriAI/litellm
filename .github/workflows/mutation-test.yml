@@ -75,6 +75,16 @@ jobs:
           uv pip uninstall litellm
           uv pip install . --no-deps
 
+      # pytest-retry's pytest_configure hook crashes with
+      # `INTERNALERROR: no option named 'filtered_exceptions'` when invoked
+      # via mutmut's in-process pytest.main() call. The entry-point name
+      # doesn't normalize cleanly with `-p no:<name>`, so just remove the
+      # package outright. Reruns are wrong for mutation testing anyway —
+      # rerunning a "failed" mutant test would mask which mutants are killed.
+      - name: Remove pytest plugins that conflict with mutmut
+        run: |
+          uv pip uninstall pytest-retry || true
+
       - name: Run mutmut
         env:
           # Make the mutants/ sandbox win over site-packages on sys.path so the
