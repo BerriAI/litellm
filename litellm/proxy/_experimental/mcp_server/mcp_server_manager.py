@@ -806,6 +806,13 @@ class MCPServerManager:
                 self.initialize_tool_name_to_mcp_server_name_mapping()
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
+        # The runtime registry is the allowlist for tool calls and health
+        # probes (which spawn the underlying transport, including stdio
+        # subprocesses). Match the eligibility set used by the bulk DB
+        # filter in reload_servers_from_database() — NULL is legacy and
+        # "approved" is a legacy alias for "active".
+        if mcp_server.approval_status not in (None, "active", "approved"):
+            return
         try:
             if mcp_server.server_id not in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
@@ -819,6 +826,13 @@ class MCPServerManager:
             raise e
 
     async def update_server(self, mcp_server: LiteLLM_MCPServerTable):
+        # If a previously-active server has been moved out of the active
+        # state, evict any stale registry entry so subsequent tool calls and
+        # health probes can't reach it.
+        if mcp_server.approval_status not in (None, "active", "approved"):
+            if mcp_server.server_id in self.registry:
+                del self.registry[mcp_server.server_id]
+            return
         try:
             if mcp_server.server_id in self.registry:
                 new_server = await self.build_mcp_server_from_table(mcp_server)
