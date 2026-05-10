@@ -1458,3 +1458,58 @@ def test_reset_budget_for_tags_linked_to_budgets_invalidates_redis_counter(monke
     counter_cache.redis_cache.async_set_cache.assert_any_await(
         key="spend:tag:tenant-42", value=0.0, ttl=60
     )
+
+
+def test_reset_budget_for_tags_linked_to_budgets_invalidates_source_cache(monkeypatch):
+    """Resetting tags must also evict the cached LiteLLM_TagTable object so
+    the auth-time fallback (``tag_object.spend``) does not keep blocking a
+    tenant after spend has been zeroed in the DB.
+    """
+    _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_tag = type("Tag", (), {"tag_name": "tenant-42"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[linked_tag])
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 1})
+
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.call_details = {"user_api_key_cache": user_api_key_cache}
+
+    job = ResetBudgetJob(
+        proxy_logging_obj=proxy_logging_obj, prisma_client=prisma_client
+    )
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    user_api_key_cache.async_delete_cache.assert_any_await(key="tag:tenant-42")
+
+
+def test_reset_budget_for_tags_linked_to_budgets_no_user_api_key_cache(monkeypatch):
+    """When user_api_key_cache is not wired up (e.g. early-boot or tests),
+    the cascade must still complete without raising — the spend counter
+    invalidation is the load-bearing path.
+    """
+    _make_counter_invalidation_job(monkeypatch)
+
+    expired_budget = type("B", (), {"budget_id": "budget-1"})
+    linked_tag = type("Tag", (), {"tag_name": "tenant-42"})
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_tagtable.find_many = AsyncMock(return_value=[linked_tag])
+    prisma_client.db.litellm_tagtable.update_many = AsyncMock(return_value={"count": 1})
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.call_details = {}
+
+    job = ResetBudgetJob(
+        proxy_logging_obj=proxy_logging_obj, prisma_client=prisma_client
+    )
+    # Should not raise even though user_api_key_cache is missing.
+    asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
+
+    # The DB write must still have happened.
+    prisma_client.db.litellm_tagtable.update_many.assert_awaited_once()
