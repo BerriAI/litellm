@@ -6510,6 +6510,27 @@ async def test_validate_key_list_check_proxy_admin():
 
 
 @pytest.mark.asyncio
+async def test_validate_key_list_check_proxy_admin_viewer():
+    mock_prisma_client = AsyncMock()
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        user_id=None,
+    )
+
+    result = await validate_key_list_check(
+        user_api_key_dict=user_api_key_dict,
+        user_id=None,
+        team_id=None,
+        organization_id=None,
+        key_alias=None,
+        key_hash=None,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_validate_key_list_check_team_admin_success():
     mock_prisma_client = AsyncMock()
     user_info = LiteLLM_UserTable(
