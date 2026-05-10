@@ -106,6 +106,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_active = False
         self._reasoning_done_emitted = False
         self._reasoning_item_id: Optional[str] = None
+        self._message_item_added_after_reasoning = False
         self._accumulated_reasoning_content_parts: List[str] = []
         self._accumulated_provider_specific_fields: Dict[str, Any] = {}
 
@@ -1034,7 +1035,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         )
                     )
                     if response_api_chunk:
-                        return response_api_chunk
+                        self._pending_response_events.append(response_api_chunk)
+                        return self._pending_response_events.pop(0)
                     # Otherwise, loop to next chunk
                 except StopIteration:
                     return self.common_done_event_logic(sync_mode=True)
@@ -1053,8 +1055,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         and the ReasoningSummaryTextDeltaEvent, which is used by the responses API to emit reasoning content.
         It also handles emitting annotation.added events when annotations are detected in the chunk.
         """
-        if self._cached_item_id is None and chunk.id:
-            self._cached_item_id = chunk.id
         item_id = self._cached_item_id or chunk.id
 
         # Check if this chunk has annotations first (before processing text/reasoning)
@@ -1094,8 +1094,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             reasoning_item_id = (
                 self._reasoning_item_id
                 or self._cached_reasoning_item_id
-                or self._cached_item_id
-                or (chunk.id if chunk.id else None)
                 or f"rs_{uuid.uuid4()}"
             )
 
@@ -1109,6 +1107,18 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # Priority 2: Handle text deltas
         delta_content = self._get_delta_string_from_streaming_choices(chunk.choices)
         if delta_content:
+            if not self.sent_content_part_added_event:
+                self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
+                if not self._message_item_added_after_reasoning:
+                    self._pending_response_events.append(
+                        self.create_output_item_added_event()
+                    )
+                    self._message_item_added_after_reasoning = True
+                self.sent_content_part_added_event = True
+                self._pending_response_events.append(
+                    self.create_content_part_added_event()
+                )
+            item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
             self._sequence_number += 1
             text_delta_event = OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
