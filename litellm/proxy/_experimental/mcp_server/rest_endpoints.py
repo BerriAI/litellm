@@ -397,6 +397,19 @@ if MCP_AVAILABLE:
                     _server, rest_client_ip
                 )
             ):
+                if rest_client_ip is None:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "client_ip_unknown",
+                            "message": (
+                                "Cannot determine client IP for IP-based access "
+                                "control. If the proxy is behind a load balancer "
+                                "or reverse proxy, configure use_x_forwarded_for "
+                                "and mcp_trusted_proxy_ranges in general_settings."
+                            ),
+                        },
+                    )
                 raise HTTPException(
                     status_code=403,
                     detail={
@@ -486,6 +499,19 @@ if MCP_AVAILABLE:
                     _server, rest_client_ip
                 )
             ):
+                if rest_client_ip is None:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "client_ip_unknown",
+                            "message": (
+                                "Cannot determine client IP for IP-based access "
+                                "control. If the proxy is behind a load balancer "
+                                "or reverse proxy, configure use_x_forwarded_for "
+                                "and mcp_trusted_proxy_ranges in general_settings."
+                            ),
+                        },
+                    )
                 raise HTTPException(
                     status_code=403,
                     detail={

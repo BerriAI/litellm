@@ -3109,12 +3109,14 @@ class MCPServerManager:
         public_ids = set(litellm.public_mcp_servers or [])
         if server.server_id in public_ids:
             return True
-        # Non-public server: only accessible from internal IPs
+        # Non-public server: only accessible from internal IPs. The two
+        # early returns above narrow client_ip to ``str`` for the type
+        # checker; cast keeps mypy happy without a runtime assert.
         general_settings = self._get_general_settings()
         internal_networks = IPAddressUtils.parse_internal_networks(
             general_settings.get("mcp_internal_ip_ranges")
         )
-        return IPAddressUtils.is_internal_ip(client_ip, internal_networks)
+        return IPAddressUtils.is_internal_ip(cast(str, client_ip), internal_networks)
 
     def get_mcp_server_by_id(self, server_id: str) -> Optional[MCPServer]:
         """

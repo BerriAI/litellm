@@ -39,7 +39,10 @@ def _validate_mcp_oauth_outbound_url(
     operator who points an MCP server at an internal IdP doesn't unintentionally
     expose it as an SSRF probe via the proxy."""
     if not getattr(litellm, "user_url_validation", True):
-        return url, urlparse(url).hostname or ""
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        host_header = f"{host}:{parsed.port}" if parsed.port else host
+        return url, host_header
     try:
         return validate_url(url)
     except SSRFError as exc:

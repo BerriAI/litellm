@@ -2530,7 +2530,14 @@ class TestOutboundOAuthURLValidation:
                 "http://10.0.0.1:5000/token", role="token"
             )
             assert url == "http://10.0.0.1:5000/token"
-            assert host == "10.0.0.1"
+            # Host header includes the explicit port from the URL.
+            assert host == "10.0.0.1:5000"
+
+            # When the URL omits the port, the Host header omits it too.
+            url2, host2 = _validate_mcp_oauth_outbound_url(
+                "http://10.0.0.1/token", role="token"
+            )
+            assert host2 == "10.0.0.1"
         finally:
             litellm.user_url_validation = original
 
