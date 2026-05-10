@@ -1427,12 +1427,17 @@ class LiteLLMCompletionResponsesConfig:
                 if tool.get("type") in unsupported_tool_types:
                     continue  # 跳过不支持的 tool 类型
 
+            # MCP 和 web_search 类型：国内模型不支持，需要过滤
             if tool.get("type") == "mcp":
+                if is_domestic_model:
+                    continue  # 国内模型不支持 MCP 协议
                 chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
             elif (
                 tool.get("type") == "web_search_preview"
                 or tool.get("type") == "web_search"
             ):
+                if is_domestic_model:
+                    continue  # 国内模型不支持 web search
                 _search_context_size: Literal["low", "medium", "high"] = cast(
                     Literal["low", "medium", "high"], tool.get("search_context_size")
                 )
@@ -1455,24 +1460,34 @@ class LiteLLMCompletionResponsesConfig:
                 # 国内模型不支持 strict 和 additionalProperties，OpenAI structured outputs 需要这些字段
                 if is_domestic_model:
                     parameters = LiteLLMCompletionResponsesConfig._clean_schema(parameters)
-
-                chat_completion_tool: Dict[str, Any] = {
-                    "type": "function",
-                    "function": {
-                        "name": typed_tool.get("name") or "",
-                        "description": typed_tool.get("description") or "",
-                        "parameters": parameters,
-                        "strict": typed_tool.get("strict", False) or False,
-                    },
-                }
-                if tool.get("cache_control"):
-                    chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
-                if tool.get("defer_loading"):
-                    chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
-                if tool.get("allowed_callers"):
-                    chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
-                if tool.get("input_examples"):
-                    chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
+                    # 国内模型不支持 strict 和额外字段，只传递基础信息
+                    chat_completion_tool: Dict[str, Any] = {
+                        "type": "function",
+                        "function": {
+                            "name": typed_tool.get("name") or "",
+                            "description": typed_tool.get("description") or "",
+                            "parameters": parameters,
+                        },
+                    }
+                else:
+                    # 国际模型支持完整参数
+                    chat_completion_tool: Dict[str, Any] = {
+                        "type": "function",
+                        "function": {
+                            "name": typed_tool.get("name") or "",
+                            "description": typed_tool.get("description") or "",
+                            "parameters": parameters,
+                            "strict": typed_tool.get("strict", False) or False,
+                        },
+                    }
+                    if tool.get("cache_control"):
+                        chat_completion_tool["cache_control"] = tool.get("cache_control")  # type: ignore
+                    if tool.get("defer_loading"):
+                        chat_completion_tool["defer_loading"] = tool.get("defer_loading")  # type: ignore
+                    if tool.get("allowed_callers"):
+                        chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")  # type: ignore
+                    if tool.get("input_examples"):
+                        chat_completion_tool["input_examples"] = tool.get("input_examples")  # type: ignore
                 chat_completion_tools.append(
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
