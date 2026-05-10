@@ -18,31 +18,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.utils import ModelResponse
-
-
-def _is_domestic_model_endpoint(api_base: Optional[str]) -> bool:
-    """
-    判断是否是国内模型 provider endpoint。
-    国内模型不支持某些 Codex CLI 特有的参数和工具类型。
-
-    Args:
-        api_base: API endpoint URL
-
-    Returns:
-        bool: True 表示是国内模型 endpoint，需要做兼容处理
-    """
-    if not api_base:
-        return False
-
-    domestic_endpoints = [
-        "dashscope.aliyuncs.com",  # 阿里云 DashScope
-        "ark.cn-beijing.volces.com",  # 火山引擎 Volcengine
-        "api.minimaxi.com",  # MiniMax 官方
-        "xiaomimimo.com",  # 小米 MiMo
-        "api.deepseek.com",  # DeepSeek 官方
-    ]
-
-    return any(endpoint in str(api_base) for endpoint in domestic_endpoints)
+from litellm.utils import ProviderConfigManager
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -89,7 +65,7 @@ class LiteLLMCompletionTransformationHandler:
         # 只对国内模型 endpoint 过滤 client_metadata (Codex CLI 0.130.0 兼容修复)
         # 国内模型不支持 Codex CLI 特有的 client_metadata 参数
         api_base = kwargs.get("api_base") or litellm_completion_request.get("api_base")
-        if _is_domestic_model_endpoint(api_base):
+        if ProviderConfigManager._is_domestic_model_endpoint(api_base):
             completion_args.pop("client_metadata", None)
 
         completion_args.update(litellm_completion_request)
@@ -146,7 +122,7 @@ class LiteLLMCompletionTransformationHandler:
         # 只对国内模型 endpoint 过滤 client_metadata (Codex CLI 0.130.0 兼容修复)
         # 国内模型不支持 Codex CLI 特有的 client_metadata 参数
         api_base = kwargs.get("api_base") or litellm_completion_request.get("api_base")
-        if _is_domestic_model_endpoint(api_base):
+        if ProviderConfigManager._is_domestic_model_endpoint(api_base):
             acompletion_args.pop("client_metadata", None)
 
         acompletion_args.update(litellm_completion_request)
