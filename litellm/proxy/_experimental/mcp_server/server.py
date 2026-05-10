@@ -863,14 +863,24 @@ if MCP_AVAILABLE:
               This is intentional for internal callers but may indicate a bug if called
               from a request handler without proper context setup.
         """
-        # Use explicit client_ip if provided, otherwise try auth context
-        if client_ip is None:
-            client_ip = _get_client_ip_from_context()
-            if client_ip is None:
+        # Use explicit client_ip if provided, otherwise try auth context.
+        # If neither is available the call is treated as internal (admin
+        # debug, registry maintenance, background work) and uses
+        # INTERNAL_REQUEST to bypass IP gating explicitly. The wrapper
+        # otherwise fails closed on None.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+        )
+
+        gate_arg: Union[str, "_InternalRequest", None] = client_ip
+        if gate_arg is None:
+            gate_arg = _get_client_ip_from_context()
+            if gate_arg is None:
                 verbose_logger.debug(
                     "MCP _get_allowed_mcp_servers called without client_ip and no auth context. "
                     "IP filtering will be skipped. This is expected for internal calls."
                 )
+                gate_arg = INTERNAL_REQUEST
 
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
@@ -879,7 +889,7 @@ if MCP_AVAILABLE:
             allowed_mcp_server_ids,
             _ip_blocked,
         ) = global_mcp_server_manager.filter_server_ids_by_ip_with_info(
-            allowed_mcp_server_ids, client_ip
+            allowed_mcp_server_ids, gate_arg
         )
         verbose_logger.debug(
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
