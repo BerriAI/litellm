@@ -1363,6 +1363,83 @@ class TestAddAndDeleteModelLifecycle:
             assert str(exc_info.value.code) == "400"
 
 
+class TestDeleteModelCascadeTeams:
+    """Deleting a model should remove it from all teams' models arrays."""
+
+    @pytest.mark.asyncio
+    async def test_delete_model_removes_from_teams(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+            ModelInfoDelete,
+        )
+
+        model_id = "cascade-test-model"
+        admin_user = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="gpt-4",
+            litellm_params={"model": "openai/gpt-4"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        team_a = MagicMock()
+        team_a.team_id = "team-a"
+        team_a.models = ["gpt-4", "claude-sonnet"]
+
+        team_b = MagicMock()
+        team_b.team_id = "team-b"
+        team_b.models = ["gpt-4"]
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[team_a, team_b]
+        )
+        mock_prisma.db.litellm_teamtable.update = AsyncMock()
+
+        _PS = "litellm.proxy.proxy_server"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+            assert "deleted successfully" in result["message"]
+
+            mock_prisma.db.litellm_teamtable.find_many.assert_called_once_with(
+                where={"models": {"has": "gpt-4"}}
+            )
+            assert mock_prisma.db.litellm_teamtable.update.call_count == 2
+
+            calls = mock_prisma.db.litellm_teamtable.update.call_args_list
+            team_a_call = next(
+                c for c in calls if c.kwargs["where"]["team_id"] == "team-a"
+            )
+            assert team_a_call.kwargs["data"]["models"] == ["claude-sonnet"]
+
+            team_b_call = next(
+                c for c in calls if c.kwargs["where"]["team_id"] == "team-b"
+            )
+            assert team_b_call.kwargs["data"]["models"] == []
+
+
 class TestGetTeamDeployments:
     """Tests for _get_team_deployments which filters by model_name prefix + Python-side team_id check."""
 
