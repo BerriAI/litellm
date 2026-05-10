@@ -21,6 +21,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_enforced_params,
     _get_metadata_variable_name,
     _resolve_credential_from_model_config,
+    _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
     add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
@@ -3819,6 +3820,76 @@ def test_resolve_provider_hint_from_model_name():
         "azure/gpt-4", config, None, pre_alias_model_name="gpt-4", provider="azure"
     )
     assert result == "azure-cred"
+
+
+def test_resolve_provider_from_deployment():
+    """
+    Regression test for https://github.com/BerriAI/litellm/issues/27516
+    When the user-facing model name has no "/" prefix (e.g. "claude-sonnet-4.6"),
+    the provider should be resolved from the deployment's litellm_params.model
+    (e.g. "bedrock/us.anthropic.claude-sonnet-4-6" -> "bedrock").
+    """
+    mock_router = MagicMock()
+    mock_router.model_list = [
+        {
+            "model_name": "claude-sonnet-4.6",
+            "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-4-6"},
+        },
+        {
+            "model_name": "gemini-2.5-pro",
+            "litellm_params": {"model": "gemini/gemini-2.5-pro-preview"},
+        },
+    ]
+
+    with patch(
+        "litellm.proxy.proxy_server.llm_router",
+        mock_router,
+    ):
+        assert _resolve_provider_from_deployment("claude-sonnet-4.6") == "bedrock"
+        assert _resolve_provider_from_deployment("gemini-2.5-pro") == "gemini"
+        assert _resolve_provider_from_deployment("unknown-model") is None
+
+
+def test_resolve_provider_from_deployment_no_router():
+    """When llm_router is None, _resolve_provider_from_deployment returns None."""
+    with patch(
+        "litellm.proxy.proxy_server.llm_router",
+        None,
+    ):
+        assert _resolve_provider_from_deployment("claude-sonnet-4.6") is None
+
+
+def test_credential_routing_uses_deployment_provider():
+    """
+    End-to-end: defaultconfig with multiple providers should resolve the
+    correct credential when the user model name has no "/" prefix.
+    """
+    mock_router = MagicMock()
+    mock_router.model_list = [
+        {
+            "model_name": "claude-sonnet-4.6",
+            "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-4-6"},
+        },
+    ]
+
+    team_model_config = {
+        "defaultconfig": {
+            "gemini": {"litellm_credentials": "gemini-team-1"},
+            "bedrock": {"litellm_credentials": "bedrock-team-1"},
+        },
+    }
+
+    with patch(
+        "litellm.proxy.proxy_server.llm_router",
+        mock_router,
+    ):
+        result = _resolve_credential_from_model_config(
+            model_name="claude-sonnet-4.6",
+            project_model_config=None,
+            team_model_config=team_model_config,
+            provider="bedrock",
+        )
+        assert result == "bedrock-team-1"
 
 
 def test_clean_headers_preserves_x_api_key_when_byok_enabled():

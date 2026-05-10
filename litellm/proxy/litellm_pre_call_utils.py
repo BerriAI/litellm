@@ -1860,6 +1860,24 @@ def _update_model_if_key_alias_exists(
     return
 
 
+def _resolve_provider_from_deployment(model_name: str) -> Optional[str]:
+    """
+    Look up the provider prefix from the router's deployment config for a
+    given user-facing model name (e.g. "claude-sonnet-4.6" ->
+    "bedrock" via litellm_params.model "bedrock/us.anthropic...").
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return None
+    for deployment in llm_router.model_list:
+        if deployment.get("model_name") == model_name:
+            litellm_model = (deployment.get("litellm_params") or {}).get("model", "")
+            if "/" in litellm_model:
+                return litellm_model.split("/", 1)[0]
+    return None
+
+
 def _apply_credential_overrides_from_model_config(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1900,9 +1918,13 @@ def _apply_credential_overrides_from_model_config(
         return
 
     # Extract provider hint from model name (e.g. "azure/gpt-4" -> "azure")
+    # When the user-facing model name has no "/" prefix, resolve from the
+    # deployment's litellm_params.model instead (e.g. "bedrock/us.anthropic...")
     provider: Optional[str] = None
     if "/" in model_name:
         provider = model_name.split("/", 1)[0]
+    else:
+        provider = _resolve_provider_from_deployment(model_name)
 
     credential_name = _resolve_credential_from_model_config(
         model_name=model_name,
