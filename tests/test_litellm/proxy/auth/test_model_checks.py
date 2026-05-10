@@ -249,3 +249,65 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     assert len(result) > 0
     assert all(m.startswith("openai/") for m in result)
     assert "openai/*" not in result
+
+
+def test_get_complete_model_list_wildcard_removed_when_return_wildcard_routes_false():
+    """
+    Test that wildcard models (e.g., openai/*) are removed from the model list
+    when return_wildcard_routes=False, even when the router HAS a deployment
+    for the wildcard.
+
+    This addresses the bug where /models endpoint was returning wildcard entries
+    like 'openai/*' as model names when users configured wildcards in their config.
+    See: https://github.com/BerriAI/litellm/issues/13752
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    # Router with wildcard deployment (common case - user configures openai/*)
+    model_list = [{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}}]
+    router = Router(model_list=model_list)
+
+    # Test with return_wildcard_routes=False (default)
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["openai/*", "gpt-4o"],  # includes wildcard + real model
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=router,
+    )
+
+    # Wildcard should NOT appear in the result
+    assert "openai/*" not in result
+    # But real models should still be there
+    assert "gpt-4o" in result
+
+
+def test_get_complete_model_list_wildcard_kept_when_return_wildcard_routes_true():
+    """
+    Test that wildcard models are kept in the model list when
+    return_wildcard_routes=True (opt-in for admin/debugging).
+    """
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm import Router
+
+    model_list = [{"model_name": "openai/*", "litellm_params": {"model": "openai/*"}}]
+    router = Router(model_list=model_list)
+
+    # Test with return_wildcard_routes=True
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["openai/*", "gpt-4o"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
+        llm_router=router,
+    )
+
+    # Wildcard SHOULD appear in the result when explicitly requested
+    assert "openai/*" in result
+    # Real models should still be there
+    assert "gpt-4o" in result

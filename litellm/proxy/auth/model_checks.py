@@ -307,6 +307,10 @@ def _get_wildcard_models(
                             ),
                         )
                         all_wildcard_models.extend(wildcard_models)
+                    # Always remove wildcard from unique_models when return_wildcard_routes=False
+                    # since we're returning the expanded models instead
+                    if not return_wildcard_routes:
+                        models_to_remove.add(model)
                 else:
                     # Router has no deployment for this wildcard (e.g., BYOK team models)
                     # Fall back to expanding from known provider models
