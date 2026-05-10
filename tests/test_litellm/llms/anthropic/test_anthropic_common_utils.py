@@ -1318,6 +1318,18 @@ class TestGetAnthropicBetaListContextManagement:
         )
         assert "context-management-2025-06-27" in betas
 
+    def test_openai_list_format_adds_compact_beta(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        info = AnthropicModelInfo()
+        betas = info.get_anthropic_beta_list(
+            model="claude-sonnet-4-6",
+            optional_params={
+                "context_management": [{"type": "compaction"}],
+            },
+        )
+        assert "compact-2026-01-12" in betas
+
     def test_no_context_management_no_extra_betas(self):
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
