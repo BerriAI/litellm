@@ -8126,6 +8126,7 @@ class ProviderConfigManager:
             "minimax",   # MiniMax series
             "mimo",      # Xiaomi MiMo series
             "deepseek",  # DeepSeek series
+            "kimi",      # Moonshot Kimi series
         ]
 
         return any(pattern in model_lower for pattern in domestic_patterns)
@@ -8151,6 +8152,8 @@ class ProviderConfigManager:
             "api.minimaxi.com",  # MiniMax official
             "xiaomimimo.com",  # Xiaomi MiMo
             "api.deepseek.com",  # DeepSeek official
+            "moonshot.cn",  # Moonshot Kimi official
+            "bigmodel.cn",  # Zhipu GLM official
         ]
 
         return any(endpoint in str(api_base) for endpoint in domestic_endpoints)
