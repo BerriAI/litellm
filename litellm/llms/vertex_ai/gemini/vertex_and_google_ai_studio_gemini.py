@@ -1077,6 +1077,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
+        if non_default_params.get("include_server_side_tool_invocations") is True:
+            optional_params["include_server_side_tool_invocations"] = True
         for param, value in non_default_params.items():
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):

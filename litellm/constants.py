@@ -744,6 +744,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "store": None,
     "metadata": None,
     "context_management": None,
+    "include_server_side_tool_invocations": None,
 }
 
 openai_compatible_endpoints: List = [
