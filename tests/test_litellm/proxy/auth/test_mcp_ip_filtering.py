@@ -85,12 +85,20 @@ class TestMCPServerIPFiltering:
 
     @patch("litellm.public_mcp_servers", [])
     @patch("litellm.proxy.proxy_server.general_settings", {})
-    def test_no_ip_means_no_filtering(self):
+    def test_no_ip_fails_closed(self):
+        # Missing client_ip on an external request fails closed; internal
+        # callers must pass INTERNAL_REQUEST explicitly to bypass IP gating.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+        )
+
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([priv])
 
-        result = manager.filter_server_ids_by_ip(["priv"], client_ip=None)
-        assert result == ["priv"]
+        assert manager.filter_server_ids_by_ip(["priv"], client_ip=None) == []
+        assert manager.filter_server_ids_by_ip(
+            ["priv"], client_ip=INTERNAL_REQUEST
+        ) == ["priv"]
 
 
 class TestFilterServerIdsByIpWithInfo:
@@ -124,15 +132,25 @@ class TestFilterServerIdsByIpWithInfo:
 
     @patch("litellm.public_mcp_servers", [])
     @patch("litellm.proxy.proxy_server.general_settings", {})
-    def test_no_ip_returns_all_with_zero_blocked(self):
+    def test_no_ip_fails_closed_reports_all_blocked(self):
+        # Missing client_ip on an external request fails closed: all servers
+        # are reported blocked. Internal callers pass INTERNAL_REQUEST.
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            INTERNAL_REQUEST,
+        )
+
         priv = _make_server("priv", available_on_public_internet=False)
         manager = _make_manager([priv])
 
         allowed, blocked = manager.filter_server_ids_by_ip_with_info(
             ["priv"], client_ip=None
         )
-        assert allowed == ["priv"]
-        assert blocked == 0
+        assert (allowed, blocked) == ([], 1)
+
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["priv"], client_ip=INTERNAL_REQUEST
+        )
+        assert (allowed, blocked) == (["priv"], 0)
 
     @patch("litellm.public_mcp_servers", [])
     @patch("litellm.proxy.proxy_server.general_settings", {})

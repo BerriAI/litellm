@@ -154,6 +154,7 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
+        _InternalRequest,
         global_mcp_server_manager,
     )
     from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
@@ -850,37 +851,24 @@ if MCP_AVAILABLE:
     async def _get_allowed_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_servers: Optional[List[str]],
-        client_ip: Optional[str] = None,
+        client_ip: Union[str, _InternalRequest, None] = None,
     ) -> List[MCPServer]:
         """Return allowed MCP servers for a request after applying filters.
 
         Args:
             user_api_key_auth: The authenticated user's API key info.
             mcp_servers: Optional list of server names to filter to.
-            client_ip: Client IP for IP-based access control. If None, falls back to
-                      auth context. Pass explicitly from request handlers for safety.
-        Note: If client_ip is None and auth context is not set, IP filtering is skipped.
-              This is intentional for internal callers but may indicate a bug if called
-              from a request handler without proper context setup.
+            client_ip: Client IP for IP-based access control. Pass an explicit
+                      string from external request handlers, the
+                      ``INTERNAL_REQUEST`` sentinel from internal callers
+                      (admin debug, registry maintenance, background work),
+                      or ``None`` to fall back to the auth-context IP.
+                      ``None`` after the auth-context fallback fails closed
+                      — an external request that can't be attributed to an IP
+                      will not reach internal-only servers.
         """
-        # Use explicit client_ip if provided, otherwise try auth context.
-        # If neither is available the call is treated as internal (admin
-        # debug, registry maintenance, background work) and uses
-        # INTERNAL_REQUEST to bypass IP gating explicitly. The wrapper
-        # otherwise fails closed on None.
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            INTERNAL_REQUEST,
-        )
-
-        gate_arg: Union[str, "_InternalRequest", None] = client_ip
-        if gate_arg is None:
-            gate_arg = _get_client_ip_from_context()
-            if gate_arg is None:
-                verbose_logger.debug(
-                    "MCP _get_allowed_mcp_servers called without client_ip and no auth context. "
-                    "IP filtering will be skipped. This is expected for internal calls."
-                )
-                gate_arg = INTERNAL_REQUEST
+        if client_ip is None:
+            client_ip = _get_client_ip_from_context()
 
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
@@ -889,7 +877,7 @@ if MCP_AVAILABLE:
             allowed_mcp_server_ids,
             _ip_blocked,
         ) = global_mcp_server_manager.filter_server_ids_by_ip_with_info(
-            allowed_mcp_server_ids, gate_arg
+            allowed_mcp_server_ids, client_ip
         )
         verbose_logger.debug(
             "MCP IP filter: client_ip=%s, allowed_server_ids=%s",
