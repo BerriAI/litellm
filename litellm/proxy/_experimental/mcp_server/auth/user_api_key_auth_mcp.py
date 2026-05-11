@@ -750,6 +750,19 @@ class MCPRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         try:
+            if user_api_key_auth is None:
+                return []
+
+            from litellm.proxy.auth.auth_checks import (
+                _get_mcp_server_ids_from_access_groups,
+            )
+
+            key_access_group_servers = (
+                await _get_mcp_server_ids_from_access_groups(
+                    user_api_key_auth.access_group_ids or []
+                )
+            )
+
             # Get key object permission (already loaded in main auth flow, or fetch from DB)
             key_object_permission = MCPRequestHandler._get_key_object_permission(
                 user_api_key_auth
@@ -775,7 +788,7 @@ class MCPRequestHandler:
                         proxy_logging_obj=proxy_logging_obj,
                     )
             if key_object_permission is None:
-                return []
+                return list(set(key_access_group_servers))
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -801,7 +814,12 @@ class MCPRequestHandler:
             )
 
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = (
+                direct_mcp_servers
+                + access_group_servers
+                + tool_perm_servers
+                + key_access_group_servers
+            )
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(
@@ -819,13 +837,27 @@ class MCPRequestHandler:
         Note: object_permission is automatically loaded by get_team_object() in main auth flow.
         """
         try:
+            if user_api_key_auth is None or user_api_key_auth.team_id is None:
+                return []
+
+            from litellm.proxy.auth.auth_checks import (
+                _get_mcp_server_ids_from_access_groups,
+            )
+
+            team_access_group_ids = await MCPRequestHandler._get_team_access_group_ids(
+                user_api_key_auth
+            )
+            team_access_group_servers = (
+                await _get_mcp_server_ids_from_access_groups(team_access_group_ids)
+            )
+
             # Get team object permission (already loaded in main auth flow)
             object_permissions = await MCPRequestHandler._get_team_object_permission(
                 user_api_key_auth
             )
 
             if object_permissions is None:
-                return []
+                return list(set(team_access_group_servers))
 
             # Permission entries may be server_ids OR names/aliases — expand to ids.
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -851,13 +883,52 @@ class MCPRequestHandler:
             )
 
             # Combine all lists
-            all_servers = direct_mcp_servers + access_group_servers + tool_perm_servers
+            all_servers = (
+                direct_mcp_servers
+                + access_group_servers
+                + tool_perm_servers
+                + team_access_group_servers
+            )
             return list(set(all_servers))
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get allowed MCP servers for team: {str(e)}"
             )
             return []
+
+    @staticmethod
+    async def _get_team_access_group_ids(
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+    ) -> List[str]:
+        """
+        Get unified access-group IDs assigned to the user's team.
+
+        These are distinct from object_permission.mcp_access_groups: unified
+        access groups can grant MCP servers directly via access_mcp_server_ids,
+        and teams may have those groups even when no object_permission row was
+        created for the team.
+        """
+        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
+            return []
+
+        team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+            team_id=user_api_key_auth.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_auth.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        if team_obj is None:
+            return []
+
+        return list(team_obj.access_group_ids or [])
 
     # Sentinel stored in cache when an org has no object_permission, so we
     # don't re-query the DB on every MCP request for that org.

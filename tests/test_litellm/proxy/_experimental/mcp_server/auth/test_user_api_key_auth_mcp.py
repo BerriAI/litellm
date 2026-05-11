@@ -1,12 +1,9 @@
 import json
 import os
 import sys
-from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import orjson
 import pytest
-from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -19,7 +16,6 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 
 @pytest.mark.asyncio
@@ -342,7 +338,7 @@ class TestMCPRequestHandler:
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
             side_effect=mock_user_api_key_auth,
-        ) as mock_auth:
+        ):
             # Call the method
             (
                 auth_result,
@@ -1796,6 +1792,75 @@ async def test_get_allowed_mcp_servers_for_team_with_no_object_permission():
 
         # Verify the helper was called
         mock_get_team_perm.assert_called_once_with(mock_user_auth)
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_key_uses_unified_access_groups_without_object_permission():
+    """Key access_group_ids grant MCP servers even when no object_permission exists."""
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        access_group_ids=["ag-key"],
+    )
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_key_object_permission",
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["mcp-from-key-group"],
+        ) as mock_get_access_group_servers,
+    ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(
+            mock_user_auth
+        )
+
+    assert result == ["mcp-from-key-group"]
+    mock_get_access_group_servers.assert_awaited_once_with(["ag-key"])
+
+
+@pytest.mark.asyncio
+async def test_get_allowed_mcp_servers_for_team_uses_unified_access_groups_without_object_permission():
+    """Team access_group_ids grant MCP servers even when no object_permission exists."""
+
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="test-user",
+        team_id="team-with-access-group",
+    )
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_team_access_group_ids",
+            new_callable=AsyncMock,
+            return_value=["ag-team"],
+        ) as mock_get_team_access_groups,
+        patch.object(
+            MCPRequestHandler,
+            "_get_team_object_permission",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_get_team_perm,
+        patch(
+            "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+            new_callable=AsyncMock,
+            return_value=["mcp-from-team-group"],
+        ) as mock_get_access_group_servers,
+    ):
+        result = await MCPRequestHandler._get_allowed_mcp_servers_for_team(
+            mock_user_auth
+        )
+
+    assert result == ["mcp-from-team-group"]
+    mock_get_team_access_groups.assert_awaited_once_with(mock_user_auth)
+    mock_get_team_perm.assert_awaited_once_with(mock_user_auth)
+    mock_get_access_group_servers.assert_awaited_once_with(["ag-team"])
 
 
 @pytest.mark.asyncio
