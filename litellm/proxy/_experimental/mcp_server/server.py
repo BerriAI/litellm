@@ -3193,6 +3193,19 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_context_last_seen[session_id] = (
                             time.monotonic()
                         )
+
+                    # Defensive cleanup: if the session has no auth-context
+                    # tracking and no in-flight requests, the per-session lock
+                    # would otherwise be orphaned (the periodic cleanup loop
+                    # iterates ``_stateful_session_auth_context_last_seen`` and
+                    # would never see it). This guards against narrow paths
+                    # where a lock is created for a session_id that never
+                    # entered ``_stateful_session_auth_contexts``.
+                    if (
+                        active_request_count <= 0
+                        and session_id not in _stateful_session_auth_contexts
+                    ):
+                        _stateful_session_locks.pop(session_id, None)
         except HTTPException:
             # Re-raise HTTP exceptions to preserve status codes and details
             raise

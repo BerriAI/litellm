@@ -1818,6 +1818,77 @@ async def test_stateful_mcp_session_serializes_concurrent_requests():
 
 
 @pytest.mark.asyncio
+async def test_stateful_mcp_lock_does_not_leak_when_auth_context_missing():
+    """
+    If a per-session lock is created for a session_id that is not tracked in
+    ``_stateful_session_auth_contexts`` (e.g., a defensive path), the request
+    finalizer must drop the lock so it isn't orphaned. The periodic cleanup
+    loop only iterates ``_stateful_session_auth_context_last_seen``, so a
+    leaked lock would otherwise live forever.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "untracked-session-1"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+
+    async def handle(s, r, se):
+        return None
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [(b"mcp-session-id", session_id.encode())],
+    }
+    receive = AsyncMock(
+        return_value={
+            "type": "http.request",
+            "body": b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+            "more_body": False,
+        }
+    )
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(owner_auth, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                session_manager_stateful, "handle_request", side_effect=handle
+            ),
+            patch.object(
+                session_manager_stateful,
+                "_server_instances",
+                {session_id: MagicMock()},
+            ),
+        ):
+            assert session_id not in mcp_server._stateful_session_auth_contexts
+            await handle_streamable_http_mcp(scope, receive, AsyncMock())
+
+        assert (
+            session_id not in mcp_server._stateful_session_locks
+        ), "lock entry must be cleaned up for untracked stateful session"
+    finally:
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_owners.pop(session_id, None)
+        mcp_server._stateful_session_locks.pop(session_id, None)
+        mcp_server._stateful_session_active_request_counts.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_stateful_mcp_get_stream_does_not_block_post():
     """
     A long-lived GET (server-to-client SSE stream) on a stateful session
