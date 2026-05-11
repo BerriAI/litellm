@@ -1,14 +1,14 @@
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
+import pytest
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
-from unittest.mock import AsyncMock
 
 from litellm.caching.redis_cache import RedisCache
 
@@ -29,6 +29,7 @@ async def test_redis_cache_async_increment(namespace, monkeypatch, redis_no_ping
     redis_cache = RedisCache(namespace=namespace)
     # Create an AsyncMock for the Redis client
     mock_redis_instance = AsyncMock()
+    mock_redis_instance.eval.return_value = b"1"
 
     # Make sure the mock can be used as an async context manager
     mock_redis_instance.__aenter__.return_value = mock_redis_instance
@@ -41,26 +42,77 @@ async def test_redis_cache_async_increment(namespace, monkeypatch, redis_no_ping
     with patch.object(
         redis_cache, "init_async_client", return_value=mock_redis_instance
     ):
-        # Call async_set_cache
         await redis_cache.async_increment(key=expected_key, value=1)
 
-        # Verify that the set method was called on the mock Redis instance
-        mock_redis_instance.incrbyfloat.assert_called_once_with(
-            name=expected_key, amount=1
+        mock_redis_instance.eval.assert_awaited_once()
+        assert mock_redis_instance.eval.await_args.args[2:] == (
+            expected_key,
+            1,
+            60,
+            "0",
         )
+        mock_redis_instance.incrbyfloat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_uses_single_redis_call_for_default_ttl(
+    monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.eval.return_value = b"1.25"
+    mock_redis_instance.ttl.side_effect = RedisTimeoutError(
+        "Timeout reading from redis"
+    )
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        result = await redis_cache.async_increment(key="spend:counter", value=1.25)
+
+    assert result == 1.25
+    mock_redis_instance.eval.assert_awaited_once()
+    mock_redis_instance.ttl.assert_not_awaited()
+    mock_redis_instance.expire.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_refresh_ttl_uses_single_redis_call(
+    monkeypatch, redis_no_ping
+):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.eval.return_value = "2.5"
+    mock_redis_instance.expire.side_effect = RedisTimeoutError(
+        "Timeout reading from redis"
+    )
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        result = await redis_cache.async_increment(
+            key="spend:counter", value=1.25, refresh_ttl=True
+        )
+
+    assert result == 2.5
+    mock_redis_instance.eval.assert_awaited_once()
+    mock_redis_instance.ttl.assert_not_awaited()
+    mock_redis_instance.expire.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_redis_cache_async_increment_refresh_ttl_true_bumps_existing_ttl(
     monkeypatch, redis_no_ping
 ):
-    """With refresh_ttl=True, every increment should call expire() to bump
-    the TTL, even when the key already has a TTL (counter-style use)."""
+    """refresh_ttl=True tells the Redis-side increment script to bump the TTL."""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache()
     mock_redis_instance = AsyncMock()
     mock_redis_instance.__aenter__.return_value = mock_redis_instance
     mock_redis_instance.__aexit__.return_value = None
+    mock_redis_instance.eval.return_value = b"0.05"
     mock_redis_instance.ttl.return_value = 42  # key already has ~42s left
 
     with patch.object(
@@ -70,20 +122,27 @@ async def test_redis_cache_async_increment_refresh_ttl_true_bumps_existing_ttl(
             key="spend:team_member:u:t", value=0.05, refresh_ttl=True
         )
 
-    mock_redis_instance.expire.assert_awaited_once_with("spend:team_member:u:t", 60)
+    mock_redis_instance.eval.assert_awaited_once()
+    assert mock_redis_instance.eval.await_args.args[2:] == (
+        "spend:team_member:u:t",
+        0.05,
+        60,
+        "1",
+    )
+    mock_redis_instance.expire.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_redis_cache_async_increment_default_does_not_bump_existing_ttl(
     monkeypatch, redis_no_ping
 ):
-    """Default (refresh_ttl=False) preserves window-style semantics: TTL is
-    set only on first creation, never refreshed (used by rate-limit windows)."""
+    """refresh_ttl=False tells the Redis-side script to preserve window TTLs."""
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
     redis_cache = RedisCache()
     mock_redis_instance = AsyncMock()
     mock_redis_instance.__aenter__.return_value = mock_redis_instance
     mock_redis_instance.__aexit__.return_value = None
+    mock_redis_instance.eval.return_value = b"1"
     mock_redis_instance.ttl.return_value = 42  # key already has ~42s left
 
     with patch.object(
@@ -91,6 +150,13 @@ async def test_redis_cache_async_increment_default_does_not_bump_existing_ttl(
     ):
         await redis_cache.async_increment(key="rate_limit:window", value=1)
 
+    mock_redis_instance.eval.assert_awaited_once()
+    assert mock_redis_instance.eval.await_args.args[2:] == (
+        "rate_limit:window",
+        1,
+        60,
+        "0",
+    )
     mock_redis_instance.expire.assert_not_awaited()
 
 
