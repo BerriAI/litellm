@@ -148,7 +148,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         input = self._validate_input_param(input)
 
         if "tool_choice" in response_api_optional_request_params:
-            response_api_optional_request_params = dict(response_api_optional_request_params)
+            response_api_optional_request_params = dict(
+                response_api_optional_request_params
+            )
             response_api_optional_request_params["tool_choice"] = (
                 self._normalize_tool_choice_for_responses_api(
                     response_api_optional_request_params["tool_choice"]
@@ -632,7 +634,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         input = self._validate_input_param(input)
 
         if "tool_choice" in response_api_optional_request_params:
-            response_api_optional_request_params = dict(response_api_optional_request_params)
+            response_api_optional_request_params = dict(
+                response_api_optional_request_params
+            )
             response_api_optional_request_params["tool_choice"] = (
                 self._normalize_tool_choice_for_responses_api(
                     response_api_optional_request_params["tool_choice"]

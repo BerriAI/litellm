@@ -154,7 +154,7 @@ class TestChatGPTResponsesAPITransformation:
         assert request["tools"] == [{"type": "function", "function": {"name": "hello"}}]
         assert request["tool_choice"] == {
             "type": "function",
-            "function": {"name": "hello"},
+            "name": "hello",
         }
 
     @pytest.mark.parametrize(
