@@ -381,6 +381,117 @@ async def test_list_tags_no_dynamic_tags():
 
 
 @pytest.mark.asyncio
+async def test_list_tags_with_date_range_filters_dynamic_tags():
+    """
+    /tag/list?start_date=...&end_date=... should push the date window into
+    the dailytagspend group_by WHERE clause so large tables don't get scanned.
+    """
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+            group_by_mock = AsyncMock(return_value=[])
+            mock_db.litellm_dailytagspend.group_by = group_by_mock
+
+            headers = {"Authorization": "Bearer sk-1234"}
+            response = client.get(
+                "/tag/list?start_date=2026-04-01&end_date=2026-04-29",
+                headers=headers,
+            )
+
+            assert response.status_code == 200
+            group_by_mock.assert_awaited_once()
+            where = group_by_mock.await_args.kwargs["where"]
+            assert where["tag"] == {"not": None}
+            assert where["date"] == {"gte": "2026-04-01", "lte": "2026-04-29"}
+
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_tags_without_date_range_omits_date_filter():
+    """When no date range is passed, the WHERE clause must not carry a date key."""
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+            group_by_mock = AsyncMock(return_value=[])
+            mock_db.litellm_dailytagspend.group_by = group_by_mock
+
+            headers = {"Authorization": "Bearer sk-1234"}
+            response = client.get("/tag/list", headers=headers)
+
+            assert response.status_code == 200
+            group_by_mock.assert_awaited_once()
+            where = group_by_mock.await_args.kwargs["where"]
+            assert "date" not in where
+
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    "query, expected_detail_fragment",
+    [
+        ("?start_date=2026-04-01", "must be provided together"),
+        ("?end_date=2026-04-29", "must be provided together"),
+        ("?start_date=2026-04-29&end_date=2026-04-01", "on or before end_date"),
+        ("?start_date=not-a-date&end_date=2026-04-29", "YYYY-MM-DD"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_list_tags_rejects_invalid_date_range(query, expected_detail_fragment):
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    mock_user_auth = UserAPIKeyAuth(
+        user_id="test-user-123",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+    try:
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_db = Mock()
+            mock_prisma.db = mock_db
+            mock_db.litellm_tagtable.find_many = AsyncMock(return_value=[])
+            mock_db.litellm_dailytagspend.group_by = AsyncMock(return_value=[])
+
+            headers = {"Authorization": "Bearer sk-1234"}
+            response = client.get(f"/tag/list{query}", headers=headers)
+
+            assert response.status_code == 400
+            assert expected_detail_fragment in response.json()["detail"]
+
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_get_deployments_by_model_id():
     """
     Test get_deployments_by_model when model is found by model_id
