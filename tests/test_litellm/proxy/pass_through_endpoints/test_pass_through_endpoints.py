@@ -1949,6 +1949,157 @@ async def test_filter_endpoints_by_team_allowed_routes_partial_match():
 
 
 @pytest.mark.asyncio
+async def test_filter_endpoints_by_team_allowed_routes_access_group_without_pt_routes():
+    """
+    Regression test: a team with an access group that contains only non-pass-through
+    resources (e.g. model names) must NOT be filtered down to 0 endpoints.
+
+    Previously, `has_passthrough_route_constraints` was set to True whenever the
+    team had any `access_group_ids`, even if those access groups resolved to an
+    empty pass-through route list. That caused every endpoint to be filtered out.
+
+    The fix: only apply the constraint when the access group actually contributes
+    pass-through routes (i.e. the resolved list is non-empty) AND the team has no
+    other allowed_passthrough_routes metadata.
+    """
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _filter_endpoints_by_team_allowed_routes,
+    )
+
+    # Create test endpoints
+    endpoints = [
+        PassThroughGenericEndpoint(
+            id="endpoint-1", path="/api/route1", target="http://example.com/api1"
+        ),
+        PassThroughGenericEndpoint(
+            id="endpoint-2", path="/api/route2", target="http://example.com/api2"
+        ),
+        PassThroughGenericEndpoint(
+            id="endpoint-3", path="/api/route3", target="http://example.com/api3"
+        ),
+    ]
+
+    # Team has an access group, but the access group contains only model names
+    # (or other non-pass-through resources), so the resolved PT route list is empty.
+    mock_prisma_client = MagicMock()
+    mock_team = SimpleNamespace(
+        metadata=None,
+        access_group_ids=["ag-with-models-only"],
+    )
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team
+    )
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._get_pass_through_routes_from_access_groups",
+        new=AsyncMock(return_value=[]),
+    ):
+        result = await _filter_endpoints_by_team_allowed_routes(
+            team_id="team-b",
+            pass_through_endpoints=endpoints,
+            prisma_client=mock_prisma_client,
+        )
+
+    # Should return ALL endpoints because the access group does not constrain
+    # pass-through routes at all.
+    assert len(result) == 3
+    assert {ep.path for ep in result} == {"/api/route1", "/api/route2", "/api/route3"}
+
+
+@pytest.mark.asyncio
+async def test_filter_endpoints_by_team_allowed_routes_access_group_with_pt_routes():
+    """
+    Test that a team with an access group that DOES contain pass-through routes
+    is correctly filtered down to just those routes.
+    """
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _filter_endpoints_by_team_allowed_routes,
+    )
+
+    endpoints = [
+        PassThroughGenericEndpoint(
+            id="endpoint-1", path="/api/route1", target="http://example.com/api1"
+        ),
+        PassThroughGenericEndpoint(
+            id="endpoint-2", path="/api/route2", target="http://example.com/api2"
+        ),
+        PassThroughGenericEndpoint(
+            id="endpoint-3", path="/api/route3", target="http://example.com/api3"
+        ),
+    ]
+
+    mock_prisma_client = MagicMock()
+    mock_team = SimpleNamespace(
+        metadata=None,
+        access_group_ids=["ag-with-pt-routes"],
+    )
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team
+    )
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._get_pass_through_routes_from_access_groups",
+        new=AsyncMock(return_value=["/api/route1"]),
+    ):
+        result = await _filter_endpoints_by_team_allowed_routes(
+            team_id="team-a",
+            pass_through_endpoints=endpoints,
+            prisma_client=mock_prisma_client,
+        )
+
+    assert len(result) == 1
+    assert result[0].path == "/api/route1"
+
+
+@pytest.mark.asyncio
+async def test_filter_endpoints_by_team_allowed_routes_metadata_and_access_group_routes_union():
+    """
+    When both team metadata and access groups contribute pass-through routes,
+    the union of routes is allowed.
+    """
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _filter_endpoints_by_team_allowed_routes,
+    )
+
+    endpoints = [
+        PassThroughGenericEndpoint(
+            id="endpoint-1", path="/api/route1", target="http://example.com/api1"
+        ),
+        PassThroughGenericEndpoint(
+            id="endpoint-2", path="/api/route2", target="http://example.com/api2"
+        ),
+        PassThroughGenericEndpoint(
+            id="endpoint-3", path="/api/route3", target="http://example.com/api3"
+        ),
+    ]
+
+    mock_prisma_client = MagicMock()
+    mock_team = SimpleNamespace(
+        metadata={"allowed_passthrough_routes": ["/api/route1"]},
+        access_group_ids=["ag-with-route2"],
+    )
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team
+    )
+
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints._get_pass_through_routes_from_access_groups",
+        new=AsyncMock(return_value=["/api/route2"]),
+    ):
+        result = await _filter_endpoints_by_team_allowed_routes(
+            team_id="team-c",
+            pass_through_endpoints=endpoints,
+            prisma_client=mock_prisma_client,
+        )
+
+    # Union of metadata routes + access group routes
+    assert {ep.path for ep in result} == {"/api/route1", "/api/route2"}
+
+
+@pytest.mark.asyncio
 async def test_bedrock_router_passthrough_metadata_initialization():
     """
     Test that bedrock router passthrough properly initializes metadata for hooks.

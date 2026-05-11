@@ -2576,12 +2576,20 @@ async def _filter_endpoints_by_team_allowed_routes(
     if not isinstance(team_access_group_ids, list):
         team_access_group_ids = []
     if team_access_group_ids:
-        has_passthrough_route_constraints = True
-        allowed_passthrough_routes.extend(
+        access_group_passthrough_routes = (
             await _get_pass_through_routes_from_access_groups(
                 access_group_ids=team_access_group_ids,
             )
         )
+        # Only treat the access group as a pass-through constraint when
+        # it actually contributes pass-through routes. Access groups can
+        # be used to gate other resource types (models, MCP servers,
+        # vector stores) without saying anything about pass-through
+        # routes - in that case the team's pass-through visibility must
+        # not be affected.
+        if access_group_passthrough_routes:
+            has_passthrough_route_constraints = True
+            allowed_passthrough_routes.extend(access_group_passthrough_routes)
 
     if has_passthrough_route_constraints:
         ## FILTER pass_through_endpoints by allowed_passthrough_routes
