@@ -94,7 +94,12 @@ class OpenAICountTokensHandler(OpenAICountTokensConfig):
         except OpenAIError:
             raise
         except httpx.HTTPStatusError as e:
-            verbose_logger.error(f"HTTP error in CountTokens handler: {str(e)}")
+            if e.response.status_code in (404, 405):
+                verbose_logger.debug(
+                    "OpenAI CountTokens endpoint unavailable: %s", str(e)
+                )
+            else:
+                verbose_logger.error(f"HTTP error in CountTokens handler: {str(e)}")
             raise OpenAIError(
                 status_code=e.response.status_code,
                 message=e.response.text,

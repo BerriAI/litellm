@@ -53,6 +53,12 @@ class AnthropicTokenCounter(BaseTokenCounter):
 
         deployment = deployment or {}
         litellm_params = deployment.get("litellm_params", {})
+        api_base = litellm_params.get("api_base")
+        if api_base and "api.anthropic.com" not in str(api_base):
+            # Anthropic-compatible providers do not necessarily expose the
+            # official CountTokens endpoint. Use LiteLLM's local tokenizer
+            # instead of trying api.anthropic.com with a non-Anthropic key.
+            return None
 
         # Get Anthropic API key from deployment config or environment
         api_key = litellm_params.get("api_key")

@@ -23,6 +23,30 @@ from litellm.types.responses.main import DeleteResponseResult
 router = APIRouter()
 
 
+def _drop_unsupported_hosted_tools(data: Dict[str, Any]) -> None:
+    """Drop hosted tools that LiteLLM cannot route for this proxy path.
+
+    Codex plugins may send OpenAI hosted/plugin tools as part
+    of the Responses tool set. If the selected model/provider does not support
+    that hosted tool, forwarding it can make the primary request and fallback
+    chain fail before normal function tools are attempted.
+    """
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        return
+
+    unsupported_tool_types = {"image_generation", "namespace"}
+    filtered_tools = [
+        tool
+        for tool in tools
+        if not (
+            isinstance(tool, dict) and tool.get("type") in unsupported_tool_types
+        )
+    ]
+    if len(filtered_tools) != len(tools):
+        data["tools"] = filtered_tools
+
+
 @router.post(
     "/v1/responses",
     dependencies=[Depends(user_api_key_auth)],
@@ -91,6 +115,7 @@ async def responses_api(
     )
 
     data = await _read_request_body(request=request)
+    _drop_unsupported_hosted_tools(data)
 
     # Check if polling via cache should be used for this request
     from litellm.proxy.response_polling.polling_handler import (
@@ -337,6 +362,7 @@ async def cursor_chat_completions(
     from litellm.types.utils import ModelResponse
 
     data = await _read_request_body(request=request)
+    _drop_unsupported_hosted_tools(data)
 
     # Convert 'messages' to 'input' for Responses API compatibility
     # Cursor sends 'messages' but Responses API expects 'input'

@@ -91,6 +91,13 @@ class OpenAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except OpenAIError as e:
+            if e.status_code in (404, 405):
+                verbose_logger.debug(
+                    "OpenAI CountTokens API unavailable for this endpoint "
+                    "(status=%s); falling back to local tokenizer",
+                    e.status_code,
+                )
+                return None
             verbose_logger.warning(
                 f"OpenAI CountTokens API error: status={e.status_code}, message={e.message}"
             )
