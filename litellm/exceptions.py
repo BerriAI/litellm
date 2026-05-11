@@ -390,15 +390,25 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         self.category = (
             category.value if isinstance(category, RateLimitErrorCategory) else category
         )
-        # Headers carried with the error (e.g. retry-after, rate_limit_type,
-        # reset_at). Preserved across the proxy boundary so clients can react
-        # appropriately.
+        # Headers explicitly attached to the error (e.g. retry-after,
+        # rate_limit_type, reset_at). Preserved across the proxy boundary so
+        # clients can react appropriately.
+        #
+        # IMPORTANT: we deliberately do NOT auto-populate self.headers from
+        # response.headers when only `response` is provided. A vendor 429 can
+        # set arbitrary response headers (Set-Cookie, CORS overrides, …); if
+        # those leaked into e.headers and a downstream proxy serializer
+        # forwarded them to the client, a malicious upstream could inject
+        # browser-interpreted headers for the proxy origin. Vendor response
+        # headers stay reachable on `e.response.headers` for callers that
+        # explicitly want them; only the proxy-supplied `headers=` kwarg
+        # makes it onto `self.headers`.
         _response_headers = (
             getattr(response, "headers", None) if response is not None else None
         )
         self.headers: Optional[Dict[str, str]] = (
             {k: str(v) for k, v in headers.items()} if headers else None
-        ) or (dict(_response_headers) if _response_headers else None)
+        )
         # Mirrors FastAPI HTTPException.detail so the same instance can be
         # serialized through both the ProxyException and HTTPException paths.
         self.detail = detail if detail is not None else self.message
