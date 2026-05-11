@@ -9,12 +9,44 @@
 
 ## LiteLLM versions of the OpenAI Exception Types
 
-from typing import Any, Dict, Optional
+import enum
+from typing import Any, Dict, Optional, Union
 
 import httpx
 import openai
 
 from litellm.types.utils import LiteLLMCommonStrings
+
+
+class RateLimitErrorCategory(str, enum.Enum):
+    """
+    Category of a rate limit error, allowing callers to distinguish where the rate
+    limit originated. Exposed on every :class:`RateLimitError` instance via the
+    ``category`` attribute.
+
+    Use these values to switch on the rate limit source, e.g.::
+
+        try:
+            ...
+        except litellm.RateLimitError as e:
+            if e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT:
+                ...  # litellm's own limiter (key/team/user/model RPM/TPM/budget)
+            elif e.category == RateLimitErrorCategory.VENDOR_RATE_LIMIT:
+                ...  # the upstream LLM provider returned 429
+    """
+
+    VENDOR_RATE_LIMIT = "vendor_rate_limit"
+    """The upstream LLM provider returned a rate-limit response (e.g. OpenAI 429)."""
+
+    VENDOR_BATCH_RATE_LIMIT = "vendor_batch_rate_limit"
+    """The upstream LLM provider returned a rate-limit response on a batch endpoint."""
+
+    LITELLM_RATE_LIMIT = "litellm_rate_limit"
+    """LiteLLM's own rate limiter (key/team/user/model RPM/TPM, budget, parallel-requests, etc.) blocked the request."""
+
+    LITELLM_BATCH_RATE_LIMIT = "litellm_batch_rate_limit"
+    """LiteLLM's own batch rate limiter (token/request budget across a batch input file) blocked the request."""
+
 
 _MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
 
@@ -321,6 +353,18 @@ class PermissionDeniedError(openai.PermissionDeniedError):  # type: ignore
 
 
 class RateLimitError(openai.RateLimitError):  # type: ignore
+    """
+    Unified rate-limit error.
+
+    Every rate-limit condition surfaced by litellm — whether it originated from
+    an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+    proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+    max-iterations, etc.) — is raised as an instance of this class.
+
+    The :attr:`category` attribute lets callers distinguish the source. See
+    :class:`RateLimitErrorCategory` for the available values.
+    """
+
     def __init__(
         self,
         message,
@@ -330,6 +374,11 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
+        category: Union[str, RateLimitErrorCategory] = (
+            RateLimitErrorCategory.VENDOR_RATE_LIMIT
+        ),
+        headers: Optional[Dict[str, str]] = None,
+        detail: Any = None,
     ):
         self.status_code = 429
         self.message = "litellm.RateLimitError: {}".format(message)
@@ -338,9 +387,21 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        self.category = (
+            category.value if isinstance(category, RateLimitErrorCategory) else category
+        )
+        # Headers carried with the error (e.g. retry-after, rate_limit_type,
+        # reset_at). Preserved across the proxy boundary so clients can react
+        # appropriately.
         _response_headers = (
             getattr(response, "headers", None) if response is not None else None
         )
+        self.headers: Optional[Dict[str, str]] = (
+            {k: str(v) for k, v in headers.items()} if headers else None
+        ) or (dict(_response_headers) if _response_headers else None)
+        # Mirrors FastAPI HTTPException.detail so the same instance can be
+        # serialized through both the ProxyException and HTTPException paths.
+        self.detail = detail if detail is not None else self.message
         self.response = httpx.Response(
             status_code=429,
             headers=_response_headers,

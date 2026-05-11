@@ -1255,6 +1255,7 @@ from .exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    RateLimitErrorCategory,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
