@@ -758,9 +758,10 @@ class LiteLLMProxyRequestSetup:
                         user_api_key_dict.user_email = getattr(
                             user_obj, "user_email", None
                         )
-                        user_api_key_dict.user_role = getattr(
-                            user_obj, "user_role", None
-                        ) or LitellmUserRoles.INTERNAL_USER
+                        user_api_key_dict.user_role = (
+                            getattr(user_obj, "user_role", None)
+                            or LitellmUserRoles.INTERNAL_USER
+                        )
                         return user_api_key_dict
             except Exception:
                 # Fall back to using header value if DB unavailable
@@ -1375,8 +1376,10 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
 
-    user_api_key_dict = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
-        general_settings, user_api_key_dict, _headers
+    user_api_key_dict = (
+        await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+            general_settings, user_api_key_dict, _headers
+        )
     )
 
     # Parse user info from headers (fallback to general_settings.user_header_name)
