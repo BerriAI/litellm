@@ -33,16 +33,32 @@ async def aiter_mock(iterable):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "endpoint_type,url_route",
+    "endpoint_type,url_route,raw_chunks",
     [
         (
             EndpointType.VERTEX_AI,
             "v1/projects/pathrise-convert-1606954137718/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent",
+            [
+                b'{"id": "1", "content": "Hello"}',
+                b'{"id": "2", "content": "World"}',
+                b'\n\ndata: {"id": "3"}',
+            ],
         ),
-        (EndpointType.ANTHROPIC, "/v1/messages"),
+        # Anthropic pass-through enables an SSE noise filter that re-bundles
+        # bytes at event boundaries, so each input chunk must be a complete
+        # SSE event for the per-chunk identity assertion to hold.
+        (
+            EndpointType.ANTHROPIC,
+            "/v1/messages",
+            [
+                b'event: message_start\ndata: {"type":"message_start","message":{"id":"m_1"}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"text":"hi"}}\n\n',
+                b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+            ],
+        ),
     ],
 )
-async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
+async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route, raw_chunks):
     """
     Test that the chunk_processor yields raw bytes
 
@@ -50,11 +66,6 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
     """
     # Mock inputs
     response = AsyncMock(spec=httpx.Response)
-    raw_chunks = [
-        b'{"id": "1", "content": "Hello"}',
-        b'{"id": "2", "content": "World"}',
-        b'\n\ndata: {"id": "3"}',  # Testing different byte formats
-    ]
 
     # Mock aiter_bytes to return an async generator
     async def mock_aiter_bytes():

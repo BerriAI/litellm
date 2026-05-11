@@ -13,6 +13,7 @@ from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessin
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject
 
+from .anthropic_sse_filter import AnthropicSSENoiseFilter
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -38,6 +39,11 @@ class PassThroughStreamingHandler:
     ):
         raw_bytes: List[bytes] = []
         logging_scheduled = False
+        anthropic_filter = (
+            AnthropicSSENoiseFilter()
+            if endpoint_type == EndpointType.ANTHROPIC
+            else None
+        )
         model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
             request_body=request_body,
             url_route=url_route,
@@ -48,6 +54,10 @@ class PassThroughStreamingHandler:
         try:
             async for chunk in response.aiter_bytes():
                 raw_bytes.append(chunk)
+                if anthropic_filter is not None:
+                    chunk = anthropic_filter.feed(chunk)
+                    if not chunk:
+                        continue
                 if (
                     getattr(litellm, "include_cost_in_streaming_usage", False)
                     and model_name
@@ -67,6 +77,11 @@ class PassThroughStreamingHandler:
                             chunk = modified_chunk
 
                 yield chunk
+
+            if anthropic_filter is not None:
+                tail = anthropic_filter.flush()
+                if tail:
+                    yield tail
         except Exception as e:
             verbose_proxy_logger.error(f"Error in chunk_processor: {str(e)}")
             raise

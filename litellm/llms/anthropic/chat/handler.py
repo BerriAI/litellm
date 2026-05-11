@@ -1302,7 +1302,10 @@ class ModelResponseIterator:
             str_line = str_line[index:]
 
         if str_line.startswith("data:"):
-            data_json = json.loads(str_line[5:])
+            data_str = str_line[5:].strip()
+            if not data_str or data_str == "[DONE]" or data_str.startswith(":"):
+                return ModelResponseStream(id=self.response_id)
+            data_json = json.loads(data_str)
             return self.chunk_parser(chunk=data_json)
         else:
             return ModelResponseStream(id=self.response_id)

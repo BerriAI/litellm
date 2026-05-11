@@ -150,3 +150,42 @@ async def test_async_anthropic_sse_wrapper():
     chunk_str = first_chunk.decode("utf-8")
     assert "event: message_start" in chunk_str
     assert '"type": "message_start"' in chunk_str
+
+
+def test_managed_messages_streaming_logging_ignores_openrouter_control_events():
+    from unittest.mock import Mock
+
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+    from litellm.types.utils import ModelResponse
+
+    litellm_logging_obj = Mock()
+    openrouter_chunks = [
+        ": OPENROUTER PROCESSING",
+        "data: : OPENROUTER PROCESSING",
+        "event: message_start",
+        'data: {"type":"message_start","message":{"id":"gen-test","type":"message","role":"assistant","model":"anthropic/claude-4.5-haiku-20251001","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}',
+        "event: content_block_start",
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        "event: content_block_delta",
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
+        "event: content_block_stop",
+        'data: {"type":"content_block_stop","index":0}',
+        "event: message_delta",
+        'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":8,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cost":0.000001}}',
+        "event: message_stop",
+        'data: {"type":"message_stop"}',
+        "event: data",
+        "data: [DONE]",
+    ]
+
+    result = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+        all_chunks=openrouter_chunks,
+        model="claude-haiku-4-5-20251001-MODELFALLBACK",
+        litellm_logging_obj=litellm_logging_obj,
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.usage.prompt_tokens == 8
+    assert result.usage.completion_tokens == 1
