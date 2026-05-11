@@ -3380,6 +3380,50 @@ class TestApprovalStatusGate:
         )
         assert "evict-me" not in manager.registry
 
+    async def test_update_server_eviction_clears_openapi_routing_artifacts(
+        self, tmp_path
+    ):
+        """Rejecting a server must remove its OpenAPI tools and name mappings."""
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+        from litellm.proxy._experimental.mcp_server.utils import (
+            add_server_prefix_to_name,
+            get_server_prefix,
+        )
+
+        manager = MCPServerManager()
+        await manager.add_server(
+            self._make_server("evict-openapi", MCPApprovalStatus.active)
+        )
+        assert "evict-openapi" in manager.registry
+
+        server = manager.registry["evict-openapi"]
+        server.spec_path = str(tmp_path / "unused.yaml")
+        prefix = get_server_prefix(server)
+        prefixed = add_server_prefix_to_name("demo_tool", prefix)
+
+        async def _noop_handler(**kwargs):
+            return None
+
+        global_mcp_tool_registry.register_tool(
+            name=prefixed,
+            description="demo",
+            input_schema={"type": "object"},
+            handler=_noop_handler,
+        )
+        manager.tool_name_to_mcp_server_name_mapping["demo_tool"] = prefix
+        manager.tool_name_to_mcp_server_name_mapping[prefixed] = prefix
+
+        await manager.update_server(
+            self._make_server("evict-openapi", MCPApprovalStatus.rejected)
+        )
+
+        assert "evict-openapi" not in manager.registry
+        assert prefixed not in global_mcp_tool_registry.tools
+        assert "demo_tool" not in manager.tool_name_to_mcp_server_name_mapping
+        assert prefixed not in manager.tool_name_to_mcp_server_name_mapping
+
     async def test_update_server_noop_for_unregistered_pending(self):
         # update_server called with a pending row that was never registered
         # should silently return without adding it. Locks in the early-return
