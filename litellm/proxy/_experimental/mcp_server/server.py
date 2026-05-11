@@ -3399,8 +3399,12 @@ if MCP_AVAILABLE:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
                 for key, value in message.get("headers", []):
-                    if key.lower() == b"mcp-session-id":
-                        session_id = value.decode()
+                    header_name = key if isinstance(key, bytes) else str(key).encode()
+                    if header_name.lower() == b"mcp-session-id":
+                        session_id = (
+                            value.decode() if isinstance(value, bytes) else str(value)
+                        )
+                        auth_context_var.set(auth_user)
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = (
                             time.monotonic()
