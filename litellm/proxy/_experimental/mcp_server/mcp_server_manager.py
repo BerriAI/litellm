@@ -871,8 +871,10 @@ class MCPServerManager:
         # state, evict any stale registry entry so subsequent tool calls and
         # health probes can't reach it.
         if mcp_server.approval_status not in (None, "active", "approved"):
-            if mcp_server.server_id in self.registry:
-                evicted = self.registry.pop(mcp_server.server_id)
+            evicted = self.registry.pop(mcp_server.server_id, None)
+            if evicted is None and mcp_server.server_name:
+                evicted = self.registry.pop(mcp_server.server_name, None)
+            if evicted is not None:
                 self._cleanup_server_tool_routing_artifacts(evicted)
             return
         try:

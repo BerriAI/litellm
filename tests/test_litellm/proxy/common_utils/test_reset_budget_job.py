@@ -1530,7 +1530,18 @@ def test_reset_budget_for_tags_linked_to_budgets_invalidates_each_tag_management
 def test_reset_budget_for_keys_linked_to_budgets_invalidates_management_cache(
     monkeypatch,
 ):
-    """Budget-tier key resets must drop the cached key object (hashed token key)."""
+    """Budget-tier key resets must drop the cached key object (hashed token key).
+
+    Historically this test used ``assert_not_awaited()`` on
+    ``user_api_key_cache.async_delete_cache``, reflecting the assumption that
+    ``SpendCounterReseed.from_db`` alone kept spend consistent for keys and
+    that invalidating the management cache was unnecessary. That was flipped to
+    ``assert_any_await(...)`` because the old invariant fails across pods: a
+    budget reset on one instance can leave another pod's cached key object
+    (including embedded ``.spend``) stale until TTL expiry. Eviction now matches
+    tags/orgs/teams. Do not treat the ``cache_key_fn`` / invalidation wiring as
+    redundant without revisiting that cross-pod consistency story.
+    """
     counter_cache = _make_counter_invalidation_job(monkeypatch)
 
     expired_budget = type("B", (), {"budget_id": "budget-1"})
