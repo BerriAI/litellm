@@ -1,3 +1,5 @@
+"""Utility helpers for LiteLLM core request handling and provider support."""
+
 # from __future__ import annotations must be the first non-comment statement
 from __future__ import annotations
 

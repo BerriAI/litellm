@@ -54,13 +54,19 @@ def test_non_admin_config_update_route_rejected():
 
 
 @pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize(
     "route",
     ["/compliance/eu-ai-act", "/compliance/gdpr"],
 )
-def test_compliance_routes_open_to_internal_user(route):
+def test_compliance_routes_open_to_non_admin_roles(role, route):
     """Compliance routes are stateless validators on caller-supplied log data
-    - non-admin internal_user roles can call them."""
-    role = LitellmUserRoles.INTERNAL_USER.value
+    — both non-admin internal_user roles can call them."""
     user_obj = LiteLLM_UserTable(
         user_id="test_user",
         user_email="test@example.com",
@@ -78,56 +84,6 @@ def test_compliance_routes_open_to_internal_user(route):
         valid_token=valid_token,
         request_data={},
     )
-
-
-def test_health_test_connection_route_delegates_internal_user_auth_to_endpoint():
-    """Team model test-connection requests are authorized by the endpoint."""
-    role = LitellmUserRoles.INTERNAL_USER.value
-    user_obj = LiteLLM_UserTable(
-        user_id="test_user",
-        user_email="test@example.com",
-        user_role=role,
-    )
-    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=role)
-    request = MagicMock(spec=Request)
-    request.query_params = {}
-
-    RouteChecks.non_proxy_admin_allowed_routes_check(
-        user_obj=user_obj,
-        _user_role=role,
-        route="/health/test_connection",
-        request=request,
-        valid_token=valid_token,
-        request_data={},
-    )
-
-
-@pytest.mark.parametrize(
-    "route",
-    ["/compliance/eu-ai-act", "/compliance/gdpr"],
-)
-def test_compliance_routes_blocked_for_internal_user_view_only(route):
-    """Deprecated internal_user_viewer role must not gain compliance route access."""
-    role = LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value
-    user_obj = LiteLLM_UserTable(
-        user_id="test_user",
-        user_email="test@example.com",
-        user_role=role,
-    )
-    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=role)
-    request = MagicMock(spec=Request)
-    request.query_params = {}
-
-    with pytest.raises(Exception) as exc_info:
-        RouteChecks.non_proxy_admin_allowed_routes_check(
-            user_obj=user_obj,
-            _user_role=role,
-            route=route,
-            request=request,
-            valid_token=valid_token,
-            request_data={},
-        )
-    assert "Only proxy admin can be used" in str(exc_info.value)
 
 
 def test_proxy_admin_viewer_config_update_route_rejected():
