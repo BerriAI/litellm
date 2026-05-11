@@ -28,8 +28,6 @@ from litellm.proxy._types import (
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 from litellm.proxy.auth.auth_checks import get_user_object
-from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
-from litellm.proxy.auth.auth_checks import get_user_object
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
