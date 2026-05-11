@@ -1128,14 +1128,18 @@ class CustomStreamWrapper:
             completion_obj: Dict[str, Any] = {"content": ""}
             from litellm.types.utils import GenericStreamingChunk as GChunk
 
-            if isinstance(chunk, ModelResponseStream) and (
-                self.custom_llm_provider
+            if (
+                isinstance(chunk, ModelResponseStream)
+                and self.custom_llm_provider is not None
                 and self.custom_llm_provider in litellm._custom_providers
             ):
                 _has_content = bool(
                     chunk.choices
                     and chunk.choices[0].delta is not None
-                    and chunk.choices[0].delta.content
+                    and (
+                        chunk.choices[0].delta.content
+                        or chunk.choices[0].delta.tool_calls
+                    )
                 )
                 if self.received_finish_reason is not None:
                     if not _has_content:
@@ -1144,6 +1148,10 @@ class CustomStreamWrapper:
                     self.received_finish_reason = chunk.choices[0].finish_reason
                     if not _has_content:
                         return None
+                    # Strip finish_reason from the content chunk so it appears
+                    # only on the trailing empty-delta chunk (OpenAI spec).
+                    # finish_reason_handler() will emit the proper terminal chunk.
+                    chunk.choices[0].finish_reason = None
                 return chunk
 
             if (

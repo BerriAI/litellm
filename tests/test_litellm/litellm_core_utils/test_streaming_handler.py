@@ -2036,23 +2036,19 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
             chunks.append(chunk)
 
     # The prompt_filter chunk should be forwarded with choices=[]
-    assert len(chunks[0].choices) == 0, (
-        f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
-    )
+    assert (
+        len(chunks[0].choices) == 0
+    ), f"Expected prompt_filter chunk with choices=[], got {len(chunks[0].choices)} choices"
 
     # At least one chunk must have role='assistant' in its delta
     has_role = any(
-        len(c.choices) > 0
-        and getattr(c.choices[0].delta, "role", None) == "assistant"
+        len(c.choices) > 0 and getattr(c.choices[0].delta, "role", None) == "assistant"
         for c in chunks
     )
     assert has_role, (
         "No chunk contained role='assistant' in delta (issue #24221). "
         "Chunk deltas: "
-        + str([
-            c.choices[0].delta if c.choices else "no choices"
-            for c in chunks
-        ])
+        + str([c.choices[0].delta if c.choices else "no choices" for c in chunks])
     )
 
 
@@ -2216,3 +2212,80 @@ def test_chunk_creator_stops_iteration_on_trailing_chunk(
         initialized_custom_stream_wrapper.chunk_creator(chunk=trailing_chunk)
 
     litellm._custom_providers.remove("my-custom-provider")
+
+
+def test_chunk_creator_strips_finish_reason_from_content_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    When content and finish_reason arrive in the same chunk, finish_reason must be
+    stripped so finish_reason_handler() emits it on the synthetic terminal chunk —
+    preventing two terminal chunks (double finish_reason bug).
+    """
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="Hello"),
+                finish_reason="stop",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is not None
+    assert (
+        result.choices[0].finish_reason is None
+    ), "finish_reason must be stripped from content chunks to avoid double terminal chunks"
+    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
+
+
+def test_chunk_creator_tool_calls_not_dropped_on_finish(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """
+    A terminal chunk with finish_reason="tool_calls" and delta.tool_calls must NOT
+    be silently dropped — tool_calls counts as content so the chunk is passed through
+    (with finish_reason stripped) rather than returning None.
+    """
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+    initialized_custom_stream_wrapper.custom_llm_provider = "my-custom-provider"
+    litellm._custom_providers.append("my-custom-provider")
+
+    chunk = ModelResponseStream(
+        id="test-id",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_abc",
+                            function=Function(name="get_weather", arguments='{"city":"NYC"}'),
+                            type="function",
+                            index=0,
+                        )
+                    ],
+                ),
+                finish_reason="tool_calls",
+            )
+        ],
+    )
+
+    result = initialized_custom_stream_wrapper.chunk_creator(chunk=chunk)
+
+    litellm._custom_providers.remove("my-custom-provider")
+
+    assert result is not None, "tool_calls chunk must not be dropped"
+    assert result.choices[0].delta.tool_calls is not None
+    assert result.choices[0].finish_reason is None
+    assert initialized_custom_stream_wrapper.received_finish_reason == "tool_calls"
