@@ -50,11 +50,15 @@ def client_no_auth(fake_env_vars):
 
 
 @mock_patch_anthropic_messages()
-def test_anthropic_messages_runs_proxy_async_pre_call_hook(mock_anthropic_messages, client_no_auth):
+def test_anthropic_messages_runs_proxy_async_pre_call_hook(
+    mock_anthropic_messages, client_no_auth
+):
     hook_calls = []
 
     class AnthropicMessagesPreCallHook(CustomLogger):
-        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type, **kwargs):
+        async def async_pre_call_hook(
+            self, user_api_key_dict, cache, data, call_type, **kwargs
+        ):
             hook_calls.append(call_type)
             data["metadata"] = {**(data.get("metadata") or {}), "source": "unit-test"}
             return data
@@ -76,7 +80,10 @@ def test_anthropic_messages_runs_proxy_async_pre_call_hook(mock_anthropic_messag
         assert response.json()["content"][0]["text"] == "Hello from LiteLLM"
         assert hook_calls == ["anthropic_messages"]
         mock_anthropic_messages.assert_called_once()
-        assert mock_anthropic_messages.call_args.kwargs["metadata"]["source"] == "unit-test"
+        assert (
+            mock_anthropic_messages.call_args.kwargs["metadata"]["source"]
+            == "unit-test"
+        )
     finally:
         litellm.callbacks = original_callbacks
 
@@ -90,7 +97,9 @@ async def test_experimental_anthropic_messages_runs_proxy_async_pre_call_hook():
     hook_calls = []
 
     class AnthropicMessagesPreCallHook(CustomLogger):
-        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type, **kwargs):
+        async def async_pre_call_hook(
+            self, user_api_key_dict, cache, data, call_type, **kwargs
+        ):
             hook_calls.append((call_type, data["model"]))
             data["metadata"] = {
                 **(data.get("metadata") or {}),
