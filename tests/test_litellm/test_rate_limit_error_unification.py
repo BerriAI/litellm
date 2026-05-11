@@ -505,6 +505,197 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         assert isinstance(e.detail, dict)
         assert "TPM" in e.detail.get("error", "")
 
+    @pytest.mark.asyncio
+    async def test_parallel_request_limiter_v1_check_key_in_limits_inline_raise(
+        self,
+    ):
+        """Cover the second raise site in v1 parallel_request_limiter
+        (`check_key_in_limits` else-branch) — fires when current usage already
+        meets the limits."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.hooks.parallel_request_limiter import (
+            _PROXY_MaxParallelRequestsHandler,
+        )
+
+        cache = MagicMock()
+        cache.async_batch_set_cache = AsyncMock(return_value=None)
+        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=cache)
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await handler.check_key_in_limits(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-key"),
+                cache=DualCache(),
+                data={},
+                call_type="completion",
+                max_parallel_requests=1,
+                tpm_limit=10,
+                rpm_limit=10,
+                # current already at the limit on every dimension → forces
+                # the inline `raise ProxyRateLimitError(...)` else-branch.
+                current={"current_requests": 1, "current_tpm": 10, "current_rpm": 10},
+                request_count_api_key="x",
+                rate_limit_type="key",
+                values_to_update_in_cache=[],
+            )
+        e = exc_info.value
+        assert e.status_code == 429
+        assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_dynamic_rate_limiter_v1_rpm_branch_raises(self):
+        """Cover the RPM raise branch in v1 dynamic_rate_limiter (the TPM
+        branch is covered by the test above)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.hooks.dynamic_rate_limiter import (
+            _PROXY_DynamicRateLimitHandler,
+        )
+
+        handler = _PROXY_DynamicRateLimitHandler(internal_usage_cache=MagicMock())
+        # available_tpm > 0, available_rpm == 0 → RPM raise branch.
+        handler.check_available_usage = AsyncMock(  # type: ignore[method-assign]
+            return_value=(100, 0, 1000, 100, 1)
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-test-dyn-rpm",
+            metadata={"priority": "default"},
+        )
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={"model": "gpt-4"},
+                call_type="completion",
+            )
+        e = exc_info.value
+        assert e.status_code == 429
+        assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
+        assert isinstance(e.detail, dict)
+        assert "RPM" in e.detail.get("error", "")
+
+    @pytest.mark.parametrize(
+        "descriptor_key",
+        [
+            "model_saturation_check",
+            "priority_model",
+            "unknown_descriptor_for_fail_closed_fallback",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_dynamic_rate_limiter_v3_each_raise_branch(self, descriptor_key):
+        """
+        Drive each of the three raise branches in v3 dynamic_rate_limiter:
+        model_saturation_check, priority_model, and the fail-closed fallback
+        for an unrecognized descriptor_key. Mocks
+        ``atomic_check_and_increment_by_n`` so the v3 limiter's response
+        directly drives the raise-site selection.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
+            _PROXY_DynamicRateLimitHandlerV3,
+        )
+
+        # Bypass __init__ — we want to inject a stub v3_limiter without
+        # paying for the full handler setup.
+        handler = _PROXY_DynamicRateLimitHandlerV3.__new__(
+            _PROXY_DynamicRateLimitHandlerV3
+        )
+        v3_limiter = MagicMock()
+        v3_limiter.window_size = 60
+        v3_limiter.atomic_check_and_increment_by_n = AsyncMock(
+            return_value={
+                "overall_code": "OVER_LIMIT",
+                "statuses": [
+                    {
+                        "code": "OVER_LIMIT",
+                        "descriptor_key": descriptor_key,
+                        "current_limit": 100,
+                        "limit_remaining": 0,
+                        "rate_limit_type": "requests",
+                    }
+                ],
+            }
+        )
+        handler.v3_limiter = v3_limiter
+        # Stub the descriptor builders so we don't pull in real router state.
+        handler._create_model_tracking_descriptor = MagicMock(  # type: ignore[method-assign]
+            return_value={
+                "key": descriptor_key,
+                "value": "v",
+                "rate_limit": {
+                    "requests_per_unit": 100,
+                    "tokens_per_unit": None,
+                    "window_size": 60,
+                },
+            }
+        )
+        handler._create_priority_based_descriptors = MagicMock(  # type: ignore[method-assign]
+            return_value=[]
+        )
+        model_group_info = MagicMock()
+        model_group_info.tpm = 1000
+        model_group_info.rpm = 100
+
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            await handler._check_rate_limits(
+                model="gpt-4",
+                model_group_info=model_group_info,
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-v3"),
+                priority="default",
+                saturation=0.99,
+                data={},
+            )
+        e = exc_info.value
+        assert e.status_code == 429
+        assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
+
+    @pytest.mark.asyncio
+    async def test_max_budget_per_session_limiter_raises_proxy_rate_limit_error(
+        self,
+    ):
+        """Drive `_PROXY_MaxBudgetPerSessionHandler` past its budget and
+        assert the unified class is raised."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.caching.caching import DualCache
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.hooks.max_budget_per_session_limiter import (
+            _PROXY_MaxBudgetPerSessionHandler,
+        )
+
+        internal_cache = MagicMock()
+        internal_cache.async_get_cache = AsyncMock(return_value=10.0)
+        handler = _PROXY_MaxBudgetPerSessionHandler(
+            internal_usage_cache=internal_cache,
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-test-session",
+            agent_id="agent-session-1",
+        )
+        agent = MagicMock()
+        agent.litellm_params = {"max_budget_per_session": 1.0}
+        with patch(
+            "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+        ) as mock_registry:
+            mock_registry.get_agent_by_id.return_value = agent
+            with pytest.raises(ProxyRateLimitError) as exc_info:
+                await handler.async_pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    cache=DualCache(),
+                    data={"metadata": {"session_id": "session-over-budget"}},
+                    call_type="completion",
+                )
+        e = exc_info.value
+        assert e.status_code == 429
+        assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
+        assert "session" in str(e.detail).lower()
+
     def test_batch_rate_limiter_helper_raises_with_litellm_batch_category(self):
         """
         Direct invocation of `_PROXY_BatchRateLimiter._raise_rate_limit_error`
