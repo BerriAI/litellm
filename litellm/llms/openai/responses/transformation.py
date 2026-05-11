@@ -59,6 +59,22 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             key="supports_none_reasoning_effort",
         )
 
+    @staticmethod
+    def _normalize_tool_choice_for_responses_api(tool_choice: Any) -> Any:
+        """
+        Chat Completions format: {"type": "function", "function": {"name": "X"}}
+        Responses API format:    {"type": "function", "name": "X"}
+        Transform tool_choice before forwarding to Responses API.
+        """
+        if (
+            isinstance(tool_choice, dict)
+            and tool_choice.get("type") == "function"
+            and "function" in tool_choice
+            and isinstance(tool_choice["function"], dict)
+        ):
+            return {"type": "function", "name": tool_choice["function"]["name"]}
+        return tool_choice
+
     def get_supported_openai_params(self, model: str) -> list:
         """
         All OpenAI Responses API params are supported
@@ -129,6 +145,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         """No transform applied since inputs are in OpenAI spec already"""
 
         input = self._validate_input_param(input)
+
+        if "tool_choice" in response_api_optional_request_params:
+            response_api_optional_request_params = dict(response_api_optional_request_params)
+            response_api_optional_request_params["tool_choice"] = (
+                self._normalize_tool_choice_for_responses_api(
+                    response_api_optional_request_params["tool_choice"]
+                )
+            )
+
         final_request_params = dict(
             ResponsesAPIRequestParams(
                 model=model, input=input, **response_api_optional_request_params
