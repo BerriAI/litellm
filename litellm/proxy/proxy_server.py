@@ -1504,21 +1504,6 @@ try:
                         # Skip binary files or files we can't write to
                         continue
 
-    # # Mount the _next directory at the root level
-    app.mount(
-        "/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next")),
-        name="next_static",
-    )
-    app.mount(
-        f"{litellm_asset_prefix}/_next",
-        StaticFiles(directory=os.path.join(ui_path, "_next")),
-        name="next_static",
-    )
-    # print(f"mounted _next at {server_root_path}/ui/_next")
-
-    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
-
     def _restructure_ui_html_files(ui_root: str) -> None:
         """Ensure each exported HTML route is available as <route>/index.html."""
 
@@ -1544,6 +1529,21 @@ try:
                 except FileNotFoundError:
                     # Another process may have already moved this file.
                     continue
+
+    # # Mount the _next directory at the root level
+    app.mount(
+        "/_next",
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        name="next_static",
+    )
+    app.mount(
+        f"{litellm_asset_prefix}/_next",
+        StaticFiles(directory=os.path.join(ui_path, "_next")),
+        name="next_static",
+    )
+    # print(f"mounted _next at {server_root_path}/ui/_next")
+
+    app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
     # Handle HTML file restructuring
     # Only restructure if:
