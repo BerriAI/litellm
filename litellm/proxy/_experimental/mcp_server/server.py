@@ -2529,6 +2529,55 @@ if MCP_AVAILABLE:
             verbose_logger.exception(f"Error executing local tool {name}: {str(e)}")
             return [TextContent(text=f"Error: {str(e)}", type="text")]
 
+    def _maybe_raise_oauth_bootstrap_challenge(scope: Scope, path: str) -> None:
+        """
+        For an unauthenticated cold-start request to an OAuth2-configured MCP
+        server, raise 401 + WWW-Authenticate so the client can discover OAuth
+        metadata via /.well-known and start PKCE.
+
+        Skips when:
+        - The path doesn't resolve to a named MCP server.
+        - No resolved server has auth_type == oauth2.
+        - The request carries any Authorization header (let the existing auth
+          + 401 logic downstream handle those).
+
+        Without this pre-check, a request with no Authorization header reaches
+        strict API-key validation in extract_mcp_auth_context, which raises a
+        ProxyException that the catch-all coerces to 500 — so the client never
+        discovers the OAuth metadata and can't bootstrap PKCE.
+        """
+        for header_name, _ in scope.get("headers", []) or []:
+            if isinstance(header_name, bytes):
+                if header_name.lower() == b"authorization":
+                    return
+            elif (
+                isinstance(header_name, str) and header_name.lower() == "authorization"
+            ):
+                return
+
+        mcp_servers = _get_mcp_servers_in_path(path)
+        if not mcp_servers:
+            return
+
+        request = StarletteRequest(scope)
+        client_ip = IPAddressUtils.get_mcp_client_ip(request)
+
+        for server_name in mcp_servers:
+            server = global_mcp_server_manager.get_mcp_server_by_name(
+                server_name, client_ip=client_ip
+            )
+            if server and server.auth_type == MCPAuth.oauth2:
+                base_url = get_request_base_url(request)
+                authorization_uri = (
+                    f"Bearer authorization_uri="
+                    f"{base_url}/.well-known/oauth-authorization-server/{server_name}"
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail="Unauthorized",
+                    headers={"www-authenticate": authorization_uri},
+                )
+
     def _get_mcp_servers_in_path(path: str) -> Optional[List[str]]:
         """
         Get the MCP servers from the path
@@ -2760,6 +2809,15 @@ if MCP_AVAILABLE:
         """Handle MCP requests through StreamableHTTP."""
         try:
             path = scope.get("path", "")
+
+            # Pre-emptive OAuth challenge for the cold-start bootstrap case.
+            # If the path resolves to an OAuth2-configured server AND the
+            # request carries no Authorization header, fire 401 +
+            # WWW-Authenticate immediately. Otherwise the empty key would
+            # raise ProxyException downstream and the catch-all would coerce
+            # that to 500, so the client never discovers OAuth metadata.
+            _maybe_raise_oauth_bootstrap_challenge(scope, path)
+
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -2898,6 +2956,7 @@ if MCP_AVAILABLE:
         """Handle MCP requests through SSE."""
         try:
             path = scope.get("path", "")
+            _maybe_raise_oauth_bootstrap_challenge(scope, path)
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -2936,6 +2995,11 @@ if MCP_AVAILABLE:
                 _sse_client_ip,
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
+        except HTTPException:
+            # Re-raise HTTP exceptions to preserve status codes and details
+            # (e.g. the 401 + WWW-Authenticate challenge raised by
+            # _maybe_raise_oauth_bootstrap_challenge for OAuth cold-starts).
+            raise
         except Exception as e:
             verbose_logger.exception(f"Error handling MCP request: {e}")
             # Instead of re-raising, try to send a graceful error response

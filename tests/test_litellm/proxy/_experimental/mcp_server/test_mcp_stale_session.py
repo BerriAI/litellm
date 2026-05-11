@@ -591,3 +591,293 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
 
     assert mock_get_stored_token.await_count == 1
     assert mock_handle_request.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_oauth_bootstrap_returns_401_without_mocking_extract_mcp_auth_context():
+    """
+    Regression: an unauthenticated POST to /mcp/{server} where the server is
+    OAuth2-configured must return 401 + WWW-Authenticate, not 500.
+
+    This test deliberately does NOT mock extract_mcp_auth_context. It registers
+    a real OAuth2 server in the manager and lets the request flow through the
+    pre-check helper. Without the pre-check, the empty Authorization header
+    would reach strict API-key validation and raise a ProxyException that the
+    catch-all coerces to 500.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    global_mcp_server_manager.registry.clear()
+    public_server = MCPServer(
+        server_id="bootstrap_test_server",
+        name="bootstrap_test_server",
+        server_name="bootstrap_test_server",
+        alias="bootstrap_test_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-client-id",
+        client_secret=None,
+        authorization_url="https://idp.example/authorize",
+        token_url="https://idp.example/token",
+    )
+    global_mcp_server_manager.registry[public_server.server_id] = public_server
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/bootstrap_test_server",
+        "headers": [
+            (b"content-type", b"application/json"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.IPAddressUtils.get_mcp_client_ip",
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await handle_streamable_http_mcp(scope, receive, send)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert "www-authenticate" in exc.headers
+    assert (
+        "/.well-known/oauth-authorization-server/bootstrap_test_server"
+        in exc.headers["www-authenticate"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_oauth_bootstrap_skips_when_authorization_header_present():
+    """
+    Pre-check must NOT fire when the client sends any Authorization header —
+    let the existing auth flow + 401 logic decide.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    global_mcp_server_manager.registry.clear()
+    public_server = MCPServer(
+        server_id="bootstrap_test_server",
+        name="bootstrap_test_server",
+        server_name="bootstrap_test_server",
+        alias="bootstrap_test_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-client-id",
+        client_secret=None,
+        authorization_url="https://idp.example/authorize",
+        token_url="https://idp.example/token",
+    )
+    global_mcp_server_manager.registry[public_server.server_id] = public_server
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/bootstrap_test_server",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer sk-some-litellm-key"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+
+    sentinel_extract = AsyncMock(
+        side_effect=RuntimeError("downstream_reached_as_expected")
+    )
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            sentinel_extract,
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.server.IPAddressUtils.get_mcp_client_ip",
+            return_value=None,
+        ):
+            await handle_streamable_http_mcp(scope, receive, send)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert sentinel_extract.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_oauth_bootstrap_skips_when_path_does_not_resolve_to_named_server():
+    """
+    Pre-check no-op when path is /mcp (root) without a server name — flows
+    into the existing extract_mcp_auth_context path.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+
+    sentinel_extract = AsyncMock(
+        side_effect=RuntimeError("downstream_reached_as_expected")
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+        sentinel_extract,
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert sentinel_extract.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_oauth_bootstrap_skips_for_non_oauth_server():
+    """
+    Pre-check no-op for path-resolved server whose auth_type != oauth2.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    global_mcp_server_manager.registry.clear()
+    api_key_server = MCPServer(
+        server_id="api_key_server",
+        name="api_key_server",
+        server_name="api_key_server",
+        alias="api_key_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+    )
+    global_mcp_server_manager.registry[api_key_server.server_id] = api_key_server
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/api_key_server",
+        "headers": [
+            (b"content-type", b"application/json"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+
+    sentinel_extract = AsyncMock(
+        side_effect=RuntimeError("downstream_reached_as_expected")
+    )
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            sentinel_extract,
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.server.IPAddressUtils.get_mcp_client_ip",
+            return_value=None,
+        ):
+            await handle_streamable_http_mcp(scope, receive, send)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert sentinel_extract.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_oauth_bootstrap_returns_401_via_sse_handler():
+    """
+    Regression: the SSE handler must propagate the 401 raised by the pre-check
+    helper instead of swallowing it via its bare `except Exception`. Mirror
+    of the StreamableHTTP test against handle_sse_mcp.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import handle_sse_mcp
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    global_mcp_server_manager.registry.clear()
+    public_server = MCPServer(
+        server_id="bootstrap_sse_server",
+        name="bootstrap_sse_server",
+        server_name="bootstrap_sse_server",
+        alias="bootstrap_sse_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-client-id",
+        client_secret=None,
+        authorization_url="https://idp.example/authorize",
+        token_url="https://idp.example/token",
+    )
+    global_mcp_server_manager.registry[public_server.server_id] = public_server
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp/bootstrap_sse_server",
+        "headers": [
+            (b"content-type", b"application/json"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server.IPAddressUtils.get_mcp_client_ip",
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await handle_sse_mcp(scope, receive, send)
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    exc = exc_info.value
+    assert exc.status_code == 401
+    assert "www-authenticate" in exc.headers
+    assert (
+        "/.well-known/oauth-authorization-server/bootstrap_sse_server"
+        in exc.headers["www-authenticate"]
+    )
