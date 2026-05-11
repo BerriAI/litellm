@@ -11,6 +11,7 @@ mapping in Redis. All Router instances with the same config and deployment IDs
 will make the same routing decision.
 """
 
+import asyncio
 import hashlib
 import json
 from typing import Any, Dict, List, Optional, Tuple, cast
@@ -28,9 +29,16 @@ class PromptPrefixAffinityCheck(CustomLogger):
 
     This is intended to improve prompt-cache hit rate for providers where prompt
     caching is scoped to the account/key behind a deployment.
+
+    Note: `prefix_tokens` / `min_tokens` are measured against the tokenization of
+    the canonical JSON representation produced by `_build_canonical_prompt()`
+    (e.g. includes field names, separators, quotes), not the provider-specific
+    "raw prompt token count" after rendering the final prompt.
     """
 
     CACHE_KEY_EXCLUDED_FIELDS = frozenset({"encrypted_content"})
+    _CANONICAL_PROMPT_CHARS_PER_TOKEN_ESTIMATE = 32
+    _CANONICAL_PROMPT_ABSOLUTE_MAX_CHARS = 1_000_000
 
     def __init__(
         self,
@@ -94,6 +102,26 @@ class PromptPrefixAffinityCheck(CustomLogger):
             separators=(",", ":"),
             ensure_ascii=False,
         )
+
+    def _truncate_canonical_prompt_for_tokenization(self, canonical_prompt: str) -> str:
+        """
+        Bound tokenization work for very large prompts.
+
+        We only use the first `prefix_tokens` token IDs (and gate on `min_tokens`),
+        so we can safely cap the number of characters we feed into tokenization to
+        avoid worst-case CPU time on extremely large canonical prompts.
+        """
+
+        token_target = max(self.prefix_tokens, self.min_tokens)
+        if token_target <= 0:
+            return canonical_prompt
+
+        soft_limit = token_target * self._CANONICAL_PROMPT_CHARS_PER_TOKEN_ESTIMATE
+        max_chars = min(soft_limit, self._CANONICAL_PROMPT_ABSOLUTE_MAX_CHARS)
+        if len(canonical_prompt) <= max_chars:
+            return canonical_prompt
+
+        return canonical_prompt[:max_chars]
 
     def _get_prefix_hash(
         self,
@@ -182,9 +210,13 @@ class PromptPrefixAffinityCheck(CustomLogger):
         if canonical_prompt is None:
             return typed_healthy_deployments
 
-        prefix_hash = self._get_prefix_hash(
+        canonical_prompt_for_tokenization = self._truncate_canonical_prompt_for_tokenization(
+            canonical_prompt
+        )
+        prefix_hash = await asyncio.to_thread(
+            self._get_prefix_hash,
             model=model,
-            canonical_prompt=canonical_prompt,
+            canonical_prompt=canonical_prompt_for_tokenization,
         )
         if prefix_hash is None:
             return typed_healthy_deployments
