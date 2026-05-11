@@ -4,7 +4,11 @@ import litellm
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.openai import OpenAIConfig
-from litellm.utils import _is_explicitly_disabled_factory
+from litellm.utils import (
+    _is_explicitly_disabled_factory,
+    peek_reasoning_summary_aliases,
+    strip_reasoning_summary_aliases_from_optional_params,
+)
 
 
 @pytest.fixture()
@@ -1005,6 +1009,74 @@ def test_gpt5_search_drops_unsupported_params(config: OpenAIConfig):
     assert "n" not in params
     assert "temperature" not in params
     assert "tools" not in params
+
+
+def test_gpt5_search_strips_reasoning_summary_aliases(gpt5_config: OpenAIGPT5Config):
+    """Search models still strip Responses-only reasoning summary aliases."""
+    non_default_params = {
+        "reasoningSummary": "auto",
+        "reasoning_summary": "ignored",
+    }
+    optional_params = {
+        "extra_body": {
+            "reasoningSummary": "auto",
+            "reasoning_summary": "ignored",
+            "metadata": "ok",
+        }
+    }
+
+    params = gpt5_config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gpt-5-search-api",
+        drop_params=False,
+    )
+
+    assert "reasoningSummary" not in non_default_params
+    assert "reasoning_summary" not in non_default_params
+    assert "reasoningSummary" not in params
+    assert "reasoning_summary" not in params
+    assert params["extra_body"] == {"metadata": "ok"}
+
+
+def test_reasoning_summary_alias_helpers_preserve_falsy_and_strip_all_aliases():
+    optional_params = {"reasoningSummary": False, "reasoning_summary": "ignored"}
+
+    assert peek_reasoning_summary_aliases(optional_params) is False
+    stripped, rs_val = strip_reasoning_summary_aliases_from_optional_params(
+        optional_params
+    )
+
+    assert rs_val is False
+    assert stripped == {}
+
+    optional_params = {
+        "extra_body": {"reasoningSummary": False, "reasoning_summary": "ignored"}
+    }
+
+    assert peek_reasoning_summary_aliases(optional_params) is False
+    stripped, rs_val = strip_reasoning_summary_aliases_from_optional_params(
+        optional_params
+    )
+
+    assert rs_val is False
+    assert stripped == {}
+
+    optional_params = {
+        "extra_body": {
+            "reasoningSummary": "auto",
+            "reasoning_summary": "ignored",
+            "metadata": "ok",
+        }
+    }
+
+    assert peek_reasoning_summary_aliases(optional_params) == "auto"
+    stripped, rs_val = strip_reasoning_summary_aliases_from_optional_params(
+        optional_params
+    )
+
+    assert rs_val == "auto"
+    assert stripped == {"extra_body": {"metadata": "ok"}}
 
 
 # GPT-5 unsupported params audit (validated via direct API calls)

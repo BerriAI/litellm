@@ -212,6 +212,12 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        # AI SDK / Responses-style aliases; never valid on Chat Completions when not
+        # bridged to Responses API (see main.responses_api_bridge_check).
+        self._strip_reasoning_summary_aliases_for_chat_completions(
+            non_default_params, optional_params
+        )
+
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
                 optional_params["max_completion_tokens"] = non_default_params.pop(
@@ -223,12 +229,6 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
                 model=model,
                 drop_params=drop_params,
             )
-
-        # AI SDK / Responses-style aliases; never valid on Chat Completions when not
-        # bridged to Responses API (see main.responses_api_bridge_check).
-        self._strip_reasoning_summary_aliases_for_chat_completions(
-            non_default_params, optional_params
-        )
 
         # Get raw reasoning_effort and effective effort level for all guards.
         # Use effective_effort (extracted string) for xhigh validation, "none" checks, and

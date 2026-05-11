@@ -9494,14 +9494,17 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
 
 def peek_reasoning_summary_aliases(optional_params: dict) -> Optional[Any]:
     """Read AI-SDK-style reasoning summary from optional_params or nested extra_body."""
-    rs = optional_params.get("reasoningSummary") or optional_params.get(
-        "reasoning_summary"
-    )
+    rs = optional_params.get("reasoningSummary")
+    if rs is None:
+        rs = optional_params.get("reasoning_summary")
     if rs is not None:
         return rs
     extra_body = optional_params.get("extra_body")
     if isinstance(extra_body, dict):
-        return extra_body.get("reasoningSummary") or extra_body.get("reasoning_summary")
+        rs = extra_body.get("reasoningSummary")
+        if rs is None:
+            rs = extra_body.get("reasoning_summary")
+        return rs
     return None
 
 
@@ -9511,18 +9514,18 @@ def strip_reasoning_summary_aliases_from_optional_params(
     """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
     op = dict(optional_params)
     rs_val = op.pop("reasoningSummary", None)
+    snake_rs_val = op.pop("reasoning_summary", None)
     if rs_val is None:
-        rs_val = op.pop("reasoning_summary", None)
+        rs_val = snake_rs_val
     eb = op.get("extra_body")
     if isinstance(eb, dict):
         eb = dict(eb)
+        eb_rs_val = eb.pop("reasoningSummary", None)
+        eb_snake_rs_val = eb.pop("reasoning_summary", None)
         if rs_val is None:
-            rs_val = eb.pop("reasoningSummary", None) or eb.pop(
-                "reasoning_summary", None
-            )
-        else:
-            eb.pop("reasoningSummary", None)
-            eb.pop("reasoning_summary", None)
+            rs_val = eb_rs_val
+            if rs_val is None:
+                rs_val = eb_snake_rs_val
         if eb:
             op["extra_body"] = eb
         else:
