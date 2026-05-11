@@ -1389,9 +1389,14 @@ def test_get_gcs_object_content_type_uses_shared_vertex_base_instance():
     mock_http_response.json.return_value = {"contentType": "image/png"}
     mock_http_response.raise_for_status.return_value = None
 
-    with patch.object(
-        gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
-    ), patch("litellm.llms.vertex_ai.gemini.transformation.httpx.get") as mock_http_get:
+    with (
+        patch.object(
+            gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+        ),
+        patch(
+            "litellm.llms.vertex_ai.gemini.transformation.httpx.get"
+        ) as mock_http_get,
+    ):
         mock_http_get.return_value = mock_http_response
         content_type = gemini_transformation._get_gcs_object_content_type(
             image_url="gs://my-bucket/path/to/image-without-extension",
@@ -1428,7 +1433,9 @@ def test_process_gemini_media_rejects_unsupported_metadata_mime_type():
         "litellm.llms.vertex_ai.gemini.transformation._get_gcs_object_content_type",
         return_value="application/octet-stream",
     ):
-        with pytest.raises(litellm.BadRequestError, match="File type not supported by gemini"):
+        with pytest.raises(
+            litellm.BadRequestError, match="File type not supported by gemini"
+        ):
             _process_gemini_media("gs://bucket/image-without-extension")
 
 
@@ -1437,7 +1444,9 @@ def test_get_gcs_object_content_type_fails_fast_with_explicit_credentials():
 
     mock_vertex_base = MagicMock()
     mock_vertex_base.get_access_token.side_effect = Exception("token failure")
-    with patch.object(gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base):
+    with patch.object(
+        gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+    ):
         with pytest.raises(
             litellm.BadRequestError,
             match="Unable to fetch GCS metadata with provided Vertex credentials/project",
@@ -1447,6 +1456,41 @@ def test_get_gcs_object_content_type_fails_fast_with_explicit_credentials():
                 vertex_project="project-123",
                 vertex_credentials="credential-json",
             )
+
+
+def test_get_gcs_object_content_type_without_credentials_skips_auth():
+    """未显式提供 Vertex 凭据时，不应使用服务端默认凭据去访问 GCS。
+
+    这是为了避免 Gemini API key（Google AI Studio）路径被用作探测私有
+    GCS 对象的 oracle（veria-ai 审阅反馈）。
+    """
+    from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
+
+    mock_vertex_base = MagicMock()
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = {"contentType": "image/jpeg"}
+    mock_http_response.raise_for_status.return_value = None
+
+    with (
+        patch.object(
+            gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+        ),
+        patch(
+            "litellm.llms.vertex_ai.gemini.transformation.httpx.get"
+        ) as mock_http_get,
+    ):
+        mock_http_get.return_value = mock_http_response
+        content_type = gemini_transformation._get_gcs_object_content_type(
+            image_url="gs://public-bucket/public-object"
+        )
+
+    # 不应触发 get_access_token（避免使用服务端默认凭据）
+    mock_vertex_base.get_access_token.assert_not_called()
+    # 匿名请求仍会发出，用于公开可读对象
+    mock_http_get.assert_called_once()
+    call_kwargs = mock_http_get.call_args.kwargs
+    assert "Authorization" not in call_kwargs.get("headers", {})
+    assert content_type == "image/jpeg"
 
 
 def test_async_transform_request_body_does_not_block_event_loop():
@@ -1513,14 +1557,16 @@ def test_async_transform_request_body_does_not_block_event_loop():
         await transform_task
         return sleep_elapsed
 
-    with patch.object(
-        gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
-    ), patch.object(
-        gemini_transformation.httpx, "get", side_effect=slow_http_get
-    ), patch(
-        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching."
-        "ContextCachingEndpoints.async_check_and_create_cache",
-        new=fake_check_and_create_cache,
+    with (
+        patch.object(
+            gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+        ),
+        patch.object(gemini_transformation.httpx, "get", side_effect=slow_http_get),
+        patch(
+            "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching."
+            "ContextCachingEndpoints.async_check_and_create_cache",
+            new=fake_check_and_create_cache,
+        ),
     ):
         sleep_elapsed = asyncio.run(run_scenario())
 
