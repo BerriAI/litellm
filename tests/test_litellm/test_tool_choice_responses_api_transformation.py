@@ -46,4 +46,5 @@ def test_transform_responses_api_request_normalizes_tool_choice():
     )
     assert result["tool_choice"] == {"type": "function", "name": "Echo"}
 
+
     
