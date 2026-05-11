@@ -3484,13 +3484,19 @@ class ProxyConfig:
             credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
         return credential_list
 
-    def parse_search_tools(self, config: dict) -> Optional[List[SearchToolTypedDict]]:
+    def parse_search_tools(
+        self, config: dict, log: bool = True
+    ) -> Optional[List[SearchToolTypedDict]]:
         """
         Parse and validate search tools from config.
         Loads environment variables and casts to SearchToolTypedDict.
 
         Args:
             config: Config dictionary containing search_tools
+            log: If True, print the loaded tools to stdout (intended for
+                startup / config-reload paths). Per-request callers (e.g.
+                ``GET /search/tools``) should pass ``log=False`` to avoid
+                spamming the proxy logs on every request — see #27645.
 
         Returns:
             List of validated SearchToolTypedDict or None if not configured
@@ -3507,9 +3513,10 @@ class ProxyConfig:
 
         search_tools_parsed: List[SearchToolTypedDict] = []
 
-        print(  # noqa
-            "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
-        )  # noqa
+        if log:
+            print(  # noqa
+                "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
+            )  # noqa
 
         for search_tool in search_tools_raw:
             # Display loaded search tool
@@ -3517,7 +3524,10 @@ class ProxyConfig:
             search_provider = search_tool.get("litellm_params", {}).get(
                 "search_provider", ""
             )
-            print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
+            if log:
+                print(  # noqa
+                    f"\033[32m    {search_tool_name} ({search_provider})\033[0m"
+                )  # noqa
 
             # Handle os.environ/ variables in litellm_params
             litellm_params = search_tool.get("litellm_params", {})
