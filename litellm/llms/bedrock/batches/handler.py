@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from typing import Any, Optional, cast
 
@@ -76,16 +77,14 @@ def _to_epoch(value: Any) -> Optional[int]:
 
 
 def _sanitize_response_for_logging(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if isinstance(value, dict):
-        return {
-            key: _sanitize_response_for_logging(response_value)
-            for key, response_value in value.items()
-        }
-    if isinstance(value, (list, tuple)):
-        return [_sanitize_response_for_logging(item) for item in value]
-    return value
+    def _default(obj: Any) -> Any:
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError(
+            f"Object of type {obj.__class__.__name__} is not JSON serializable"
+        )
+
+    return json.loads(json.dumps(value, default=_default))
 
 
 class BedrockBatchesHandler:
