@@ -689,7 +689,7 @@ class LiteLLMRoutes(enum.Enum):
         + compliance_check_routes
     )
 
-    internal_user_view_only_routes = spend_tracking_routes
+    internal_user_view_only_routes = spend_tracking_routes + compliance_check_routes
 
     self_managed_routes = [
         "/team/member_add",
