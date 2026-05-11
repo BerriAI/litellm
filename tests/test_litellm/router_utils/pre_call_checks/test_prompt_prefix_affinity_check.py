@@ -1,13 +1,42 @@
 import os
 import sys
 
+import hashlib
+import re
+
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import litellm.router_utils.pre_call_checks.prompt_prefix_affinity_check as affinity_module
+
 from litellm.router_utils.pre_call_checks.prompt_prefix_affinity_check import (
     PromptPrefixAffinityCheck,
 )
+
+
+def _fake_encode(*, model: str, text: str):
+    """
+    Deterministic, offline tokenizer stub.
+
+    Tests in `tests/test_litellm/` must not make network calls. The real
+    `litellm.utils.encode()` can trigger a tiktoken download on fresh CI runners.
+    We stub it with a pure function that produces stable token IDs derived from
+    token content, so prefix routing behavior remains meaningful.
+    """
+
+    _ = model  # model selection is irrelevant for this stub
+    tokens = re.findall(r"\w+|[^\w\s]", text, flags=re.UNICODE)
+    token_ids = []
+    for token in tokens:
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        token_ids.append(int.from_bytes(digest[:4], "big"))
+    return token_ids
+
+
+@pytest.fixture(autouse=True)
+def _stub_encode(monkeypatch):
+    monkeypatch.setattr(affinity_module, "encode", _fake_encode)
 
 
 def _deployments():
