@@ -1684,6 +1684,8 @@ def completion(  # type: ignore # noqa: PLR0915
                         "effort": eff,
                         "summary": rs_val,
                     }
+                else:
+                    optional_params["reasoning_effort"] = {"summary": rs_val}
 
             return responses_api_bridge.completion(
                 model=model,

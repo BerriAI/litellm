@@ -876,6 +876,30 @@ def test_gpt_5_4_responses_bridge_merges_reasoning_summary_kwarg_without_tools(
 
 
 @patch("litellm.completion_extras.responses_api_bridge.completion")
+def test_responses_bridge_preserves_reasoning_summary_without_effort(
+    mock_responses_completion,
+):
+    """Reasoning summary should survive responses routing even without effort."""
+    mock_responses_completion.return_value = MagicMock()
+
+    import litellm
+
+    with patch.object(litellm, "route_all_chat_openai_to_responses", True):
+        litellm.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "ok"}],
+            reasoningSummary="auto",
+            api_key="fake-key",
+        )
+
+    assert mock_responses_completion.called is True
+    optional_params = mock_responses_completion.call_args.kwargs["optional_params"]
+    assert optional_params["reasoning_effort"] == {"summary": "auto"}
+    assert "reasoningSummary" not in optional_params
+    assert "reasoning_summary" not in optional_params
+
+
+@patch("litellm.completion_extras.responses_api_bridge.completion")
 def test_gpt_5_responses_bridge_tools_and_reasoning_summary(
     mock_responses_completion,
 ):
