@@ -2390,8 +2390,40 @@ def jsonify_object(data: dict) -> dict:
             except Exception:
                 # This avoids Prisma retrying this 5 times, and making 5 clients
                 db_data[k] = "failed-to-serialize-json"
+        elif isinstance(v, list) and k in _PRISMA_JSON_LIST_FIELDS:
+            # Only serialize lists that map to Prisma Json? columns.
+            # String[] columns (models, allowed_routes, etc.) must remain
+            # as Python lists for Prisma to accept them.
+            try:
+                db_data[k] = json.dumps(v)
+            except Exception:
+                db_data[k] = "failed-to-serialize-json"
     return db_data
 
+
+# Prisma Json? columns whose Pydantic type is a list (not a dict).  These must
+# be JSON-serialized before writes.  String[] columns (models, allowed_routes,
+# etc.) must NOT be serialized — Prisma expects native Python lists for those.
+_PRISMA_JSON_LIST_FIELDS: frozenset = frozenset(
+    {
+        "budget_limits",
+    }
+)
+
+# Prisma does not allow relation scalars (FK fields backing a @relation) or
+# relation objects in a direct update() call.  These must be stripped from the
+# payload to avoid "Field does not exist in enclosing type" errors when batch-
+# updating LiteLLM_VerificationToken rows.
+_VERIFICATION_TOKEN_RELATION_FIELDS: frozenset = frozenset(
+    {
+        "object_permission_id",
+        "object_permission",
+        "litellm_budget_table",
+        "litellm_organization_table",
+        "litellm_project_table",
+        "jwt_key_mappings",
+    }
+)
 
 # In-memory cache for deprecated key lookups: maps old_token_hash -> (active_token_id, expires_at_ts)
 # Avoids a DB query on every auth request for non-deprecated keys.
@@ -2665,6 +2697,14 @@ class PrismaClient:
                     db_data[k] = json.dumps(v)
                 except Exception:
                     # This avoids Prisma retrying this 5 times, and making 5 clients
+                    db_data[k] = "failed-to-serialize-json"
+            elif isinstance(v, list) and k in _PRISMA_JSON_LIST_FIELDS:
+                # Only serialize lists that map to Prisma Json? columns.
+                # String[] columns (models, allowed_routes, etc.) must remain
+                # as Python lists for Prisma to accept them.
+                try:
+                    db_data[k] = json.dumps(v)
+                except Exception:
                     db_data[k] = "failed-to-serialize-json"
         return db_data
 
@@ -3604,6 +3644,9 @@ class PrismaClient:
                         )
                     except Exception:
                         data_json = self.jsonify_object(data=t.dict(exclude_none=True))
+                    # Remove relation fields that Prisma rejects in update()
+                    for field in _VERIFICATION_TOKEN_RELATION_FIELDS:
+                        data_json.pop(field, None)
                     batcher.litellm_verificationtoken.update(
                         where={"token": t.token},  # type: ignore
                         data={**data_json},  # type: ignore
