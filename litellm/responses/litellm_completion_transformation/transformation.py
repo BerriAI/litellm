@@ -201,11 +201,16 @@ class LiteLLMCompletionResponsesConfig:
         Transform a Responses API request into a Chat Completion request
         """
         # 获取 model 和 api_base 用于判断是否是国内模型
-        model_name: Optional[str] = responses_api_request.get("model") or kwargs.get(
-            "model"
+        # MyPy fix: cast to Optional[str] since .get() returns object | Any
+        from typing import cast
+
+        model_name = cast(
+            Optional[str],
+            responses_api_request.get("model") or kwargs.get("model"),
         )
-        api_base: Optional[str] = kwargs.get("api_base") or responses_api_request.get(
-            "api_base"
+        api_base = cast(
+            Optional[str],
+            kwargs.get("api_base") or responses_api_request.get("api_base"),
         )
 
         (
@@ -1475,12 +1480,13 @@ class LiteLLMCompletionResponsesConfig:
 
                 # 只对国内模型 endpoint 清理 schema 中不支持的字段
                 # 国内模型不支持 strict 和 additionalProperties，OpenAI structured outputs 需要这些字段
+                chat_completion_tool: Dict[str, Any]
                 if is_domestic_model:
                     parameters = LiteLLMCompletionResponsesConfig._clean_schema(
                         parameters
                     )
                     # 国内模型不支持 strict 和额外字段，只传递基础信息
-                    chat_completion_tool: Dict[str, Any] = {
+                    chat_completion_tool = {
                         "type": "function",
                         "function": {
                             "name": typed_tool.get("name") or "",
@@ -1490,7 +1496,7 @@ class LiteLLMCompletionResponsesConfig:
                     }
                 else:
                     # 国际模型支持完整参数
-                    chat_completion_tool: Dict[str, Any] = {
+                    chat_completion_tool = {
                         "type": "function",
                         "function": {
                             "name": typed_tool.get("name") or "",
