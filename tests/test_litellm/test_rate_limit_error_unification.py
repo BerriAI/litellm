@@ -326,6 +326,27 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         # And it must still be catchable as HTTPException for FastAPI's
         # default 429 dispatcher.
         assert isinstance(e, HTTPException)
+        # Regression: the detail must include the supplied additional_details
+        # and must not stringify a None placeholder.
+        assert "key-over-rpm" in e.detail
+        assert "None" not in e.detail
+
+    def test_parallel_request_limiter_v1_helper_detail_omits_none(self):
+        """Regression for the dead-variable / None-interpolation bug flagged
+        in code review: calling ``raise_rate_limit_error()`` without
+        ``additional_details`` must NOT produce a detail string ending in
+        ' None'."""
+        from unittest.mock import MagicMock
+
+        from litellm.proxy.hooks.parallel_request_limiter import (
+            _PROXY_MaxParallelRequestsHandler,
+        )
+
+        handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
+        with pytest.raises(ProxyRateLimitError) as exc_info:
+            handler.raise_rate_limit_error()
+        assert exc_info.value.detail == "Max parallel request limit reached"
+        assert "None" not in exc_info.value.detail
 
     def test_parallel_request_limiter_v3_handle_rate_limit_error_raises(self):
         """v3 parallel_request_limiter's ``_handle_rate_limit_error`` must

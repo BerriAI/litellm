@@ -1,7 +1,7 @@
 import asyncio
 import sys
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Literal, NoReturn, Optional, Tuple, Union
 
 from pydantic import BaseModel
 from typing_extensions import TypedDict
@@ -72,7 +72,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if current is None:
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case
-                raise self.raise_rate_limit_error(
+                self.raise_rate_limit_error(
                     additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
                 )
             new_val = {
@@ -122,11 +122,11 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
     def raise_rate_limit_error(
         self, additional_details: Optional[str] = None
-    ) -> ProxyRateLimitError:
+    ) -> NoReturn:
         """
         Raise a 429 with a retry-after header for litellm-proxy parallel-request limits.
 
-        Returns a :class:`ProxyRateLimitError`, which is both a
+        Raises a :class:`ProxyRateLimitError`, which is both a
         :class:`litellm.RateLimitError` (so callers can catch by category) and a
         :class:`fastapi.HTTPException` (so the FastAPI dispatcher serializes it
         correctly with status 429 and the supplied headers).
@@ -227,7 +227,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 current_global_requests = 1
             # if above -> raise error
             if current_global_requests >= global_max_parallel_requests:
-                return self.raise_rate_limit_error(
+                self.raise_rate_limit_error(
                     additional_details=f"Hit Global Limit: Limit={global_max_parallel_requests}, current: {current_global_requests}"
                 )
             # if below -> increment
