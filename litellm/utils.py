@@ -9493,18 +9493,20 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
 
 
 def peek_reasoning_summary_aliases(optional_params: dict) -> Optional[Any]:
-    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body."""
-    rs = optional_params.get("reasoningSummary")
-    if rs is None:
-        rs = optional_params.get("reasoning_summary")
-    if rs is not None:
-        return rs
+    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
+
+    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
+    """
+    if "reasoningSummary" in optional_params:
+        return optional_params["reasoningSummary"]
+    if "reasoning_summary" in optional_params:
+        return optional_params["reasoning_summary"]
     extra_body = optional_params.get("extra_body")
     if isinstance(extra_body, dict):
-        rs = extra_body.get("reasoningSummary")
-        if rs is None:
-            rs = extra_body.get("reasoning_summary")
-        return rs
+        if "reasoningSummary" in extra_body:
+            return extra_body["reasoningSummary"]
+        if "reasoning_summary" in extra_body:
+            return extra_body["reasoning_summary"]
     return None
 
 
