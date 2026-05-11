@@ -71,6 +71,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             and tool_choice.get("type") == "function"
             and "function" in tool_choice
             and isinstance(tool_choice["function"], dict)
+            and "name" in tool_choice["function"]
         ):
             return {"type": "function", "name": tool_choice["function"]["name"]}
         return tool_choice
@@ -629,6 +630,15 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         url = str(parsed_url.copy_with(path=compact_path))
 
         input = self._validate_input_param(input)
+
+        if "tool_choice" in response_api_optional_request_params:
+            response_api_optional_request_params = dict(response_api_optional_request_params)
+            response_api_optional_request_params["tool_choice"] = (
+                self._normalize_tool_choice_for_responses_api(
+                    response_api_optional_request_params["tool_choice"]
+                )
+            )
+
         data = dict(
             ResponsesAPIRequestParams(
                 model=model, input=input, **response_api_optional_request_params
