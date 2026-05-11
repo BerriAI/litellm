@@ -135,7 +135,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         if additional_details is not None:
             error_message = error_message + " " + additional_details
         raise ProxyRateLimitError(
-            detail=f"Max parallel request limit reached {additional_details}",
+            detail=error_message,
             headers={"retry-after": str(self.time_to_next_minute())},
         )
 
