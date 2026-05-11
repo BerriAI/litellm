@@ -2565,7 +2565,8 @@ async def test_add_internal_user_from_user_mapping_no_header_or_mapping_returns_
 async def test_add_internal_user_from_user_mapping_resolves_email_header_to_internal_user(
     monkeypatch,
 ):
-    from litellm import proxy as proxy_pkg
+    import litellm.proxy.auth.auth_checks as auth_checks
+    import litellm.proxy.proxy_server as proxy_server
 
     user_api_key_dict = UserAPIKeyAuth(api_key="test-key")
     headers = {"X-OpenWebUI-User-Email": "internal@example.com"}
@@ -2585,22 +2586,10 @@ async def test_add_internal_user_from_user_mapping_resolves_email_header_to_inte
     fake_user.user_email = "internal@example.com"
     fake_user.user_role = "internal_user"
 
-    monkeypatch.setattr(
-        proxy_pkg.litellm_pre_call_utils,
-        "prisma_client",
-        fake_prisma_client,
-    )
-    monkeypatch.setattr(
-        proxy_pkg.litellm_pre_call_utils,
-        "user_api_key_cache",
-        fake_cache,
-    )
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma_client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", fake_cache)
     get_user_object_mock = AsyncMock(return_value=fake_user)
-    monkeypatch.setattr(
-        proxy_pkg.litellm_pre_call_utils,
-        "get_user_object",
-        get_user_object_mock,
-    )
+    monkeypatch.setattr(auth_checks, "get_user_object", get_user_object_mock)
 
     result = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
         general_settings, user_api_key_dict, headers

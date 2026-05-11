@@ -26,8 +26,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
-from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
-from litellm.proxy.auth.auth_checks import get_user_object
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
@@ -739,15 +737,20 @@ class LiteLLMProxyRequestSetup:
             return user_api_key_dict
 
         # Quick email-ish heuristic
-        if isinstance(header_value, str) and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", header_value):
+        if isinstance(header_value, str) and re.match(
+            r"^[^@\s]+@[^@\s]+\.[^@\s]+$", header_value
+        ):
             try:
-                # Import at runtime to avoid circular imports
-                if prisma_client is not None:
+                # Import at runtime to avoid circular imports.
+                from litellm.proxy import proxy_server
+                from litellm.proxy.auth.auth_checks import get_user_object
+
+                if proxy_server.prisma_client is not None:
                     try:
                         user_obj = await get_user_object(
                             user_id=str(header_value),
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
+                            prisma_client=proxy_server.prisma_client,
+                            user_api_key_cache=proxy_server.user_api_key_cache,
                             user_id_upsert=True,
                             user_email=str(header_value),
                         )
@@ -757,7 +760,7 @@ class LiteLLMProxyRequestSetup:
                     if user_obj is not None:
                         # Ensure role is internal_user (best-effort)
                         try:
-                            await prisma_client.db.litellm_usertable.update(
+                            await proxy_server.prisma_client.db.litellm_usertable.update(
                                 where={"user_id": user_obj.user_id},
                                 data={"user_role": str(LitellmUserRoles.INTERNAL_USER)},
                             )
