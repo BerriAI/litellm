@@ -61,7 +61,19 @@ def _coerce_message(detail: Any) -> str:
     return str(detail)
 
 
-class ProxyRateLimitError(HTTPException, RateLimitError):
+# NOTE: mypy emits two `[misc]` errors on the class line below because the
+# bases declare overlapping attributes with related-but-not-identical
+# annotations:
+#   * `status_code` is `int` on starlette HTTPException but `Literal[429]` on
+#     openai.RateLimitError (every openai status-error subclass narrows it
+#     this way and silences pyright with the same convention).
+#   * `headers` is `Mapping[str, str] | None` on HTTPException; we narrow it
+#     to `Optional[Dict[str, str]]` on RateLimitError because we always carry
+#     a stringified dict.
+# Both narrowings are intentional and handled at construction time — every
+# instance always has status_code == 429 and a Dict-typed headers — so we
+# silence the ATTR-overlap check rather than relax the annotations.
+class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
     """
     A 429 raised by litellm's proxy-side rate limiting hooks.
 
