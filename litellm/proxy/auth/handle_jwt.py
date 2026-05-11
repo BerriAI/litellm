@@ -227,8 +227,8 @@ class JWTHandler:
     def get_all_jwt_team_ids(self, token: dict) -> List[str]:
         """
         Return team IDs from both the plural ``team_ids_jwt_field`` and the
-        singular ``team_id_jwt_field`` claim, as a deduplicated list preserving
-        plural-first order.
+        singular ``team_id_jwt_field`` claim (string or list of strings), as a
+        deduplicated list preserving plural-first order.
 
         Membership-reconciliation paths (SSO callback, JWT-bearer sync) need
         to consider both claim shapes. Reading only the plural field — as
@@ -249,9 +249,14 @@ class JWTHandler:
                 default=None,
             )
             if isinstance(singular, list):
-                singular = singular[0] if singular else None
-            if singular and singular not in team_ids:
-                team_ids.append(singular)
+                for item in singular:
+                    if item is None:
+                        continue
+                    sid = str(item)
+                    if sid and sid not in team_ids:
+                        team_ids.append(sid)
+            elif singular and str(singular) not in team_ids:
+                team_ids.append(str(singular))
         return team_ids
 
     def get_end_user_id(

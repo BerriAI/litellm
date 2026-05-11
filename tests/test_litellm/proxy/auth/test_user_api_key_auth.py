@@ -587,6 +587,14 @@ def _assert_get_api_key_with_custom_litellm_key_header(
             False,
             False,
         ),
+        # Wildcard iss must not match space-containing claim strings (fnmatch * spans spaces)
+        (
+            "trusted.*",
+            "trusted.example.com attacker.example.com",
+            False,
+            False,
+        ),
+        ("trusted.*", "trusted.example.com", True, False),
         (
             ["issuer-a.example.com", "issuer-b.example.com"],
             "issuer-b.example.com",
@@ -667,7 +675,10 @@ def test_routing_selector_matches_claim_parametrized(
                 aud=["api://litellm", "api://fallback"],
                 path="oauth2",
             ),
-            {"iss": "oauth-issuer.example.com", "aud": ["api://other", "api://litellm"]},
+            {
+                "iss": "oauth-issuer.example.com",
+                "aud": ["api://other", "api://litellm"],
+            },
             True,
         ),
         # All provided selectors are AND-ed.
@@ -1738,20 +1749,21 @@ class TestJWTOAuth2Coexistence:
         mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
         mock_request.query_params = {}
 
-        with patch(
-            "litellm.proxy.proxy_server.general_settings", general_settings
-        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
-            "litellm.proxy.proxy_server.master_key", "sk-master"
-        ), patch(
-            "litellm.proxy.proxy_server.prisma_client", None
-        ), patch(
-            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
-            new_callable=AsyncMock,
-            return_value=mock_oauth2_response,
-        ) as mock_oauth2, patch(
-            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
-            new_callable=AsyncMock,
-        ) as mock_jwt_auth:
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+                new_callable=AsyncMock,
+                return_value=mock_oauth2_response,
+            ) as mock_oauth2,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+            ) as mock_jwt_auth,
+        ):
             litellm.proxy.proxy_server.jwt_handler.update_environment(
                 prisma_client=None,
                 user_api_key_cache=DualCache(),
@@ -1809,20 +1821,21 @@ class TestJWTOAuth2Coexistence:
         mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
         mock_request.query_params = {}
 
-        with patch(
-            "litellm.proxy.proxy_server.general_settings", general_settings
-        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
-            "litellm.proxy.proxy_server.master_key", "sk-master"
-        ), patch(
-            "litellm.proxy.proxy_server.prisma_client", None
-        ), patch(
-            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
-            new_callable=AsyncMock,
-        ) as mock_oauth2, patch(
-            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
-            new_callable=AsyncMock,
-            return_value=mock_jwt_result,
-        ) as mock_jwt_auth:
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+                new_callable=AsyncMock,
+            ) as mock_oauth2,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+                return_value=mock_jwt_result,
+            ) as mock_jwt_auth,
+        ):
             litellm.proxy.proxy_server.jwt_handler.update_environment(
                 prisma_client=None,
                 user_api_key_cache=DualCache(),
@@ -1873,20 +1886,21 @@ class TestJWTOAuth2Coexistence:
         mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
         mock_request.query_params = {}
 
-        with patch(
-            "litellm.proxy.proxy_server.general_settings", general_settings
-        ), patch("litellm.proxy.proxy_server.premium_user", True), patch(
-            "litellm.proxy.proxy_server.master_key", "sk-master"
-        ), patch(
-            "litellm.proxy.proxy_server.prisma_client", None
-        ), patch(
-            "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
-            new_callable=AsyncMock,
-            return_value=mock_oauth2_response,
-        ) as mock_oauth2, patch(
-            "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
-            new_callable=AsyncMock,
-        ) as mock_jwt_auth:
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.Oauth2Handler.check_oauth2_token",
+                new_callable=AsyncMock,
+                return_value=mock_oauth2_response,
+            ) as mock_oauth2,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+            ) as mock_jwt_auth,
+        ):
             litellm.proxy.proxy_server.jwt_handler.update_environment(
                 prisma_client=None,
                 user_api_key_cache=DualCache(),

@@ -219,6 +219,11 @@ def _routing_selector_matches_claim(
     def _selector_matches_claim(selector: str, claim: str) -> bool:
         # NOTE: wildcard matching is case-sensitive (fnmatch.fnmatchcase).
         if "*" in selector or "?" in selector:
+            # Without scope splitting, do not let `*` span whitespace: a malformed
+            # iss like "trusted.example.com evil.com" must not match "trusted.*".
+            # Scope uses split_space_delimited so each claim token is checked separately.
+            if not split_space_delimited and any(ch.isspace() for ch in claim):
+                return False
             return fnmatch.fnmatchcase(claim, selector)
         return selector == claim
 

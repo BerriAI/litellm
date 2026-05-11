@@ -524,6 +524,11 @@ def test_get_all_jwt_team_ids_unions_singular_and_plural():
         "b",
     ]
 
+    # singular field as multi-element list (some IdPs) — merge all, preserve plural-first order
+    assert jwt_handler.get_all_jwt_team_ids(
+        {"team_id": ["primary", "secondary"], "teams": ["a"]}
+    ) == ["a", "primary", "secondary"]
+
     # neither populated
     assert jwt_handler.get_all_jwt_team_ids({}) == []
 
