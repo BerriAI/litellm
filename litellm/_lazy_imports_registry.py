@@ -719,7 +719,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
         "AnthropicMessagesConfig",
     ),
     "BedrockClaudePlatformMessagesConfig": (
-        ".llms.bedrock.claude_platform.transformation",
+        ".llms.bedrock.claude_platform.messages_transformation",
         "BedrockClaudePlatformMessagesConfig",
     ),
     "AmazonAnthropicClaudeMessagesConfig": (

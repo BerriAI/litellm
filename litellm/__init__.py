@@ -1428,6 +1428,8 @@ if TYPE_CHECKING:
     from .llms.anthropic.chat.transformation import AnthropicConfig as AnthropicConfig
     from .llms.bedrock.claude_platform.transformation import (
         BedrockClaudePlatformConfig as BedrockClaudePlatformConfig,
+    )
+    from .llms.bedrock.claude_platform.messages_transformation import (
         BedrockClaudePlatformMessagesConfig as BedrockClaudePlatformMessagesConfig,
     )
     from .llms.anthropic.completion.transformation import (

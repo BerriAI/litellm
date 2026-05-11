@@ -1,5 +1,7 @@
 from .transformation import (
     BedrockClaudePlatformConfig,
+)
+from .messages_transformation import (
     BedrockClaudePlatformMessagesConfig,
 )
 
