@@ -2285,6 +2285,16 @@ class ProxyLogging:
             data=request_data, llm_router=llm_router
         )
 
+        # Snapshot the inner iterator (typically CustomStreamWrapper) before
+        # the guardrail wrap chain. The finally below drives ``aclose()`` on
+        # THIS reference, not on ``current_response``, because
+        # ``_wrap_streaming_iterator_with_enrichment`` is an async generator
+        # whose frame is marked completed on the exception path — Python's
+        # async generator semantics then turn its ``aclose()`` into a no-op,
+        # so the cascade would never reach CSW. Closing the inner iterator
+        # directly bypasses that and lets CSW.aclose() persist partial
+        # usage from chunks accumulated so far.
+        inner_response = response
         current_response = response
 
         for callback in litellm.callbacks:
@@ -2353,16 +2363,16 @@ class ProxyLogging:
             async for chunk in current_response:
                 yield chunk
         finally:
-            # Drive aclose() down the wrapper chain so the innermost
-            # CustomStreamWrapper can persist partial usage from chunks
-            # already streamed. On normal completion this is a no-op (CSW
-            # already set ``_deferred_stream_complete_args`` at
-            # StopAsyncIteration). On client disconnect this is where the
-            # partial-response args get set; without it
-            # ``_fire_deferred_stream_logging`` would find no args and
-            # silently skip spend logging.
+            # Drive aclose() on the INNER iterator (CSW), not the wrapper
+            # chain. The wrapper chain's aclose() is a no-op after an
+            # exception completes its generator frame, so on the exception
+            # path the cascade would never reach CSW and partial usage
+            # would not get persisted. Closing the inner iterator directly
+            # guarantees CSW.aclose() runs on every termination path —
+            # normal completion (no-op, args already set), client
+            # disconnect, and exception.
             try:
-                aclose_fn = getattr(current_response, "aclose", None)
+                aclose_fn = getattr(inner_response, "aclose", None)
                 if aclose_fn is not None:
                     await aclose_fn()
             except BaseException:
