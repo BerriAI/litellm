@@ -1151,7 +1151,7 @@ class CustomStreamWrapper:
                     # Strip finish_reason from the content chunk so it appears
                     # only on the trailing empty-delta chunk (OpenAI spec).
                     # finish_reason_handler() will emit the proper terminal chunk.
-                    chunk.choices[0].finish_reason = None
+                    chunk.choices[0].finish_reason = None  # type: ignore[assignment]
                 return chunk
 
             if (
