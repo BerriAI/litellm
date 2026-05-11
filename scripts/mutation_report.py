@@ -70,6 +70,12 @@ def parse_mutant_name(name: str) -> tuple[str, str, str]:
     return m.group(1), m.group(2), m.group(3)
 
 
+def function_anchor(module_path: str, function_name: str) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "-", f"{module_path}-{function_name}".lower()).strip(
+        "-"
+    )
+
+
 def module_to_file(module_path: str) -> Path | None:
     candidate = ROOT / Path(*module_path.split(".")).with_suffix(".py")
     return candidate if candidate.exists() else None
@@ -265,7 +271,7 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
     out.append("## Surviving mutants by function")
     out.append("")
     for (module_path, function_name), items in by_function.items():
-        anchor = function_name.lower()
+        anchor = function_anchor(module_path, function_name)
         out.append(
             f"- [`{function_name}`](#{anchor}) — {len(items)} mutant"
             f"{'s' if len(items) != 1 else ''} ({module_path})"
@@ -273,7 +279,9 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
     out.append("")
 
     for (module_path, function_name), items in by_function.items():
-        out.append(f"## `{function_name}`")
+        anchor = function_anchor(module_path, function_name)
+        out.append(f'<a id="{anchor}"></a>')
+        out.append(f"## `{module_path}.{function_name}`")
         out.append("")
         out.append(f"**Module:** `{module_path}`")
 
