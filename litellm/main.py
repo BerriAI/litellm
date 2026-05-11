@@ -991,17 +991,29 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-    # OpenAI/Azure gpt-5.4+ chat-completions calls that need Responses-only fields
-    # (e.g. reasoning summary) must be bridged. SDKs send ``reasoningSummary`` /
-    # ``reasoning_summary`` alongside ``reasoning_effort``; Chat Completions rejects
-    # those keys, so route when tools+reasoning_effort (original case) or when a
-    # reasoning summary is requested without tools.
+    # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
+    # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
+    # those keys.
+    #
+    # - gpt-5.4+: tools + reasoning_effort (original) or any reasoning-summary alias.
+    # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
+    #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
     if (
         custom_llm_provider in ("openai", "azure")
-        and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
-        and reasoning_effort is not None
-        and (tools or reasoning_summary is not None)
         and model_info.get("mode") != "responses"
+        and OpenAIGPT5Config.is_model_gpt_5_model(model)
+        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
+        and reasoning_effort is not None
+        and (
+            (
+                OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+                and (tools or reasoning_summary is not None)
+            )
+            or (
+                not OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
+                and reasoning_summary is not None
+            )
+        )
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
