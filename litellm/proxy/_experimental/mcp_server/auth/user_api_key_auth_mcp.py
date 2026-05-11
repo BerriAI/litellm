@@ -757,9 +757,15 @@ class MCPRequestHandler:
                 _get_mcp_server_ids_from_access_groups,
             )
 
-            key_access_group_servers = await _get_mcp_server_ids_from_access_groups(
-                user_api_key_auth.access_group_ids or []
-            )
+            try:
+                key_access_group_servers = await _get_mcp_server_ids_from_access_groups(
+                    user_api_key_auth.access_group_ids or []
+                )
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Failed to expand key access groups for MCP servers: {str(e)}"
+                )
+                key_access_group_servers = []
 
             # Get key object permission (already loaded in main auth flow, or fetch from DB)
             key_object_permission = MCPRequestHandler._get_key_object_permission(
@@ -842,12 +848,20 @@ class MCPRequestHandler:
                 _get_mcp_server_ids_from_access_groups,
             )
 
-            team_access_group_ids = await MCPRequestHandler._get_team_access_group_ids(
-                user_api_key_auth
-            )
-            team_access_group_servers = await _get_mcp_server_ids_from_access_groups(
-                team_access_group_ids
-            )
+            try:
+                team_access_group_ids = (
+                    await MCPRequestHandler._get_team_access_group_ids(
+                        user_api_key_auth
+                    )
+                )
+                team_access_group_servers = (
+                    await _get_mcp_server_ids_from_access_groups(team_access_group_ids)
+                )
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Failed to expand team access groups for MCP servers: {str(e)}"
+                )
+                team_access_group_servers = []
 
             # Get team object permission (already loaded in main auth flow)
             object_permissions = await MCPRequestHandler._get_team_object_permission(
@@ -906,27 +920,37 @@ class MCPRequestHandler:
         and teams may have those groups even when no object_permission row was
         created for the team.
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
+        try:
+            from litellm.proxy.auth.auth_checks import get_team_object
+            from litellm.proxy.proxy_server import (
+                prisma_client,
+                proxy_logging_obj,
+                user_api_key_cache,
+            )
 
-        if not user_api_key_auth or not user_api_key_auth.team_id or not prisma_client:
+            if (
+                not user_api_key_auth
+                or not user_api_key_auth.team_id
+                or not prisma_client
+            ):
+                return []
+
+            team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
+                team_id=user_api_key_auth.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            if team_obj is None:
+                return []
+
+            return list(team_obj.access_group_ids or [])
+        except Exception as e:
+            verbose_logger.debug(
+                f"Failed to get team access group IDs for MCP servers: {str(e)}"
+            )
             return []
-
-        team_obj: Optional[LiteLLM_TeamTable] = await get_team_object(
-            team_id=user_api_key_auth.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            parent_otel_span=user_api_key_auth.parent_otel_span,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        if team_obj is None:
-            return []
-
-        return list(team_obj.access_group_ids or [])
 
     # Sentinel stored in cache when an org has no object_permission, so we
     # don't re-query the DB on every MCP request for that org.
