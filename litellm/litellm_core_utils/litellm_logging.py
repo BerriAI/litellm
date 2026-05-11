@@ -3442,6 +3442,11 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         import httpx
 
+        if self.stream and isinstance(
+            result,
+            (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+        ):
+            return result
         if self.stream and isinstance(result, ModelResponse):
             return result
         elif isinstance(result, ModelResponse):
