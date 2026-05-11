@@ -29,7 +29,6 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.files import (
-    get_file_extension_from_mime_type,
     get_file_mime_type_for_file_type,
     get_file_type_from_extension,
     is_gemini_1_5_accepted_file_type,
@@ -60,12 +59,24 @@ from ..common_utils import (
     get_supports_response_schema,
     get_supports_system_message,
 )
-from ..vertex_llm_base import VertexBase
 
-_GCS_METADATA_VERTEX_BASE = VertexBase()
+# 使用 Any 标注避免在模块加载期引入到 vertex_llm_base 的循环依赖；
+# 该实例在首次需要拉取 GCS metadata 时才通过 _get_vertex_base() 懒加载。
+_GCS_METADATA_VERTEX_BASE: Optional[Any] = None
 _GEMINI_MIME_TYPE_ALIASES: Dict[str, str] = {
     "image/jpg": "image/jpeg",
 }
+
+
+def _get_vertex_base() -> Any:
+    """懒加载共享的 VertexBase 实例，避免模块加载期的循环依赖。"""
+    global _GCS_METADATA_VERTEX_BASE
+    if _GCS_METADATA_VERTEX_BASE is None:
+        from ..vertex_llm_base import VertexBase
+
+        _GCS_METADATA_VERTEX_BASE = VertexBase()
+    return _GCS_METADATA_VERTEX_BASE
+
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -232,7 +243,7 @@ def _get_gcs_object_content_type(
         vertex_project is not None or vertex_credentials is not None
     )
     try:
-        access_token, _ = _GCS_METADATA_VERTEX_BASE.get_access_token(
+        access_token, _ = _get_vertex_base().get_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
         )
@@ -249,10 +260,15 @@ def _get_gcs_object_content_type(
             )
         # 未显式提供 Vertex 凭据时，metadata 对公开对象仍可能可读，继续无 token 尝试。
 
-    object_path = quote(object_name, safe="")
-    metadata_url = (
-        f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{object_path}"
-        "?fields=contentType"
+    # 通过 httpx.URL 固定 scheme/host，并对 bucket、object 都做 URL 编码，
+    # 避免被 CodeQL 误判为可能拼接出任意主机 URL 的 SSRF。
+    encoded_bucket = quote(bucket, safe="")
+    encoded_object = quote(object_name, safe="")
+    metadata_url = httpx.URL(
+        scheme="https",
+        host="storage.googleapis.com",
+        path=f"/storage/v1/b/{encoded_bucket}/o/{encoded_object}",
+        params={"fields": "contentType"},
     )
     try:
         response = httpx.get(url=metadata_url, headers=headers, timeout=5.0)
@@ -268,6 +284,9 @@ def _get_gcs_object_content_type(
 def _normalize_and_validate_gemini_mime_type(
     mime_type: str, model: Optional[str]
 ) -> str:
+    # 延迟导入，避免在模块顶层与 litellm.types.files 形成循环引用告警。
+    from litellm.types.files import get_file_extension_from_mime_type
+
     normalized_mime_type = _GEMINI_MIME_TYPE_ALIASES.get(
         mime_type.strip().lower(), mime_type.strip().lower()
     )
