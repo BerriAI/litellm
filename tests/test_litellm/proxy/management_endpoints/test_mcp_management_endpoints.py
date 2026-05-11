@@ -1554,6 +1554,98 @@ class TestTemporaryMCPSessionEndpoints:
         assert "permission" in str(exc_info.value)
 
     @pytest.mark.asyncio
+    async def test_mcp_oauth_user_api_key_auth_falls_back_to_token_cookie(self):
+        """
+        When the Authorization header is absent but a valid 'token' cookie is
+        present (browser navigation), _mcp_oauth_user_api_key_auth should
+        decode the cookie JWT and authenticate via the API key stored in it.
+        """
+        import jwt
+
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _mcp_oauth_user_api_key_auth,
+        )
+
+        master_key = "test-master-key"
+        api_key_in_cookie = "sk-test-cookie-key"
+        token_cookie = jwt.encode(
+            {
+                "user_id": "user@example.com",
+                "key": api_key_in_cookie,
+                "user_role": "proxy_admin",
+                "login_method": "sso",
+            },
+            master_key,
+            algorithm="HS256",
+        )
+
+        mock_request = MagicMock()
+        mock_request.headers = {}
+        mock_request.cookies = {"token": token_cookie}
+
+        expected_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key=api_key_in_cookie
+        )
+        fake_proxy_server = types.SimpleNamespace(master_key=master_key)
+
+        with (
+            patch.dict(sys.modules, {"litellm.proxy.proxy_server": fake_proxy_server}),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_api_key_auth_builder",
+                AsyncMock(return_value=expected_auth),
+            ) as auth_builder_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._read_request_body",
+                AsyncMock(return_value={}),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.populate_request_with_path_params",
+                side_effect=lambda request_data, request: request_data,
+            ),
+        ):
+            result = await _mcp_oauth_user_api_key_auth(mock_request)
+
+        assert result is expected_auth
+        _, call_kwargs = auth_builder_mock.call_args
+        assert call_kwargs["api_key"] == f"Bearer {api_key_in_cookie}"
+
+    @pytest.mark.asyncio
+    async def test_mcp_oauth_user_api_key_auth_uses_authorization_header_when_present(
+        self,
+    ):
+        """When Authorization header is present it takes priority over the cookie."""
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _mcp_oauth_user_api_key_auth,
+        )
+
+        expected_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        mock_request = MagicMock()
+        mock_request.headers = {"Authorization": "Bearer sk-header-key"}
+        mock_request.cookies = {}
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_api_key_auth_builder",
+                AsyncMock(return_value=expected_auth),
+            ) as auth_builder_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._read_request_body",
+                AsyncMock(return_value={}),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.populate_request_with_path_params",
+                side_effect=lambda request_data, request: request_data,
+            ),
+        ):
+            result = await _mcp_oauth_user_api_key_auth(mock_request)
+
+        assert result is expected_auth
+        _, call_kwargs = auth_builder_mock.call_args
+        assert call_kwargs["api_key"] == "Bearer sk-header-key"
+
+    @pytest.mark.asyncio
     async def test_mcp_authorize_proxies_to_discoverable_endpoint(self):
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             mcp_authorize,

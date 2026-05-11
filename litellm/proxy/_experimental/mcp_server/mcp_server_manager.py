@@ -411,6 +411,15 @@ class MCPServerManager:
                 aws_role_name=server_config.get("aws_role_name", None),
                 aws_session_name=server_config.get("aws_session_name", None),
                 instructions=server_config.get("instructions", None),
+                # Token Exchange (OBO) fields
+                token_exchange_endpoint=server_config.get(
+                    "token_exchange_endpoint", None
+                ),
+                audience=server_config.get("audience", None),
+                subject_token_type=server_config.get(
+                    "subject_token_type",
+                    "urn:ietf:params:oauth:token-type:access_token",
+                ),
             )
             self._assign_unique_short_prefix(new_server)
             self.config_mcp_servers[server_id] = new_server
@@ -497,7 +506,8 @@ class MCPServerManager:
             # Add any static headers from server config.
             #
             # Note: `extra_headers` on MCPServer is a List[str] of header names to forward
-            # from the client request (not available in this OpenAPI tool generation step).
+            # from each client MCP request; values are applied at call time via
+            # `_request_extra_headers` in server.py (not baked in here).
             # `static_headers` is a dict of concrete headers to always send.
             headers = (
                 merge_mcp_headers(
@@ -765,10 +775,23 @@ class MCPServerManager:
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
             instructions=mcp_server.instructions,
+            # Token Exchange (OBO) fields — read from credentials JSON blob
+            token_exchange_endpoint=(
+                credentials_dict.get("token_exchange_endpoint")
+                if credentials_dict
+                else None
+            ),
+            audience=(credentials_dict.get("audience") if credentials_dict else None),
+            subject_token_type=(
+                credentials_dict.get("subject_token_type") if credentials_dict else None
+            )
+            or "urn:ietf:params:oauth:token-type:access_token",
         )
         return new_server
 
-    async def _maybe_register_openapi_tools(self, server: MCPServer):
+    async def _maybe_register_openapi_tools(
+        self, server: MCPServer, *, initialize_mapping: bool = True
+    ):
         """Register OpenAPI tools if the server has a spec_path configured."""
         if server.spec_path:
             verbose_logger.info(
@@ -779,7 +802,8 @@ class MCPServerManager:
                 server=server,
                 base_url=server.url or "",
             )
-            self.initialize_tool_name_to_mcp_server_name_mapping()
+            if initialize_mapping:
+                self.initialize_tool_name_to_mcp_server_name_mapping()
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
         try:
@@ -1136,6 +1160,29 @@ class MCPServerManager:
     #########################################################
     # Methods that call the upstream MCP servers
     #########################################################
+    @staticmethod
+    def _extract_bearer_token(
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+    ) -> Optional[str]:
+        """Extract the bare Bearer token from oauth2_headers or raw_headers.
+
+        Returns the token string without the ``Bearer `` prefix, or ``None``
+        if no Authorization header is found.
+        """
+        auth_value: Optional[str] = None
+        if oauth2_headers and "Authorization" in oauth2_headers:
+            auth_value = oauth2_headers["Authorization"]
+        elif raw_headers:
+            # raw_headers may have lowercase keys depending on the ASGI server
+            normalized = {k.lower(): v for k, v in raw_headers.items()}
+            auth_value = normalized.get("authorization")
+        if auth_value:
+            if auth_value.startswith("Bearer "):
+                return auth_value[len("Bearer ") :]
+            return auth_value
+        return None
+
     def _build_stdio_env(
         self,
         server: MCPServer,
@@ -1169,25 +1216,30 @@ class MCPServerManager:
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         stdio_env: Optional[Dict[str, str]] = None,
+        subject_token: Optional[str] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
 
         Auth resolution (single place for all auth logic):
         1. ``mcp_auth_header`` — per-request/per-user override
-        2. OAuth2 client_credentials token — auto-fetched and cached
-        3. ``server.authentication_token`` — static token from config/DB
+        2. OAuth2 Token Exchange (OBO) — exchange user token for scoped token
+        3. OAuth2 client_credentials token — auto-fetched and cached
+        4. ``server.authentication_token`` — static token from config/DB
 
         Args:
             server: The server configuration.
             mcp_auth_header: Optional per-request auth override.
             extra_headers: Additional headers to forward.
             stdio_env: Environment variables for stdio transport.
+            subject_token: Optional user JWT for token exchange (OBO) flow.
 
         Returns:
             Configured MCP client instance.
         """
-        auth_value = await resolve_mcp_auth(server, mcp_auth_header)
+        auth_value = await resolve_mcp_auth(
+            server, mcp_auth_header, subject_token=subject_token
+        )
 
         transport = server.transport or MCPTransport.sse
 
@@ -1978,7 +2030,11 @@ class MCPServerManager:
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
 
-    def _assign_unique_short_prefix(self, server: MCPServer) -> None:
+    def _assign_unique_short_prefix(
+        self,
+        server: MCPServer,
+        registry: Optional[Dict[str, MCPServer]] = None,
+    ) -> None:
         """Resolve and cache a collision-free short tool prefix on ``server``.
 
         Called at registration time for every MCP server entering the
@@ -2002,7 +2058,8 @@ class MCPServerManager:
             return
 
         used: Dict[str, str] = {}
-        for other in self.get_registry().values():
+        registry_for_collision_check = registry or self.get_registry()
+        for other in registry_for_collision_check.values():
             if other.server_id == server.server_id:
                 continue
             if other.short_prefix:
@@ -2534,9 +2591,12 @@ class MCPServerManager:
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
 
-        # oauth2 headers
+        # Extract subject token for OAuth2 Token Exchange (OBO) flow
+        subject_token: Optional[str] = None
         extra_headers: Optional[Dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2:
+        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+        elif mcp_server.auth_type == MCPAuth.oauth2:
             if mcp_server.has_client_credentials:
                 # For M2M OAuth servers, Authorization must come from token fetch.
                 extra_headers = None
@@ -2604,6 +2664,7 @@ class MCPServerManager:
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
             stdio_env=stdio_env,
+            subject_token=subject_token,
         )
 
         call_tool_params = MCPCallToolRequestParams(
@@ -2916,46 +2977,72 @@ class MCPServerManager:
         # against the *full* set so dedup is deterministic regardless of
         # iteration order.
         for server in db_mcp_servers:
-            existing_server = previous_registry.get(server.server_id)
+            try:
+                existing_server = previous_registry.get(server.server_id)
 
-            if (
-                existing_server is not None
-                and existing_server.updated_at is not None
-                and server.updated_at is not None
-                and existing_server.updated_at == server.updated_at
-            ):
-                # Re-use existing server instance to avoid re-running build_mcp_server_from_table()
-                # which can perform network discovery for OAuth2 servers.
-                new_registry[server.server_id] = existing_server
-                continue
+                if (
+                    existing_server is not None
+                    and existing_server.updated_at is not None
+                    and server.updated_at is not None
+                    and existing_server.updated_at == server.updated_at
+                ):
+                    # Re-use existing server instance to avoid re-running build_mcp_server_from_table()
+                    # which can perform network discovery for OAuth2 servers.
+                    new_registry[server.server_id] = existing_server
+                    continue
 
-            _warn_on_server_name_fields(
-                server_id=server.server_id,
-                alias=getattr(server, "alias", None),
-                server_name=getattr(server, "server_name", None),
-            )
-            verbose_logger.debug(
-                f"Building server from DB: {server.server_id} ({server.server_name})"
-            )
-            new_server = await self.build_mcp_server_from_table(server)
-            # Carry the cached short_prefix from the previous registry entry
-            # (if any) so the prefix is stable across reloads.
-            if existing_server is not None and existing_server.short_prefix:
-                new_server.short_prefix = existing_server.short_prefix
-            new_registry[server.server_id] = new_server
+                _warn_on_server_name_fields(
+                    server_id=server.server_id,
+                    alias=getattr(server, "alias", None),
+                    server_name=getattr(server, "server_name", None),
+                )
+                verbose_logger.debug(
+                    f"Building server from DB: {server.server_id} ({server.server_name})"
+                )
+                new_server = await self.build_mcp_server_from_table(server)
+                # Carry the cached short_prefix from the previous registry entry
+                # (if any) so the prefix is stable across reloads.
+                if existing_server is not None and existing_server.short_prefix:
+                    new_server.short_prefix = existing_server.short_prefix
+                new_registry[server.server_id] = new_server
+            except Exception as e:
+                verbose_logger.exception(
+                    "Skipping MCP server %s (%s) during DB reload: %s",
+                    server.server_id,
+                    getattr(server, "alias", None),
+                    e,
+                )
 
-        # Swap in the new registry first so _assign_unique_short_prefix
-        # sees the complete set when checking for collisions.
-        self.registry = new_registry
-        for new_server in new_registry.values():
-            self._assign_unique_short_prefix(new_server)
-            # Register OpenAPI tools *after* the final short prefix is assigned
-            # so the tools are stored in the global registry under the same
-            # prefix that lookups will use.
-            await self._maybe_register_openapi_tools(new_server)
+        # Assign short prefixes against the full candidate set without
+        # publishing the staged registry to concurrent callers.
+        registered_registry: Dict[str, MCPServer] = {}
+        registered_openapi_tools = False
+        for server_id, new_server in new_registry.items():
+            try:
+                self._assign_unique_short_prefix(new_server, registry=new_registry)
+                # Register OpenAPI tools *after* the final short prefix is assigned
+                # so the tools are stored in the global registry under the same
+                # prefix that lookups will use.
+                await self._maybe_register_openapi_tools(
+                    new_server, initialize_mapping=False
+                )
+                registered_registry[server_id] = new_server
+                if new_server.spec_path:
+                    registered_openapi_tools = True
+            except Exception as e:
+                verbose_logger.exception(
+                    "Skipping MCP server %s (%s) during DB reload: %s",
+                    new_server.server_id,
+                    getattr(new_server, "alias", None),
+                    e,
+                )
+
+        self.registry = registered_registry
+        if registered_openapi_tools:
+            self.initialize_tool_name_to_mcp_server_name_mapping()
 
         verbose_logger.debug(
-            "MCP registry refreshed (%s servers in registry)", len(new_registry)
+            "MCP registry refreshed (%s servers in registry)", len(registered_registry)
         )
 
     def get_mcp_servers_from_ids(self, server_ids: List[str]) -> List[MCPServer]:

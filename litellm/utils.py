@@ -1,3 +1,5 @@
+"""Utility helpers for LiteLLM core request handling and provider support."""
+
 # from __future__ import annotations must be the first non-comment statement
 from __future__ import annotations
 
@@ -8545,6 +8547,12 @@ class ProviderConfigManager:
             )
 
             return MistralAudioTranscriptionConfig()
+        elif litellm.LlmProviders.NVIDIA_RIVA == provider:
+            from litellm.llms.nvidia_riva.audio_transcription.transformation import (
+                NvidiaRivaAudioTranscriptionConfig,
+            )
+
+            return NvidiaRivaAudioTranscriptionConfig()
         return None
 
     @staticmethod

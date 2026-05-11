@@ -53,6 +53,39 @@ def test_non_admin_config_update_route_rejected():
     assert "Your role=internal_user" in str(exc_info.value)
 
 
+@pytest.mark.parametrize(
+    "role",
+    [
+        LitellmUserRoles.INTERNAL_USER.value,
+        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
+    ],
+)
+@pytest.mark.parametrize(
+    "route",
+    ["/compliance/eu-ai-act", "/compliance/gdpr"],
+)
+def test_compliance_routes_open_to_non_admin_roles(role, route):
+    """Compliance routes are stateless validators on caller-supplied log data
+    — both non-admin internal_user roles can call them."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=role,
+    )
+    valid_token = UserAPIKeyAuth(user_id="test_user", user_role=role)
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=role,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
 def test_proxy_admin_viewer_config_update_route_rejected():
     """Test that proxy admin viewer users are rejected when trying to call /config/update"""
 

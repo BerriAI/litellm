@@ -239,6 +239,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
     KEY_BULK_UPDATE = "/key/bulk_update"
+    TEAM_KEY_BULK_UPDATE = "/team/key/bulk_update"
     KEY_RESET_SPEND = "/key/{key_id}/reset_spend"
 
     # info and health routes
@@ -353,8 +354,10 @@ class LiteLLMRoutes(enum.Enum):
         # realtime
         "/realtime",
         "/v1/realtime",
+        "/openai/v1/realtime",
         "/realtime?{model}",
         "/v1/realtime?{model}",
+        "/openai/v1/realtime?{model}",
         # responses API
         "/responses",
         "/v1/responses",
@@ -538,6 +541,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -656,6 +660,13 @@ class LiteLLMRoutes(enum.Enum):
         "/health/services",
     ] + info_routes
 
+    # Stateless validators on caller-supplied log data; source logs are
+    # already accessible via spend_tracking_routes, so no scope expansion.
+    compliance_check_routes = [
+        "/compliance/eu-ai-act",
+        "/compliance/gdpr",
+    ]
+
     # Routes in `global_spend_tracking_routes` return proxy-wide spend across
     # every team, customer, and api_key. They are intentionally NOT included
     # here — non-admin roles must not see other tenants' spend. Admin roles go
@@ -675,9 +686,10 @@ class LiteLLMRoutes(enum.Enum):
         ]
         + spend_tracking_routes
         + key_management_routes
+        + compliance_check_routes
     )
 
-    internal_user_view_only_routes = spend_tracking_routes
+    internal_user_view_only_routes = spend_tracking_routes + compliance_check_routes
 
     self_managed_routes = [
         "/team/member_add",
@@ -699,6 +711,8 @@ class LiteLLMRoutes(enum.Enum):
         # Project read routes - endpoint scopes results to caller's teams (non-admin)
         "/project/list",
         "/project/info",
+        # Endpoint enforces proxy-admin vs team-admin model access itself.
+        "/health/test_connection",
         # Invitation routes - org/team admins checked in endpoint via _user_has_admin_privileges
         "/invitation/new",
         "/invitation/delete",
@@ -3348,6 +3362,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
     )
 
+    azure_sentinel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="azure_sentinel",
+        ui_callback_name="Azure Sentinel",
+        litellm_callback_params=[
+            "AZURE_SENTINEL_DCR_IMMUTABLE_ID",
+            "AZURE_SENTINEL_ENDPOINT",
+            "AZURE_SENTINEL_TENANT_ID",
+            "AZURE_SENTINEL_CLIENT_ID",
+            "AZURE_SENTINEL_CLIENT_SECRET",
+            "AZURE_SENTINEL_STREAM_NAME",
+        ],
+    )
+
     openmeter: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="openmeter",
         ui_callback_name="OpenMeter",
@@ -4321,10 +4348,16 @@ class JWTRoutingOverride(BaseModel):
 
     A rule matches when all provided selectors match token claims.
     If matched, request is routed to the configured auth path.
+
+    Wildcard selectors use shell-style patterns (* and ?) and are matched with
+    case-sensitive semantics; use the same casing your IdP emits in JWT claims.
+    Space-delimited tokenization applies only to the ``scope`` claim (OAuth/OIDC
+    scope strings), not to ``iss``, ``aud``, or ``client_id``.
     """
 
     iss: Union[str, List[str]]
     client_id: Optional[Union[str, List[str]]] = None
+    scope: Optional[Union[str, List[str]]] = None
     aud: Optional[Union[str, List[str]]] = None
     path: Literal["oauth2"] = "oauth2"
 

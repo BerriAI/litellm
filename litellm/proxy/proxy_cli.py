@@ -170,6 +170,66 @@ class ProxyInitializationHelpers:
         return uvicorn_args
 
     @staticmethod
+    def _get_reload_options(config_path: Optional[str]) -> dict:
+        """Build uvicorn reload kwargs so --reload also reacts to YAML edits."""
+        options: dict = {"reload": True}
+        if not config_path:
+            return options
+        config_abs = os.path.abspath(config_path)
+        config_dir = os.path.dirname(config_abs)
+        cwd = os.path.abspath(os.getcwd())
+        reload_dirs = [cwd]
+        if config_dir and config_dir != cwd:
+            reload_dirs.append(config_dir)
+        options["reload_dirs"] = reload_dirs
+        # Must be a basename, not an absolute path: uvicorn's
+        # resolve_reload_patterns() calls pathlib.Path.glob(), which raises
+        # NotImplementedError on absolute patterns (uvicorn discussion #2156).
+        options["reload_includes"] = ["*.py", os.path.basename(config_abs)]
+        return options
+
+    @staticmethod
+    def _patch_statreload_for_config(config_path: str) -> bool:
+        """Make uvicorn's StatReload reloader notice YAML config changes.
+
+        Uvicorn uses WatchFilesReload when the optional `watchfiles` package
+        is installed, otherwise StatReload. StatReload hard-codes `*.py` in
+        `iter_py_files()` and silently ignores `reload_includes`, so the
+        kwargs from `_get_reload_options` alone don't trigger reloads on YAML
+        edits. We monkey-patch `iter_py_files` to also yield the config path.
+
+        Idempotent across calls and a no-op for the WatchFilesReload path.
+        """
+        try:
+            from uvicorn.supervisors.statreload import StatReload
+        except ImportError:  # pragma: no cover - uvicorn is a hard dep
+            return False
+
+        if not config_path:
+            return False
+
+        from pathlib import Path
+
+        config_abs = Path(config_path).resolve()
+
+        patched_paths = getattr(StatReload, "_litellm_patched_config_paths", None)
+        if patched_paths is None:
+            original_iter = StatReload.iter_py_files
+            patched_paths = set()
+
+            def _iter_with_config(self):  # type: ignore[no-untyped-def]
+                yield from original_iter(self)
+                for path in StatReload._litellm_patched_config_paths:
+                    if path.exists():
+                        yield path
+
+            StatReload.iter_py_files = _iter_with_config  # type: ignore[assignment]
+            StatReload._litellm_patched_config_paths = patched_paths  # type: ignore[attr-defined]
+
+        patched_paths.add(config_abs)
+        return True
+
+    @staticmethod
     def _init_hypercorn_server(
         app: FastAPI,
         host: str,
@@ -619,7 +679,7 @@ class ProxyInitializationHelpers:
     "--reload",
     is_flag=True,
     default=False,
-    help="Enable uvicorn hot reload (dev only). Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
+    help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
 def run_server(  # noqa: PLR0915
     host,
@@ -753,7 +813,12 @@ def run_server(  # noqa: PLR0915
             from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
             db_host = os.getenv("DATABASE_HOST")
-            db_port = os.getenv("DATABASE_PORT")
+            # Default to the Postgres standard port. Without a default,
+            # `db_port=None` flows into `boto.generate_db_auth_token(Port=None)`
+            # and botocore stringifies it to `"None"` while building the
+            # presigned URL, which then blows up with `ValueError: Port could
+            # not be cast to integer value as 'None'` during signing.
+            db_port = os.getenv("DATABASE_PORT", "5432")
             db_user = os.getenv("DATABASE_USER")
             db_name = os.getenv("DATABASE_NAME")
             db_schema = os.getenv("DATABASE_SCHEMA")
@@ -990,11 +1055,6 @@ def run_server(  # noqa: PLR0915
             litellm_settings=litellm_settings if config else None,  # type: ignore[possibly-unbound]
         )
 
-        # --- SEPARATE HEALTH APP LOGIC ---
-        # To run the health app separately, use:
-        #   uvicorn litellm.proxy.health_app_factory:build_health_app --factory --host 0.0.0.0 --port=4001
-        # This is compatible with the SEPARATE_HEALTH_APP Docker/supervisord pattern.
-        # --- END SEPARATE HEALTH APP LOGIC ---
         # Skip server startup if requested (after all setup is done)
         if skip_server_startup:
             print(  # noqa
@@ -1028,7 +1088,11 @@ def run_server(  # noqa: PLR0915
                 uvicorn_args["loop"] = loop_type
 
             if reload:
-                uvicorn_args["reload"] = True
+                uvicorn_args.update(
+                    ProxyInitializationHelpers._get_reload_options(config)
+                )
+                if config:
+                    ProxyInitializationHelpers._patch_statreload_for_config(config)
 
             uvicorn.run(
                 **uvicorn_args,
