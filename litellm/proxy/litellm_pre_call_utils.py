@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import re
 import time
 from collections import OrderedDict
@@ -794,8 +795,17 @@ class LiteLLMProxyRequestSetup:
                 )
             )
             for k, v in litellm_logging_metadata_headers.items():
-                if v is not None:
+                if v is None:
+                    continue
+                # httpx requires header values to be str or bytes; coerce numbers/bools
+                # to str and JSON-encode dict/list (e.g. user_api_key_spend is float,
+                # user_api_key_auth_metadata is dict). See #27458.
+                if isinstance(v, (dict, list)):
+                    returned_headers["x-litellm-{}".format(k)] = json.dumps(v)
+                elif isinstance(v, (str, bytes)):
                     returned_headers["x-litellm-{}".format(k)] = v
+                else:
+                    returned_headers["x-litellm-{}".format(k)] = str(v)
 
         return returned_headers
 
@@ -1731,6 +1741,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data=data,
         user_api_key_dict=user_api_key_dict,
         pre_alias_model_name=_pre_alias_model,
+        llm_router=llm_router,
     )
 
     ## ENFORCED PARAMS CHECK
@@ -1864,6 +1875,7 @@ def _apply_credential_overrides_from_model_config(
     data: dict,
     user_api_key_dict: UserAPIKeyAuth,
     pre_alias_model_name: Optional[str] = None,
+    llm_router: Optional[Router] = None,
 ) -> None:
     """
     Walk the model_config precedence chain in team/project metadata.
@@ -1899,10 +1911,19 @@ def _apply_credential_overrides_from_model_config(
     if not project_model_config and not team_model_config:
         return
 
-    # Extract provider hint from model name (e.g. "azure/gpt-4" -> "azure")
+    # Extract provider hint from model name (e.g. "azure/gpt-4" -> "azure").
+    # When the user-facing name has no provider prefix, fall back to the
+    # deployment's litellm_params so multi-provider defaultconfig entries
+    # don't silently match the first dict key (#27516).
     provider: Optional[str] = None
     if "/" in model_name:
         provider = model_name.split("/", 1)[0]
+    elif llm_router is not None:
+        provider = _resolve_provider_from_deployment(
+            llm_router=llm_router,
+            model_name=model_name,
+            pre_alias_model_name=pre_alias_model_name,
+        )
 
     credential_name = _resolve_credential_from_model_config(
         model_name=model_name,
@@ -1936,6 +1957,48 @@ def _apply_credential_overrides_from_model_config(
         _safe_cred,
         _safe_model,
     )
+
+
+def _resolve_provider_from_deployment(
+    llm_router: Router,
+    model_name: str,
+    pre_alias_model_name: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Resolve a provider hint from the deployment's litellm_params when the
+    user-facing model name has no provider prefix.
+
+    Tries the post-alias name first (the resolved model group), then the
+    pre-alias name. Returns None if no deployment is found or the deployment
+    has no usable provider info.
+    """
+    candidates = [model_name]
+    if pre_alias_model_name and pre_alias_model_name != model_name:
+        candidates.append(pre_alias_model_name)
+
+    for name in candidates:
+        try:
+            deployment = llm_router.get_deployment_by_model_group_name(
+                model_group_name=name
+            )
+        except Exception:
+            deployment = None
+        if deployment is None:
+            continue
+
+        litellm_params = getattr(deployment, "litellm_params", None)
+        if litellm_params is None:
+            continue
+
+        custom_provider = getattr(litellm_params, "custom_llm_provider", None)
+        if custom_provider:
+            return custom_provider
+
+        deployment_model = getattr(litellm_params, "model", "") or ""
+        if "/" in deployment_model:
+            return deployment_model.split("/", 1)[0]
+
+    return None
 
 
 def _resolve_credential_from_model_config(
