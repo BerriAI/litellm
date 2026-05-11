@@ -692,6 +692,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
     ) -> Literal[
         "converse",
         "invoke",
+        "claude_platform",
         "converse_like",
         "agent",
         "agentcore",
@@ -706,6 +707,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
             str,
             Literal[
                 "invoke",
+                "claude_platform",
                 "converse_like",
                 "converse",
                 "agent",
@@ -716,6 +718,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
             ],
         ] = {
             "invoke/": "invoke",
+            "claude_platform/": "claude_platform",
             "converse_like/": "converse_like",
             "converse/": "converse",
             "agent/": "agent",
@@ -752,6 +755,36 @@ class BedrockModelInfo(BaseLLMModelInfo):
         Check if the model is an explicit converse route.
         """
         return "converse/" in model
+
+    @staticmethod
+    def _explicit_claude_platform_route(model: str) -> bool:
+        """
+        Check if the model is an explicit Claude Platform on AWS route.
+        """
+        return "claude_platform/" in model
+
+    @staticmethod
+    def get_claude_platform_model(model: str) -> str:
+        """
+        Strip the Claude Platform route prefix from a Bedrock model name.
+        """
+        return model.replace("claude_platform/", "", 1)
+
+    @staticmethod
+    def map_claude_platform_auth_params(
+        passed_params: dict, optional_params: dict
+    ) -> dict:
+        """
+        Map Claude Platform route auth params that are not OpenAI request params.
+        """
+        for key in (
+            "workspace_id",
+            "aws_workspace_id",
+            "anthropic_workspace_id",
+        ):
+            if key in passed_params:
+                optional_params[key] = passed_params[key]
+        return optional_params
 
     @staticmethod
     def _explicit_invoke_route(model: str) -> bool:
@@ -816,6 +849,12 @@ class BedrockModelInfo(BaseLLMModelInfo):
         """
 
         #########################################################
+        # Claude Platform route uses Anthropic Messages API via the AWS gateway.
+        #########################################################
+        if BedrockModelInfo._explicit_claude_platform_route(model):
+            return litellm.BedrockClaudePlatformMessagesConfig()
+
+        #########################################################
         # Converse routes should go through litellm.completion()
         if BedrockModelInfo._explicit_converse_route(model):
             return None
@@ -860,7 +899,9 @@ def get_bedrock_chat_config(model: str):
     base_model = BedrockModelInfo.get_base_model(model)
 
     # Handle explicit routes first
-    if bedrock_route == "converse" or bedrock_route == "converse_like":
+    if bedrock_route == "claude_platform":
+        return litellm.BedrockClaudePlatformConfig()
+    elif bedrock_route == "converse" or bedrock_route == "converse_like":
         return litellm.AmazonConverseConfig()
     elif bedrock_route == "openai":
         return litellm.AmazonBedrockOpenAIConfig()

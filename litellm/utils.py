@@ -4407,6 +4407,10 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
+            if bedrock_route == "claude_platform":
+                optional_params = BedrockModelInfo.map_claude_platform_auth_params(
+                    passed_params=passed_params, optional_params=optional_params
+                )
     elif custom_llm_provider == "cloudflare":
         optional_params = litellm.CloudflareChatConfig().map_openai_params(
             model=model,

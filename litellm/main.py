@@ -3858,7 +3858,33 @@ def completion(  # type: ignore # noqa: PLR0915
                     )
 
             bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-            if bedrock_route == "converse":
+            if bedrock_route == "claude_platform":
+                provider_config = ProviderConfigManager.get_provider_chat_config(
+                    model=model,
+                    provider=LlmProviders.BEDROCK,
+                )
+                model = BedrockModelInfo.get_claude_platform_model(model)
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    acompletion=acompletion,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    custom_llm_provider="bedrock",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=_get_encoding(),
+                    api_key=api_key,
+                    logging_obj=logging,
+                    client=client,
+                    provider_config=provider_config,
+                )
+                return response
+            elif bedrock_route == "converse":
                 model = model.replace("converse/", "")
                 response = bedrock_converse_chat_completion.completion(
                     model=model,
