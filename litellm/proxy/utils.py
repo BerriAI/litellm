@@ -2337,15 +2337,27 @@ class ProxyLogging:
                             )
                         )
 
-        # Actually iterate through the chained async generator and yield chunks
-        async for chunk in current_response:
-            yield chunk
-
-        # Fire deferred logging AFTER all guardrail end-of-stream blocks
-        # completed.  unified_guardrail writes guardrail_information during
-        # its end-of-stream block (inside current_response), so by the time
-        # we reach this point the metadata is fully populated.
-        ProxyLogging._fire_deferred_stream_logging(request_data)
+        # Actually iterate through the chained async generator and yield chunks.
+        # The try/finally is load-bearing: this generator is bound to the
+        # client's network connection, so a mid-stream disconnect raises
+        # CancelledError / GeneratorExit inside the async for. Without
+        # finally, the deferred logging is skipped — no SpendLogs row, no
+        # post-call guardrail block (PII / moderation / policy), no token
+        # reconciliation. A caller can terminate the TCP connection right
+        # before the final chunk and consume LLM provider quota without it
+        # being attributed to their key, bypassing budgets / TPM limits /
+        # content guardrails simultaneously. The same shape is used in
+        # pass_through_endpoints/streaming_handler.py:73 for the same
+        # GeneratorExit-on-disconnect reason.
+        try:
+            async for chunk in current_response:
+                yield chunk
+        finally:
+            # Fire deferred logging AFTER all guardrail end-of-stream blocks
+            # completed.  unified_guardrail writes guardrail_information
+            # during its end-of-stream block (inside current_response), so by
+            # the time we reach this point the metadata is fully populated.
+            ProxyLogging._fire_deferred_stream_logging(request_data)
 
     @staticmethod
     def _fire_deferred_stream_logging(request_data: dict) -> None:

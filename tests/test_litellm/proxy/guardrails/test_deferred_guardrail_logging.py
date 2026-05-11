@@ -1094,3 +1094,141 @@ class TestFireDeferredStreamLogging:
         assert info is not None, "guardrail_information should be populated"
         assert len(info) == 1
         assert info[0]["guardrail_name"] == "info-writer"
+
+
+class TestStreamingDisconnectFiresDeferredLogging:
+    """
+    AAr6bXKP regression: ``async_post_call_streaming_iterator_hook`` is the
+    outer generator bound to the client's network connection. A mid-stream
+    disconnect raises ``CancelledError`` / ``GeneratorExit`` inside the
+    ``async for`` loop. Without ``try/finally``,
+    ``_fire_deferred_stream_logging`` is skipped — no SpendLogs row, no
+    post-call guardrails, no token reconciliation. A caller can drop the
+    TCP connection right before the final chunk and consume LLM provider
+    quota without it being attributed to their key, also bypassing
+    PII / moderation / policy guardrails.
+
+    The fix wraps the iteration in ``try/finally`` so the deferred logging
+    fires on every termination path: normal completion, exception, and
+    client disconnect.
+    """
+
+    @pytest.mark.asyncio
+    async def test_deferred_logging_fires_on_client_disconnect(self):
+        """Simulate a client disconnect mid-stream: GeneratorExit inside the
+        ``async for`` must still trigger ``_fire_deferred_stream_logging``."""
+        fired_with: list = []
+
+        def _capture_fire(request_data: dict) -> None:
+            fired_with.append(request_data)
+
+        async def _two_chunks_then_exit():
+            yield "chunk-1"
+            yield "chunk-2"
+            yield "chunk-3"  # consumer disconnects before this
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        request_data = {"litellm_logging_obj": MagicMock()}
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+
+        with (
+            patch.object(
+                ProxyLogging,
+                "_fire_deferred_stream_logging",
+                staticmethod(_capture_fire),
+            ),
+            patch("litellm.callbacks", []),
+        ):
+            gen = proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=_two_chunks_then_exit(),
+                request_data=request_data,
+            )
+
+            # Pull two chunks then close the generator — this is what FastAPI /
+            # uvicorn do when the client TCP-disconnects: aclose() on the
+            # generator raises GeneratorExit inside the async for loop.
+            chunks_seen = []
+            async for chunk in gen:
+                chunks_seen.append(chunk)
+                if len(chunks_seen) == 2:
+                    await gen.aclose()
+                    break
+
+        assert len(fired_with) == 1, (
+            "_fire_deferred_stream_logging must fire exactly once even when "
+            "the client disconnects mid-stream"
+        )
+        assert fired_with[0] is request_data
+
+    @pytest.mark.asyncio
+    async def test_deferred_logging_fires_on_normal_completion(self):
+        """Sanity: deferred logging still fires on the normal happy path."""
+        fired_with: list = []
+
+        def _capture_fire(request_data: dict) -> None:
+            fired_with.append(request_data)
+
+        async def _gen():
+            yield "only-chunk"
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        request_data = {"litellm_logging_obj": MagicMock()}
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+
+        with (
+            patch.object(
+                ProxyLogging,
+                "_fire_deferred_stream_logging",
+                staticmethod(_capture_fire),
+            ),
+            patch("litellm.callbacks", []),
+        ):
+            gen = proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=_gen(),
+                request_data=request_data,
+            )
+            async for _ in gen:
+                pass
+
+        assert len(fired_with) == 1
+        assert fired_with[0] is request_data
+
+    @pytest.mark.asyncio
+    async def test_deferred_logging_fires_on_exception_mid_stream(self):
+        """If the inner stream raises mid-iteration, deferred logging must
+        still fire — the bug class covers any abrupt termination, not just
+        client disconnects."""
+        fired_with: list = []
+
+        def _capture_fire(request_data: dict) -> None:
+            fired_with.append(request_data)
+
+        async def _gen_raises():
+            yield "chunk-1"
+            raise RuntimeError("upstream blew up")
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        request_data = {"litellm_logging_obj": MagicMock()}
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+
+        with (
+            patch.object(
+                ProxyLogging,
+                "_fire_deferred_stream_logging",
+                staticmethod(_capture_fire),
+            ),
+            patch("litellm.callbacks", []),
+        ):
+            gen = proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=_gen_raises(),
+                request_data=request_data,
+            )
+            with pytest.raises(RuntimeError, match="upstream blew up"):
+                async for _ in gen:
+                    pass
+
+        assert len(fired_with) == 1
+        assert fired_with[0] is request_data
