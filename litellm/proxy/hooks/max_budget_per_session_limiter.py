@@ -17,12 +17,11 @@ Follows the same pattern as max_iterations_limiter.py.
 import os
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from fastapi import HTTPException
-
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -112,8 +111,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         )
 
         if current_spend >= max_budget:
-            raise HTTPException(
-                status_code=429,
+            raise ProxyRateLimitError(
                 detail=(
                     f"Session budget exceeded for session {session_id}. "
                     f"Current spend: ${current_spend:.4f}, "

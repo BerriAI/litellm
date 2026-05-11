@@ -13,12 +13,11 @@ Follows the same pattern as parallel_request_limiter_v3.py.
 import os
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-from fastapi import HTTPException
-
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -116,8 +115,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         current_count = await self._increment_and_get(cache_key)
 
         if current_count > max_iterations:
-            raise HTTPException(
-                status_code=429,
+            raise ProxyRateLimitError(
                 detail=(
                     f"Max iterations exceeded for session {session_id}. "
                     f"Current count: {current_count}, max_iterations: {max_iterations}."
