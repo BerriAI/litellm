@@ -6,14 +6,13 @@ import asyncio
 import os
 from typing import List, Optional, Tuple, Union
 
-from fastapi import HTTPException
-
 import litellm
 from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
 from litellm.utils import get_utc_datetime
@@ -218,8 +217,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             )
             ### CHECK TPM ###
             if available_tpm is not None and available_tpm == 0:
-                raise HTTPException(
-                    status_code=429,
+                raise ProxyRateLimitError(
                     detail={
                         "error": "Key={} over available TPM={}. Model TPM={}, Active keys={}".format(
                             user_api_key_dict.api_key,
@@ -231,8 +229,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 )
             ### CHECK RPM ###
             elif available_rpm is not None and available_rpm == 0:
-                raise HTTPException(
-                    status_code=429,
+                raise ProxyRateLimitError(
                     detail={
                         "error": "Key={} over available RPM={}. Model RPM={}, Active keys={}".format(
                             user_api_key_dict.api_key,

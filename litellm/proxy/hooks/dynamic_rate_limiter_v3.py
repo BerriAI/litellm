@@ -14,6 +14,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitDescriptor,
     RateLimitDescriptorRateLimitObject,
@@ -492,8 +493,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                     continue
                 descriptor_key = status["descriptor_key"]
                 if descriptor_key == "model_saturation_check":
-                    raise HTTPException(
-                        status_code=429,
+                    raise ProxyRateLimitError(
                         detail={
                             "error": f"Model capacity reached for {model}. "
                             f"Priority: {priority}, "
@@ -513,8 +513,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                         f"Enforcing priority limits for {model}, saturation: {saturation:.1%}, "
                         f"priority: {priority}"
                     )
-                    raise HTTPException(
-                        status_code=429,
+                    raise ProxyRateLimitError(
                         detail={
                             "error": f"Priority-based rate limit exceeded. "
                             f"Model: {model}, "
@@ -547,8 +546,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
                 f"Dynamic rate limiter: OVER_LIMIT response with unknown "
                 f"descriptor_key(s) — refusing request. response={atomic_response}"
             )
-            raise HTTPException(
-                status_code=429,
+            raise ProxyRateLimitError(
                 detail={
                     "error": "Rate limit exceeded",
                     "descriptor_key": (
