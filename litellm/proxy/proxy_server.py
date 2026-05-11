@@ -1061,6 +1061,52 @@ vertex_live_passthrough_vertex_base = VertexBase()
 from fastapi.routing import APIWebSocketRoute
 
 
+def _inject_websocket_stubs_into_openapi_schema(
+    openapi_schema: dict, websocket_routes: list
+) -> dict:
+    """
+    Add a synthetic GET stub for each WebSocket route so it appears in Swagger UI.
+
+    Merges into any existing path entry rather than replacing it — a WebSocket route
+    that shares its path with an HTTP route must not erase the HTTP operation. If
+    a "get" operation is already documented on the path, the WebSocket stub is
+    skipped to preserve the real GET.
+    """
+    for route in websocket_routes:
+        base_path = route.path.split("{")[0].rstrip("?")
+
+        parameters = []
+        try:
+            if hasattr(route, "dependant") and route.dependant is not None:
+                # Handle both FastAPI <0.120 and >=0.120
+                query_params = getattr(route.dependant, "query_params", [])
+                if query_params:
+                    for param in query_params:
+                        parameters.append(
+                            {
+                                "name": param.name,
+                                "in": "query",
+                                "required": param.required,
+                                "schema": {"type": "string"},
+                            }
+                        )
+        except (AttributeError, TypeError):
+            pass
+
+        path_entry = openapi_schema["paths"].setdefault(base_path, {})
+        if "get" not in path_entry:
+            path_entry["get"] = {
+                "summary": f"WebSocket: {route.name or base_path}",
+                "description": "WebSocket connection endpoint",
+                "operationId": f"websocket_{route.name or base_path.replace('/', '_')}",
+                "parameters": parameters,
+                "responses": {"101": {"description": "WebSocket Protocol Switched"}},
+                "tags": ["WebSocket"],
+            }
+
+    return openapi_schema
+
+
 def get_openapi_schema():
     if app.openapi_schema:
         return app.openapi_schema
@@ -1083,43 +1129,11 @@ def get_openapi_schema():
         route for route in app.routes if isinstance(route, APIWebSocketRoute)
     ]
 
-    # Add each WebSocket route to the schema
-    for route in websocket_routes:
-        # Get the base path without query parameters
-        base_path = route.path.split("{")[0].rstrip("?")
-
-        # Extract parameters from the route
-        parameters = []
-        try:
-            if hasattr(route, "dependant") and route.dependant is not None:
-                # Handle both FastAPI <0.120 and >=0.120
-                query_params = getattr(route.dependant, "query_params", [])
-                if query_params:
-                    for param in query_params:
-                        parameters.append(
-                            {
-                                "name": param.name,
-                                "in": "query",
-                                "required": param.required,
-                                "schema": {
-                                    "type": "string"
-                                },  # You can make this more specific if needed
-                            }
-                        )
-        except (AttributeError, TypeError):
-            # If we can't access query_params, continue without them
-            pass
-
-        openapi_schema["paths"][base_path] = {
-            "get": {
-                "summary": f"WebSocket: {route.name or base_path}",
-                "description": "WebSocket connection endpoint",
-                "operationId": f"websocket_{route.name or base_path.replace('/', '_')}",
-                "parameters": parameters,
-                "responses": {"101": {"description": "WebSocket Protocol Switched"}},
-                "tags": ["WebSocket"],
-            }
-        }
+    # Add a synthetic GET stub for each so they render in Swagger UI,
+    # without clobbering existing HTTP operations on the same path.
+    openapi_schema = _inject_websocket_stubs_into_openapi_schema(
+        openapi_schema, websocket_routes
+    )
 
     # Add LLM API request schema bodies for documentation
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
