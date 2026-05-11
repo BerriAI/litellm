@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-05-02T11:18:44.200141Z"
+exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3189,7 +3189,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.84.0"
+version = "1.85.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -3374,7 +3374,7 @@ proxy-dev = [
 [package.metadata]
 requires-dist = [
     { name = "a2a-sdk", marker = "extra == 'extra-proxy'", specifier = "==0.3.24" },
-    { name = "aiohttp", specifier = "==3.13.4" },
+    { name = "aiohttp", specifier = ">=3.10,<4.0" },
     { name = "anthropic", extras = ["vertex"], marker = "extra == 'proxy-runtime'", specifier = "==0.84.0" },
     { name = "apscheduler", marker = "extra == 'proxy'", specifier = "==3.11.2" },
     { name = "audioread", marker = "extra == 'stt-nvidia-riva'", specifier = ">=3.0.1" },
@@ -3387,14 +3387,14 @@ requires-dist = [
     { name = "azure-storage-file-datalake", marker = "extra == 'proxy-runtime'", specifier = "==12.20.0" },
     { name = "backoff", marker = "extra == 'proxy'", specifier = "==2.2.1" },
     { name = "boto3", marker = "extra == 'proxy'", specifier = "==1.43.1" },
-    { name = "click", specifier = "==8.1.8" },
+    { name = "click", specifier = ">=8.0.0,<9.0" },
     { name = "cryptography", marker = "extra == 'proxy'", specifier = "==46.0.7" },
     { name = "ddtrace", marker = "extra == 'proxy-runtime'", specifier = "==2.19.0" },
     { name = "detect-secrets", marker = "extra == 'proxy-runtime'", specifier = "==1.5.0" },
     { name = "diskcache", marker = "extra == 'caching'", specifier = "==5.6.3" },
     { name = "fastapi", marker = "extra == 'proxy'", specifier = "==0.124.4" },
     { name = "fastapi-sso", marker = "extra == 'proxy'", specifier = "==0.19.0" },
-    { name = "fastuuid", specifier = "==0.14.0" },
+    { name = "fastuuid", specifier = ">=0.14.0,<1.0" },
     { name = "google-cloud-aiplatform", marker = "extra == 'google'", specifier = "==1.133.0" },
     { name = "google-cloud-aiplatform", marker = "extra == 'proxy-runtime'", specifier = "==1.133.0" },
     { name = "google-cloud-iam", marker = "extra == 'extra-proxy'", specifier = "==2.19.1" },
@@ -3403,10 +3403,10 @@ requires-dist = [
     { name = "grpcio", marker = "extra == 'grpc'", specifier = "==1.78.0" },
     { name = "grpcio", marker = "extra == 'proxy-runtime'", specifier = "==1.78.0" },
     { name = "gunicorn", marker = "extra == 'proxy'", specifier = "==23.0.0" },
-    { name = "httpx", specifier = "==0.28.1" },
-    { name = "importlib-metadata", specifier = "==8.5.0" },
-    { name = "jinja2", specifier = "==3.1.6" },
-    { name = "jsonschema", specifier = "==4.23.0" },
+    { name = "httpx", specifier = ">=0.28.0,<1.0" },
+    { name = "importlib-metadata", specifier = ">=8.0.0,<9.0" },
+    { name = "jinja2", specifier = ">=3.1.6,<4.0" },
+    { name = "jsonschema", specifier = ">=4.0.0,<5.0" },
     { name = "langfuse", marker = "extra == 'proxy-runtime'", specifier = "==2.59.7" },
     { name = "litellm-enterprise", marker = "extra == 'proxy'", editable = "enterprise" },
     { name = "litellm-proxy-extras", marker = "extra == 'proxy'", editable = "litellm-proxy-extras" },
@@ -3417,7 +3417,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'stt-nvidia-riva'", specifier = ">=1.26.0" },
     { name = "numpydoc", marker = "extra == 'utils'", specifier = "==1.8.0" },
     { name = "nvidia-riva-client", marker = "extra == 'stt-nvidia-riva'", specifier = ">=2.15.0" },
-    { name = "openai", specifier = "==2.33.0" },
+    { name = "openai", specifier = ">=2.20.0,<3.0.0" },
     { name = "opentelemetry-api", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
     { name = "opentelemetry-exporter-otlp", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
@@ -3425,12 +3425,12 @@ requires-dist = [
     { name = "polars", marker = "extra == 'proxy'", specifier = "==1.38.1" },
     { name = "prisma", marker = "extra == 'extra-proxy'", specifier = "==0.11.0" },
     { name = "prometheus-client", marker = "extra == 'proxy-runtime'", specifier = "==0.20.0" },
-    { name = "pydantic", specifier = "==2.12.5" },
+    { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
     { name = "pyjwt", marker = "extra == 'proxy'", specifier = "==2.12.0" },
     { name = "pynacl", marker = "extra == 'proxy'", specifier = "==1.6.2" },
     { name = "pypdf", marker = "python_full_version < '3.14' and extra == 'proxy-runtime'", specifier = "==6.10.2" },
     { name = "pyroscope-io", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = "==0.8.16" },
-    { name = "python-dotenv", specifier = "==1.2.2" },
+    { name = "python-dotenv", specifier = ">=1.0.0,<2.0" },
     { name = "python-multipart", marker = "extra == 'proxy'", specifier = "==0.0.27" },
     { name = "pyyaml", marker = "extra == 'proxy'", specifier = "==6.0.3" },
     { name = "redisvl", marker = "python_full_version < '3.14' and extra == 'extra-proxy'", specifier = "==0.4.1" },
@@ -3442,8 +3442,8 @@ requires-dist = [
     { name = "sentry-sdk", marker = "extra == 'proxy-runtime'", specifier = "==2.21.0" },
     { name = "soundfile", marker = "extra == 'proxy'", specifier = "==0.12.1" },
     { name = "soundfile", marker = "extra == 'stt-nvidia-riva'", specifier = ">=0.12.1" },
-    { name = "tiktoken", specifier = "==0.12.0" },
-    { name = "tokenizers", specifier = "==0.23.1" },
+    { name = "tiktoken", specifier = ">=0.8.0,<1.0" },
+    { name = "tokenizers", specifier = ">=0.21.0,<1.0" },
     { name = "uvicorn", marker = "extra == 'proxy'", specifier = "==0.33.0" },
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = "==0.21.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = "==15.0.1" },

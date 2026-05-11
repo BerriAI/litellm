@@ -57,6 +57,17 @@ LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
+CAPTURE_MODE_NO_CONTENT = "NO_CONTENT"
+CAPTURE_MODE_SPAN_ONLY = "SPAN_ONLY"
+CAPTURE_MODE_EVENT_ONLY = "EVENT_ONLY"
+CAPTURE_MODE_SPAN_AND_EVENT = "SPAN_AND_EVENT"
+_VALID_CAPTURE_MODES = {
+    CAPTURE_MODE_NO_CONTENT,
+    CAPTURE_MODE_SPAN_ONLY,
+    CAPTURE_MODE_EVENT_ONLY,
+    CAPTURE_MODE_SPAN_AND_EVENT,
+}
+
 
 @dataclass
 class OpenTelemetryConfig:
@@ -71,6 +82,9 @@ class OpenTelemetryConfig:
     ignore_context_propagation: Optional[bool] = None
     # When True, create a private TracerProvider instead of reusing or setting the global one.
     skip_set_global: bool = False
+    # Programmatic override for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
+    # One of NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT (or "true" as legacy alias).
+    capture_message_content: Optional[str] = None
 
     def __post_init__(self) -> None:
         # If endpoint is specified but exporter is still the default "console",
@@ -182,6 +196,9 @@ class OpenTelemetry(CustomLogger):
         super().__init__(**kwargs)
         self._init_metrics(meter_provider)
         self._init_logs(logger_provider)
+        # Sample env-var / config / message_logging at init so subsequent
+        # _capture_in_span / _capture_in_event calls are deterministic.
+        self._capture_mode_cached = self._compute_capture_mode_from_init_state()
         self._init_otel_logger_on_litellm_proxy()
 
     @staticmethod
@@ -304,6 +321,62 @@ class OpenTelemetry(CustomLogger):
         # langfuse_otel relies on the Langfuse SDK's providers; don't overwrite them.
         return self.config.skip_set_global or (
             hasattr(self, "callback_name") and self.callback_name == "langfuse_otel"
+        )
+
+    def _compute_capture_mode_from_init_state(self) -> Optional[str]:
+        """Sample explicit settings at init. Returns the resolved mode or
+        None if nothing explicit is set (in which case the legacy
+        ``self.message_logging`` flag is consulted dynamically per request).
+
+        ``"true"``/``"1"`` map to ``EVENT_ONLY`` per the contrib convention.
+        ``"false"``/``"0"`` map to ``NO_CONTENT``.
+        Unknown values are ignored.
+        """
+        explicit = self.config.capture_message_content or os.getenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+        )
+        if not explicit:
+            return None
+        normalized = explicit.upper()
+        if normalized in ("TRUE", "1"):
+            return CAPTURE_MODE_EVENT_ONLY
+        if normalized in ("FALSE", "0"):
+            return CAPTURE_MODE_NO_CONTENT
+        if normalized in _VALID_CAPTURE_MODES:
+            return normalized
+        return None
+
+    def _resolve_capture_mode(self) -> str:
+        """Return the active capture mode for this request.
+
+        Precedence:
+          1. ``litellm.turn_off_message_logging=True`` forces ``NO_CONTENT``
+             (kill-switch checked dynamically).
+          2. Explicit setting sampled at init from
+             ``OpenTelemetryConfig.capture_message_content`` or
+             ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``.
+          3. Legacy ``self.message_logging`` (checked dynamically).
+        """
+        if litellm.turn_off_message_logging:
+            return CAPTURE_MODE_NO_CONTENT
+        if self._capture_mode_cached is not None:
+            return self._capture_mode_cached
+        return (
+            CAPTURE_MODE_SPAN_AND_EVENT
+            if self.message_logging
+            else CAPTURE_MODE_NO_CONTENT
+        )
+
+    def _capture_in_span(self) -> bool:
+        return self._resolve_capture_mode() in (
+            CAPTURE_MODE_SPAN_ONLY,
+            CAPTURE_MODE_SPAN_AND_EVENT,
+        )
+
+    def _capture_in_event(self) -> bool:
+        return self._resolve_capture_mode() in (
+            CAPTURE_MODE_EVENT_ONLY,
+            CAPTURE_MODE_SPAN_AND_EVENT,
         )
 
     def _init_tracing(self, tracer_provider):
@@ -825,8 +898,7 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        # only log raw LLM request/response if message_logging is on and not globally turned off
-        if litellm.turn_off_message_logging or not self.message_logging:
+        if not self._capture_in_span():
             return
 
         litellm_params = kwargs.get("litellm_params", {})
@@ -1117,8 +1189,13 @@ class OpenTelemetry(CustomLogger):
             }
             if role == "tool" and msg.get("id"):
                 attrs["id"] = msg["id"]
-            if self.message_logging and msg.get("content"):
+            capture_event_content = self._capture_in_event()
+            if capture_event_content and msg.get("content"):
                 attrs["gen_ai.prompt"] = msg["content"]
+
+            body = msg.copy()
+            if not capture_event_content:
+                body.pop("content", None)
 
             log_record = SdkLogRecord(
                 timestamp=self._to_ns(datetime.now()),
@@ -1127,7 +1204,7 @@ class OpenTelemetry(CustomLogger):
                 trace_flags=parent_ctx.trace_flags,
                 severity_number=SeverityNumber.INFO,
                 severity_text="INFO",
-                body=msg.copy(),
+                body=body,
                 attributes=attrs,
             )
             otel_logger.emit(log_record)
@@ -1141,14 +1218,15 @@ class OpenTelemetry(CustomLogger):
                 "finish_reason": choice.get("finish_reason"),
             }
             body_msg = choice.get("message", {})
-            if self.message_logging and body_msg.get("content"):
+            capture_event_content = self._capture_in_event()
+            if capture_event_content and body_msg.get("content"):
                 attrs["message.content"] = body_msg["content"]
             body = {
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
                 "message": {"role": body_msg.get("role", "assistant")},
             }
-            if self.message_logging and body_msg.get("content"):
+            if capture_event_content and body_msg.get("content"):
                 body["message"]["content"] = body_msg["content"]
 
             log_record = SdkLogRecord(
@@ -1674,9 +1752,7 @@ class OpenTelemetry(CustomLogger):
             ########## LLM Request Medssages / tools / content Attributes ###########
             #########################################################################
 
-            if litellm.turn_off_message_logging is True:
-                return
-            if self.message_logging is not True:
+            if not self._capture_in_span():
                 return
 
             if optional_params.get("tools"):
@@ -1695,17 +1771,41 @@ class OpenTelemetry(CustomLogger):
                     value=safe_dumps(transformed_messages),
                 )
 
-            if kwargs.get("system_instructions"):
-                transformed_system_instructions = (
-                    self._transform_messages_to_otel_semantic_conventions(
-                        kwargs.get("system_instructions")
+            # Coalesce the different kwarg names that carry the system
+            # prompt depending on the call path:
+            #   - "system_instructions" — Vertex AI Gemini chat-completion
+            #   - "instructions"        — OpenAI Responses API
+            #   - "system"              — Anthropic Messages API
+            # Use `is not None` rather than truthiness to avoid falsy
+            # values (e.g. []) falling through to the wrong kwarg.
+            system_instructions = (
+                kwargs.get("system_instructions")
+                if kwargs.get("system_instructions") is not None
+                else (
+                    kwargs.get("instructions")
+                    if kwargs.get("instructions") is not None
+                    else kwargs.get("system")
+                )
+            )
+            if system_instructions:
+                if isinstance(system_instructions, str):
+                    # Plain text system prompt — no transformation needed
+                    self.safe_set_attribute(
+                        span=span,
+                        key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
+                        value=system_instructions,
                     )
-                )
-                self.safe_set_attribute(
-                    span=span,
-                    key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
-                    value=safe_dumps(transformed_system_instructions),
-                )
+                else:
+                    transformed_system_instructions = (
+                        self._transform_messages_to_otel_semantic_conventions(
+                            system_instructions
+                        )
+                    )
+                    self.safe_set_attribute(
+                        span=span,
+                        key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
+                        value=safe_dumps(transformed_system_instructions),
+                    )
 
             self.safe_set_attribute(
                 span=span,
@@ -1763,6 +1863,57 @@ class OpenTelemetry(CustomLogger):
                                         key=key,
                                         value=value,
                                     )
+
+                elif response_obj.get("output"):
+                    # Responses API: ResponsesAPIResponse has an "output"
+                    # list instead of "choices".  Each item with
+                    # type="message" contains a "content" list of
+                    # OutputText objects (type="output_text").
+                    output_items = response_obj.get("output")
+                    output_messages = self._transform_responses_api_output_to_otel(
+                        output_items
+                    )
+                    if output_messages:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
+                            value=safe_dumps(output_messages),
+                        )
+
+                    # Emit per-tool-call span attributes (parity with
+                    # the choices branch that calls _tool_calls_kv_pair).
+                    # Convert Responses API function_call items to the
+                    # ChatCompletionMessageToolCall format expected by
+                    # _tool_calls_kv_pair.
+                    tool_calls = []
+                    for out_item in output_items:
+                        item_d = self._to_dict(out_item)
+                        if item_d and item_d.get("type") == "function_call":
+                            tool_calls.append(
+                                {
+                                    "function": {
+                                        "name": item_d.get("name", ""),
+                                        "arguments": item_d.get("arguments", ""),
+                                    }
+                                }
+                            )
+                    if tool_calls:
+                        kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)  # type: ignore
+                        for key, value in kv_pairs.items():
+                            self.safe_set_attribute(
+                                span=span,
+                                key=key,
+                                value=value,
+                            )
+
+                    # Extract finish reason from ResponsesAPIResponse.status
+                    status = response_obj.get("status")
+                    if status:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
+                            value=safe_dumps([status]),
+                        )
 
         except Exception as e:
             self.handle_callback_failure(
@@ -1857,6 +2008,78 @@ class OpenTelemetry(CustomLogger):
                 transformed_msg["finish_reason"] = finish_reason
 
             transformed.append(transformed_msg)
+        return transformed
+
+    @staticmethod
+    def _to_dict(obj) -> Optional[dict]:
+        """Normalize an object to a plain dict.
+
+        Handles three forms that appear in practice:
+
+        1. Plain ``dict`` — returned as-is.
+        2. LiteLLM's ``BaseLiteLLMOpenAIResponseObject`` — exposes a
+           ``.get()`` method that delegates to ``__dict__``.
+        3. Raw Pydantic v2 models from the ``openai`` SDK (e.g.
+           ``ResponseOutputMessage``, ``ResponseOutputText``) — these do
+           **not** have ``.get()`` but do have ``.model_dump()``.
+
+        Returns ``None`` for anything else so callers can skip it.
+        """
+        if isinstance(obj, dict):
+            return obj
+        if hasattr(obj, "get"):
+            # BaseLiteLLMOpenAIResponseObject duck-type
+            return obj  # type: ignore[return-value]
+        if hasattr(obj, "model_dump"):
+            # Raw Pydantic v2 model (e.g. openai SDK types)
+            return obj.model_dump()  # type: ignore[union-attr]
+        return None
+
+    def _transform_responses_api_output_to_otel(self, output: List) -> List[dict]:
+        """
+        Transform Responses API output items into OTEL GenAI 1.38 format.
+
+        The Responses API returns output as a list of items, each with a
+        ``type`` field.  Message items (``type="message"``) contain a
+        ``content`` list of ``OutputText`` objects with ``type="output_text"``
+        and ``text`` fields.
+
+        Items may be plain dicts, LiteLLM wrapper objects (with ``.get()``),
+        or raw Pydantic v2 models from the ``openai`` SDK (with
+        ``.model_dump()``).  We normalize each item to a dict via
+        ``_to_dict`` before processing.
+
+        This method converts them to the same ``{"role": ..., "parts": [...]}``
+        format used by ``_transform_choices_to_otel_semantic_conventions``.
+        """
+        transformed = []
+        for raw_item in output:
+            item = self._to_dict(raw_item)
+            if item is None:
+                continue
+            if item.get("type") == "message":
+                role = item.get("role", "assistant")
+                parts = []
+                for raw_content in item.get("content", []):
+                    content = self._to_dict(raw_content)
+                    if content is None:
+                        continue
+                    if content.get("type") == "output_text":
+                        text = content.get("text", "")
+                        if text:
+                            parts.append({"type": "text", "content": text})
+                if parts:
+                    transformed.append({"role": role, "parts": parts})
+            elif item.get("type") == "function_call":
+                # Surface tool calls from Responses API output
+                part: dict = {
+                    "type": "tool_call",
+                    "name": item.get("name", ""),
+                    "arguments": item.get("arguments", ""),
+                }
+                if item.get("call_id"):
+                    part["id"] = item["call_id"]
+                transformed.append({"role": "assistant", "parts": [part]})
         return transformed
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):

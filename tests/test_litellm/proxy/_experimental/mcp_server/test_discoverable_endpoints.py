@@ -23,6 +23,20 @@ def mock_mcp_client_ip():
         yield
 
 
+def _mock_callback_request(base_url: str = "http://localhost:3000/"):
+    """Return a MagicMock Request for callback/authorize same-origin tests.
+
+    The callback handler only uses ``request`` to compute the proxy's own
+    base URL via ``get_request_base_url`` (which reads ``request.base_url``
+    and trusted ``X-Forwarded-*`` headers). A simple MagicMock with the
+    right attributes is sufficient.
+    """
+    req = MagicMock()
+    req.base_url = base_url
+    req.headers = {}
+    return req
+
+
 @pytest.fixture
 def trust_xff():
     """Force ``IPAddressUtils.is_request_from_trusted_proxy`` to True.
@@ -1844,6 +1858,7 @@ async def test_oauth_callback_redirects_with_state():
 
         # Call callback endpoint with code and state
         response = await callback(
+            request=_mock_callback_request(),
             code="test_authorization_code_12345",
             state="encrypted_state_value",
         )
@@ -1887,6 +1902,7 @@ async def test_oauth_callback_preserves_client_redirect_uri_query():
         }
 
         response = await callback(
+            request=_mock_callback_request(),
             code="test_authorization_code_12345",
             state="encrypted_state_value",
         )
@@ -1917,6 +1933,7 @@ async def test_oauth_callback_handles_invalid_state():
 
         # Call callback endpoint with invalid state
         response = await callback(
+            request=_mock_callback_request(),
             code="test_code",
             state="invalid_encrypted_state",
         )
@@ -1924,6 +1941,40 @@ async def test_oauth_callback_handles_invalid_state():
         # Should return HTML error page
         assert response.status_code == 200
         assert "Authentication incomplete" in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_accepts_same_origin_ui_redirect():
+    """UI OAuth flow: the callback should redirect to the proxy's own UI
+    origin when the encrypted state carries a same-origin client_redirect_uri."""
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        callback,
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.decode_state_hash"
+    ) as mock_decode:
+        mock_decode.return_value = {
+            "base_url": "https://proxy.example.com/ui/mcp/oauth/callback",
+            "original_state": "state-123",
+            "code_challenge": None,
+            "code_challenge_method": None,
+            "client_redirect_uri": "https://proxy.example.com/ui/mcp/oauth/callback",
+        }
+
+        response = await callback(
+            request=_mock_callback_request(base_url="https://proxy.example.com/"),
+            code="auth-code-123",
+            state="encrypted_state",
+        )
+
+    assert response.status_code == 302
+    assert (
+        "https://proxy.example.com/ui/mcp/oauth/callback"
+        in response.headers["location"]
+    )
+    assert "code=auth-code-123" in response.headers["location"]
+    assert "state=state-123" in response.headers["location"]
 
 
 @pytest.mark.asyncio
@@ -2307,7 +2358,11 @@ async def test_callback_revalidates_loopback_on_decoded_base_url():
             "client_redirect_uri": "https://attacker.example.com/cb",
         }
         with pytest.raises(HTTPException) as exc_info:
-            await callback(code="stolen_code", state="encrypted_stale_state")
+            await callback(
+                request=_mock_callback_request(),
+                code="stolen_code",
+                state="encrypted_stale_state",
+            )
         assert exc_info.value.status_code == 400
 
 
@@ -2329,7 +2384,11 @@ async def test_callback_revalidates_loopback_on_decoded_client_redirect_uri():
             "client_redirect_uri": "https://attacker.example.com/cb",
         }
         with pytest.raises(HTTPException) as exc_info:
-            await callback(code="stolen_code", state="encrypted_stale_state")
+            await callback(
+                request=_mock_callback_request(),
+                code="stolen_code",
+                state="encrypted_stale_state",
+            )
         assert exc_info.value.status_code == 400
 
 
@@ -2349,7 +2408,11 @@ async def test_callback_rejects_state_missing_redirect_uri():
             "code_challenge_method": None,
         }
         with pytest.raises(HTTPException) as exc_info:
-            await callback(code="code", state="encrypted_malformed_state")
+            await callback(
+                request=_mock_callback_request(),
+                code="code",
+                state="encrypted_malformed_state",
+            )
         assert exc_info.value.status_code == 400
 
 

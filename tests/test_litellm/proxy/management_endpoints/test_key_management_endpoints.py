@@ -5689,7 +5689,7 @@ async def test_process_single_key_update():
                             "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook"
                         ):
                             # Create update request
-                            key_update_item = BulkUpdateKeyRequestItem(
+                            update_key_request = UpdateKeyRequest(
                                 key="test-key-123",
                                 max_budget=100.0,
                                 tags=["production"],
@@ -5703,7 +5703,7 @@ async def test_process_single_key_update():
 
                             # Call the function
                             result = await _process_single_key_update(
-                                key_update_item=key_update_item,
+                                update_key_request=update_key_request,
                                 user_api_key_dict=user_api_key_dict,
                                 litellm_changed_by=None,
                                 prisma_client=mock_prisma_client,
@@ -9855,9 +9855,6 @@ async def test_process_single_key_update_cache_invalidation_with_token_hash():
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _process_single_key_update,
     )
-    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
-        BulkUpdateKeyRequestItem,
-    )
 
     token_hash = "abc123def456"
 
@@ -9900,7 +9897,7 @@ async def test_process_single_key_update_cache_invalidation_with_token_hash():
             new_callable=AsyncMock,
         ),
     ):
-        key_update_item = BulkUpdateKeyRequestItem(
+        update_key_request = UpdateKeyRequest(
             key=token_hash,
             max_budget=100.0,
         )
@@ -9912,7 +9909,7 @@ async def test_process_single_key_update_cache_invalidation_with_token_hash():
         )
 
         await _process_single_key_update(
-            key_update_item=key_update_item,
+            update_key_request=update_key_request,
             user_api_key_dict=user_api_key_dict,
             litellm_changed_by=None,
             prisma_client=mock_prisma_client,
@@ -10019,3 +10016,583 @@ async def test_execute_virtual_key_regeneration_cache_invalidation_with_token_ha
         call_kwargs = mock_delete_cache.call_args.kwargs
         # The token hash should be passed as-is, NOT double-hashed
         assert call_kwargs["hashed_token"] == token_hash
+
+
+# ---------------------------------------------------------------------------
+# /team/key/bulk_update tests
+# ---------------------------------------------------------------------------
+
+
+_BULK_PKG = "litellm.proxy.management_endpoints.key_management_endpoints"
+
+
+def _make_team_key(token: str, team_id: str = "team-abc") -> LiteLLM_VerificationToken:
+    return LiteLLM_VerificationToken(
+        token=token,
+        user_id="user-123",
+        models=[],
+        team_id=team_id,
+        max_budget=None,
+    )
+
+
+def _admin() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin"
+    )
+
+
+def _internal_user() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-iu", user_id="iu"
+    )
+
+
+def _updated(payload):
+    m = MagicMock()
+    m.model_dump.return_value = payload
+    return m
+
+
+def _setup_team_keys_mocks(
+    monkeypatch,
+    *,
+    find_many=None,
+    find_unique=None,
+    update_data=None,
+    hash_identity=True,
+):
+    """Set up mocks for bulk_update_team_keys; returns mock_prisma."""
+    mock_prisma = AsyncMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[] if find_many is None else find_many
+    )
+    if find_unique is not None:
+        mock_prisma.db.litellm_verificationtoken.find_unique = find_unique
+    if update_data is not None:
+        mock_prisma.update_data = update_data
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_custom_key_update", None)
+    monkeypatch.setattr(
+        f"{_BULK_PKG}.prepare_key_update_data",
+        AsyncMock(return_value={"max_budget": 50.0}),
+    )
+    monkeypatch.setattr(f"{_BULK_PKG}._delete_cache_key_object", AsyncMock())
+    monkeypatch.setattr(
+        f"{_BULK_PKG}.KeyManagementEventHooks.async_key_updated_hook", AsyncMock()
+    )
+    monkeypatch.setattr(f"{_BULK_PKG}.get_team_object", AsyncMock(return_value=None))
+    monkeypatch.setattr(f"{_BULK_PKG}._check_team_key_limits", AsyncMock())
+    monkeypatch.setattr(
+        f"{_BULK_PKG}.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+        AsyncMock(),
+    )
+    if hash_identity:
+        # Tests use already-hashed tokens; the raw-sk regression opts out.
+        monkeypatch.setattr(f"{_BULK_PKG}._hash_token_if_needed", lambda token: token)
+    return mock_prisma
+
+
+async def _call_as_admin(data):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        bulk_update_team_keys,
+    )
+
+    return await bulk_update_team_keys(
+        data=data, user_api_key_dict=_admin(), litellm_changed_by=None
+    )
+
+
+# ---- happy paths ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_success_with_key_ids(monkeypatch):
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    keys = [_make_team_key("tok-a"), _make_team_key("tok-b")]
+    find_unique = AsyncMock(side_effect=keys)
+    mock = _setup_team_keys_mocks(
+        monkeypatch,
+        find_many=keys,
+        find_unique=find_unique,
+        update_data=AsyncMock(
+            side_effect=[{"data": _updated({"max_budget": 50.0})}] * 2
+        ),
+    )
+
+    response = await _call_as_admin(
+        BulkUpdateTeamKeysRequest(
+            team_id="team-abc",
+            key_ids=["tok-a", "tok-b"],
+            update_fields=KeyUpdateFields(max_budget=50.0),
+        )
+    )
+
+    assert len(response.successful_updates) == 2
+    assert len(response.failed_updates) == 0
+    where = mock.db.litellm_verificationtoken.find_many.await_args.kwargs["where"]
+    assert where["team_id"] == "team-abc"
+    assert where["token"] == {"in": ["tok-a", "tok-b"]}
+    find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_success_all_keys_in_team(monkeypatch):
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    keys = [_make_team_key(f"tok-{i}") for i in range(3)]
+    find_unique = AsyncMock(side_effect=keys)
+    mock = _setup_team_keys_mocks(
+        monkeypatch,
+        find_many=keys,
+        find_unique=find_unique,
+        update_data=AsyncMock(
+            side_effect=[{"data": _updated({"max_budget": 50.0})}] * 3
+        ),
+    )
+
+    response = await _call_as_admin(
+        BulkUpdateTeamKeysRequest(
+            team_id="team-abc",
+            all_keys_in_team=True,
+            update_fields=KeyUpdateFields(max_budget=50.0),
+        )
+    )
+
+    assert len(response.successful_updates) == 3
+    where = mock.db.litellm_verificationtoken.find_many.await_args.kwargs["where"]
+    # `blocked` is Boolean? with no default → /key/generate writes NULL. Prisma's
+    # NOT excludes NULLs, so the filter has to OR `false` with `null` explicitly.
+    blocked_or, expires_or = where["AND"][0]["OR"], where["AND"][1]["OR"]
+    assert {"blocked": False} in blocked_or and {"blocked": None} in blocked_or
+    assert {"expires": None} in expires_or
+    assert any(
+        "gt" in c.get("expires", {})
+        for c in expires_or
+        if isinstance(c.get("expires"), dict)
+    )
+    find_unique.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_key_not_in_team(monkeypatch):
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    in_team = _make_team_key("tok-a")
+    _setup_team_keys_mocks(
+        monkeypatch,
+        find_many=[in_team],
+        find_unique=AsyncMock(return_value=in_team),
+        update_data=AsyncMock(return_value={"data": _updated({"max_budget": 50.0})}),
+    )
+
+    response = await _call_as_admin(
+        BulkUpdateTeamKeysRequest(
+            team_id="team-abc",
+            key_ids=["tok-a", "tok-foreign"],
+            update_fields=KeyUpdateFields(max_budget=50.0),
+        )
+    )
+    assert [u.key for u in response.successful_updates] == ["tok-a"]
+    assert [u.key for u in response.failed_updates] == ["tok-foreign"]
+    assert "not found in team" in response.failed_updates[0].failed_reason
+
+
+# ---- error paths ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_batch_size_cap(monkeypatch):
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    _setup_team_keys_mocks(
+        monkeypatch,
+        find_many=[_make_team_key(f"tok-{i}") for i in range(501)],
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _call_as_admin(
+            BulkUpdateTeamKeysRequest(
+                team_id="team-abc",
+                all_keys_in_team=True,
+                update_fields=KeyUpdateFields(max_budget=50.0),
+            )
+        )
+    assert exc.value.status_code == 400
+    assert "more than 500" in exc.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_empty_team_returns_404(monkeypatch):
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    _setup_team_keys_mocks(monkeypatch, find_many=[])
+    with pytest.raises(HTTPException) as exc:
+        await _call_as_admin(
+            BulkUpdateTeamKeysRequest(
+                team_id="team-empty",
+                all_keys_in_team=True,
+                update_fields=KeyUpdateFields(max_budget=50.0),
+            )
+        )
+    assert exc.value.status_code == 404
+
+
+# ---- auth -----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_team_member_with_permission(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        bulk_update_team_keys,
+    )
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    key_a = _make_team_key("tok-a")
+    _setup_team_keys_mocks(
+        monkeypatch,
+        find_many=[key_a],
+        find_unique=AsyncMock(return_value=key_a),
+        update_data=AsyncMock(return_value={"data": _updated({"max_budget": 50.0})}),
+    )
+    auth_check = AsyncMock()
+    monkeypatch.setattr(
+        f"{_BULK_PKG}.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+        auth_check,
+    )
+
+    response = await bulk_update_team_keys(
+        data=BulkUpdateTeamKeysRequest(
+            team_id="team-abc",
+            all_keys_in_team=True,
+            update_fields=KeyUpdateFields(max_budget=50.0),
+        ),
+        user_api_key_dict=_internal_user(),
+        litellm_changed_by=None,
+    )
+    assert len(response.successful_updates) == 1
+    # Upfront check + per-key check inside _process_single_key_update
+    assert auth_check.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_team_member_no_permission(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        bulk_update_team_keys,
+    )
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    mock = _setup_team_keys_mocks(monkeypatch, find_many=[_make_team_key("tok-a")])
+    monkeypatch.setattr(
+        f"{_BULK_PKG}.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+        AsyncMock(
+            side_effect=ProxyException(
+                message="not in team",
+                type="team_member_permission_error",
+                param="/key/update",
+                code=401,
+            )
+        ),
+    )
+
+    with pytest.raises(ProxyException):
+        await bulk_update_team_keys(
+            data=BulkUpdateTeamKeysRequest(
+                team_id="team-abc",
+                all_keys_in_team=True,
+                update_fields=KeyUpdateFields(max_budget=1.0),
+            ),
+            user_api_key_dict=_internal_user(),
+            litellm_changed_by=None,
+        )
+    mock.update_data.assert_not_called()
+
+
+# ---- pydantic-layer validation -------------------------------------------
+
+
+def test_bulk_update_team_keys_request_validation():
+    """Allowlist (extra='forbid'), empty-payload rejection, and selection XOR."""
+    from pydantic import ValidationError
+
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    forbidden = [
+        "key",
+        "key_alias",
+        "team_id",
+        "allowed_routes",
+        "allowed_passthrough_routes",
+        "permissions",
+        "object_permission",
+        "access_group_ids",
+        "user_id",
+        "organization_id",
+        "blocked",
+        "key_type",
+        "models",
+        "config",
+        "router_settings",
+        "spend",
+    ]
+    for f in forbidden:
+        with pytest.raises(ValidationError, match=f):
+            KeyUpdateFields(**{f: True})
+
+    with pytest.raises(ValidationError, match="at least one"):
+        KeyUpdateFields()
+
+    assert KeyUpdateFields(max_budget=50.0, tags=["x"]).max_budget == 50.0
+
+    valid = KeyUpdateFields(max_budget=10)
+    with pytest.raises(ValidationError):
+        BulkUpdateTeamKeysRequest(
+            team_id="t", key_ids=["k"], all_keys_in_team=True, update_fields=valid
+        )
+    with pytest.raises(ValidationError):
+        BulkUpdateTeamKeysRequest(team_id="t", update_fields=valid)
+
+
+# ---- security regressions ------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_hashes_raw_sk_key_ids(monkeypatch):
+    """Regression: raw sk-... key_ids must be hashed before the find_many lookup."""
+    from litellm.proxy._types import hash_token
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    raw_sk = "sk-rawkey1234567890"
+    hashed = hash_token(raw_sk)
+    row = LiteLLM_VerificationToken(
+        token=hashed, user_id="u", models=[], team_id="team-abc", max_budget=None
+    )
+    mock = _setup_team_keys_mocks(
+        monkeypatch,
+        find_many=[row],
+        find_unique=AsyncMock(return_value=row),
+        update_data=AsyncMock(return_value={"data": _updated({"max_budget": 50.0})}),
+        hash_identity=False,
+    )
+
+    response = await _call_as_admin(
+        BulkUpdateTeamKeysRequest(
+            team_id="team-abc",
+            key_ids=[raw_sk],
+            update_fields=KeyUpdateFields(max_budget=50.0),
+        )
+    )
+    where = mock.db.litellm_verificationtoken.find_many.await_args.kwargs["where"]
+    assert where["token"] == {"in": [hashed]}
+    # Response reports the user-supplied form, not the hash.
+    assert response.successful_updates[0].key == raw_sk
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_auth_check_runs_when_no_keys_match(monkeypatch):
+    """Regression: non-admin with bogus key_ids must still hit the membership gate."""
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        bulk_update_team_keys,
+    )
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    mock = _setup_team_keys_mocks(monkeypatch, find_many=[])
+    auth_check = AsyncMock(
+        side_effect=ProxyException(
+            message="not in team",
+            type="team_member_permission_error",
+            param="/key/update",
+            code=401,
+        )
+    )
+    monkeypatch.setattr(
+        f"{_BULK_PKG}.TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint",
+        auth_check,
+    )
+
+    with pytest.raises(ProxyException):
+        await bulk_update_team_keys(
+            data=BulkUpdateTeamKeysRequest(
+                team_id="victim-team",
+                key_ids=["bogus-1", "bogus-2"],
+                update_fields=KeyUpdateFields(max_budget=1.0),
+            ),
+            user_api_key_dict=_internal_user(),
+            litellm_changed_by=None,
+        )
+    # Anchored on data.team_id, not existing_keys[0].
+    assert auth_check.await_args.kwargs["existing_key_row"].team_id == "victim-team"
+    mock.update_data.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_does_not_log_raw_sk_token_on_failure(
+    monkeypatch, caplog
+):
+    """Regression: per-key failure must not log the raw sk-... (ERROR-level logs persist)."""
+    import logging
+
+    from litellm.proxy._types import hash_token
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    raw_sk = "sk-supersecret1234567890"
+    row = LiteLLM_VerificationToken(
+        token=hash_token(raw_sk),
+        user_id="u",
+        models=[],
+        team_id="team-abc",
+        max_budget=None,
+    )
+    _setup_team_keys_mocks(
+        monkeypatch,
+        find_many=[row],
+        update_data=AsyncMock(side_effect=RuntimeError("boom")),
+        hash_identity=False,
+    )
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        response = await _call_as_admin(
+            BulkUpdateTeamKeysRequest(
+                team_id="team-abc",
+                key_ids=[raw_sk],
+                update_fields=KeyUpdateFields(max_budget=50.0),
+            )
+        )
+    assert len(response.failed_updates) == 1
+    log_text = "\n".join(r.getMessage() for r in caplog.records)
+    assert raw_sk not in log_text
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_propagates_team_id_to_per_key_request(monkeypatch):
+    """Regression: per-key UpdateKeyRequest carries data.team_id (gates _check_team_key_limits)."""
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    _setup_team_keys_mocks(monkeypatch, find_many=[_make_team_key("tok-a")])
+    captured = []
+
+    async def fake_process(*, update_key_request, **kw):
+        captured.append(update_key_request)
+        return {"max_budget": update_key_request.max_budget}
+
+    monkeypatch.setattr(f"{_BULK_PKG}._process_single_key_update", fake_process)
+
+    await _call_as_admin(
+        BulkUpdateTeamKeysRequest(
+            team_id="team-abc",
+            key_ids=["tok-a"],
+            update_fields=KeyUpdateFields(
+                tpm_limit=10_000, tpm_limit_type="guaranteed_throughput"
+            ),
+        )
+    )
+    assert captured[0].team_id == "team-abc"
+    assert captured[0].tpm_limit_type == "guaranteed_throughput"
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_dedupes_key_ids(monkeypatch):
+    """Duplicate key_ids collapse to a single update (no redundant DB writes, no inflated counts)."""
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    key_a = _make_team_key("tok-a")
+    update_data = AsyncMock(return_value={"data": _updated({"max_budget": 50.0})})
+    _setup_team_keys_mocks(
+        monkeypatch,
+        find_many=[key_a],
+        find_unique=AsyncMock(return_value=key_a),
+        update_data=update_data,
+    )
+
+    response = await _call_as_admin(
+        BulkUpdateTeamKeysRequest(
+            team_id="team-abc",
+            key_ids=["tok-a", "tok-a", "tok-a"],
+            update_fields=KeyUpdateFields(max_budget=50.0),
+        )
+    )
+
+    assert response.total_requested == 1
+    assert len(response.successful_updates) == 1
+    assert len(response.failed_updates) == 0
+    update_data.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_team_keys_blocks_metadata_allowed_passthrough_routes(
+    monkeypatch,
+):
+    """Non-admin can't grant passthrough access by smuggling allowed_passthrough_routes through metadata."""
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        bulk_update_team_keys,
+    )
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateTeamKeysRequest,
+        KeyUpdateFields,
+    )
+
+    mock = _setup_team_keys_mocks(monkeypatch, find_many=[_make_team_key("tok-a")])
+
+    request = BulkUpdateTeamKeysRequest(
+        team_id="team-abc",
+        all_keys_in_team=True,
+        update_fields=KeyUpdateFields(
+            metadata={"allowed_passthrough_routes": ["/admin/*"]}
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await bulk_update_team_keys(
+            data=request,
+            user_api_key_dict=_internal_user(),
+            litellm_changed_by=None,
+        )
+
+    assert exc.value.status_code == 403
+    assert "allowed_passthrough_routes" in str(exc.value.detail)
+    mock.update_data.assert_not_called()
