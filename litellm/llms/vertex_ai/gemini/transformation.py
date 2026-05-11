@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
@@ -246,8 +247,7 @@ def _get_gcs_object_content_type(
                 model=None,
                 llm_provider="vertex_ai",
             )
-        # Metadata may still be readable for public objects.
-        pass
+        # 未显式提供 Vertex 凭据时，metadata 对公开对象仍可能可读，继续无 token 尝试。
 
     object_path = quote(object_name, safe="")
     metadata_url = (
@@ -1104,7 +1104,10 @@ async def async_transform_request_body(
         vertex_auth_header=vertex_auth_header,
     )
 
-    return _transform_request_body(
+    # _transform_request_body 可能通过 _get_gcs_object_content_type 发起同步 httpx.get
+    # （最长 5s 超时）去拉 GCS 对象 metadata。为避免阻塞 async 事件循环，整个同步
+    # 转换放到 worker 线程执行。
+    return await asyncify(_transform_request_body)(
         messages=messages,
         model=model,
         custom_llm_provider=custom_llm_provider,
