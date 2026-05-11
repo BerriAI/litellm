@@ -2,13 +2,85 @@
 Tests for domestic_utils.py - Chinese model compatibility detection
 """
 
+import os
 import pytest
 
 from litellm.llms.domestic.domestic_utils import (
+    _is_domestic_compatibility_disabled,
     is_domestic_model,
     is_domestic_endpoint,
     is_domestic_model_or_endpoint,
 )
+
+
+class TestIsDomesticCompatibilityDisabled:
+    """Tests for _is_domestic_compatibility_disabled function"""
+
+    def test_default_disabled(self):
+        """By default, domestic compatibility is enabled (function returns False)"""
+        # Ensure env var is not set
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
+        assert _is_domestic_compatibility_disabled() == False
+
+    def test_disabled_with_true(self):
+        """Setting to 'true' should disable domestic compatibility"""
+        os.environ["LITELLM_DISABLE_DOMESTIC_COMPATIBILITY"] = "true"
+        assert _is_domestic_compatibility_disabled() == True
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
+
+    def test_disabled_with_1(self):
+        """Setting to '1' should disable domestic compatibility"""
+        os.environ["LITELLM_DISABLE_DOMESTIC_COMPATIBILITY"] = "1"
+        assert _is_domestic_compatibility_disabled() == True
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
+
+    def test_disabled_with_yes(self):
+        """Setting to 'yes' should disable domestic compatibility"""
+        os.environ["LITELLM_DISABLE_DOMESTIC_COMPATIBILITY"] = "yes"
+        assert _is_domestic_compatibility_disabled() == True
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
+
+    def test_not_disabled_with_false(self):
+        """Setting to 'false' should NOT disable (compatibility enabled)"""
+        os.environ["LITELLM_DISABLE_DOMESTIC_COMPATIBILITY"] = "false"
+        assert _is_domestic_compatibility_disabled() == False
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
+
+    def test_not_disabled_with_random_value(self):
+        """Random values should NOT disable"""
+        os.environ["LITELLM_DISABLE_DOMESTIC_COMPATIBILITY"] = "random"
+        assert _is_domestic_compatibility_disabled() == False
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
+
+    def test_case_insensitive_true(self):
+        """'TRUE' (uppercase) should also work"""
+        os.environ["LITELLM_DISABLE_DOMESTIC_COMPATIBILITY"] = "TRUE"
+        assert _is_domestic_compatibility_disabled() == True
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
+
+
+class TestEnvironmentVariableOptOut:
+    """Tests for LITELLM_DISABLE_DOMESTIC_COMPATIBILITY opt-out mechanism"""
+
+    def test_disable_env_bypasses_model_check(self):
+        """When disabled, even domestic model names return False"""
+        os.environ["LITELLM_DISABLE_DOMESTIC_COMPATIBILITY"] = "true"
+        assert is_domestic_model("qwen3.5-plus") == False
+        assert is_domestic_model("MiniMax-M2.7") == False
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
+
+    def test_disable_env_bypasses_endpoint_check(self):
+        """When disabled, even domestic endpoints return False"""
+        os.environ["LITELLM_DISABLE_DOMESTIC_COMPATIBILITY"] = "true"
+        assert is_domestic_endpoint("https://dashscope.aliyuncs.com/api/v1") == False
+        assert is_domestic_endpoint("https://api.deepseek.com/v1") == False
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
+
+    def test_disable_env_bypasses_combined_check(self):
+        """When disabled, combined check also returns False"""
+        os.environ["LITELLM_DISABLE_DOMESTIC_COMPATIBILITY"] = "true"
+        assert is_domestic_model_or_endpoint("qwen3.5-plus", "https://dashscope.aliyuncs.com/api/v1") == False
+        os.environ.pop("LITELLM_DISABLE_DOMESTIC_COMPATIBILITY", None)
 
 
 class TestIsDomesticModel:
