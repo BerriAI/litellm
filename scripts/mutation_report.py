@@ -265,7 +265,7 @@ def render(config: dict, survivors: list[str], stats: dict | None) -> str:
     out.append("## Surviving mutants by function")
     out.append("")
     for (module_path, function_name), items in by_function.items():
-        anchor = f"{function_name.lower().replace('_', '-')}"
+        anchor = function_name.lower()
         out.append(
             f"- [`{function_name}`](#{anchor}) — {len(items)} mutant"
             f"{'s' if len(items) != 1 else ''} ({module_path})"
