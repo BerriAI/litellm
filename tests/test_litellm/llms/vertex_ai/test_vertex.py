@@ -1283,8 +1283,13 @@ def test_process_gemini_media():
 
 
 def test_process_gemini_media_gcs_without_extension_raises_clear_error():
-    with pytest.raises(litellm.BadRequestError) as exc_info:
-        _process_gemini_media("gs://bucket/image-without-extension")
+    # mock 掉 GCS metadata 查询，避免测试发出真实外网请求
+    with patch(
+        "litellm.llms.vertex_ai.gemini.transformation._get_gcs_object_content_type",
+        return_value=None,
+    ):
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            _process_gemini_media("gs://bucket/image-without-extension")
 
     assert "Unable to determine mime type for gs URI" in str(exc_info.value)
 
@@ -1442,6 +1447,88 @@ def test_get_gcs_object_content_type_fails_fast_with_explicit_credentials():
                 vertex_project="project-123",
                 vertex_credentials="credential-json",
             )
+
+
+def test_async_transform_request_body_does_not_block_event_loop():
+    """当同步 GCS metadata 查询阻塞时，async_transform_request_body 不应阻塞事件循环。"""
+    import asyncio
+    import time
+
+    from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "gs://bucket/image-without-extension"},
+                }
+            ],
+        }
+    ]
+
+    # 模拟同步阻塞的 httpx.get（就像真实的 GCS metadata 查询超时），
+    # 如果 async_transform_request_body 没有把同步部分 offload 到 worker 线程，
+    # 这次阻塞会卡住事件循环，并行的 sleep 就无法推进。
+    def slow_http_get(*args, **kwargs):
+        time.sleep(0.5)
+        response = MagicMock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"contentType": "image/png"}
+        return response
+
+    # 模拟 context-caching 查询，避免其发出真实 HTTP
+    async def fake_check_and_create_cache(self, **kwargs):
+        return kwargs["messages"], kwargs["optional_params"], None
+
+    mock_vertex_base = MagicMock()
+    mock_vertex_base.get_access_token.return_value = ("token", "project")
+
+    async def run_scenario() -> float:
+        async def concurrent_sleep() -> float:
+            start = time.monotonic()
+            await asyncio.sleep(0.05)
+            return time.monotonic() - start
+
+        transform_task = asyncio.create_task(
+            gemini_transformation.async_transform_request_body(
+                gemini_api_key=None,
+                messages=messages,
+                api_base=None,
+                model="gemini-2.5-flash",
+                client=None,
+                timeout=None,
+                extra_headers=None,
+                optional_params={},
+                logging_obj=MagicMock(),
+                custom_llm_provider="vertex_ai",
+                litellm_params={},
+                vertex_project=None,
+                vertex_location=None,
+                vertex_auth_header=None,
+            )
+        )
+        sleep_elapsed = await concurrent_sleep()
+        await transform_task
+        return sleep_elapsed
+
+    with patch.object(
+        gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_vertex_base
+    ), patch.object(
+        gemini_transformation.httpx, "get", side_effect=slow_http_get
+    ), patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching."
+        "ContextCachingEndpoints.async_check_and_create_cache",
+        new=fake_check_and_create_cache,
+    ):
+        sleep_elapsed = asyncio.run(run_scenario())
+
+    # 没被阻塞的情况下，0.05s 的 sleep 不应被拖到接近同步阻塞时长（0.5s）
+    assert sleep_elapsed < 0.4, (
+        f"事件循环被阻塞 {sleep_elapsed:.3f}s，async_transform_request_body 未把同步 GCS "
+        "metadata 查询 offload 到 worker 线程"
+    )
 
 
 def test_get_image_mime_type_from_url():
