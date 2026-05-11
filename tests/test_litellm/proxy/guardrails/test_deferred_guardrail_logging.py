@@ -1232,3 +1232,99 @@ class TestStreamingDisconnectFiresDeferredLogging:
 
         assert len(fired_with) == 1
         assert fired_with[0] is request_data
+
+    @pytest.mark.asyncio
+    async def test_disconnect_persists_partial_usage_via_csw_aclose(self):
+        """Veria-AI follow-up: the ``try/finally`` only guarantees the hook
+        FIRES on disconnect — but ``_fire_deferred_stream_logging`` is a
+        no-op when ``_deferred_stream_complete_args`` is unset, which is
+        exactly the case on early disconnect (CSW hasn't reached
+        StopAsyncIteration). The fix drives ``current_response.aclose()``
+        so ``CustomStreamWrapper.aclose()`` can persist partial usage from
+        the chunks it accumulated before exiting via aclose."""
+        aclose_calls: list = []
+        fired_with: list = []
+
+        def _capture_fire(request_data: dict) -> None:
+            fired_with.append(
+                {
+                    "args_set": getattr(
+                        request_data["litellm_logging_obj"],
+                        "_deferred_stream_complete_args",
+                        None,
+                    )
+                    is not None,
+                }
+            )
+
+        class _FakeCSWChain:
+            """Mimics chained iterator + aclose-cascade. aclose() simulates
+            CSW.aclose() persisting partial usage from accumulated chunks."""
+
+            def __init__(self, chunks_to_yield, logging_obj):
+                self._chunks = list(chunks_to_yield)
+                self._logging_obj = logging_obj
+                self._closed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if self._closed or not self._chunks:
+                    raise StopAsyncIteration
+                return self._chunks.pop(0)
+
+            async def aclose(self):
+                aclose_calls.append("aclose")
+                self._closed = True
+                if (
+                    getattr(self._logging_obj, "_on_deferred_stream_complete", None)
+                    is not None
+                    and getattr(
+                        self._logging_obj, "_deferred_stream_complete_args", None
+                    )
+                    is None
+                ):
+                    self._logging_obj._deferred_stream_complete_args = (
+                        "partial_assembled_response",
+                        False,
+                    )
+
+        logging_obj = MagicMock()
+        logging_obj._on_deferred_stream_complete = MagicMock()
+        logging_obj._deferred_stream_complete_args = None
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        request_data = {"litellm_logging_obj": logging_obj}
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test")
+
+        with (
+            patch.object(
+                ProxyLogging,
+                "_fire_deferred_stream_logging",
+                staticmethod(_capture_fire),
+            ),
+            patch("litellm.callbacks", []),
+        ):
+            gen = proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=_FakeCSWChain(["c1", "c2", "c3"], logging_obj),
+                request_data=request_data,
+            )
+            chunks_seen = []
+            async for chunk in gen:
+                chunks_seen.append(chunk)
+                if len(chunks_seen) == 2:
+                    await gen.aclose()
+                    break
+
+        assert aclose_calls == ["aclose"], (
+            "aclose() must be driven down the wrapper chain before firing "
+            "deferred logging, so CSW can persist partial usage"
+        )
+        assert len(fired_with) == 1
+        assert fired_with[0]["args_set"] is True, (
+            "_deferred_stream_complete_args must be set by the time "
+            "_fire_deferred_stream_logging runs on the disconnect path — "
+            "otherwise the deferred callback is a silent no-op"
+        )

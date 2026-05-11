@@ -2353,6 +2353,22 @@ class ProxyLogging:
             async for chunk in current_response:
                 yield chunk
         finally:
+            # Drive aclose() down the wrapper chain so the innermost
+            # CustomStreamWrapper can persist partial usage from chunks
+            # already streamed. On normal completion this is a no-op (CSW
+            # already set ``_deferred_stream_complete_args`` at
+            # StopAsyncIteration). On client disconnect this is where the
+            # partial-response args get set; without it
+            # ``_fire_deferred_stream_logging`` would find no args and
+            # silently skip spend logging.
+            try:
+                aclose_fn = getattr(current_response, "aclose", None)
+                if aclose_fn is not None:
+                    await aclose_fn()
+            except BaseException:
+                # Cleanup is best-effort; never let aclose errors mask the
+                # original disconnect/exception or block deferred logging.
+                pass
             # Fire deferred logging AFTER all guardrail end-of-stream blocks
             # completed.  unified_guardrail writes guardrail_information
             # during its end-of-stream block (inside current_response), so by
