@@ -529,7 +529,7 @@ async def _update_existing_team_model_assignment(
     """
 
     def _get_team_public_model_name(
-        model_info: Optional[Union[dict, str]]
+        model_info: Optional[Union[dict, str]],
     ) -> Optional[str]:
         if isinstance(model_info, dict):
             value = model_info.get("team_public_model_name")

@@ -16,7 +16,6 @@ from litellm.secret_managers.main import get_secret_str
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
-
 BEDROCK_MANTLE_DEFAULT_REGION = "us-east-1"
 
 
