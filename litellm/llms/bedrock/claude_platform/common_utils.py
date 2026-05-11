@@ -71,8 +71,6 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
             or litellm.api_base
             or get_secret_str("ANTHROPIC_AWS_BASE_URL")
             or get_secret_str("ANTHROPIC_AWS_API_BASE")
-            or get_secret_str("ANTHROPIC_BASE_URL")
-            or get_secret_str("ANTHROPIC_API_BASE")
         )
         if api_base is None:
             aws_region_name = self._get_required_aws_region_name(optional_params)
@@ -94,11 +92,7 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
     ) -> Tuple[dict, Optional[bytes]]:
-        if (
-            api_key
-            or get_secret_str("ANTHROPIC_AWS_API_KEY")
-            or get_secret_str("ANTHROPIC_API_KEY")
-        ):
+        if api_key or get_secret_str("ANTHROPIC_AWS_API_KEY"):
             return headers, None
 
         return self._sign_request(

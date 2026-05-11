@@ -38,11 +38,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
                 model=model,
             )
 
-        api_key = (
-            api_key
-            or get_secret_str("ANTHROPIC_AWS_API_KEY")
-            or get_secret_str("ANTHROPIC_API_KEY")
-        )
+        api_key = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
         anthropic_headers = self.get_anthropic_headers(
             api_key=api_key,
             auth_token=None,

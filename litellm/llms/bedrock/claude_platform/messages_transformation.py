@@ -35,11 +35,7 @@ class BedrockClaudePlatformMessagesConfig(
                 model=model,
             )
 
-        resolved_api_key = (
-            api_key
-            or get_secret_str("ANTHROPIC_AWS_API_KEY")
-            or get_secret_str("ANTHROPIC_API_KEY")
-        )
+        resolved_api_key = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
         headers = {
             **headers,
             "anthropic-version": headers.get(
