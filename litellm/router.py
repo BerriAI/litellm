@@ -9262,16 +9262,6 @@ class Router:
             )
             healthy_deployments = _pre_cooldown_deployments
 
-        healthy_deployments = await self.async_callback_filter_deployments(
-            model=model,
-            healthy_deployments=healthy_deployments,
-            messages=(
-                cast(List[AllMessageValues], messages) if messages is not None else None
-            ),
-            request_kwargs=request_kwargs,
-            parent_otel_span=parent_otel_span,
-        )
-
         if self.enable_pre_call_checks and messages is not None:
             healthy_deployments = self._pre_call_checks(
                 model=model,
@@ -9288,6 +9278,16 @@ class Router:
             metadata_variable_name=self._get_metadata_variable_name_from_kwargs(
                 request_kwargs
             ),
+        )
+
+        healthy_deployments = await self.async_callback_filter_deployments(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            messages=(
+                cast(List[AllMessageValues], messages) if messages is not None else None
+            ),
+            request_kwargs=request_kwargs,
+            parent_otel_span=parent_otel_span,
         )
 
         ## ORDER FILTERING ## -> if user set 'order' in deployments, return deployments with lowest order (e.g. order=1 > order=2)

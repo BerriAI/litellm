@@ -25,6 +25,9 @@ from dotenv import load_dotenv
 import litellm
 from litellm import Router
 from litellm._logging import verbose_logger
+from litellm.router_utils.pre_call_checks.prompt_prefix_affinity_check import (
+    PromptPrefixAffinityCheck,
+)
 
 
 @pytest.mark.asyncio()
@@ -218,6 +221,57 @@ async def test_default_tagged_deployments():
         print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "default-model"
+
+
+@pytest.mark.asyncio()
+async def test_prompt_prefix_affinity_does_not_bypass_default_tag_routing_for_untagged_requests():
+    """
+    Ensure prompt-prefix affinity selection cannot bypass tag-based routing defaults.
+
+    For untagged requests, tag routing prefers deployments tagged "default" when present.
+    Prompt-prefix affinity must select only from that tag-filtered candidate set.
+    """
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["default"],
+                },
+                "model_info": {"id": "default-model"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4o-mini",
+                    "api_base": "https://exampleopenaiendpoint-production.up.railway.app/",
+                    "tags": ["teamA"],
+                },
+                "model_info": {"id": "teamA-model"},
+            },
+        ],
+        enable_tag_filtering=True,
+        optional_pre_call_checks=["prompt_prefix_affinity"],
+        prompt_prefix_affinity_tokens=64,
+        prompt_prefix_affinity_min_tokens=0,
+    )
+
+    # Force the affinity scorer to prefer the non-default deployment if it ever sees it.
+    def _prefer_team_a(self, prefix_hash: str, deployment_model_id: str) -> int:  # noqa: ANN001
+        return 2 if deployment_model_id == "teamA-model" else 1
+
+    with patch.object(PromptPrefixAffinityCheck, "_get_prefix_hash", return_value="hash"):
+        with patch.object(PromptPrefixAffinityCheck, "_score_deployment", _prefer_team_a):
+            response = await router.acompletion(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "Tell me a joke."}],
+                mock_response="Tell me a joke.",
+            )
+
+    assert response._hidden_params["model_id"] == "default-model"
 
     for _ in range(5):
         # requests tagged with "default", this should pick model with id == "default-model"
