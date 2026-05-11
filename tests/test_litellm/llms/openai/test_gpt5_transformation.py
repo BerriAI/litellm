@@ -1,6 +1,7 @@
 import pytest
 
 import litellm
+import litellm.main as litellm_main
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.openai import OpenAIConfig
@@ -1011,32 +1012,35 @@ def test_gpt5_search_drops_unsupported_params(config: OpenAIConfig):
     assert "tools" not in params
 
 
-def test_gpt5_search_strips_reasoning_summary_aliases(gpt5_config: OpenAIGPT5Config):
-    """Search models still strip Responses-only reasoning summary aliases."""
-    non_default_params = {
-        "reasoningSummary": "auto",
-        "reasoning_summary": "ignored",
-    }
-    optional_params = {
-        "extra_body": {
-            "reasoningSummary": "auto",
-            "reasoning_summary": "ignored",
-            "metadata": "ok",
-        }
-    }
+def test_gpt5_chat_strips_reasoning_summary_aliases_after_bridge_check(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Non-bridged GPT-5 chat calls strip Responses-only reasoning summary aliases."""
+    captured_kwargs = {}
 
-    params = gpt5_config.map_openai_params(
-        non_default_params=non_default_params,
-        optional_params=optional_params,
-        model="gpt-5-search-api",
-        drop_params=False,
+    def fake_openai_completion(**kwargs):
+        captured_kwargs.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(
+        litellm_main.openai_chat_completions,
+        "completion",
+        fake_openai_completion,
     )
 
-    assert "reasoningSummary" not in non_default_params
-    assert "reasoning_summary" not in non_default_params
-    assert "reasoningSummary" not in params
-    assert "reasoning_summary" not in params
-    assert params["extra_body"] == {"metadata": "ok"}
+    litellm.completion(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "ok"}],
+        reasoning_effort="medium",
+        reasoningSummary="auto",
+        extra_body={"reasoning_summary": "ignored", "metadata": "ok"},
+        api_key="fake-key",
+    )
+
+    optional_params = captured_kwargs["optional_params"]
+    assert "reasoningSummary" not in optional_params
+    assert "reasoning_summary" not in optional_params
+    assert optional_params["extra_body"] == {"metadata": "ok"}
 
 
 def test_reasoning_summary_alias_helpers_preserve_falsy_and_strip_all_aliases():

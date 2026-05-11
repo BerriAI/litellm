@@ -1696,6 +1696,16 @@ def completion(  # type: ignore # noqa: PLR0915
                 encoding=_get_encoding(),
                 stream=stream,
             )
+        elif (
+            custom_llm_provider == "openai"
+            and OpenAIGPT5Config.is_model_gpt_5_model(model)
+        ) or (
+            custom_llm_provider == "azure"
+            and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model)
+        ):
+            optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(
+                optional_params
+            )
 
         if custom_llm_provider == "azure":
             # azure configs

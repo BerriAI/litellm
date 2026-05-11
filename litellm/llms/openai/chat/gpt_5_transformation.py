@@ -6,7 +6,6 @@ import litellm
 from litellm.utils import (
     _is_explicitly_disabled_factory,
     _supports_factory,
-    strip_reasoning_summary_aliases_from_openai_completion_params,
 )
 
 from .gpt_transformation import OpenAIGPTConfig
@@ -195,16 +194,6 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             if param not in non_supported_params
         ]
 
-    @staticmethod
-    def _strip_reasoning_summary_aliases_for_chat_completions(
-        non_default_params: dict,
-        optional_params: dict,
-    ) -> None:
-        """Remove Responses-style reasoning summary keys; invalid on Chat Completions."""
-        strip_reasoning_summary_aliases_from_openai_completion_params(
-            non_default_params, optional_params
-        )
-
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -212,12 +201,6 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # AI SDK / Responses-style aliases; never valid on Chat Completions when not
-        # bridged to Responses API (see main.responses_api_bridge_check).
-        self._strip_reasoning_summary_aliases_for_chat_completions(
-            non_default_params, optional_params
-        )
-
         if self.is_model_gpt_5_search_model(model):
             if "max_tokens" in non_default_params:
                 optional_params["max_completion_tokens"] = non_default_params.pop(

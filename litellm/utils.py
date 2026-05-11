@@ -9533,22 +9533,6 @@ def strip_reasoning_summary_aliases_from_optional_params(
     return op, rs_val
 
 
-def strip_reasoning_summary_aliases_from_openai_completion_params(
-    non_default_params: dict,
-    optional_params: dict,
-) -> None:
-    """Drop AI-SDK reasoning summary keys from chat completion param dicts (in-place).
-
-    These aliases are not valid on OpenAI Chat Completions and may appear on
-    ``non_default_params`` or ``optional_params`` (including nested ``extra_body``).
-    """
-    non_default_params.pop("reasoningSummary", None)
-    non_default_params.pop("reasoning_summary", None)
-    stripped, _ = strip_reasoning_summary_aliases_from_optional_params(optional_params)
-    optional_params.clear()
-    optional_params.update(stripped)
-
-
 def get_non_default_transcription_params(kwargs: dict) -> dict:
     from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
 
