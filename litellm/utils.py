@@ -4345,7 +4345,7 @@ def get_optional_params(  # noqa: PLR0915
     elif custom_llm_provider == "bedrock":
         BedrockModelInfo = getattr(sys.modules[__name__], "BedrockModelInfo")
         if model.startswith("claude_platform/"):
-            optional_params = litellm.AnthropicAWSConfig().map_openai_params(
+            optional_params = litellm.BedrockClaudePlatformConfig().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model.replace("claude_platform/", "", 1),
@@ -4357,7 +4357,6 @@ def get_optional_params(  # noqa: PLR0915
             )
             for key in (
                 "workspace_id",
-                "anthropic_aws_workspace_id",
                 "aws_workspace_id",
                 "anthropic_workspace_id",
             ):
@@ -8500,7 +8499,7 @@ class ProviderConfigManager:
         # This mapping ensures that the correct configuration is returned for BEDROCK.
         elif litellm.LlmProviders.BEDROCK == provider:
             if model.startswith("claude_platform/"):
-                return litellm.AnthropicAWSMessagesConfig()
+                return litellm.BedrockClaudePlatformMessagesConfig()
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)

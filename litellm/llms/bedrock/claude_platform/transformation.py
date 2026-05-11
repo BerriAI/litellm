@@ -12,7 +12,9 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 
-ANTHROPIC_AWS_SERVICE_NAME: Literal["aws-external-anthropic"] = "aws-external-anthropic"
+CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
+    "aws-external-anthropic"
+)
 CLAUDE_PLATFORM_BEDROCK_ROUTE = "claude_platform/"
 
 
@@ -22,14 +24,12 @@ def strip_claude_platform_route(model: str) -> str:
     return model
 
 
-class AnthropicAWSMixin(BaseAWSLLM):
+class BedrockClaudePlatformMixin(BaseAWSLLM):
     @staticmethod
     def _get_workspace_id(optional_params: dict, litellm_params: dict) -> Optional[str]:
         workspace_id = (
             optional_params.get("workspace_id")
             or litellm_params.get("workspace_id")
-            or optional_params.get("anthropic_aws_workspace_id")
-            or litellm_params.get("anthropic_aws_workspace_id")
             or optional_params.get("aws_workspace_id")
             or litellm_params.get("aws_workspace_id")
             or optional_params.get("anthropic-workspace-id")
@@ -83,7 +83,9 @@ class AnthropicAWSMixin(BaseAWSLLM):
         )
         if api_base is None:
             aws_region_name = self._get_required_aws_region_name(optional_params)
-            api_base = f"https://{ANTHROPIC_AWS_SERVICE_NAME}.{aws_region_name}.api.aws"
+            api_base = (
+                f"https://{CLAUDE_PLATFORM_SERVICE_NAME}.{aws_region_name}.api.aws"
+            )
         if not api_base.endswith("/v1/messages"):
             api_base = f"{api_base.rstrip('/')}/v1/messages"
         return api_base
@@ -107,7 +109,7 @@ class AnthropicAWSMixin(BaseAWSLLM):
             return headers, None
 
         return self._sign_request(
-            service_name=ANTHROPIC_AWS_SERVICE_NAME,
+            service_name=CLAUDE_PLATFORM_SERVICE_NAME,
             headers=headers,
             optional_params=optional_params,
             request_data=request_data,
@@ -118,9 +120,9 @@ class AnthropicAWSMixin(BaseAWSLLM):
         )
 
 
-class AnthropicAWSConfig(AnthropicAWSMixin, AnthropicConfig):
+class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
     """
-    Claude Platform on AWS uses Anthropic's Messages API with AWS gateway auth.
+    Bedrock Claude Platform uses Anthropic's Messages API with AWS gateway auth.
     """
 
     @property
@@ -208,7 +210,9 @@ class AnthropicAWSConfig(AnthropicAWSMixin, AnthropicConfig):
         )
 
 
-class AnthropicAWSMessagesConfig(AnthropicAWSMixin, AnthropicMessagesConfig):
+class BedrockClaudePlatformMessagesConfig(
+    BedrockClaudePlatformMixin, AnthropicMessagesConfig
+):
     def validate_anthropic_messages_environment(
         self,
         headers: dict,

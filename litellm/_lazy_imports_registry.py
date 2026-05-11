@@ -131,7 +131,7 @@ LLM_CONFIG_NAMES = (
     "OpenrouterConfig",
     "DataRobotConfig",
     "AnthropicConfig",
-    "AnthropicAWSConfig",
+    "BedrockClaudePlatformConfig",
     "AnthropicTextConfig",
     "GroqSTTConfig",
     "TritonConfig",
@@ -171,7 +171,7 @@ LLM_CONFIG_NAMES = (
     "SagemakerNovaConfig",
     "CohereChatConfig",
     "AnthropicMessagesConfig",
-    "AnthropicAWSMessagesConfig",
+    "BedrockClaudePlatformMessagesConfig",
     "AmazonAnthropicClaudeMessagesConfig",
     "AmazonMantleMessagesConfig",
     "TogetherAIConfig",
@@ -612,9 +612,9 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "OpenrouterConfig": (".llms.openrouter.chat.transformation", "OpenrouterConfig"),
     "DataRobotConfig": (".llms.datarobot.chat.transformation", "DataRobotConfig"),
     "AnthropicConfig": (".llms.anthropic.chat.transformation", "AnthropicConfig"),
-    "AnthropicAWSConfig": (
-        ".llms.anthropic_aws.chat.transformation",
-        "AnthropicAWSConfig",
+    "BedrockClaudePlatformConfig": (
+        ".llms.bedrock.claude_platform.transformation",
+        "BedrockClaudePlatformConfig",
     ),
     "AnthropicTextConfig": (
         ".llms.anthropic.completion.transformation",
@@ -718,9 +718,9 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.anthropic.experimental_pass_through.messages.transformation",
         "AnthropicMessagesConfig",
     ),
-    "AnthropicAWSMessagesConfig": (
-        ".llms.anthropic_aws.chat.transformation",
-        "AnthropicAWSMessagesConfig",
+    "BedrockClaudePlatformMessagesConfig": (
+        ".llms.bedrock.claude_platform.transformation",
+        "BedrockClaudePlatformMessagesConfig",
     ),
     "AmazonAnthropicClaudeMessagesConfig": (
         ".llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation",

@@ -3854,7 +3854,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     api_key=api_key,
                     logging_obj=logging,
                     client=client,
-                    provider_config=litellm.AnthropicAWSConfig(),
+                    provider_config=litellm.BedrockClaudePlatformConfig(),
                 )
                 return response
 

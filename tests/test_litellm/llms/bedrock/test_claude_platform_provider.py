@@ -52,10 +52,12 @@ def anthropic_capture_server():
         server.server_close()
 
 
-def test_anthropic_aws_builds_default_messages_url_from_region():
-    from litellm.llms.anthropic_aws.chat.transformation import AnthropicAWSConfig
+def test_claude_platform_builds_default_messages_url_from_region():
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
 
-    config = AnthropicAWSConfig()
+    config = BedrockClaudePlatformConfig()
 
     assert (
         config.get_complete_url(
@@ -80,11 +82,13 @@ def test_claude_platform_uses_bedrock_subroute():
     assert model == "claude_platform/claude-sonnet-4-6"
 
 
-def test_anthropic_aws_requires_workspace_header():
+def test_claude_platform_requires_workspace_header():
     from litellm import AuthenticationError
-    from litellm.llms.anthropic_aws.chat.transformation import AnthropicAWSConfig
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
 
-    config = AnthropicAWSConfig()
+    config = BedrockClaudePlatformConfig()
 
     with pytest.raises(AuthenticationError) as exc_info:
         config.validate_environment(
@@ -99,10 +103,12 @@ def test_anthropic_aws_requires_workspace_header():
     assert "workspace" in str(exc_info.value).lower()
 
 
-def test_anthropic_aws_api_key_auth_sets_workspace_and_key_headers():
-    from litellm.llms.anthropic_aws.chat.transformation import AnthropicAWSConfig
+def test_claude_platform_api_key_auth_sets_workspace_and_key_headers():
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
 
-    config = AnthropicAWSConfig()
+    config = BedrockClaudePlatformConfig()
     headers = config.validate_environment(
         api_key="fake-platform-key",
         headers={"anthropic-beta": "skills-2025-10-02"},
@@ -117,10 +123,12 @@ def test_anthropic_aws_api_key_auth_sets_workspace_and_key_headers():
     assert headers["anthropic-beta"] == "skills-2025-10-02"
 
 
-def test_anthropic_aws_sigv4_signs_transformed_request_body():
-    from litellm.llms.anthropic_aws.chat.transformation import AnthropicAWSConfig
+def test_claude_platform_sigv4_signs_transformed_request_body():
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
 
-    config = AnthropicAWSConfig()
+    config = BedrockClaudePlatformConfig()
     request_body = {
         "model": "claude-sonnet-4-6",
         "messages": [{"role": "user", "content": "hello"}],

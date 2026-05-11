@@ -31,7 +31,7 @@ def get_supported_openai_params(  # noqa: PLR0915
             return None
 
     if custom_llm_provider == "bedrock" and model.startswith("claude_platform/"):
-        return litellm.AnthropicAWSConfig().get_supported_openai_params(
+        return litellm.BedrockClaudePlatformConfig().get_supported_openai_params(
             model=model.replace("claude_platform/", "", 1)
         )
 
