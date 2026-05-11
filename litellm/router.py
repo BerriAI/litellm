@@ -359,9 +359,13 @@ class Router:
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
             prompt_prefix_affinity_tokens (int): Number of canonical prompt-prefix
-                tokens used for deterministic prompt-prefix routing. Defaults to 2048.
+                tokens used for deterministic prompt-prefix routing. This is
+                measured against tokenization of the canonical JSON representation
+                (not the provider-specific "raw prompt token count"). Defaults to 2048.
             prompt_prefix_affinity_min_tokens (int): Minimum canonical prompt token
-                count before prompt-prefix affinity applies. Defaults to
+                count before prompt-prefix affinity applies. This is measured
+                against tokenization of the canonical JSON representation (not the
+                provider-specific "raw prompt token count"). Defaults to
                 MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
         Returns:
