@@ -2697,16 +2697,14 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     llm_provider: Optional[str]
     traceback: Optional[str]
     error_message: Optional[str]
+    # error_rate_limit_category:
+    #   For 429 / rate-limit errors, the source of the rate limit. One of the
+    #   string values defined by `litellm.exceptions.RateLimitErrorCategory`
+    #   (vendor_rate_limit, vendor_batch_rate_limit, litellm_rate_limit,
+    #   litellm_batch_rate_limit). None for non-rate-limit exceptions.
+    #   Surfaced here so custom callbacks / metrics consumers can switch on
+    #   the rate-limit source without reaching for the raw exception.
     error_rate_limit_category: Optional[str]
-    """
-    For 429 / rate-limit errors, the source of the rate limit. One of the
-    string values defined by :class:`litellm.exceptions.RateLimitErrorCategory`
-    (``vendor_rate_limit``, ``vendor_batch_rate_limit``, ``litellm_rate_limit``,
-    ``litellm_batch_rate_limit``). ``None`` for non-rate-limit exceptions.
-
-    Surfaced here so custom callbacks / metrics consumers can switch on the
-    rate-limit source without reaching for the raw exception.
-    """
 
 
 class GuardrailMode(TypedDict, total=False):
