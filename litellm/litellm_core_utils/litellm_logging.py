@@ -5165,7 +5165,7 @@ class StandardLoggingPayloadSetup:
         # reaching for the raw exception object.
         rate_limit_category: Optional[str] = (
             getattr(original_exception, "category", None)
-            if original_exception is not None
+            if isinstance(original_exception, litellm.RateLimitError)
             else None
         )
 
