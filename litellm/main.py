@@ -1,3 +1,5 @@
+# LiteLLM main module: public completion, embedding, streaming, and moderation entrypoints.
+#
 # +-----------------------------------------------+
 # |                                               |
 # |           Give Feedback / Get Help            |
@@ -59,7 +61,13 @@ import litellm
 from litellm import client
 
 # Other utils are imported directly to avoid circular imports
-from litellm.utils import exception_type, get_litellm_params, get_optional_params
+from litellm.utils import (
+    exception_type,
+    get_litellm_params,
+    get_optional_params,
+    peek_reasoning_summary_aliases,
+    strip_reasoning_summary_aliases_from_optional_params,
+)
 
 # Logging is imported lazily when needed to avoid loading litellm_logging at import time
 if TYPE_CHECKING:
@@ -946,6 +954,7 @@ def responses_api_bridge_check(
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     tools: Optional[List[Any]] = None,
     reasoning_effort: Optional[Any] = None,
+    reasoning_summary: Optional[Any] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
 
@@ -982,13 +991,16 @@ def responses_api_bridge_check(
             mode = "responses"
             model_info["mode"] = mode
 
-    # OpenAI/Azure gpt-5.4+ chat-completions calls with both tools + reasoning_effort
-    # must be bridged to Responses API.
+    # OpenAI/Azure gpt-5.4+ chat-completions calls that need Responses-only fields
+    # (e.g. reasoning summary) must be bridged. SDKs send ``reasoningSummary`` /
+    # ``reasoning_summary`` alongside ``reasoning_effort``; Chat Completions rejects
+    # those keys, so route when tools+reasoning_effort (original case) or when a
+    # reasoning summary is requested without tools.
     if (
         custom_llm_provider in ("openai", "azure")
         and OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
-        and tools
         and reasoning_effort is not None
+        and (tools or reasoning_summary is not None)
         and model_info.get("mode") != "responses"
     ):
         model_info["mode"] = "responses"
@@ -1634,8 +1646,10 @@ def completion(  # type: ignore # noqa: PLR0915
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         # Only run the second bridge check if the first one didn't already
         # detect responses mode (e.g. via the "responses/" prefix).  The second
-        # check handles cases like gpt-5.4+ with tools+reasoning_effort that
-        # the first (early) check doesn't cover.
+        # check handles cases like gpt-5.4+ with tools+reasoning_effort or
+        # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
+        # (early) check doesn't cover.
+        _reasoning_summary_for_bridge = peek_reasoning_summary_aliases(optional_params)
         if responses_api_model_info.get("mode") != "responses":
             responses_api_model_info, model = responses_api_bridge_check(
                 model=model,
@@ -1643,14 +1657,27 @@ def completion(  # type: ignore # noqa: PLR0915
                 web_search_options=web_search_options,
                 tools=tools,
                 reasoning_effort=reasoning_effort,
+                reasoning_summary=_reasoning_summary_for_bridge,
             )
 
         if responses_api_model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
 
+            optional_params, rs_val = (
+                strip_reasoning_summary_aliases_from_optional_params(optional_params)
+            )
+
             if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
-                optional_params = dict(optional_params)
                 optional_params["reasoning_effort"] = reasoning_effort
+            elif rs_val is not None:
+                eff = optional_params.get("reasoning_effort", reasoning_effort)
+                if isinstance(eff, dict):
+                    optional_params["reasoning_effort"] = {**eff, "summary": rs_val}
+                elif eff is not None:
+                    optional_params["reasoning_effort"] = {
+                        "effort": eff,
+                        "summary": rs_val,
+                    }
 
             return responses_api_bridge.completion(
                 model=model,

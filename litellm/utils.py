@@ -1,3 +1,5 @@
+"""Utility helpers for LiteLLM core request handling and provider support."""
+
 # from __future__ import annotations must be the first non-comment statement
 from __future__ import annotations
 
@@ -9488,6 +9490,60 @@ def get_non_default_completion_params(kwargs: dict) -> dict:
     }  # model-specific params - pass them straight to the model/provider
 
     return non_default_params
+
+
+def peek_reasoning_summary_aliases(optional_params: dict) -> Optional[Any]:
+    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body."""
+    rs = optional_params.get("reasoningSummary") or optional_params.get(
+        "reasoning_summary"
+    )
+    if rs is not None:
+        return rs
+    extra_body = optional_params.get("extra_body")
+    if isinstance(extra_body, dict):
+        return extra_body.get("reasoningSummary") or extra_body.get("reasoning_summary")
+    return None
+
+
+def strip_reasoning_summary_aliases_from_optional_params(
+    optional_params: dict,
+) -> Tuple[dict, Optional[Any]]:
+    """Copy optional_params; remove reasoningSummary aliases from top-level and extra_body."""
+    op = dict(optional_params)
+    rs_val = op.pop("reasoningSummary", None)
+    if rs_val is None:
+        rs_val = op.pop("reasoning_summary", None)
+    eb = op.get("extra_body")
+    if isinstance(eb, dict):
+        eb = dict(eb)
+        if rs_val is None:
+            rs_val = eb.pop("reasoningSummary", None) or eb.pop(
+                "reasoning_summary", None
+            )
+        else:
+            eb.pop("reasoningSummary", None)
+            eb.pop("reasoning_summary", None)
+        if eb:
+            op["extra_body"] = eb
+        else:
+            op.pop("extra_body", None)
+    return op, rs_val
+
+
+def strip_reasoning_summary_aliases_from_openai_completion_params(
+    non_default_params: dict,
+    optional_params: dict,
+) -> None:
+    """Drop AI-SDK reasoning summary keys from chat completion param dicts (in-place).
+
+    These aliases are not valid on OpenAI Chat Completions and may appear on
+    ``non_default_params`` or ``optional_params`` (including nested ``extra_body``).
+    """
+    non_default_params.pop("reasoningSummary", None)
+    non_default_params.pop("reasoning_summary", None)
+    stripped, _ = strip_reasoning_summary_aliases_from_optional_params(optional_params)
+    optional_params.clear()
+    optional_params.update(stripped)
 
 
 def get_non_default_transcription_params(kwargs: dict) -> dict:
