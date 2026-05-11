@@ -2729,24 +2729,34 @@ if MCP_AVAILABLE:
         single ``anonymous`` owner and end up able to drive each other's
         stateful sessions.
         """
+
+        def _bytes_for_hash(value: Any) -> Optional[bytes]:
+            """Only hash str/bytes secrets; skip mocks and other unexpected types."""
+            if value is None:
+                return None
+            if isinstance(value, (bytes, bytearray)):
+                return bytes(value)
+            if isinstance(value, str):
+                return value.encode("utf-8")
+            return None
+
         if user_api_key_auth is not None:
-            if user_api_key_auth.api_key:
-                api_key_hash = hashlib.sha256(
-                    user_api_key_auth.api_key.encode("utf-8")
-                ).hexdigest()
+            key_material = _bytes_for_hash(getattr(user_api_key_auth, "api_key", None))
+            if key_material:
+                api_key_hash = hashlib.sha256(key_material).hexdigest()
                 return f"key:{api_key_hash}"
-            if user_api_key_auth.user_id:
-                user_id_hash = hashlib.sha256(
-                    user_api_key_auth.user_id.encode("utf-8")
-                ).hexdigest()
+            uid_material = _bytes_for_hash(getattr(user_api_key_auth, "user_id", None))
+            if uid_material:
+                user_id_hash = hashlib.sha256(uid_material).hexdigest()
                 return f"user:{user_id_hash}"
         if oauth2_headers:
             authz = oauth2_headers.get("Authorization") or oauth2_headers.get(
                 "authorization"
             )
-            if authz:
-                return f"oauth:{hashlib.sha256(authz.encode('utf-8')).hexdigest()}"
-        if client_ip:
+            authz_bytes = _bytes_for_hash(authz)
+            if authz_bytes:
+                return f"oauth:{hashlib.sha256(authz_bytes).hexdigest()}"
+        if client_ip and isinstance(client_ip, str):
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
