@@ -3346,10 +3346,14 @@ class TestIPGatingFailClosed:
     @pytest.mark.parametrize(
         "server_kind,client_ip_kind,expected",
         [
-            # None fails closed regardless of server visibility — missing IP
-            # signals an external request that couldn't be attributed.
+            # None fails closed for non-public servers — missing IP signals
+            # an external request that couldn't be attributed and must not
+            # reach internal-only servers.
             ("internal", "none", False),
-            ("public", "none", False),
+            # None still lets public servers through — otherwise a request
+            # to a public OAuth endpoint behind ASGI middleware that nulls
+            # request.client would 404 with no actionable diagnostic.
+            ("public", "none", True),
             # INTERNAL_REQUEST bypasses gating for both visibilities.
             ("internal", "internal_request", True),
             ("public", "internal_request", True),

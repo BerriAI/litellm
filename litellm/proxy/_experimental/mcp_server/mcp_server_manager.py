@@ -1107,10 +1107,9 @@ class MCPServerManager:
         client_ip = self._resolve_unknown_client_ip(client_ip)
         if client_ip is INTERNAL_REQUEST:
             return server_ids, 0
-        if client_ip is None:
-            # Fail closed: don't expose internal-only servers when the IP
-            # couldn't be attributed.
-            return [], len(server_ids)
+        # Don't short-circuit on client_ip is None — public servers should
+        # still be reachable, only internal-only servers fail closed. The
+        # per-server gate enforces both halves.
         allowed = []
         blocked = 0
         for sid in server_ids:
@@ -3119,29 +3118,42 @@ class MCPServerManager:
 
         - ``INTERNAL_REQUEST`` bypasses IP filtering (internal callers, admin
           debug, registry maintenance).
-        - ``None`` fails closed: external request handlers must extract a real
-          IP via ``IPAddressUtils.get_mcp_client_ip(request)`` and reject the
-          request when extraction fails. Earlier behaviour treated ``None`` as
-          "no filter," which let external callers reach internal-only servers
-          when IP extraction silently failed. Operators behind ASGI middleware
-          or load-balancer setups where ``request.client`` is legitimately
-          ``None`` can opt back to the previous fail-open behaviour by setting
+        - If the server has ``available_on_public_internet=True`` (or is in
+          ``litellm.public_mcp_servers``), it's always accessible — including
+          when ``client_ip`` is ``None``. Otherwise a request to a
+          legitimately-public OAuth endpoint behind ASGI middleware that
+          nulls ``request.client`` would 404 with no actionable diagnostic.
+        - For non-public servers, ``None`` fails closed: external request
+          handlers must extract a real IP via
+          ``IPAddressUtils.get_mcp_client_ip(request)``. Earlier behaviour
+          treated ``None`` as "no filter," which let external callers reach
+          internal-only servers when IP extraction silently failed. Operators
+          behind ASGI middleware or load-balancer setups where
+          ``request.client`` is legitimately ``None`` can opt back to the
+          previous fail-open behaviour by setting
           ``general_settings.mcp_allow_unknown_client_ip: true``.
-        - If the server has ``available_on_public_internet=True``, it's
-          always accessible.
-        - Otherwise, only internal/private IPs can access it.
+        - For non-public servers with a real IP, only internal/private IPs
+          can access it.
         """
         client_ip = self._resolve_unknown_client_ip(client_ip)
         if client_ip is INTERNAL_REQUEST:
             return True
-        if client_ip is None:
-            return False
+        # Public servers are reachable regardless of caller IP — and crucially
+        # even when IP extraction failed (client_ip is None). Otherwise a
+        # request to a legitimately-public OAuth endpoint behind an ASGI
+        # middleware that nulls request.client would 404 with no actionable
+        # diagnostic for operators.
         if server.available_on_public_internet:
             return True
         # Check backwards compat: litellm.public_mcp_servers
         public_ids = set(litellm.public_mcp_servers or [])
         if server.server_id in public_ids:
             return True
+        if client_ip is None:
+            # Non-public server with unknown caller IP fails closed. Earlier
+            # behaviour treated None as "no filter," letting external callers
+            # reach internal-only servers when IP extraction silently failed.
+            return False
         # Non-public server: only accessible from internal IPs. The two
         # early returns above narrow client_ip to ``str`` for the type
         # checker; cast keeps mypy happy without a runtime assert.
@@ -3301,8 +3313,8 @@ class MCPServerManager:
         client_ip = self._resolve_unknown_client_ip(client_ip)
         if client_ip is INTERNAL_REQUEST:
             return registry
-        if client_ip is None:
-            return {}
+        # Don't short-circuit on client_ip is None — public servers should
+        # still be reachable, only internal-only servers fail closed.
         return {
             k: v
             for k, v in registry.items()

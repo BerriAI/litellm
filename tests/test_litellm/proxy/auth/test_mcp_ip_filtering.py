@@ -114,6 +114,21 @@ class TestMCPServerIPFiltering:
 
         assert manager.filter_server_ids_by_ip(["priv"], client_ip=None) == ["priv"]
 
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_public_server_reachable_when_ip_unknown(self):
+        # A legitimately-public server must stay reachable even when IP
+        # extraction failed (client_ip=None). Otherwise a request to a
+        # public OAuth endpoint behind ASGI middleware that nulls
+        # request.client would 404 with no actionable diagnostic.
+        pub = _make_server("pub", available_on_public_internet=True)
+        priv = _make_server("priv", available_on_public_internet=False)
+        manager = _make_manager([pub, priv])
+
+        assert manager.filter_server_ids_by_ip(["pub", "priv"], client_ip=None) == [
+            "pub"
+        ]
+
 
 class TestFilterServerIdsByIpWithInfo:
     """Tests that filter_server_ids_by_ip_with_info returns accurate block counts."""
@@ -165,6 +180,21 @@ class TestFilterServerIdsByIpWithInfo:
             ["priv"], client_ip=INTERNAL_REQUEST
         )
         assert (allowed, blocked) == (["priv"], 0)
+
+    @patch("litellm.public_mcp_servers", [])
+    @patch("litellm.proxy.proxy_server.general_settings", {})
+    def test_no_ip_lets_public_through_blocks_private(self):
+        # When IP extraction fails (client_ip=None), public servers stay
+        # reachable; only non-public servers are blocked.
+        pub = _make_server("pub", available_on_public_internet=True)
+        priv = _make_server("priv", available_on_public_internet=False)
+        manager = _make_manager([pub, priv])
+
+        allowed, blocked = manager.filter_server_ids_by_ip_with_info(
+            ["pub", "priv"], client_ip=None
+        )
+        assert allowed == ["pub"]
+        assert blocked == 1
 
     @patch("litellm.public_mcp_servers", [])
     @patch("litellm.proxy.proxy_server.general_settings", {})
