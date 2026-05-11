@@ -3138,6 +3138,7 @@ proxy = [
     { name = "litellm-enterprise" },
     { name = "litellm-proxy-extras" },
     { name = "mcp" },
+    { name = "objgraph" },
     { name = "openapi-spec-validator" },
     { name = "orjson" },
     { name = "polars" },
@@ -3303,6 +3304,7 @@ requires-dist = [
     { name = "mcp", marker = "extra == 'proxy'", specifier = "==1.26.0" },
     { name = "mlflow", marker = "extra == 'mlflow'", specifier = "==3.9.0" },
     { name = "numpydoc", marker = "extra == 'utils'", specifier = "==1.8.0" },
+    { name = "objgraph", marker = "extra == 'proxy'", specifier = "==3.6.2" },
     { name = "openai", specifier = "==2.24.0" },
     { name = "openapi-spec-validator", marker = "extra == 'proxy'", specifier = "==0.7.2" },
     { name = "opentelemetry-api", marker = "extra == 'proxy-runtime'", specifier = "==1.28.0" },
@@ -4164,6 +4166,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0b/5f/19930f824ffeb0ad4372da4812c50edbd1434f678c90c2733e1188edfc63/oauthlib-3.3.1.tar.gz", hash = "sha256:0f0f8aa759826a193cf66c12ea1af1637f87b9b4622d46e866952bb022e538c9", size = 185918, upload-time = "2025-06-19T22:48:08.269Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/be/9c/92789c596b8df838baa98fa71844d84283302f7604ed565dafe5a6b5041a/oauthlib-3.3.1-py3-none-any.whl", hash = "sha256:88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1", size = 160065, upload-time = "2025-06-19T22:48:06.508Z" },
+]
+
+[[package]]
+name = "objgraph"
+version = "3.6.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ba/74/60dfb345ca493d69551dd1ba599ceb6fe325527fedabe4217d6e030449e2/objgraph-3.6.2.tar.gz", hash = "sha256:00b9f2f40f7422e3c7f45a61c4dafdaf81f03ff0649d6eaec866f01030e51ad8", size = 759524, upload-time = "2024-10-10T12:00:45.207Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8e/67/7bffbb861cb8a0a62b7df50738d35812bf40dc8bcc1559c04bdf593f1164/objgraph-3.6.2-py3-none-any.whl", hash = "sha256:8114c97712291c3ba30d882406a384d0a7651b307ea9a06e0d83836ccde85e15", size = 17667, upload-time = "2024-10-10T12:00:41.581Z" },
 ]
 
 [[package]]

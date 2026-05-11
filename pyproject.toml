@@ -33,6 +33,7 @@ Documentation = "https://docs.litellm.ai"
 # Docker and CI should prefer `uv.lock` rather than maintaining parallel installers.
 [project.optional-dependencies]
 proxy = [
+    "objgraph==3.6.2",
     "pycryptodome==3.23.0", # rsa
     "rsa==4.9.1", # rsa
     "prance==25.4.8.0",
