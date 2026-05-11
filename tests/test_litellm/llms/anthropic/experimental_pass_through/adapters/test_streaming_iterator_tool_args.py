@@ -306,6 +306,166 @@ def test_sync_stream_emits_input_json_delta_for_bundled_tool_args():
     assert events[input_json_delta_idx]["delta"]["partial_json"]
 
 
+@pytest.mark.asyncio
+async def test_async_stream_combined_tool_and_finish_chunk():
+    """
+    Regression test for v1.83.7: when a provider sends tool_calls AND
+    finish_reason in the SAME chunk (e.g., GLM-5.1), the async wrapper must
+    still emit a tool_use content_block_start + input_json_delta before the
+    message_delta, rather than silently dropping the tool call.
+    """
+    # Single chunk: tool call + finish_reason together
+    combined_chunk = _make_chunk(
+        Delta(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call_abc123",
+                    function=Function(
+                        name="read_file",
+                        arguments='{"file_path": "test.py"}',
+                    ),
+                    type="function",
+                    index=0,
+                )
+            ],
+        ),
+        finish_reason="tool_calls",
+    )
+
+    async def mock_stream():
+        yield combined_chunk
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=mock_stream(),
+        model="test-model",
+    )
+
+    events = await _collect_events_async(wrapper)
+    event_types = [e.get("type") if isinstance(e, dict) else str(e) for e in events]
+
+    tool_start_idx = None
+    input_json_delta_idx = None
+    message_delta_idx = None
+
+    for i, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        if (
+            event.get("type") == "content_block_start"
+            and isinstance(event.get("content_block"), dict)
+            and event["content_block"].get("type") == "tool_use"
+        ):
+            tool_start_idx = i
+        if (
+            event.get("type") == "content_block_delta"
+            and isinstance(event.get("delta"), dict)
+            and event["delta"].get("type") == "input_json_delta"
+        ):
+            input_json_delta_idx = i
+        if event.get("type") == "message_delta":
+            message_delta_idx = i
+
+    assert tool_start_idx is not None, (
+        f"Expected tool_use content_block_start; events: {event_types}"
+    )
+    assert input_json_delta_idx is not None, (
+        f"Expected input_json_delta for tool arguments; events: {event_types}"
+    )
+    assert message_delta_idx is not None, (
+        f"Expected message_delta with stop_reason; events: {event_types}"
+    )
+    assert tool_start_idx < input_json_delta_idx < message_delta_idx, (
+        f"Events must be ordered tool_start < input_json_delta < message_delta; "
+        f"indices: {tool_start_idx}, {input_json_delta_idx}, {message_delta_idx}"
+    )
+
+    # Verify the tool id and name are present
+    tool_start_event = events[tool_start_idx]
+    assert tool_start_event["content_block"]["id"] == "call_abc123"
+    assert tool_start_event["content_block"]["name"] == "read_file"
+
+    # Verify tool args carried through
+    delta_event = events[input_json_delta_idx]
+    assert delta_event["delta"]["partial_json"] == '{"file_path": "test.py"}'
+
+
+def test_sync_stream_combined_tool_and_finish_chunk():
+    """
+    Regression test for v1.83.7: sync counterpart of the combined chunk test.
+    """
+    combined_chunk = _make_chunk(
+        Delta(
+            content=None,
+            role="assistant",
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call_abc123",
+                    function=Function(
+                        name="read_file",
+                        arguments='{"file_path": "test.py"}',
+                    ),
+                    type="function",
+                    index=0,
+                )
+            ],
+        ),
+        finish_reason="tool_calls",
+    )
+
+    wrapper = AnthropicStreamWrapper(
+        completion_stream=iter([combined_chunk]),
+        model="test-model",
+    )
+
+    events = _collect_events_sync(wrapper)
+    event_types = [e.get("type") if isinstance(e, dict) else str(e) for e in events]
+
+    tool_start_idx = None
+    input_json_delta_idx = None
+    message_delta_idx = None
+
+    for i, event in enumerate(events):
+        if not isinstance(event, dict):
+            continue
+        if (
+            event.get("type") == "content_block_start"
+            and isinstance(event.get("content_block"), dict)
+            and event["content_block"].get("type") == "tool_use"
+        ):
+            tool_start_idx = i
+        if (
+            event.get("type") == "content_block_delta"
+            and isinstance(event.get("delta"), dict)
+            and event["delta"].get("type") == "input_json_delta"
+        ):
+            input_json_delta_idx = i
+        if event.get("type") == "message_delta":
+            message_delta_idx = i
+
+    assert tool_start_idx is not None, (
+        f"Expected tool_use content_block_start; events: {event_types}"
+    )
+    assert input_json_delta_idx is not None, (
+        f"Expected input_json_delta for tool arguments; events: {event_types}"
+    )
+    assert message_delta_idx is not None, (
+        f"Expected message_delta with stop_reason; events: {event_types}"
+    )
+    assert tool_start_idx < input_json_delta_idx < message_delta_idx, (
+        f"Events must be ordered tool_start < input_json_delta < message_delta; "
+        f"indices: {tool_start_idx}, {input_json_delta_idx}, {message_delta_idx}"
+    )
+
+    tool_start_event = events[tool_start_idx]
+    assert tool_start_event["content_block"]["id"] == "call_abc123"
+    assert tool_start_event["content_block"]["name"] == "read_file"
+
+    delta_event = events[input_json_delta_idx]
+    assert delta_event["delta"]["partial_json"] == '{"file_path": "test.py"}'
+
+
 def test_sync_stream_no_extra_delta_when_tool_args_empty():
     """
     Sync counterpart: empty args (OpenAI-style) should not emit an extra

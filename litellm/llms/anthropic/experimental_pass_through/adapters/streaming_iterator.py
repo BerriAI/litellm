@@ -161,9 +161,39 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         and processed_chunk["delta"].get("type") == "input_json_delta"
                         and processed_chunk["delta"].get("partial_json")
                     ):
+                        # xAI/Gemini: args bundled with name, no finish_reason
                         self.chunk_queue.append(processed_chunk)
-
-                    self.sent_content_block_finish = False
+                        self.sent_content_block_finish = False
+                    elif processed_chunk.get("type") == "message_delta":
+                        # Combined tool+finish chunk (e.g. GLM-5.1): tool_calls AND
+                        # finish_reason in one chunk. Extract args, close the tool
+                        # block, then queue the message_delta.
+                        _tc = getattr(chunk.choices[0].delta, "tool_calls", None)
+                        if _tc and _tc[0].function:
+                            _args = (
+                                getattr(_tc[0].function, "arguments", None) or ""
+                            )
+                            if _args:
+                                self.chunk_queue.append(
+                                    {
+                                        "type": "content_block_delta",
+                                        "index": self.current_content_block_index,
+                                        "delta": {
+                                            "type": "input_json_delta",
+                                            "partial_json": _args,
+                                        },
+                                    }
+                                )
+                        self.chunk_queue.append(
+                            {
+                                "type": "content_block_stop",
+                                "index": self.current_content_block_index,
+                            }
+                        )
+                        self.sent_content_block_finish = True
+                        self.chunk_queue.append(processed_chunk)
+                    else:
+                        self.sent_content_block_finish = False
                     return self.chunk_queue.popleft()
 
                 if (
@@ -355,10 +385,41 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             == "input_json_delta"
                             and processed_chunk["delta"].get("partial_json")
                         ):
+                            # xAI/Gemini: args bundled with name, no finish_reason
                             self.chunk_queue.append(processed_chunk)
-
-                        # Reset state for new block
-                        self.sent_content_block_finish = False
+                            self.sent_content_block_finish = False
+                        elif processed_chunk.get("type") == "message_delta":
+                            # Combined tool+finish chunk (e.g. GLM-5.1): tool_calls AND
+                            # finish_reason in one chunk. Extract args, close the tool
+                            # block, then queue the message_delta.
+                            _tc = getattr(
+                                chunk.choices[0].delta, "tool_calls", None
+                            )
+                            if _tc and _tc[0].function:
+                                _args = (
+                                    getattr(_tc[0].function, "arguments", None) or ""
+                                )
+                                if _args:
+                                    self.chunk_queue.append(
+                                        {
+                                            "type": "content_block_delta",
+                                            "index": self.current_content_block_index,
+                                            "delta": {
+                                                "type": "input_json_delta",
+                                                "partial_json": _args,
+                                            },
+                                        }
+                                    )
+                            self.chunk_queue.append(
+                                {
+                                    "type": "content_block_stop",
+                                    "index": self.current_content_block_index,
+                                }
+                            )
+                            self.sent_content_block_finish = True
+                            self.chunk_queue.append(processed_chunk)
+                        else:
+                            self.sent_content_block_finish = False
                         return self.chunk_queue.popleft()
 
                     if (
@@ -472,7 +533,22 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Example logic - customize based on your needs:
         # If chunk indicates a tool call
         if chunk.choices[0].finish_reason is not None:
-            return False
+            # Some providers (e.g., GLM-5.1) bundle tool_calls and finish_reason
+            # in the same chunk. If the chunk also carries a named tool call we
+            # must fall through so the new tool_use content block is detected.
+            _delta = chunk.choices[0].delta
+            _tool_calls = getattr(_delta, "tool_calls", None)
+            _has_named_tool_call = bool(
+                _tool_calls
+                and _tool_calls[0].function is not None
+                and (
+                    getattr(_tool_calls[0].function, "name", None)
+                    or getattr(_tool_calls[0], "id", None)
+                )
+            )
+            if not _has_named_tool_call:
+                return False
+            # Fall through to detect the new tool_use block below
 
         (
             block_type,
