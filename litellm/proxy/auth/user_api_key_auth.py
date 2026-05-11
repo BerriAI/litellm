@@ -1284,8 +1284,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                 )
                 hashed_api_key = api_key
-            is_invalid_token = await InvalidVirtualKeyCache.check_invalid_token(
-                api_key=hashed_api_key,
+            is_invalid_token = await InvalidVirtualKeyCache.check_invalid_hashed_token(
+                hashed_token=hashed_api_key,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 general_settings=general_settings,
