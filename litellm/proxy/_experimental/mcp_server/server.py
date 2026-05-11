@@ -289,7 +289,7 @@ if MCP_AVAILABLE:
         now: Optional[float] = None,
     ) -> None:
         """Terminate expired stateful sessions and drop their auth contexts."""
-        now = now or time.monotonic()
+        now = time.monotonic() if now is None else now
         server_instances = getattr(session_manager_stateful, "_server_instances", {})
         expired_session_ids = []
         for session_id, last_seen in _stateful_session_auth_context_last_seen.items():
@@ -2684,8 +2684,8 @@ if MCP_AVAILABLE:
     ) -> str:
         """
         Stable, non-reversible identifier for the caller used to bind an
-        mcp-session-id to its creator. ``api_key`` on UserAPIKeyAuth is
-        already hashed at construction time, so we can use it directly.
+        mcp-session-id to its creator. Hash the resolved credential before
+        using it so custom key formats are never stored in cleartext.
 
         For OAuth2 passthrough (``UserAPIKeyAuth()`` with no key/user_id),
         the caller's identity is the upstream OAuth bearer; hash it so two
@@ -2701,7 +2701,10 @@ if MCP_AVAILABLE:
         """
         if user_api_key_auth is not None:
             if user_api_key_auth.api_key:
-                return f"key:{user_api_key_auth.api_key}"
+                api_key_hash = hashlib.sha256(
+                    user_api_key_auth.api_key.encode("utf-8")
+                ).hexdigest()
+                return f"key:{api_key_hash}"
             if user_api_key_auth.user_id:
                 return f"user:{user_api_key_auth.user_id}"
         if oauth2_headers:

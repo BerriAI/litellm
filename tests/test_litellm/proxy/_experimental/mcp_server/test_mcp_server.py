@@ -1477,6 +1477,45 @@ async def test_stateful_mcp_auth_contexts_do_not_expire_active_sessions():
 
 
 @pytest.mark.asyncio
+async def test_stateful_mcp_auth_context_cleanup_respects_zero_now():
+    """Explicit now=0 should be used as-is instead of falling back to monotonic."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "zero-now-stateful-session"
+    auth_user = UserAPIKeyAuth(api_key="zero-now-key", user_id="zero-now-user")
+    transport = MagicMock()
+    transport.terminate = AsyncMock()
+
+    mcp_server._stateful_session_auth_contexts[session_id] = auth_user
+    mcp_server._stateful_session_auth_context_last_seen[session_id] = 0.0
+
+    try:
+        with (
+            patch.object(
+                mcp_server.session_manager_stateful,
+                "_server_instances",
+                {session_id: transport},
+            ),
+            patch.object(
+                mcp_server.time,
+                "monotonic",
+                return_value=mcp_server._STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS + 1,
+            ),
+        ):
+            await mcp_server._purge_expired_stateful_session_auth_contexts(now=0.0)
+
+        assert session_id in mcp_server._stateful_session_auth_contexts
+        assert session_id in mcp_server._stateful_session_auth_context_last_seen
+        transport.terminate.assert_not_awaited()
+    finally:
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_auth_context_last_seen.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_owner_fingerprint_distinguishes_oauth_callers():
     """
     OAuth2 passthrough callers all share `UserAPIKeyAuth()` with no api_key
@@ -1515,6 +1554,26 @@ async def test_owner_fingerprint_distinguishes_oauth_callers():
     assert fp_ip_a == fp_ip_a_again
     assert fp_ip_a.startswith("ip:")
     assert "10.0.0.1" not in fp_ip_a
+
+
+@pytest.mark.asyncio
+async def test_owner_fingerprint_hashes_custom_api_keys():
+    """Custom API key formats should not appear in owner fingerprints."""
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _owner_fingerprint_for,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    auth = UserAPIKeyAuth(api_key="custom-master-key")
+    fp = _owner_fingerprint_for(auth)
+    fp_again = _owner_fingerprint_for(auth)
+
+    assert fp == fp_again
+    assert fp.startswith("key:")
+    assert "custom-master-key" not in fp
+    assert fp != "key:custom-master-key"
 
 
 @pytest.mark.asyncio
