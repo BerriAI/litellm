@@ -75,6 +75,19 @@ def _to_epoch(value: Any) -> Optional[int]:
     return None
 
 
+def _sanitize_response_for_logging(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_response_for_logging(response_value)
+            for key, response_value in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_response_for_logging(item) for item in value]
+    return value
+
+
 class BedrockBatchesHandler:
     """
     Handler for Bedrock Batches.
@@ -270,7 +283,7 @@ class BedrockBatchesHandler:
             logging_obj.post_call(
                 input=batch_id,
                 api_key="",
-                original_response=response,
+                original_response=_sanitize_response_for_logging(response),
                 additional_args={"complete_input_dict": {"jobIdentifier": batch_id}},
             )
 
