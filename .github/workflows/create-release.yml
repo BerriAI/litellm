@@ -73,8 +73,9 @@ jobs:
                 throw e;
               }
               core.warning(
-                `cosign.pub not found at ${commitHash}; omitting the tag-based ` +
-                `convenience URL in release notes to avoid a broken link.`
+                `cosign.pub not found at ${commitHash} for tag ${tag}; ` +
+                `omitting the tag-based convenience URL in release notes to ` +
+                `avoid a broken link.`
               );
             }
 
