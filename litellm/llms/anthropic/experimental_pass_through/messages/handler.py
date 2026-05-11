@@ -56,16 +56,26 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 async def _execute_pre_request_hooks(
     model: str,
     messages: List[Dict],
+    max_tokens: int,
+    metadata: Optional[Dict],
+    stop_sequences: Optional[List[str]],
     tools: Optional[List[Dict]],
     stream: Optional[bool],
+    system: Optional[str],
+    temperature: Optional[float],
+    thinking: Optional[Dict],
+    tool_choice: Optional[Dict],
+    top_k: Optional[int],
+    top_p: Optional[float],
     custom_llm_provider: Optional[str],
     **kwargs,
 ) -> Dict:
     """
-    Execute pre-request hooks from CustomLogger callbacks.
+    Execute pre-call and pre-request hooks from CustomLogger callbacks.
 
     Allows CustomLoggers to modify request parameters before the API call.
-    Used for WebSearch tool conversion, stream modification, etc.
+    Used for proxy guardrails, WebSearch tool conversion, stream
+    modification, etc.
 
     Args:
         model: Model name
@@ -88,8 +98,19 @@ async def _execute_pre_request_hooks(
 
     # Build complete request kwargs dict
     request_kwargs = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "metadata": metadata,
+        "stop_sequences": stop_sequences,
         "tools": tools,
         "stream": stream,
+        "system": system,
+        "temperature": temperature,
+        "thinking": thinking,
+        "tool_choice": tool_choice,
+        "top_k": top_k,
+        "top_p": top_p,
         "litellm_params": {
             "custom_llm_provider": custom_llm_provider,
         },
@@ -105,9 +126,31 @@ async def _execute_pre_request_hooks(
         if not isinstance(callback, _CustomLogger):
             continue
 
+        if (
+            "async_pre_call_hook" in vars(callback.__class__)
+            and callback.__class__.async_pre_call_hook != _CustomLogger.async_pre_call_hook
+        ):
+            # Keep the experimental Messages path in parity with the proxy
+            # pre-call hook contract used by the standard /v1/messages path.
+            modified_kwargs = await callback.async_pre_call_hook(
+                user_api_key_dict=request_kwargs.get("user_api_key_dict"),
+                cache=request_kwargs.get("cache"),
+                data=request_kwargs,
+                call_type="anthropic_messages",
+            )
+
+            if isinstance(modified_kwargs, Exception):
+                raise modified_kwargs
+            if isinstance(modified_kwargs, str):
+                raise ValueError(modified_kwargs)
+            if modified_kwargs is not None:
+                request_kwargs = modified_kwargs
+
         # Call the pre-request hook
         modified_kwargs = await callback.async_pre_request_hook(
-            model, messages, request_kwargs
+            request_kwargs.get("model", model),
+            request_kwargs.get("messages", messages),
+            request_kwargs,
         )
 
         # If hook returned modified kwargs, use them
@@ -190,30 +233,46 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
-    original_stream = stream or kwargs.get(
-        "_websearch_interception_converted_stream", False
-    )
+    original_stream = stream or kwargs.get("_websearch_interception_converted_stream", False)
 
     # Execute pre-request hooks to allow CustomLoggers to modify request
     request_kwargs = await _execute_pre_request_hooks(
         model=model,
         messages=messages,
+        max_tokens=max_tokens,
+        metadata=metadata,
+        stop_sequences=stop_sequences,
         tools=tools,
         stream=stream,
+        system=system,
+        temperature=temperature,
+        thinking=thinking,
+        tool_choice=tool_choice,
+        top_k=top_k,
+        top_p=top_p,
         custom_llm_provider=custom_llm_provider,
         **kwargs,
     )
 
     # Extract modified parameters
+    model = request_kwargs.pop("model", model)
+    messages = request_kwargs.pop("messages", messages)
+    max_tokens = request_kwargs.pop("max_tokens", max_tokens)
+    metadata = request_kwargs.pop("metadata", metadata)
+    stop_sequences = request_kwargs.pop("stop_sequences", stop_sequences)
     tools = request_kwargs.pop("tools", tools)
     stream = request_kwargs.pop("stream", stream)
+    system = request_kwargs.pop("system", system)
+    temperature = request_kwargs.pop("temperature", temperature)
+    thinking = request_kwargs.pop("thinking", thinking)
+    tool_choice = request_kwargs.pop("tool_choice", tool_choice)
+    top_k = request_kwargs.pop("top_k", top_k)
+    top_p = request_kwargs.pop("top_p", top_p)
     # Propagate the provider derived inside pre-request hooks, if not already set.
     # The litellm_params dict may have been overwritten by **kwargs in
     # _execute_pre_request_hooks, so fall back to get_llm_provider() if needed.
     if not custom_llm_provider:
-        custom_llm_provider = request_kwargs.get("litellm_params", {}).get(
-            "custom_llm_provider"
-        )
+        custom_llm_provider = request_kwargs.get("litellm_params", {}).get("custom_llm_provider")
         if not custom_llm_provider:
             try:
                 _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
@@ -376,9 +435,7 @@ def anthropic_messages_handler(
         # Check if stream was converted for WebSearch interception
         # This is set in the async wrapper above when stream=True is converted to stream=False
         if kwargs.get("_websearch_interception_converted_stream", False):
-            litellm_logging_obj.model_call_details[
-                "websearch_interception_converted_stream"
-            ] = True
+            litellm_logging_obj.model_call_details["websearch_interception_converted_stream"] = True
 
     if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
         return mock_response(
@@ -390,14 +447,10 @@ def anthropic_messages_handler(
 
     anthropic_messages_provider_config: Optional[BaseAnthropicMessagesConfig] = None
 
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
-        anthropic_messages_provider_config = (
-            ProviderConfigManager.get_provider_anthropic_messages_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+    if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
+        anthropic_messages_provider_config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
@@ -423,14 +476,8 @@ def anthropic_messages_handler(
             **kwargs,
         )
         if _should_route_to_responses_api(custom_llm_provider):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
-                **_shared_kwargs
-            )
-        return (
-            LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-                **_shared_kwargs
-            )
-        )
+            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(**_shared_kwargs)
+        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(**_shared_kwargs)
 
     if custom_llm_provider is None:
         raise ValueError(
@@ -439,16 +486,11 @@ def anthropic_messages_handler(
 
     local_vars.update(kwargs)
     anthropic_messages_optional_request_params = (
-        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(
-            params=local_vars
-        )
+        AnthropicMessagesRequestUtils.get_requested_anthropic_messages_optional_param(params=local_vars)
     )
     if is_reasoning_auto_summary_enabled():
         thinking_param = anthropic_messages_optional_request_params.get("thinking")
-        if (
-            isinstance(thinking_param, dict)
-            and thinking_param.get("type") != "disabled"
-        ):
+        if isinstance(thinking_param, dict) and thinking_param.get("type") != "disabled":
             anthropic_messages_optional_request_params["thinking"] = {
                 **thinking_param,
                 "display": "summarized",
@@ -458,9 +500,7 @@ def anthropic_messages_handler(
         model=model,
         messages=messages,
         anthropic_messages_provider_config=anthropic_messages_provider_config,
-        anthropic_messages_optional_request_params=dict(
-            anthropic_messages_optional_request_params
-        ),
+        anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
         _is_async=is_async,
         client=client,
         custom_llm_provider=custom_llm_provider,

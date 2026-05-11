@@ -50,15 +50,11 @@ def client_no_auth(fake_env_vars):
 
 
 @mock_patch_anthropic_messages()
-def test_anthropic_messages_runs_proxy_async_pre_call_hook(
-    mock_anthropic_messages, client_no_auth
-):
+def test_anthropic_messages_runs_proxy_async_pre_call_hook(mock_anthropic_messages, client_no_auth):
     hook_calls = []
 
     class AnthropicMessagesPreCallHook(CustomLogger):
-        async def async_pre_call_hook(
-            self, user_api_key_dict, cache, data, call_type, **kwargs
-        ):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type, **kwargs):
             hook_calls.append(call_type)
             data["metadata"] = {**(data.get("metadata") or {}), "source": "unit-test"}
             return data
@@ -80,9 +76,55 @@ def test_anthropic_messages_runs_proxy_async_pre_call_hook(
         assert response.json()["content"][0]["text"] == "Hello from LiteLLM"
         assert hook_calls == ["anthropic_messages"]
         mock_anthropic_messages.assert_called_once()
-        assert (
-            mock_anthropic_messages.call_args.kwargs["metadata"]["source"]
-            == "unit-test"
-        )
+        assert mock_anthropic_messages.call_args.kwargs["metadata"]["source"] == "unit-test"
     finally:
         litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_experimental_anthropic_messages_runs_proxy_async_pre_call_hook():
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    hook_calls = []
+
+    class AnthropicMessagesPreCallHook(CustomLogger):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type, **kwargs):
+            hook_calls.append((call_type, data["model"]))
+            data["metadata"] = {
+                **(data.get("metadata") or {}),
+                "source": "experimental-unit-test",
+            }
+            data["temperature"] = 0.2
+            return data
+
+    original_callbacks = litellm.callbacks
+    original_flag = litellm.use_chat_completions_url_for_anthropic_messages
+    litellm.callbacks = [AnthropicMessagesPreCallHook()]
+    litellm.use_chat_completions_url_for_anthropic_messages = True
+
+    try:
+        with mock.patch(
+            "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
+            return_value=EXAMPLE_ANTHROPIC_MESSAGES_RESULT,
+        ) as mock_handler:
+            response = await anthropic_messages(
+                model="openai/gpt-4o-mini",
+                max_tokens=100,
+                messages=[{"role": "user", "content": "hi"}],
+                metadata={"existing": "keep"},
+                custom_llm_provider="openai",
+            )
+
+        assert response == EXAMPLE_ANTHROPIC_MESSAGES_RESULT
+        assert hook_calls == [("anthropic_messages", "openai/gpt-4o-mini")]
+        mock_handler.assert_called_once()
+        assert mock_handler.call_args.kwargs["metadata"] == {
+            "existing": "keep",
+            "source": "experimental-unit-test",
+        }
+        assert mock_handler.call_args.kwargs["temperature"] == 0.2
+    finally:
+        litellm.callbacks = original_callbacks
+        litellm.use_chat_completions_url_for_anthropic_messages = original_flag
