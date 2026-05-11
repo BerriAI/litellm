@@ -30,6 +30,11 @@ def get_supported_openai_params(  # noqa: PLR0915
         except BadRequestError:
             return None
 
+    if custom_llm_provider == "bedrock" and model.startswith("claude_platform/"):
+        return litellm.AnthropicAWSConfig().get_supported_openai_params(
+            model=model.replace("claude_platform/", "", 1)
+        )
+
     if custom_llm_provider in LlmProvidersSet:
         provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
             model=model, provider=LlmProviders(custom_llm_provider)

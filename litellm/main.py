@@ -2954,6 +2954,25 @@ def completion(  # type: ignore # noqa: PLR0915
                     original_response=response,
                 )
             response = response
+        elif custom_llm_provider == "anthropic_aws":
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
         elif custom_llm_provider == "nlp_cloud":
             nlp_cloud_key = (
                 api_key
@@ -3834,6 +3853,28 @@ def completion(  # type: ignore # noqa: PLR0915
         elif custom_llm_provider == "bedrock":
             # boto3 reads keys from .env
             custom_prompt_dict = custom_prompt_dict or litellm.custom_prompt_dict
+
+            if model.startswith("claude_platform/"):
+                model = model.replace("claude_platform/", "", 1)
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    acompletion=acompletion,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    custom_llm_provider="anthropic_aws",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=_get_encoding(),
+                    api_key=api_key,
+                    logging_obj=logging,
+                    client=client,
+                )
+                return response
 
             if "aws_bedrock_client" in optional_params:
                 verbose_logger.warning(

@@ -4344,9 +4344,32 @@ def get_optional_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "bedrock":
         BedrockModelInfo = getattr(sys.modules[__name__], "BedrockModelInfo")
-        bedrock_route = BedrockModelInfo.get_bedrock_route(model)
-        bedrock_base_model = BedrockModelInfo.get_base_model(model)
-        if bedrock_route == "converse" or bedrock_route == "converse_like":
+        if model.startswith("claude_platform/"):
+            optional_params = litellm.AnthropicAWSConfig().map_openai_params(
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model.replace("claude_platform/", "", 1),
+                drop_params=(
+                    drop_params
+                    if drop_params is not None and isinstance(drop_params, bool)
+                    else False
+                ),
+            )
+            for key in (
+                "workspace_id",
+                "anthropic_aws_workspace_id",
+                "aws_workspace_id",
+                "anthropic_workspace_id",
+            ):
+                if key in passed_params:
+                    optional_params[key] = passed_params[key]
+            provider_config = None
+        else:
+            bedrock_route = BedrockModelInfo.get_bedrock_route(model)
+            bedrock_base_model = BedrockModelInfo.get_base_model(model)
+        if not model.startswith("claude_platform/") and (
+            bedrock_route == "converse" or bedrock_route == "converse_like"
+        ):
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
@@ -4357,7 +4380,7 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
-        elif bedrock_route == "openai":
+        elif not model.startswith("claude_platform/") and bedrock_route == "openai":
             optional_params = litellm.AmazonBedrockOpenAIConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,
@@ -4368,7 +4391,11 @@ def get_optional_params(  # noqa: PLR0915
                     else False
                 ),
             )
-        elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
+        elif (
+            not model.startswith("claude_platform/")
+            and "anthropic" in bedrock_base_model
+            and bedrock_route == "invoke"
+        ):
             if (
                 bedrock_base_model
                 in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
@@ -8080,6 +8107,10 @@ class ProviderConfigManager:
             # Format: (factory_function, needs_model_parameter: bool)
             LlmProviders.OPENAI: (lambda: litellm.OpenAIGPTConfig(), False),
             LlmProviders.ANTHROPIC: (lambda: litellm.AnthropicConfig(), False),
+            LlmProviders.ANTHROPIC_AWS: (
+                lambda: litellm.AnthropicAWSConfig(),
+                False,
+            ),
             LlmProviders.AZURE: (
                 lambda model: ProviderConfigManager._get_azure_config(model),
                 True,
@@ -8472,6 +8503,8 @@ class ProviderConfigManager:
         # The 'BEDROCK' provider corresponds to Amazon's implementation of Anthropic Claude v3.
         # This mapping ensures that the correct configuration is returned for BEDROCK.
         elif litellm.LlmProviders.BEDROCK == provider:
+            if model.startswith("claude_platform/"):
+                return litellm.AnthropicAWSMessagesConfig()
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)

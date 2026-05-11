@@ -3212,6 +3212,7 @@ class LlmProviders(str, Enum):
     COHERE_CHAT = "cohere_chat"
     CLARIFAI = "clarifai"
     ANTHROPIC = "anthropic"
+    ANTHROPIC_AWS = "anthropic_aws"
     ANTHROPIC_TEXT = "anthropic_text"
     BYTEZ = "bytez"
     REPLICATE = "replicate"
