@@ -3,7 +3,6 @@ import sys
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
-from fastapi import HTTPException
 from pydantic import BaseModel
 from typing_extensions import TypedDict
 
@@ -17,6 +16,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -95,8 +95,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             values_to_update_in_cache.append((request_count_api_key, new_val))
 
         else:
-            raise HTTPException(
-                status_code=429,
+            raise ProxyRateLimitError(
                 detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. {CommonProxyErrors.max_parallel_request_limit_reached.value}. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}, current max_parallel_requests: {current['current_requests']}, max_parallel_requests: {max_parallel_requests}",
                 headers={"retry-after": str(self.time_to_next_minute())},
             )
@@ -123,15 +122,19 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
     def raise_rate_limit_error(
         self, additional_details: Optional[str] = None
-    ) -> HTTPException:
+    ) -> ProxyRateLimitError:
         """
-        Raise an HTTPException with a 429 status code and a retry-after header
+        Raise a 429 with a retry-after header for litellm-proxy parallel-request limits.
+
+        Returns a :class:`ProxyRateLimitError`, which is both a
+        :class:`litellm.RateLimitError` (so callers can catch by category) and a
+        :class:`fastapi.HTTPException` (so the FastAPI dispatcher serializes it
+        correctly with status 429 and the supplied headers).
         """
         error_message = "Max parallel request limit reached"
         if additional_details is not None:
             error_message = error_message + " " + additional_details
-        raise HTTPException(
-            status_code=429,
+        raise ProxyRateLimitError(
             detail=f"Max parallel request limit reached {additional_details}",
             headers={"retry-after": str(self.time_to_next_minute())},
         )
