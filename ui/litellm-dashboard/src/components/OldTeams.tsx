@@ -44,6 +44,7 @@ import { AntDLoadingSpinner } from "@/components/ui/AntDLoadingSpinner";
 import OrganizationDropdown from "./common_components/OrganizationDropdown";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { teamListCall as v2TeamListCall, type TeamsResponse } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { isLikelyTeamId } from "@/utils/teamUtils";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import ModelAliasManager from "./common_components/ModelAliasManager";
@@ -216,6 +217,7 @@ const Teams: React.FC<TeamProps> = ({
     sortOrder?: string;
     organizationID?: string;
     teamAlias?: string;
+    teamId?: string;
   } = {}) => {
     if (!accessToken) return;
     const page = opts.page ?? currentPage;
@@ -224,6 +226,7 @@ const Teams: React.FC<TeamProps> = ({
     const sortOrder = opts.sortOrder ?? filters.sort_order;
     const organizationID = opts.organizationID ?? filters.organization_id;
     const teamAlias = opts.teamAlias ?? filters.team_alias;
+    const teamId = opts.teamId ?? filters.team_id;
 
     setIsLoading(true);
     setFetchError(null);
@@ -235,6 +238,7 @@ const Teams: React.FC<TeamProps> = ({
         {
           organizationID: organizationID || null,
           team_alias: teamAlias || null,
+          teamID: teamId || null,
           userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
           sortBy: sortBy || null,
           sortOrder: sortOrder || null,
@@ -632,9 +636,12 @@ const Teams: React.FC<TeamProps> = ({
     setIsSearching(true);
     searchDebounceRef.current = setTimeout(async () => {
       try {
-        setFilters((prev) => ({ ...prev, team_alias: value }));
+        const searchAsTeamId = isLikelyTeamId(value);
+        const teamId = searchAsTeamId ? value : "";
+        const teamAlias = searchAsTeamId ? "" : value;
+        setFilters((prev) => ({ ...prev, team_id: teamId, team_alias: teamAlias }));
         setCurrentPage(1);
-        await fetchTeamsV2({ page: 1, teamAlias: value });
+        await fetchTeamsV2({ page: 1, teamId, teamAlias });
       } finally {
         setIsSearching(false);
       }
@@ -654,6 +661,7 @@ const Teams: React.FC<TeamProps> = ({
         {
           organizationID: newFilters.organization_id || null,
           team_alias: newFilters.team_alias || null,
+          teamID: newFilters.team_id || null,
           userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
           sortBy: newFilters.sort_by || null,
           sortOrder: newFilters.sort_order || null,
@@ -678,7 +686,7 @@ const Teams: React.FC<TeamProps> = ({
     };
     setFilters(resetFilters);
     setCurrentPage(1);
-    fetchTeamsV2({ page: 1, organizationID: "", teamAlias: "", sortBy: "created_at", sortOrder: "desc" });
+    fetchTeamsV2({ page: 1, organizationID: "", teamAlias: "", teamId: "", sortBy: "created_at", sortOrder: "desc" });
   };
 
   const { token } = theme.useToken();
@@ -945,7 +953,7 @@ const Teams: React.FC<TeamProps> = ({
                 <Input
                   prefix={<SearchIcon size={16} />}
                   suffix={isSearching ? <AntDLoadingSpinner size="small" /> : null}
-                  placeholder="Search teams by name..."
+                  placeholder="Search teams by name or ID..."
                   onChange={(e) => handleSearchChange(e.target.value)}
                   allowClear
                   style={{ maxWidth: 400 }}

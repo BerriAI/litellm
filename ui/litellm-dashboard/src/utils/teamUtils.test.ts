@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveTeamAliasFromTeamID, createTeamAliasMap } from "./teamUtils";
+import { resolveTeamAliasFromTeamID, createTeamAliasMap, isLikelyTeamId } from "./teamUtils";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 describe("resolveTeamAliasFromTeamID", () => {
@@ -60,5 +60,16 @@ describe("createTeamAliasMap", () => {
     expect(createTeamAliasMap(null)).toEqual({});
     expect(createTeamAliasMap(undefined)).toEqual({});
     expect(createTeamAliasMap([])).toEqual({});
+  });
+});
+
+describe("isLikelyTeamId", () => {
+  it("matches a full UUID", () => {
+    expect(isLikelyTeamId("a1b2c3d4-5678-90ab-cdef-1234567890ab")).toBe(true);
+  });
+
+  it("does not match a UUID prefix or arbitrary string", () => {
+    expect(isLikelyTeamId("a1b2c3d4-5678")).toBe(false);
+    expect(isLikelyTeamId("my-team")).toBe(false);
   });
 });
