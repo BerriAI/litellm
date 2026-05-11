@@ -166,3 +166,97 @@ class TestDeepSeekThinkingParams:
         )
 
         assert "thinking" not in result
+
+
+class TestDeepSeekV4ToolChoiceConstraint:
+    """
+    DeepSeek V4 (deepseek-v4-pro / deepseek-v4-flash, released 2026-04) is
+    reasoner-only and rejects ``tool_choice="required"``, ``"any"``, or a
+    dict form with HTTP 400 "deepseek-reasoner does not support this
+    tool_choice", even when the caller did NOT explicitly send
+    ``thinking={"type":"enabled"}`` (the server enables thinking mode by
+    default for V4). Only ``"auto"`` and ``"none"`` are accepted in thinking
+    mode. Verify the transformation converts unsupported values to ``"auto"``
+    so SDKs that hardcode ``tool_choice="required"`` (e.g. OpenAI Agents SDK
+    delegation paths) keep working on V4.
+    """
+
+    def setup_method(self):
+        self.config = DeepSeekChatConfig()
+
+    def test_v4_pro_tool_choice_required_converted_to_auto(self):
+        """V4-pro + tool_choice='required' → 'auto' (model-name match, no thinking required)."""
+        result = self.config.map_openai_params(
+            non_default_params={"tool_choice": "required"},
+            optional_params={"tool_choice": "required"},
+            model="deepseek/deepseek-v4-pro",
+            drop_params=False,
+        )
+        assert result["tool_choice"] == "auto"
+
+    def test_v4_flash_tool_choice_any_converted_to_auto(self):
+        """V4-flash + tool_choice='any' → 'auto'."""
+        result = self.config.map_openai_params(
+            non_default_params={"tool_choice": "any"},
+            optional_params={"tool_choice": "any"},
+            model="deepseek-v4-flash",
+            drop_params=False,
+        )
+        assert result["tool_choice"] == "auto"
+
+    def test_v4_pro_tool_choice_dict_form_converted_to_auto(self):
+        """V4-pro + dict tool_choice (specific function) → 'auto'."""
+        tc = {"type": "function", "function": {"name": "my_tool"}}
+        result = self.config.map_openai_params(
+            non_default_params={"tool_choice": tc},
+            optional_params={"tool_choice": tc},
+            model="deepseek/deepseek-v4-pro",
+            drop_params=False,
+        )
+        assert result["tool_choice"] == "auto"
+
+    def test_v4_pro_tool_choice_auto_unchanged(self):
+        """V4-pro + tool_choice='auto' → unchanged (already valid)."""
+        result = self.config.map_openai_params(
+            non_default_params={"tool_choice": "auto"},
+            optional_params={"tool_choice": "auto"},
+            model="deepseek/deepseek-v4-pro",
+            drop_params=False,
+        )
+        assert result["tool_choice"] == "auto"
+
+    def test_v4_pro_tool_choice_none_unchanged(self):
+        """V4-pro + tool_choice='none' → unchanged (already valid)."""
+        result = self.config.map_openai_params(
+            non_default_params={"tool_choice": "none"},
+            optional_params={"tool_choice": "none"},
+            model="deepseek/deepseek-v4-pro",
+            drop_params=False,
+        )
+        assert result["tool_choice"] == "none"
+
+    def test_non_v4_chat_model_tool_choice_required_unchanged(self):
+        """Non-V4 deepseek-chat + tool_choice='required' → unchanged (V3 supports it)."""
+        result = self.config.map_openai_params(
+            non_default_params={"tool_choice": "required"},
+            optional_params={"tool_choice": "required"},
+            model="deepseek/deepseek-chat",
+            drop_params=False,
+        )
+        assert result["tool_choice"] == "required"
+
+    def test_thinking_enabled_explicit_also_converts(self):
+        """Explicit thinking={'type':'enabled'} on any deepseek model converts tool_choice too."""
+        result = self.config.map_openai_params(
+            non_default_params={
+                "thinking": {"type": "enabled"},
+                "tool_choice": "required",
+            },
+            optional_params={
+                "thinking": {"type": "enabled"},
+                "tool_choice": "required",
+            },
+            model="deepseek-reasoner",
+            drop_params=False,
+        )
+        assert result["tool_choice"] == "auto"
