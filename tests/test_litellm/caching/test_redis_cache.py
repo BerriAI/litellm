@@ -164,6 +164,62 @@ async def test_redis_cache_async_increment_default_fallback_existing_ttl_skips_s
 
 
 @pytest.mark.asyncio
+async def test_redis_cache_async_increment_default_falls_back_on_redis6_expire_nx_syntax_error(
+    monkeypatch, redis_no_ping
+):
+    """If Redis server rejects EXPIRE ... NX, fallback to TTL-check + conditional EXPIRE."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.__aenter__.return_value = mock_redis_instance
+    mock_redis_instance.__aexit__.return_value = None
+
+    class ResponseError(Exception):
+        pass
+
+    mock_redis_instance.expire.side_effect = [
+        ResponseError("ERR syntax error"),
+        True,
+    ]
+    mock_redis_instance.ttl.return_value = -1
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        await redis_cache.async_increment(key="rate_limit:window", value=1)
+
+    assert mock_redis_instance.expire.await_count == 2
+    assert mock_redis_instance.expire.await_args_list[0].kwargs == {"nx": True}
+    assert mock_redis_instance.expire.await_args_list[1].kwargs == {}
+    mock_redis_instance.ttl.assert_awaited_once_with("rate_limit:window")
+
+
+@pytest.mark.asyncio
+async def test_redis_cache_async_increment_default_raises_non_compat_expire_error(
+    monkeypatch, redis_no_ping
+):
+    """Non-compatibility expire errors should still propagate."""
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.__aenter__.return_value = mock_redis_instance
+    mock_redis_instance.__aexit__.return_value = None
+
+    class ResponseError(Exception):
+        pass
+
+    mock_redis_instance.expire.side_effect = ResponseError("READONLY You can't write")
+
+    with patch.object(
+        redis_cache, "init_async_client", return_value=mock_redis_instance
+    ):
+        with pytest.raises(ResponseError, match="READONLY"):
+            await redis_cache.async_increment(key="rate_limit:window", value=1)
+
+    mock_redis_instance.ttl.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_redis_client_init_with_socket_timeout(monkeypatch, redis_no_ping):
     monkeypatch.setenv("REDIS_HOST", "my-fake-host")
     redis_cache = RedisCache(socket_timeout=1.0)
