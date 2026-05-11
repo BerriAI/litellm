@@ -2706,7 +2706,10 @@ if MCP_AVAILABLE:
                 ).hexdigest()
                 return f"key:{api_key_hash}"
             if user_api_key_auth.user_id:
-                return f"user:{user_api_key_auth.user_id}"
+                user_id_hash = hashlib.sha256(
+                    user_api_key_auth.user_id.encode("utf-8")
+                ).hexdigest()
+                return f"user:{user_id_hash}"
         if oauth2_headers:
             authz = oauth2_headers.get("Authorization") or oauth2_headers.get(
                 "authorization"
