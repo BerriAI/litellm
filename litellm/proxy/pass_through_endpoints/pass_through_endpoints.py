@@ -2576,12 +2576,16 @@ async def _filter_endpoints_by_team_allowed_routes(
     if not isinstance(team_access_group_ids, list):
         team_access_group_ids = []
     if team_access_group_ids:
-        has_passthrough_route_constraints = True
-        allowed_passthrough_routes.extend(
-            await _get_pass_through_routes_from_access_groups(
-                access_group_ids=team_access_group_ids,
-            )
+        # Only impose pass-through-route constraints when the access groups
+        # actually contribute pass-through routes. A team that uses access
+        # groups solely for model (or other resource) gating must still see
+        # the full pass-through endpoint list.
+        ag_pass_through_routes = await _get_pass_through_routes_from_access_groups(
+            access_group_ids=team_access_group_ids,
         )
+        if ag_pass_through_routes:
+            has_passthrough_route_constraints = True
+            allowed_passthrough_routes.extend(ag_pass_through_routes)
 
     if has_passthrough_route_constraints:
         ## FILTER pass_through_endpoints by allowed_passthrough_routes
