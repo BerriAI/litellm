@@ -8,7 +8,17 @@
 import asyncio
 import contextvars
 from functools import partial
-from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Coroutine,
+    Dict,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -30,6 +40,10 @@ from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response
+
+if TYPE_CHECKING:
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
 
 # Providers that are routed directly to the OpenAI Responses API instead of
 # going through chat/completions.
@@ -134,8 +148,10 @@ async def _execute_pre_request_hooks(
             # Keep the experimental Messages path in parity with the proxy
             # pre-call hook contract used by the standard /v1/messages path.
             modified_kwargs = await callback.async_pre_call_hook(
-                user_api_key_dict=request_kwargs.get("user_api_key_dict"),
-                cache=request_kwargs.get("cache"),
+                user_api_key_dict=cast(
+                    "UserAPIKeyAuth", request_kwargs.get("user_api_key_dict")
+                ),
+                cache=cast("DualCache", request_kwargs.get("cache")),
                 data=request_kwargs,
                 call_type="anthropic_messages",
             )
