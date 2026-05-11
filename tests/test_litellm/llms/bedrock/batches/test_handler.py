@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from decimal import Decimal
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -112,6 +113,7 @@ def test_sanitize_response_for_logging_converts_nested_datetimes():
         "nested": {
             "endTimes": [END_TIME],
             "tupleTimes": (SUBMIT_TIME,),
+            "cost": Decimal("1.25"),
         },
     }
 
@@ -122,9 +124,11 @@ def test_sanitize_response_for_logging_converts_nested_datetimes():
         "nested": {
             "endTimes": [END_TIME.isoformat()],
             "tupleTimes": [SUBMIT_TIME.isoformat()],
+            "cost": "1.25",
         },
     }
     assert response["submitTime"] == SUBMIT_TIME
+    json.dumps(sanitized_response)
 
 
 def test_extract_job_id_from_arn():
@@ -329,14 +333,21 @@ def test_logging_obj_pre_and_post_call_invoked(patched_boto3):
 
 def test_logging_obj_post_call_gets_json_serializable_response(patched_boto3):
     class JsonSerializingLogger:
+        serialized_response: str
+
         def pre_call(self, **kwargs):
             pass
 
         def post_call(self, **kwargs):
-            json.dumps(kwargs["original_response"])
+            self.serialized_response = json.dumps(kwargs["original_response"])
+
+    logging_obj = JsonSerializingLogger()
 
     BedrockBatchesHandler._handle_model_invocation_job_status(
-        batch_id=JOB_ARN, logging_obj=JsonSerializingLogger()
+        batch_id=JOB_ARN, logging_obj=logging_obj
+    )
+    assert (
+        f'"submitTime": "{SUBMIT_TIME.isoformat()}"' in logging_obj.serialized_response
     )
 
 

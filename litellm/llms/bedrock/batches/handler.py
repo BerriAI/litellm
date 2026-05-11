@@ -80,9 +80,7 @@ def _sanitize_response_for_logging(value: Any) -> Any:
     def _default(obj: Any) -> Any:
         if isinstance(obj, datetime):
             return obj.isoformat()
-        raise TypeError(
-            f"Object of type {obj.__class__.__name__} is not JSON serializable"
-        )
+        return str(obj)
 
     return json.loads(json.dumps(value, default=_default))
 
