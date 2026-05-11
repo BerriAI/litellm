@@ -746,31 +746,21 @@ class LiteLLMProxyRequestSetup:
                 from litellm.proxy.auth.auth_checks import get_user_object
 
                 if proxy_server.prisma_client is not None:
-                    try:
-                        user_obj = await get_user_object(
-                            user_id=str(header_value),
-                            prisma_client=proxy_server.prisma_client,
-                            user_api_key_cache=proxy_server.user_api_key_cache,
-                            user_id_upsert=True,
-                            user_email=str(header_value),
-                        )
-                    except Exception:
-                        user_obj = None
-
+                    user_obj = await get_user_object(
+                        user_id=str(header_value),
+                        prisma_client=proxy_server.prisma_client,
+                        user_api_key_cache=proxy_server.user_api_key_cache,
+                        user_id_upsert=True,
+                        user_email=str(header_value),
+                    )
                     if user_obj is not None:
-                        # Ensure role is internal_user (best-effort)
-                        try:
-                            await proxy_server.prisma_client.db.litellm_usertable.update(
-                                where={"user_id": user_obj.user_id},
-                                data={"user_role": str(LitellmUserRoles.INTERNAL_USER)},
-                            )
-                        except Exception:
-                            # ignore role-update failures
-                            pass
-
                         user_api_key_dict.user_id = user_obj.user_id
-                        user_api_key_dict.user_email = getattr(user_obj, "user_email", None)
-                        user_api_key_dict.user_role = getattr(user_obj, "user_role", None) or LitellmUserRoles.INTERNAL_USER
+                        user_api_key_dict.user_email = getattr(
+                            user_obj, "user_email", None
+                        )
+                        user_api_key_dict.user_role = getattr(
+                            user_obj, "user_role", None
+                        ) or LitellmUserRoles.INTERNAL_USER
                         return user_api_key_dict
             except Exception:
                 # Fall back to using header value if DB unavailable
