@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 from litellm.caching import InMemoryCache
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm._logging import verbose_logger
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -79,6 +80,13 @@ class ChatCompletionSession(TypedDict, total=False):
 
 
 class LiteLLMCompletionResponsesConfig:
+    unsupported_tool_types = [
+        "local_shell",
+        "file_search",
+        "image_generation",
+        "namespace",
+    ]
+
     @staticmethod
     def get_supported_openai_params(model: str) -> list:
         """
@@ -171,7 +179,8 @@ class LiteLLMCompletionResponsesConfig:
             tools,
             web_search_options,
         ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-            responses_api_request.get("tools") or []  # type: ignore
+            responses_api_request.get("tools") or [],  # type: ignore
+            custom_llm_provider=custom_llm_provider,
         )
 
         response_format = None
@@ -1349,8 +1358,149 @@ class LiteLLMCompletionResponsesConfig:
         return ChatCompletionSystemMessage(role="system", content=instructions or "")
 
     @staticmethod
+    def _convert_builtin_responses_tool_to_function_tool(
+        tool: Dict[str, Any],
+    ) -> ChatCompletionToolParam:
+        """
+        Convert a Responses API built-in tool (e.g. code_interpreter, computer_use)
+        to a Chat Completions function tool so the model can still call it.
+
+        This preserves the model's tool-calling intent when bridging from the
+        Responses API to the Chat Completions API, where built-in tools don't exist.
+        """
+        tool_type = tool.get("type", "unknown")
+        if tool_type == "code_interpreter":
+            return cast(
+                ChatCompletionToolParam,
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "code_interpreter",
+                        "description": (
+                            "Execute Python code in a sandboxed environment and return the output. "
+                            "Use this for calculations, data analysis, file processing, and any "
+                            "task that requires executing code."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "code": {
+                                    "type": "string",
+                                    "description": "The Python code to execute.",
+                                }
+                            },
+                            "required": ["code"],
+                        },
+                    },
+                },
+            )
+        elif tool_type in ("computer_use_preview", "computer_use"):
+            display_width = tool.get("display_width_px")
+            display_height = tool.get("display_height_px")
+            environment = tool.get("environment", "browser")
+            description = (
+                "Interact with a computer by taking screenshots and performing "
+                "mouse/keyboard actions."
+            )
+            if display_width and display_height:
+                description += f" Display size: {display_width}x{display_height}px."
+            if environment:
+                description += f" Environment: {environment}."
+            return cast(
+                ChatCompletionToolParam,
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "computer_use",
+                        "description": description,
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "description": (
+                                        "The action to perform. Examples: 'screenshot', "
+                                        "'click(x=100, y=200)', 'type(\"hello\")'."
+                                    ),
+                                }
+                            },
+                            "required": ["action"],
+                        },
+                    },
+                },
+            )
+        # Fallback — should not reach here if callers check type first
+        return cast(
+            ChatCompletionToolParam,
+            {
+                "type": "function",
+                "function": {
+                    "name": tool_type,
+                    "description": f"Built-in tool: {tool_type}",
+                    "parameters": {"type": "object"},
+                },
+            },
+        )
+
+    # Maps a provider to the native computer_use format it expects in the
+    # Chat Completions tool list.  This lives in the transformation layer
+    # (rather than llms/) because it converts from the Responses-API-native
+    # ``computer_use_preview`` shape to a provider-specific Chat Completions
+    # tool shape *before* the request reaches the provider-specific handler.
+    _COMPUTER_USE_NATIVE_PROVIDERS = {
+        "anthropic": "anthropic_wrapper",
+        "vertex_ai": "gemini_flat",
+        "vertex_ai_beta": "gemini_flat",
+        "gemini": "gemini_flat",
+    }
+
+    @staticmethod
+    def _map_computer_use_tool_for_provider(
+        tool: Dict[str, Any],
+        custom_llm_provider: Optional[str],
+    ) -> Union[ChatCompletionToolParam, Dict[str, Any]]:
+        """
+        Map a Responses API computer_use/computer_use_preview tool to a format
+        the target provider understands.
+
+        - Anthropic: wrap in {"type": "computer_use_preview", "function": {"parameters": {...}}}
+          so AnthropicConfig._map_tool_helper() routes it to AnthropicComputerTool.
+        - Gemini / Vertex AI: keep as flat dict with type="computer_use" so
+          vertex_and_google_ai_studio_gemini.py routes it to VertexToolName.COMPUTER_USE.
+        - Everyone else: convert to a generic function tool.
+        """
+        format_type = (
+            LiteLLMCompletionResponsesConfig._COMPUTER_USE_NATIVE_PROVIDERS.get(
+                custom_llm_provider or "", "function_tool"
+            )
+        )
+
+        if format_type == "anthropic_wrapper":
+            # Anthropic's handler expects tool["type"].startswith("computer_") and
+            # tool["function"]["parameters"]["display_width_px"]
+            return {
+                "type": tool.get("type", "computer_use_preview"),
+                "function": {
+                    "parameters": {k: v for k, v in tool.items() if k not in ("type",)}
+                },
+            }
+        elif format_type == "gemini_flat":
+            # Gemini/Vertex AI handler expects tool["type"] == "computer_use"
+            # with display_width_px / display_height_px directly on the dict.
+            gemini_tool: Dict[str, Any] = {k: v for k, v in tool.items() if k != "type"}
+            gemini_tool["type"] = "computer_use"
+            return gemini_tool
+        else:
+            # OpenAI-compatible providers (z.ai, kimi, minimax, vllm, etc.)
+            # only support function type tools.
+            return LiteLLMCompletionResponsesConfig._convert_builtin_responses_tool_to_function_tool(
+                tool
+            )
+
+    @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
         tools: Optional[List[Union[FunctionToolParam, OpenAIMcpServerTool]]],
+        custom_llm_provider: Optional[str] = None,
     ) -> Tuple[
         List[Union[ChatCompletionToolParam, OpenAIMcpServerTool]],
         Optional[OpenAIWebSearchOptions],
@@ -1366,7 +1516,15 @@ class LiteLLMCompletionResponsesConfig:
         web_search_options: Optional[OpenAIWebSearchOptions] = None
         for tool in tools:
             if tool.get("type") == "mcp":
-                chat_completion_tools.append(cast(OpenAIMcpServerTool, tool))
+                # Skip MCP tools when converting from Responses API to
+                # Chat Completions API. MCP tools are not valid in the Chat
+                # Completions spec and cause errors like "tools[N].type:type is
+                # illegal" from non-OpenAI providers (z.ai, kimi, minimax).
+                verbose_logger.warning(
+                    "Skipping MCP tool (%s) when converting Responses API -> Chat Completions API. "
+                    "MCP tools are not supported in the Chat Completions spec.",
+                    tool.get("server_label", "unknown"),
+                )
             elif (
                 tool.get("type") == "web_search_preview"
                 or tool.get("type") == "web_search"
@@ -1408,9 +1566,48 @@ class LiteLLMCompletionResponsesConfig:
                 chat_completion_tools.append(
                     cast(ChatCompletionToolParam, chat_completion_tool)
                 )
-            else:
+            elif tool.get("type") == "code_interpreter":
+                # code_interpreter has no native equivalent in Chat Completions.
+                # Convert to a function tool so the model can still generate code.
                 chat_completion_tools.append(
-                    cast(Union[ChatCompletionToolParam, OpenAIMcpServerTool], tool)
+                    LiteLLMCompletionResponsesConfig._convert_builtin_responses_tool_to_function_tool(
+                        cast(Dict[str, Any], tool)
+                    )
+                )
+            elif tool.get("type") in ("computer_use_preview", "computer_use"):
+                # Preserve native computer_use for providers that support it
+                # (Anthropic, Gemini/Vertex AI); convert to function tool for
+                # OpenAI-compatible providers (z.ai, kimi, minimax, etc.).
+                chat_completion_tools.append(
+                    cast(
+                        ChatCompletionToolParam,
+                        LiteLLMCompletionResponsesConfig._map_computer_use_tool_for_provider(
+                            cast(Dict[str, Any], tool), custom_llm_provider
+                        ),
+                    )
+                )
+            elif (
+                tool.get("type")
+                in LiteLLMCompletionResponsesConfig.unsupported_tool_types
+            ):
+                # Skip unsupported built-in tool types when converting from
+                # Responses API to Chat Completions API. These tools have no
+                # equivalent in the Chat Completions spec.
+                verbose_logger.warning(
+                    "Skipping unsupported tool with type '%s' when converting Responses API -> Chat Completions API. "
+                    "Only 'function' type tools are supported in the Chat Completions spec.",
+                    tool.get("type", "unknown"),
+                )
+            else:
+                # Skip unknown tool types when converting from Responses
+                # API to Chat Completions API. The Chat Completions spec only
+                # supports `function` type tools. Passing through types like
+                # `local_shell`, `bash`, etc. causes "tools[N].type:type is illegal"
+                # errors from non-OpenAI providers.
+                verbose_logger.warning(
+                    "Skipping tool with type '%s' when converting Responses API -> Chat Completions API. "
+                    "Only 'function' type tools are supported in the Chat Completions spec.",
+                    tool.get("type", "unknown"),
                 )
         return chat_completion_tools, web_search_options
 
