@@ -60,8 +60,9 @@ from ..common_utils import (
     get_supports_system_message,
 )
 
-# 使用 Any 标注避免在模块加载期引入到 vertex_llm_base 的循环依赖；
-# 该实例在首次需要拉取 GCS metadata 时才通过 _get_vertex_base() 懒加载。
+# Typed as Any to avoid introducing a module-load-time cyclic import to
+# vertex_llm_base. The instance is lazily constructed by _get_vertex_base()
+# the first time GCS metadata needs to be fetched.
 _GCS_METADATA_VERTEX_BASE: Optional[Any] = None
 _GEMINI_MIME_TYPE_ALIASES: Dict[str, str] = {
     "image/jpg": "image/jpeg",
@@ -69,7 +70,7 @@ _GEMINI_MIME_TYPE_ALIASES: Dict[str, str] = {
 
 
 def _get_vertex_base() -> Any:
-    """懒加载共享的 VertexBase 实例，避免模块加载期的循环依赖。"""
+    """Lazily return the shared VertexBase instance to avoid a module-load-time cyclic import."""
     global _GCS_METADATA_VERTEX_BASE
     if _GCS_METADATA_VERTEX_BASE is None:
         from ..vertex_llm_base import VertexBase
@@ -231,10 +232,12 @@ def _get_gcs_object_content_type(
     """
     Resolve content type from GCS object metadata.
 
-    仅当调用方显式传入 Vertex 凭据时才附带 Bearer token，避免在 Gemini
-    API key（Google AI Studio）路径上自动使用服务端的默认 Google 凭据去
-    访问 GCS，防止被用作探测私有 GCS 对象的 oracle。
-    无显式凭据时只做匿名请求，仅对公开可读对象有效。
+    Only attaches a Bearer token when the caller explicitly supplies Vertex
+    credentials, to avoid using the server's default Google credentials on
+    the Gemini API-key (Google AI Studio) path and being used as an oracle
+    for private GCS object metadata. Without explicit credentials we only
+    issue an anonymous request, which only succeeds for publicly-readable
+    objects.
     """
     try:
         bucket, object_name = _parse_gs_uri(image_url)
@@ -264,8 +267,9 @@ def _get_gcs_object_content_type(
                 llm_provider="vertex_ai",
             )
 
-    # 通过 httpx.URL 固定 scheme/host，并对 bucket、object 都做 URL 编码，
-    # 避免被 CodeQL 误判为可能拼接出任意主机 URL 的 SSRF。
+    # Build the URL via httpx.URL with a fixed scheme/host and URL-encode both
+    # bucket and object so CodeQL does not flag the interpolation as a
+    # potential SSRF that could resolve to an arbitrary host.
     encoded_bucket = quote(bucket, safe="")
     encoded_object = quote(object_name, safe="")
     metadata_url = httpx.URL(
@@ -288,7 +292,8 @@ def _get_gcs_object_content_type(
 def _normalize_and_validate_gemini_mime_type(
     mime_type: str, model: Optional[str]
 ) -> str:
-    # 延迟导入，避免在模块顶层与 litellm.types.files 形成循环引用告警。
+    # Import lazily to avoid a module-level cyclic-import alert with
+    # litellm.types.files.
     from litellm.types.files import get_file_extension_from_mime_type
 
     normalized_mime_type = _GEMINI_MIME_TYPE_ALIASES.get(
@@ -542,8 +547,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             media_resolution_enum: Optional[Dict[str, str]] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
-                                # TypedDict 未声明 mime_type/content_type 键，这里按
-                                # 通用字典读取以兼容调用方显式传入的 MIME 字段。
+                                # TypedDict does not declare mime_type/content_type;
+                                # read via a plain dict to accept MIME fields
+                                # that callers pass through explicitly.
                                 image_url_dict = cast(
                                     Dict[str, Any], img_element["image_url"]
                                 )
@@ -597,8 +603,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         elif element["type"] == "file":
                             file_element = cast(ChatCompletionFileObject, element)
                             file_id = file_element["file"].get("file_id")
-                            # TypedDict 未声明 mime_type/content_type 键，这里按
-                            # 通用字典读取以兼容调用方显式传入的 MIME 字段。
+                            # TypedDict does not declare mime_type/content_type;
+                            # read via a plain dict to accept MIME fields
+                            # that callers pass through explicitly.
                             file_dict = cast(Dict[str, Any], file_element["file"])
                             format = (
                                 file_dict.get("format")
@@ -1114,9 +1121,10 @@ async def async_transform_request_body(
         vertex_auth_header=vertex_auth_header,
     )
 
-    # _transform_request_body 可能通过 _get_gcs_object_content_type 发起同步 httpx.get
-    # （最长 5s 超时）去拉 GCS 对象 metadata。为避免阻塞 async 事件循环，整个同步
-    # 转换放到 worker 线程执行。
+    # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
+    # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
+    # whole sync transformation on a worker thread so it does not block the
+    # async event loop.
     return await asyncify(_transform_request_body)(
         messages=messages,
         model=model,
