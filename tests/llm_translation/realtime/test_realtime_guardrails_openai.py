@@ -119,7 +119,6 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             OPENAI_REALTIME_URL,
             additional_headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta": "realtime=v1",
             },
         ) as backend_ws:
             streaming, input_queue = await _build_streaming(client_events, backend_ws)
@@ -178,11 +177,18 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             len(guardrail_errors) >= 1
         ), f"Expected at least one guardrail_violation error but got: {[e.get('error', {}).get('type') for e in error_events]}"
 
-        # 2. Must have the guardrail message surfaced as an AI transcript delta
+        # 2. Must have the guardrail message surfaced as an AI transcript delta.
+        # The connection uses GA realtime protocol (no OpenAI-Beta header) so
+        # OpenAI emits ``response.output_audio_transcript.delta``; older
+        # ``response.audio_transcript.delta`` is the beta-protocol name.
         transcript_deltas = [
             e
             for e in client_events
-            if e.get("type") == "response.audio_transcript.delta"
+            if e.get("type")
+            in (
+                "response.output_audio_transcript.delta",
+                "response.audio_transcript.delta",
+            )
         ]
         assert (
             len(transcript_deltas) >= 1
@@ -298,7 +304,6 @@ async def test_clean_text_message_passes_through_to_openai():
             OPENAI_REALTIME_URL,
             additional_headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "OpenAI-Beta": "realtime=v1",
             },
         ) as backend_ws:
             streaming, input_queue = await _build_streaming(client_events, backend_ws)
