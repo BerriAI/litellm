@@ -159,6 +159,32 @@ def test_dimensions_merged_with_existing_parameters(
         }
 
 
+def test_encoding_format_forwarded_to_model_params(
+    fake_token_creator, fake_deployment_url
+):
+    """Test that encoding_format from optional_params is placed into model.params."""
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        body = GenAIHubEmbeddingConfig().transform_embedding_request(
+            model="text-embedding-3-large",
+            input="Hello",
+            optional_params={"encoding_format": "float"},
+            headers={},
+        )
+        assert body["config"]["modules"]["embeddings"]["model"]["params"] == {
+            "encoding_format": "float"
+        }
+
+
 def test_map_openai_params_forwards_supported_params(
     fake_token_creator, fake_deployment_url
 ):
