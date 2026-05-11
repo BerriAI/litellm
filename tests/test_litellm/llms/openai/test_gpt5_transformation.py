@@ -1031,7 +1031,6 @@ def test_gpt5_chat_strips_reasoning_summary_aliases_after_bridge_check(
     litellm.completion(
         model="gpt-5",
         messages=[{"role": "user", "content": "ok"}],
-        reasoning_effort="medium",
         reasoningSummary="auto",
         extra_body={"reasoning_summary": "ignored", "metadata": "ok"},
         api_key="fake-key",
