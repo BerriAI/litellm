@@ -1283,7 +1283,7 @@ def test_process_gemini_media():
 
 
 def test_process_gemini_media_gcs_without_extension_raises_clear_error():
-    # mock 掉 GCS metadata 查询，避免测试发出真实外网请求
+    # Mock the GCS metadata lookup to avoid real outbound HTTP in tests.
     with patch(
         "litellm.llms.vertex_ai.gemini.transformation._get_gcs_object_content_type",
         return_value=None,
@@ -1459,10 +1459,11 @@ def test_get_gcs_object_content_type_fails_fast_with_explicit_credentials():
 
 
 def test_get_gcs_object_content_type_without_credentials_skips_auth():
-    """未显式提供 Vertex 凭据时，不应使用服务端默认凭据去访问 GCS。
+    """Without explicit Vertex credentials, must not use the server's default
+    Google credentials to access GCS.
 
-    这是为了避免 Gemini API key（Google AI Studio）路径被用作探测私有
-    GCS 对象的 oracle（veria-ai 审阅反馈）。
+    Prevents the Gemini API-key (Google AI Studio) path from being used as an
+    oracle for private GCS objects (per veria-ai review feedback).
     """
     from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
 
@@ -1484,9 +1485,9 @@ def test_get_gcs_object_content_type_without_credentials_skips_auth():
             image_url="gs://public-bucket/public-object"
         )
 
-    # 不应触发 get_access_token（避免使用服务端默认凭据）
+    # Must not call get_access_token (so default server credentials are not used)
     mock_vertex_base.get_access_token.assert_not_called()
-    # 匿名请求仍会发出，用于公开可读对象
+    # An anonymous request is still sent, covering publicly-readable objects.
     mock_http_get.assert_called_once()
     call_kwargs = mock_http_get.call_args.kwargs
     assert "Authorization" not in call_kwargs.get("headers", {})
@@ -1494,7 +1495,7 @@ def test_get_gcs_object_content_type_without_credentials_skips_auth():
 
 
 def test_async_transform_request_body_does_not_block_event_loop():
-    """当同步 GCS metadata 查询阻塞时，async_transform_request_body 不应阻塞事件循环。"""
+    """When the sync GCS metadata lookup blocks, async_transform_request_body must not block the event loop."""
     import asyncio
     import time
 
@@ -1512,9 +1513,10 @@ def test_async_transform_request_body_does_not_block_event_loop():
         }
     ]
 
-    # 模拟同步阻塞的 httpx.get（就像真实的 GCS metadata 查询超时），
-    # 如果 async_transform_request_body 没有把同步部分 offload 到 worker 线程，
-    # 这次阻塞会卡住事件循环，并行的 sleep 就无法推进。
+    # Simulate a blocking sync httpx.get (as if the real GCS metadata lookup
+    # timed out). If async_transform_request_body does not offload the sync
+    # portion to a worker thread, this blocks the event loop and a concurrent
+    # sleep cannot make progress.
     def slow_http_get(*args, **kwargs):
         time.sleep(0.5)
         response = MagicMock()
@@ -1522,7 +1524,7 @@ def test_async_transform_request_body_does_not_block_event_loop():
         response.json.return_value = {"contentType": "image/png"}
         return response
 
-    # 模拟 context-caching 查询，避免其发出真实 HTTP
+    # Stub out the context-caching lookup so it does not make a real HTTP call.
     async def fake_check_and_create_cache(self, **kwargs):
         return kwargs["messages"], kwargs["optional_params"], None
 
@@ -1570,10 +1572,12 @@ def test_async_transform_request_body_does_not_block_event_loop():
     ):
         sleep_elapsed = asyncio.run(run_scenario())
 
-    # 没被阻塞的情况下，0.05s 的 sleep 不应被拖到接近同步阻塞时长（0.5s）
+    # If the loop is not blocked, a 0.05s sleep must not be stretched toward
+    # the sync block duration (0.5s).
     assert sleep_elapsed < 0.4, (
-        f"事件循环被阻塞 {sleep_elapsed:.3f}s，async_transform_request_body 未把同步 GCS "
-        "metadata 查询 offload 到 worker 线程"
+        f"Event loop blocked for {sleep_elapsed:.3f}s; "
+        "async_transform_request_body did not offload the sync GCS metadata "
+        "lookup to a worker thread"
     )
 
 
