@@ -46,6 +46,9 @@ litellm_settings:
   cache: true
   callbacks: ["otel", "prometheus"]
   disable_end_user_cost_tracking_prometheus_only: True
+  # /metrics auth is on by default; tests/otel_tests/test_prometheus.py
+  # scrapes the endpoint without credentials, so opt out here.
+  require_auth_for_metrics_endpoint: False
 
 guardrails:
   - guardrail_name: "bedrock-pre-guard"

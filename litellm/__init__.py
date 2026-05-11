@@ -166,7 +166,7 @@ langfuse_default_tags: Optional[List[str]] = None
 langsmith_batch_size: Optional[int] = None
 prometheus_initialize_budget_metrics: Optional[bool] = False
 prometheus_latency_buckets: Optional[List[float]] = None
-require_auth_for_metrics_endpoint: Optional[bool] = False
+require_auth_for_metrics_endpoint: Optional[bool] = True
 argilla_batch_size: Optional[int] = None
 datadog_use_v1: Optional[bool] = False  # if you want to use v1 datadog logged payload.
 gcs_pub_sub_use_v1: Optional[bool] = (
@@ -206,6 +206,7 @@ add_user_information_to_llm_headers: Optional[bool] = (
 )
 store_audit_logs = False  # Enterprise feature, allow users to see audit logs
 skip_system_message_in_guardrail: bool = False
+skip_tool_message_in_guardrail: bool = False
 ### end of callbacks #############
 
 email: Optional[str] = (
@@ -280,6 +281,7 @@ ssl_security_level: Optional[str] = None
 ssl_certificate: Optional[str] = None
 user_url_validation: bool = True
 user_url_allowed_hosts: List[str] = []
+provider_url_destination_allowed_hosts: List[str] = []
 ssl_ecdh_curve: Optional[str] = (
     None  # Set to 'X25519' to disable PQC and improve performance
 )
@@ -288,6 +290,7 @@ disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 disable_anthropic_gemini_context_caching_transform: bool = False
+disable_vertex_batch_output_transformation: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
@@ -329,6 +332,9 @@ enable_json_schema_validation: bool = False
 enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (
     False  # opt-in validation of key_alias format on /key/generate and /key/update
+)
+enable_gemini_default_thinking_level_low: bool = (
+    False  # opt-in: force thinkingLevel low/minimal for Gemini 3 thinking param mapping
 )
 ####################
 logging: bool = True
@@ -383,6 +389,7 @@ anthropic_beta_headers_url: str = os.getenv(
 suppress_debug_info = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
+s3_audit_callback_params: Optional[Dict] = None
 datadog_llm_observability_params: Optional[Union[DatadogLLMObsInitParams, Dict]] = None
 datadog_params: Optional[Union[DatadogInitParams, Dict]] = None
 aws_sqs_callback_params: Optional[Dict] = None
@@ -409,6 +416,9 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
+prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
+prometheus_end_user_metrics_cleanup_interval_seconds: Optional[float] = 60.0
 disable_add_prefix_to_prompt: bool = (
     False  # used by anthropic, to disable adding prefix to prompt
 )
@@ -581,6 +591,7 @@ anyscale_models: Set = set()
 cerebras_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
+nvidia_riva_models: Set = set()
 sambanova_models: Set = set()
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
@@ -807,6 +818,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             galadriel_models.add(key)
         elif value.get("litellm_provider") == "nvidia_nim":
             nvidia_nim_models.add(key)
+        elif value.get("litellm_provider") == "nvidia_riva":
+            nvidia_riva_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
@@ -966,6 +979,7 @@ model_list = list(
     | cerebras_models
     | galadriel_models
     | nvidia_nim_models
+    | nvidia_riva_models
     | sambanova_models
     | azure_text_models
     | novita_models
@@ -1062,6 +1076,7 @@ models_by_provider: dict = {
     "cerebras": cerebras_models,
     "galadriel": galadriel_models,
     "nvidia_nim": nvidia_nim_models,
+    "nvidia_riva": nvidia_riva_models,
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
@@ -1612,6 +1627,9 @@ if TYPE_CHECKING:
     )
     from .llms.deepgram.audio_transcription.transformation import (
         DeepgramAudioTranscriptionConfig as DeepgramAudioTranscriptionConfig,
+    )
+    from .llms.nvidia_riva.audio_transcription.transformation import (
+        NvidiaRivaAudioTranscriptionConfig as NvidiaRivaAudioTranscriptionConfig,
     )
     from .llms.topaz.image_variations.transformation import (
         TopazImageVariationConfig as TopazImageVariationConfig,

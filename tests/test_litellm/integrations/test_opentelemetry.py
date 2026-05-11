@@ -259,6 +259,292 @@ class TestOpenTelemetryProviderInitialization(unittest.TestCase):
         ), "Existing LoggerProvider should be respected and not overridden"
 
 
+class TestOpenTelemetryDualHandlerIsolation(unittest.TestCase):
+    """Two OpenTelemetry handlers coexisting via skip_set_global=True
+    must each get their own provider for every signal (tracer/meter/logger)."""
+
+    @staticmethod
+    def _wire_span_processor(exporter):
+        """Context manager: while active, the next OpenTelemetry instance
+        wires its TracerProvider to `exporter`."""
+        return patch.object(
+            OpenTelemetry,
+            "_get_span_processor",
+            lambda self, dynamic_headers=None: SimpleSpanProcessor(exporter),
+        )
+
+    def test_skip_set_global_creates_isolated_tracer_provider(self):
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        fake_existing = SDKTracerProvider()
+        own_exporter = InMemorySpanExporter()
+        cfg = OpenTelemetryConfig(
+            exporter="console", service_name="iso-test", skip_set_global=True
+        )
+        with (
+            patch.object(trace, "get_tracer_provider", return_value=fake_existing),
+            patch.object(trace, "set_tracer_provider") as mock_set,
+            self._wire_span_processor(own_exporter),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        self.assertIsNot(handler._tracer_provider, fake_existing)
+        mock_set.assert_not_called()
+
+        handler.tracer.start_span("isolation_check").end()
+        handler._tracer_provider.force_flush(2000)
+        self.assertEqual(
+            [s.name for s in own_exporter.get_finished_spans()],
+            ["isolation_check"],
+        )
+
+    def test_skip_set_global_via_callback_name_back_compat(self):
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        fake_existing = SDKTracerProvider()
+        cfg = OpenTelemetryConfig(exporter="console", service_name="lf-back-compat")
+        with (
+            patch.object(trace, "get_tracer_provider", return_value=fake_existing),
+            patch.object(trace, "set_tracer_provider"),
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg, callback_name="langfuse_otel")
+
+        self.assertIsNot(handler._tracer_provider, fake_existing)
+
+    def test_default_behavior_reuses_existing_sdk_tracer_provider(self):
+        from opentelemetry.sdk.trace import TracerProvider as SDKTracerProvider
+
+        fake_existing = SDKTracerProvider()
+        with patch.object(trace, "get_tracer_provider", return_value=fake_existing):
+            handler = OpenTelemetry(config=OpenTelemetryConfig(service_name="shared"))
+        self.assertIs(handler._tracer_provider, fake_existing)
+
+    def test_skip_set_global_creates_isolated_meter_provider(self):
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider as SDKMeterProvider
+
+        fake_existing = SDKMeterProvider()
+        cfg = OpenTelemetryConfig(
+            exporter="console",
+            service_name="meter-iso-test",
+            enable_metrics=True,
+            skip_set_global=True,
+        )
+        with (
+            patch.object(metrics, "get_meter_provider", return_value=fake_existing),
+            patch.object(metrics, "set_meter_provider") as mock_set,
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        self.assertIsNot(handler._meter_provider, fake_existing)
+        mock_set.assert_not_called()
+
+    def test_skip_set_global_creates_isolated_logger_provider(self):
+        from opentelemetry import _logs
+        from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
+
+        fake_existing = SDKLoggerProvider()
+        cfg = OpenTelemetryConfig(
+            exporter="console",
+            service_name="logger-iso-test",
+            enable_events=True,
+            skip_set_global=True,
+        )
+        with (
+            patch.object(_logs, "get_logger_provider", return_value=fake_existing),
+            patch.object(_logs, "set_logger_provider") as mock_set,
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        self.assertIsNot(handler._logger_provider, fake_existing)
+        mock_set.assert_not_called()
+
+    def test_emitted_logs_route_to_isolated_logger_provider(self):
+        # End-to-end: emitted logs land in the handler's private LoggerProvider,
+        # not the global one. Guards against get_logger() bypassing self._logger_provider.
+        from opentelemetry import _logs
+        from opentelemetry.sdk._logs import LoggerProvider as SDKLoggerProvider
+
+        global_exporter = InMemoryLogExporter()
+        fake_existing = SDKLoggerProvider()
+        fake_existing.add_log_record_processor(
+            SimpleLogRecordProcessor(global_exporter)
+        )
+
+        private_exporter = InMemoryLogExporter()
+        cfg = OpenTelemetryConfig(
+            exporter="console",
+            service_name="logger-emit-test",
+            enable_events=True,
+            skip_set_global=True,
+        )
+        with (
+            patch.object(_logs, "get_logger_provider", return_value=fake_existing),
+            patch.object(_logs, "set_logger_provider"),
+            patch.object(
+                OpenTelemetry, "_get_log_exporter", return_value=private_exporter
+            ),
+            self._wire_span_processor(InMemorySpanExporter()),
+        ):
+            handler = OpenTelemetry(config=cfg)
+
+        span = handler.tracer.start_span("emit-test")
+        handler._emit_semantic_logs(
+            kwargs={"messages": [{"role": "user", "content": "hi"}]},
+            response_obj={"choices": []},
+            span=span,
+        )
+        span.end()
+        handler._logger_provider.force_flush(2000)
+
+        self.assertGreater(len(private_exporter.get_finished_logs()), 0)
+        self.assertEqual(len(global_exporter.get_finished_logs()), 0)
+
+    def test_two_handlers_each_receive_their_own_spans(self):
+        # Handler A gets explicit injection (production-ish: claims the global).
+        exporter_a = InMemorySpanExporter()
+        provider_a = TracerProvider()
+        provider_a.add_span_processor(SimpleSpanProcessor(exporter_a))
+        handler_a = OpenTelemetry(
+            config=OpenTelemetryConfig(service_name="handler-a"),
+            tracer_provider=provider_a,
+        )
+
+        # Handler B comes along with the global appearing to be A's provider.
+        exporter_b = InMemorySpanExporter()
+        cfg_b = OpenTelemetryConfig(
+            exporter="console", service_name="handler-b", skip_set_global=True
+        )
+        with (
+            patch.object(trace, "get_tracer_provider", return_value=provider_a),
+            patch.object(trace, "set_tracer_provider"),
+            self._wire_span_processor(exporter_b),
+        ):
+            handler_b = OpenTelemetry(config=cfg_b)
+
+        self.assertIsNot(handler_a._tracer_provider, handler_b._tracer_provider)
+
+        handler_a.tracer.start_span("from_handler_a").end()
+        handler_b.tracer.start_span("from_handler_b").end()
+        provider_a.force_flush(2000)
+        handler_b._tracer_provider.force_flush(2000)
+
+        self.assertEqual(
+            sorted(s.name for s in exporter_a.get_finished_spans()),
+            ["from_handler_a"],
+        )
+        self.assertEqual(
+            sorted(s.name for s in exporter_b.get_finished_spans()),
+            ["from_handler_b"],
+        )
+
+
+class TestOpenTelemetryCaptureMessageContent(unittest.TestCase):
+    """OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT and the
+    OpenTelemetryConfig.capture_message_content programmatic override
+    drive what the handler captures in spans vs events."""
+
+    @staticmethod
+    def _make(env=None, config_value=None, message_logging=True):
+        env_dict = (
+            {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": env}
+            if env is not None
+            else {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""}
+        )
+        with patch.dict(os.environ, env_dict):
+            handler = OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console", capture_message_content=config_value
+                )
+            )
+            handler.message_logging = message_logging
+            return handler, handler._resolve_capture_mode()
+
+    def test_no_explicit_setting_falls_back_to_message_logging_true(self):
+        _, mode = self._make()
+        self.assertEqual(mode, "SPAN_AND_EVENT")
+
+    def test_no_explicit_setting_falls_back_to_message_logging_false(self):
+        _, mode = self._make(message_logging=False)
+        self.assertEqual(mode, "NO_CONTENT")
+
+    def test_env_var_no_content(self):
+        _, mode = self._make(env="NO_CONTENT")
+        self.assertEqual(mode, "NO_CONTENT")
+
+    def test_env_var_span_only(self):
+        _, mode = self._make(env="SPAN_ONLY")
+        self.assertEqual(mode, "SPAN_ONLY")
+
+    def test_env_var_event_only(self):
+        _, mode = self._make(env="EVENT_ONLY")
+        self.assertEqual(mode, "EVENT_ONLY")
+
+    def test_env_var_span_and_event(self):
+        _, mode = self._make(env="SPAN_AND_EVENT")
+        self.assertEqual(mode, "SPAN_AND_EVENT")
+
+    def test_env_var_legacy_true_maps_to_event_only(self):
+        _, mode = self._make(env="true")
+        self.assertEqual(mode, "EVENT_ONLY")
+
+    def test_env_var_legacy_false_maps_to_no_content(self):
+        for env in ("false", "0"):
+            with self.subTest(env=env):
+                _, mode = self._make(env=env)
+                self.assertEqual(mode, "NO_CONTENT")
+
+    def test_env_var_unknown_value_falls_through_to_legacy(self):
+        _, mode = self._make(env="garbage", message_logging=True)
+        self.assertEqual(mode, "SPAN_AND_EVENT")
+
+    def test_config_field_overrides_env(self):
+        _, mode = self._make(env="EVENT_ONLY", config_value="SPAN_ONLY")
+        self.assertEqual(mode, "SPAN_ONLY")
+
+    def test_turn_off_message_logging_forces_no_content(self):
+        with patch("litellm.turn_off_message_logging", True):
+            _, mode = self._make(env="SPAN_AND_EVENT", message_logging=True)
+            self.assertEqual(mode, "NO_CONTENT")
+
+    def test_capture_in_span_and_event_predicates(self):
+        cases = {
+            "NO_CONTENT": (False, False),
+            "SPAN_ONLY": (True, False),
+            "EVENT_ONLY": (False, True),
+            "SPAN_AND_EVENT": (True, True),
+        }
+        for mode, (in_span, in_event) in cases.items():
+            handler, _ = self._make(env=mode)
+            self.assertEqual(handler._capture_in_span(), in_span, msg=mode)
+            self.assertEqual(handler._capture_in_event(), in_event, msg=mode)
+
+    def test_two_handlers_can_have_different_modes(self):
+        # FIL's stated requirement: one handler strips content, the other keeps it.
+        with patch.dict(
+            os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""}
+        ):
+            stripped = OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console", capture_message_content="NO_CONTENT"
+                )
+            )
+            kept = OpenTelemetry(
+                config=OpenTelemetryConfig(
+                    exporter="console", capture_message_content="SPAN_AND_EVENT"
+                )
+            )
+        self.assertEqual(stripped._resolve_capture_mode(), "NO_CONTENT")
+        self.assertEqual(kept._resolve_capture_mode(), "SPAN_AND_EVENT")
+        self.assertFalse(stripped._capture_in_span())
+        self.assertFalse(stripped._capture_in_event())
+        self.assertTrue(kept._capture_in_span())
+        self.assertTrue(kept._capture_in_event())
+
+
 class TestOpenTelemetry(unittest.TestCase):
     POLL_INTERVAL = 0.05
     POLL_TIMEOUT = 2.0
@@ -884,6 +1170,7 @@ class TestOpenTelemetry(unittest.TestCase):
         result = otel._get_span_name(kwargs)
         self.assertEqual(result, LITELLM_REQUEST_SPAN_NAME)
 
+    @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
     @patch("litellm.turn_off_message_logging", False)
     def test_maybe_log_raw_request_creates_span(self):
         """Test _maybe_log_raw_request creates span when logging enabled"""
@@ -2010,6 +2297,19 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
 
     See: https://github.com/BerriAI/litellm/issues/17794
     """
+
+    def setUp(self):
+        # Insulate from a shell-set OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT
+        # so these tests exercise the legacy default path (message_logging=True).
+        self._prev = os.environ.pop(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", None
+        )
+
+    def tearDown(self):
+        if self._prev is not None:
+            os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = (
+                self._prev
+            )
 
     def test_input_messages_uses_parts_structure(self):
         """
