@@ -276,6 +276,8 @@ def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
     assert gpt5_config._supports_reasoning_effort_level("gpt-5.1", "none")
     assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-2025-11-13", "none")
     assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-chat-latest", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-mini", "none")
+    assert gpt5_config._supports_reasoning_effort_level("gpt-5.1-nano", "none")
     assert gpt5_config._supports_reasoning_effort_level("gpt-5.2", "none")
     assert gpt5_config._supports_reasoning_effort_level("gpt-5.2-2025-12-11", "none")
     # codex/pro/chat variants do not support none
@@ -302,6 +304,25 @@ def test_gpt5_1_temperature_with_reasoning_effort_none(config: OpenAIConfig):
         )
         assert params["temperature"] == temp
         assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_1_mini_nano_temperature_with_reasoning_effort_none(
+    config: OpenAIConfig,
+):
+    """Test that gpt-5.1-mini and gpt-5.1-nano support temperature when
+    reasoning_effort='none' (registry parity with bare gpt-5.1)."""
+    for model in ["gpt-5.1-mini", "gpt-5.1-nano"]:
+        for temp in [0.0, 0.7, 1.0, 1.5]:
+            params = config.map_openai_params(
+                non_default_params={"temperature": temp, "reasoning_effort": "none"},
+                optional_params={},
+                model=model,
+                drop_params=False,
+            )
+            assert params["temperature"] == temp, (
+                f"{model} should preserve temperature={temp} with effort='none'"
+            )
+            assert params["reasoning_effort"] == "none"
 
 
 def test_gpt5_2_temperature_with_reasoning_effort_none(config: OpenAIConfig):
