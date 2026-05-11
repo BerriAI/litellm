@@ -805,7 +805,8 @@ def run_server(  # noqa: PLR0915
             )
 
         db_connection_pool_limit = 100
-        db_connection_timeout = 60
+        # Starts optional due to config fallback checks; guaranteed non-None before use.
+        db_connection_timeout: Optional[Union[int, float]] = 60
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
