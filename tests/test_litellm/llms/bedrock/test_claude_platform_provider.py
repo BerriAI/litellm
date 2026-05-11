@@ -73,6 +73,7 @@ def test_claude_platform_builds_default_messages_url_from_region():
 
 def test_claude_platform_uses_bedrock_subroute():
     import litellm
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
     model, provider, _, _ = litellm.get_llm_provider(
         model="bedrock/claude_platform/claude-sonnet-4-6"
@@ -80,6 +81,10 @@ def test_claude_platform_uses_bedrock_subroute():
 
     assert provider == "bedrock"
     assert model == "claude_platform/claude-sonnet-4-6"
+    assert BedrockModelInfo.get_bedrock_route(model) == "claude_platform"
+    assert (
+        BedrockModelInfo.get_claude_platform_model(model) == "claude-sonnet-4-6"
+    )
 
 
 def test_claude_platform_requires_workspace_header():
