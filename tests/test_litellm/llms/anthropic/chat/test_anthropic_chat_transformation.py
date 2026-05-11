@@ -4703,3 +4703,100 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+def test_map_tool_helper_detects_function_style_computer_use():
+    """Anthropic _map_tool_helper should detect function tools named
+    'computer_use' / 'computer_use_preview' and remap them to
+    AnthropicComputerTool."""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "computer_use",
+            "description": "Interact with a computer...",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "display_width_px": {"type": "integer"},
+                    "display_height_px": {"type": "integer"},
+                },
+                "required": ["action"],
+                "display_width_px": 1024,
+                "display_height_px": 768,
+            },
+        },
+    }
+
+    result, mcp_server = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["type"] == "computer_use_preview"
+    assert result["name"] == "computer_use"
+    assert result["display_width_px"] == 1024
+    assert result["display_height_px"] == 768
+    assert mcp_server is None
+
+
+def test_map_tool_helper_detects_function_style_computer_use_preview():
+    """Anthropic _map_tool_helper should detect function tools named
+    'computer_use_preview' and remap them to AnthropicComputerTool."""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "computer_use_preview",
+            "description": "Interact with a computer...",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "display_width_px": {"type": "integer"},
+                    "display_height_px": {"type": "integer"},
+                    "display_number": {"type": "integer"},
+                },
+                "required": ["action"],
+                "display_width_px": 1024,
+                "display_height_px": 768,
+                "display_number": 1,
+            },
+        },
+    }
+
+    result, mcp_server = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["type"] == "computer_use_preview"
+    assert result["name"] == "computer_use_preview"
+    assert result["display_width_px"] == 1024
+    assert result["display_height_px"] == 768
+    assert result["display_number"] == 1
+    assert mcp_server is None
+
+
+def test_map_tool_helper_function_style_computer_use_missing_display_falls_back():
+    """If display dimensions are missing, _map_tool_helper should fall back
+    to treating it as a regular custom function tool."""
+    config = AnthropicConfig()
+
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "computer_use",
+            "description": "Interact with a computer...",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                },
+                "required": ["action"],
+            },
+        },
+    }
+
+    result, mcp_server = config._map_tool_helper(tool)
+    assert result is not None
+    assert result["type"] == "custom"
+    assert result["name"] == "computer_use"
+    assert mcp_server is None

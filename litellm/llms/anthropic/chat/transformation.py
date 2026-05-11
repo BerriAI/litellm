@@ -645,7 +645,30 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         mcp_server: Optional[AnthropicMcpServerTool] = None
 
         if tool["type"] == "function" or tool["type"] == "custom":
-            _input_schema: dict = tool["function"].get(
+            _fn = tool["function"]
+            _fn_name = _fn.get("name")
+
+            # Detect function-style computer_use tools coming from the
+            # Responses API -> Chat Completion bridge and remap them to
+            # Anthropic's native computer_use format.
+            if _fn_name in ("computer_use", "computer_use_preview"):
+                _params = _fn.get("parameters") or {}
+                _display_width_px = _params.get("display_width_px")
+                _display_height_px = _params.get("display_height_px")
+                if _display_width_px is not None and _display_height_px is not None:
+                    _computer_tool = AnthropicComputerTool(
+                        type="computer_use_preview",
+                        name=_fn_name,
+                        display_width_px=_display_width_px,
+                        display_height_px=_display_height_px,
+                    )
+                    _display_number = _params.get("display_number")
+                    if _display_number is not None:
+                        _computer_tool["display_number"] = _display_number
+                    returned_tool = _computer_tool
+                    return returned_tool, mcp_server
+
+            _input_schema: dict = _fn.get(
                 "parameters",
                 {
                     "type": "object",
@@ -661,7 +684,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     "_map_tool_helper: coercing input_schema type from %r to "
                     "'object' for Anthropic compatibility (tool: %s)",
                     _input_schema.get("type"),
-                    tool["function"].get("name"),
+                    _fn.get("name"),
                 )
                 _input_schema = dict(_input_schema)  # avoid mutating caller's dict
                 _input_schema["type"] = "object"
@@ -677,12 +700,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
             _tool = AnthropicMessagesTool(
-                name=tool["function"]["name"],
+                name=_fn["name"],
                 input_schema=input_anthropic_schema,
                 type="custom",
             )
 
-            _description = tool["function"].get("description")
+            _description = _fn.get("description")
             if _description is not None:
                 _tool["description"] = _description
 

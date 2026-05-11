@@ -572,20 +572,41 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 None
             )
             if "function" in tool:  # tools list
-                _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
-                    **tool["function"]
-                )
-
-                if (
-                    "parameters" in _openai_function_object
-                    and _openai_function_object["parameters"] is not None
-                    and isinstance(_openai_function_object["parameters"], dict)
-                ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
-                    _openai_function_object["parameters"] = _build_vertex_schema(
-                        _openai_function_object["parameters"]
+                # Detect function-style computer_use tools BEFORE
+                # _build_vertex_schema strips non-schema fields like
+                # display_width_px / display_height_px.
+                if tool["function"].get("name") in (
+                    "computer_use",
+                    "computer_use_preview",
+                ):
+                    _params = tool["function"].get("parameters") or {}
+                    computer_use_config: Dict[str, Any] = {}
+                    if "display_width_px" in _params:
+                        computer_use_config["display_width_px"] = _params[
+                            "display_width_px"
+                        ]
+                    if "display_height_px" in _params:
+                        computer_use_config["display_height_px"] = _params[
+                            "display_height_px"
+                        ]
+                    if "environment" in _params:
+                        computer_use_config["environment"] = _params["environment"]
+                    tool = {VertexToolName.COMPUTER_USE.value: computer_use_config}
+                else:
+                    _openai_function_object = ChatCompletionToolParamFunctionChunk(  # type: ignore
+                        **tool["function"]
                     )
 
-                openai_function_object = _openai_function_object
+                    if (
+                        "parameters" in _openai_function_object
+                        and _openai_function_object["parameters"] is not None
+                        and isinstance(_openai_function_object["parameters"], dict)
+                    ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
+                        _openai_function_object["parameters"] = _build_vertex_schema(
+                            _openai_function_object["parameters"]
+                        )
+
+                    openai_function_object = _openai_function_object
 
             elif "name" in tool:  # functions list
                 openai_function_object = ChatCompletionToolParamFunctionChunk(**tool)  # type: ignore

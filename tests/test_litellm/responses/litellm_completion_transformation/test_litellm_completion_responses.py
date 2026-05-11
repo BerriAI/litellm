@@ -997,7 +997,7 @@ class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""
 
     def test_transform_vertex_ai_tools(self):
-        """Test that Vertex AI tools are passed through as-is"""
+        """Test that Vertex AI tools are filtered out (Chat Completions only supports function tools)"""
         from litellm.types.llms.vertex_ai import VertexToolName
 
         # Create a Vertex AI tool using the enum value
@@ -1013,13 +1013,12 @@ class TestToolTransformation:
             tools=tools
         )
 
-        # Assert
-        assert len(result_tools) == 1
-        assert result_tools[0] == vertex_tool
+        # Assert — Vertex AI tools are not valid in Chat Completions spec
+        assert len(result_tools) == 0
         assert web_search_options is None
 
     def test_transform_mcp_tools(self):
-        """Test that MCP tools are passed through as-is"""
+        """Test that MCP tools are filtered out (Chat Completions only supports function tools)"""
         mcp_tool = {
             "type": "mcp",
             "server_label": "zapier",
@@ -1037,14 +1036,36 @@ class TestToolTransformation:
             tools=tools
         )
 
-        # Assert
-        assert len(result_tools) == 1
-        assert result_tools[0] == mcp_tool
-        assert result_tools[0]["type"] == "mcp"
+        # Assert — MCP tools are not valid in Chat Completions spec
+        assert len(result_tools) == 0
         assert web_search_options is None
 
-    def test_transform_computer_use_tools(self):
-        """Test that computer_use tools are passed through as-is"""
+    def test_transform_unsupported_tool_types(self):
+        """Test how unsupported Responses API tool types are handled for generic providers.
+
+        The Chat Completions spec only supports `function` type tools.
+        Built-in tools defined in unsupported_tool_types are dropped because
+        they have no Chat Completions equivalent.
+        """
+        for tool_type in LiteLLMCompletionResponsesConfig.unsupported_tool_types:
+            tools = [{"type": tool_type}]
+
+            (
+                result_tools,
+                web_search_options,
+            ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=tools
+            )
+
+            # Each unsupported tool type is dropped
+            assert len(result_tools) == 0, (
+                f"Tool type '{tool_type}' should be dropped, "
+                f"but got {len(result_tools)} result tool(s)"
+            )
+            assert web_search_options is None
+
+    def test_transform_computer_use_tools_generic_provider(self):
+        """Test that computer_use tools are converted to function tools for generic providers"""
         computer_use_tool = {
             "type": "computer_use",
             "display_width_px": 1024,
@@ -1053,7 +1074,7 @@ class TestToolTransformation:
 
         tools = [computer_use_tool]
 
-        # Execute
+        # Execute without provider
         (
             result_tools,
             web_search_options,
@@ -1061,10 +1082,153 @@ class TestToolTransformation:
             tools=tools
         )
 
-        # Assert
+        # Assert — computer_use is converted to a function tool for generic providers
         assert len(result_tools) == 1
-        assert result_tools[0] == computer_use_tool
-        assert result_tools[0]["type"] == "computer_use"
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "computer_use"
+        assert "1024x768" in result_tools[0]["function"]["description"]
+        assert (
+            result_tools[0]["function"]["parameters"]["properties"]["display_width_px"][
+                "type"
+            ]
+            == "integer"
+        )
+        assert (
+            result_tools[0]["function"]["parameters"]["properties"][
+                "display_height_px"
+            ]["type"]
+            == "integer"
+        )
+        assert web_search_options is None
+
+    def test_convert_builtin_tool_fallback(self):
+        """Test that _convert_builtin_responses_tool_to_function_tool handles unknown types gracefully."""
+        tool = {"type": "some_future_builtin"}
+        result = LiteLLMCompletionResponsesConfig._convert_builtin_responses_tool_to_function_tool(
+            tool
+        )
+        assert result["type"] == "function"
+        assert result["function"]["name"] == "some_future_builtin"
+        assert "Built-in tool" in result["function"]["description"]
+
+    def test_transform_computer_use_tools_anthropic(self):
+        """Test that computer_use tools are converted to function tools for Anthropic.
+
+        The Anthropic provider-specific handler (_map_tool_helper) detects the
+        "computer_use" function name and remaps it to AnthropicComputerTool.
+        """
+        computer_use_tool = {
+            "type": "computer_use_preview",
+            "display_width_px": 1024,
+            "display_height_px": 768,
+            "environment": "browser",
+        }
+
+        tools = [computer_use_tool]
+
+        # Execute with Anthropic provider
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools, custom_llm_provider="anthropic"
+        )
+
+        # Assert — bridge always converts to function tool; Anthropic handler remaps it
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "computer_use"
+        assert (
+            result_tools[0]["function"]["parameters"]["properties"]["display_width_px"][
+                "type"
+            ]
+            == "integer"
+        )
+        assert (
+            result_tools[0]["function"]["parameters"]["properties"][
+                "display_height_px"
+            ]["type"]
+            == "integer"
+        )
+        assert (
+            result_tools[0]["function"]["parameters"]["properties"]["environment"][
+                "type"
+            ]
+            == "string"
+        )
+        assert web_search_options is None
+
+    def test_transform_computer_use_tools_gemini(self):
+        """Test that computer_use tools are converted to function tools for Gemini.
+
+        The Gemini provider-specific handler detects the "computer_use" function
+        name and remaps it to VertexToolName.COMPUTER_USE.
+        """
+        computer_use_tool = {
+            "type": "computer_use_preview",
+            "display_width_px": 1024,
+            "display_height_px": 768,
+        }
+
+        tools = [computer_use_tool]
+
+        # Execute with Gemini provider
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools, custom_llm_provider="gemini"
+        )
+
+        # Assert — bridge always converts to function tool; Gemini handler remaps it
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "computer_use"
+        assert (
+            result_tools[0]["function"]["parameters"]["properties"]["display_width_px"][
+                "type"
+            ]
+            == "integer"
+        )
+        assert (
+            result_tools[0]["function"]["parameters"]["properties"][
+                "display_height_px"
+            ]["type"]
+            == "integer"
+        )
+        assert web_search_options is None
+
+    def test_transform_openai_only_tool_types(self):
+        """Test how OpenAI-only Responses API tool types are handled for generic providers.
+
+        The Chat Completions spec only supports `function` type tools.
+        Built-in tools like `code_interpreter` and `computer_use_preview`
+        are converted to function tools so the model can still call them.
+        Other unknown types like `local_shell`, `bash`, `file_search`
+        are dropped because they have no Chat Completions equivalent.
+        """
+        tools = [
+            {"type": "code_interpreter"},
+            {"type": "file_search"},
+            {"type": "local_shell"},
+            {"type": "bash"},
+            {"type": "computer_use_preview", "display_width_px": 1024},
+        ]
+
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # code_interpreter and computer_use_preview are converted to function tools
+        # file_search, local_shell, bash are dropped
+        assert len(result_tools) == 2
+        assert result_tools[0]["type"] == "function"
+        assert result_tools[0]["function"]["name"] == "code_interpreter"
+        assert result_tools[1]["type"] == "function"
+        assert result_tools[1]["function"]["name"] == "computer_use"
         assert web_search_options is None
 
     def test_transform_web_search_tools_to_web_search_options(self):
@@ -1190,7 +1354,7 @@ class TestToolTransformation:
         assert "input_examples" not in result_tool
 
     def test_transform_code_execution_tools(self):
-        """Test that code_execution tools are passed through as-is"""
+        """Test that unknown code_execution tools are filtered out"""
         code_execution_tool = {
             "type": "code_execution_20250825",
             "name": "python_code_execution",
@@ -1206,12 +1370,11 @@ class TestToolTransformation:
             tools=tools
         )
 
-        # Assert
-        assert len(result_tools) == 1
-        assert result_tools[0]["type"] == "code_execution_20250825"
+        # Assert — unknown code_execution types are not valid in Chat Completions spec
+        assert len(result_tools) == 0
 
     def test_transform_tool_search_tools(self):
-        """Test that tool_search tools are passed through as-is"""
+        """Test that tool_search tools are filtered out (Chat Completions only supports function tools)"""
         tool_search_regex = {
             "name": "tool_search_tool_regex",
             "description": "Search tools using regex",
@@ -1232,10 +1395,8 @@ class TestToolTransformation:
             tools=tools
         )
 
-        # Assert
-        assert len(result_tools) == 2
-        assert result_tools[0]["name"] == "tool_search_tool_regex"
-        assert result_tools[1]["name"] == "tool_search_tool_bm25"
+        # Assert — tool_search tools are not valid in Chat Completions spec
+        assert len(result_tools) == 0
 
     def test_transform_mixed_tools_list(self):
         """Test transforming a mixed list of different tool types"""
@@ -1250,11 +1411,11 @@ class TestToolTransformation:
                 "parameters": {"type": "object"},
                 "cache_control": {"type": "ephemeral"},
             },
-            # MCP tool
+            # MCP tool (filtered out — not valid in Chat Completions)
             {"type": "mcp", "server_label": "zapier"},
-            # Web search tool
+            # Web search tool (converted to options)
             {"type": "web_search_preview", "search_context_size": "high"},
-            # Vertex AI tool
+            # Vertex AI tool (filtered out — not valid in Chat Completions)
             {VertexToolName.CODE_EXECUTION.value: {}},
         ]
 
@@ -1266,20 +1427,22 @@ class TestToolTransformation:
             tools=tools
         )
 
-        # Assert
-        assert (
-            len(result_tools) == 3
-        )  # function, mcp, vertex (web_search becomes options)
+        # Assert — only function tool remains
+        assert len(result_tools) == 1
         assert web_search_options is not None
 
-        # Check function tool
-        func_tools = [t for t in result_tools if t.get("type") == "function"]
+        # Check regular function tool
+        func_tools = [
+            t
+            for t in result_tools
+            if t.get("type") == "function" and t["function"]["name"] == "get_weather"
+        ]
         assert len(func_tools) == 1
         assert func_tools[0]["cache_control"]["type"] == "ephemeral"
 
-        # Check MCP tool
+        # Check MCP tool was filtered out
         mcp_tools = [t for t in result_tools if t.get("type") == "mcp"]
-        assert len(mcp_tools) == 1
+        assert len(mcp_tools) == 0
 
         # Check web search was converted to options
         assert web_search_options.get("search_context_size") == "high"
