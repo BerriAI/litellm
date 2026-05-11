@@ -392,6 +392,13 @@ class TestProxyInitializationHelpers:
         [
             ({"database_connection_timeout": 30}, 30),
             ({"database_connection_pool_timeout": 45}, 45),
+            (
+                {
+                    "database_connection_timeout": 30,
+                    "database_connection_pool_timeout": 45,
+                },
+                30,
+            ),
         ],
     )
     @patch("subprocess.run")
