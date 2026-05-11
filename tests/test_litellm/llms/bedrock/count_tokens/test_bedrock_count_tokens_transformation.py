@@ -80,6 +80,23 @@ def test_detect_input_type_converse_shape_blocks_stay_converse():
     assert config._detect_input_type(req) == "converse"
 
 
+def test_detect_input_type_skips_non_dict_message_entries():
+    """Defensive: a malformed messages list with non-dict entries shouldn't
+    crash the detector. Skip the bad entry and decide based on the rest."""
+    config = BedrockCountTokensConfig()
+    req = {
+        "messages": [
+            "not-a-dict",  # ignored
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+    }
+    assert config._detect_input_type(req) == "invokeModel"
+
+    # All non-dict entries falls through to the default "converse" branch
+    req = {"messages": ["not-a-dict", 42]}
+    assert config._detect_input_type(req) == "converse"
+
+
 def test_transform_to_invoke_model_format_base64_encodes_body():
     """The Bedrock CountTokens API spec describes ``invokeModel.body`` as a
     Base64-encoded blob. A raw JSON string fails with ``Unable to parse
