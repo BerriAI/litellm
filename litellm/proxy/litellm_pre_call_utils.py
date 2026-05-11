@@ -26,6 +26,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+from litellm.proxy.auth.auth_checks import get_user_object
+from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
+from litellm.proxy.auth.auth_checks import get_user_object
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
@@ -707,11 +711,18 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
-    def add_internal_user_from_user_mapping(
+    async def add_internal_user_from_user_mapping(
         general_settings: Optional[Dict],
         user_api_key_dict: UserAPIKeyAuth,
         headers: dict,
     ) -> UserAPIKeyAuth:
+        """If configured, map a header to an internal user.
+
+        If the header value looks like an email address, try to resolve an
+        internal user by email. If no user exists, create an internal-only
+        user for that email. In all cases set `user_api_key_dict.user_id` so
+        downstream spend attribution uses the resolved/created user.
+        """
         if general_settings is None:
             return user_api_key_dict
         user_header_mapping = general_settings.get("user_header_mappings")
@@ -722,12 +733,50 @@ class LiteLLMProxyRequestSetup:
         )
         if not header_name:
             return user_api_key_dict
+
         header_value = LiteLLMProxyRequestSetup._get_case_insensitive_header(
             headers, header_name
         )
-        if header_value:
-            user_api_key_dict.user_id = header_value
+        if not header_value:
             return user_api_key_dict
+
+        # Quick email-ish heuristic
+        if isinstance(header_value, str) and re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", header_value):
+            try:
+                # Import at runtime to avoid circular imports
+                if prisma_client is not None:
+                    try:
+                        user_obj = await get_user_object(
+                            user_id=str(header_value),
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            user_id_upsert=True,
+                            user_email=str(header_value),
+                        )
+                    except Exception:
+                        user_obj = None
+
+                    if user_obj is not None:
+                        # Ensure role is internal_user (best-effort)
+                        try:
+                            await prisma_client.db.litellm_usertable.update(
+                                where={"user_id": user_obj.user_id},
+                                data={"user_role": str(LitellmUserRoles.INTERNAL_USER)},
+                            )
+                        except Exception:
+                            # ignore role-update failures
+                            pass
+
+                        user_api_key_dict.user_id = user_obj.user_id
+                        user_api_key_dict.user_email = getattr(user_obj, "user_email", None)
+                        user_api_key_dict.user_role = getattr(user_obj, "user_role", None) or LitellmUserRoles.INTERNAL_USER
+                        return user_api_key_dict
+            except Exception:
+                # Fall back to using header value if DB unavailable
+                pass
+
+        # Default: use the raw header value as the user identifier
+        user_api_key_dict.user_id = header_value
         return user_api_key_dict
 
     @staticmethod
@@ -1335,7 +1384,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         data=data, headers=_headers, user_api_key_dict=user_api_key_dict
     )
 
-    user_api_key_dict = LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
+    user_api_key_dict = await LiteLLMProxyRequestSetup.add_internal_user_from_user_mapping(
         general_settings, user_api_key_dict, _headers
     )
 
