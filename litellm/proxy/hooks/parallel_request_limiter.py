@@ -126,11 +126,16 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         """
         Raise a 429 with a retry-after header for litellm-proxy parallel-request limits.
 
-        Raises a :class:`ProxyRateLimitError`, which is both a
+        Always raises :class:`ProxyRateLimitError` — never returns. Annotated
+        ``NoReturn`` so type-checkers know callers after this invocation are
+        unreachable. The raised exception is both a
         :class:`litellm.RateLimitError` (so callers can catch by category) and a
         :class:`fastapi.HTTPException` (so the FastAPI dispatcher serializes it
         correctly with status 429 and the supplied headers).
         """
+        # additional_details is optional; build the detail with a None-guard
+        # so callers that pass nothing don't get the literal string "None"
+        # interpolated into the error message.
         error_message = "Max parallel request limit reached"
         if additional_details is not None:
             error_message = error_message + " " + additional_details
