@@ -31,7 +31,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles } from "../../../utils/roles";
+import { all_admin_roles, internalUserRoles } from "../../../utils/roles";
 import { ActivityMetrics, processActivityData } from "../../activity_metrics";
 import CloudZeroExportModal from "../../cloudzero_export_modal";
 import EntityUsageExportModal from "../../EntityUsageExport";
@@ -84,6 +84,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   console.log(`currentUser: ${JSON.stringify(currentUser)}`);
   console.log(`currentUser max budget: ${currentUser?.max_budget}`);
   const isAdmin = all_admin_roles.includes(userRole || "");
+  const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
 
   // Debounced search for user selector
   const [userSearchInput, setUserSearchInput] = useState("");
@@ -444,7 +445,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       <div className="flex items-end justify-between gap-6 mb-6">
         <div className="flex-1">
           <div className="flex items-end justify-between gap-6 mb-4 w-full">
-            <UsageViewSelect value={usageView} onChange={(value) => setUsageView(value)} isAdmin={isAdmin} />
+            <UsageViewSelect
+              value={usageView}
+              onChange={(value) => setUsageView(value)}
+              isAdmin={isAdmin}
+              canViewTagUsage={canViewTagUsage}
+            />
             <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
           </div>
           {paginatedResult.isFetchingMore && (
