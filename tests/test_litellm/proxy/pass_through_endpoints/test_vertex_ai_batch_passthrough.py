@@ -264,6 +264,57 @@ class TestVertexAIBatchPassthroughHandler:
                 # Verify the managed files hook was called
                 mock_managed_files_hook.store_unified_object_id.assert_called_once()
 
+    @pytest.mark.parametrize(
+        "kwargs,expected_user_id,expected_team_id",
+        [
+            (
+                {
+                    "litellm_params": {
+                        "metadata": {
+                            "user_api_key_user_id": "real-user-123",
+                            "user_api_key_team_id": "team-456",
+                        }
+                    }
+                },
+                "real-user-123",
+                "team-456",
+            ),
+            ({}, "default-user", None),
+        ],
+    )
+    def test_store_batch_managed_object_propagates_user_identity_from_metadata(
+        self,
+        mock_logging_obj,
+        mock_managed_files_hook,
+        kwargs,
+        expected_user_id,
+        expected_team_id,
+    ):
+        """The fabricated UserAPIKeyAuth must inherit user_id/team_id from the
+        request's litellm_params.metadata, not the (always-empty) top-level
+        kwargs lookup. Falls back to "default-user" only when metadata is
+        absent."""
+        with (
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_pl,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler.verbose_proxy_logger"
+            ),
+        ):
+            mock_pl.get_proxy_hook.return_value = mock_managed_files_hook
+
+            VertexPassthroughLoggingHandler._store_batch_managed_object(
+                unified_object_id="uoi",
+                batch_object={"id": "b1", "object": "batch", "status": "validating"},
+                model_object_id="b1",
+                logging_obj=mock_logging_obj,
+                **kwargs,
+            )
+
+            mock_managed_files_hook.store_unified_object_id.assert_called_once()
+            call_kwargs = mock_managed_files_hook.store_unified_object_id.call_args[1]
+            assert call_kwargs["user_api_key_dict"].user_id == expected_user_id
+            assert call_kwargs["user_api_key_dict"].team_id == expected_team_id
+
     def test_batch_cost_calculation_integration(self):
         """Single Vertex AI response → non-zero cost with correct token counts."""
         from litellm.batches.batch_utils import calculate_vertex_ai_batch_cost_and_usage

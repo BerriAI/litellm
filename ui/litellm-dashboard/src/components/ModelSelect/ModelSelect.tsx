@@ -141,36 +141,38 @@ export const ModelSelect = (props: ModelSelectProps) => {
       onChange={handleChange}
       style={style}
       options={[
-        includeSpecialOptions
-          ? {
-            label: <span>Special Options</span>,
-            title: "Special Options",
-            options: [
-              ...(shouldShowAllProxyModels
-                ? [
-                  {
-                    label: <span>All Proxy Models</span>,
-                    value: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
-                    disabled:
-                      value.length > 0 &&
-                      value.some(
-                        (v) => isSpecialOption(v) && v !== MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
-                      ),
-                    key: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
-                  },
-                ]
-                : []),
-              {
-                label: <span>No Default Models</span>,
-                value: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
-                disabled:
-                  value.length > 0 &&
-                  value.some((v) => isSpecialOption(v) && v !== MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value),
-                key: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
-              },
-            ],
-          }
-          : [],
+        ...(includeSpecialOptions
+          ? [
+            {
+              label: <span>Special Options</span>,
+              title: "Special Options",
+              options: [
+                ...(shouldShowAllProxyModels
+                  ? [
+                    {
+                      label: <span>All Proxy Models</span>,
+                      value: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                      disabled:
+                        value.length > 0 &&
+                        value.some(
+                          (v) => isSpecialOption(v) && v !== MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                        ),
+                      key: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
+                    },
+                  ]
+                  : []),
+                {
+                  label: <span>No Default Models</span>,
+                  value: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
+                  disabled:
+                    value.length > 0 &&
+                    value.some((v) => isSpecialOption(v) && v !== MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value),
+                  key: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
+                },
+              ],
+            },
+          ]
+          : []),
         ...(wildcard.length > 0
           ? [
             {

@@ -824,8 +824,6 @@ def convert_to_model_response_object(  # noqa: PLR0915
             stream=stream,
             start_time=start_time,
             end_time=end_time,
-            hidden_params=hidden_params,
-            _response_headers=_response_headers,
             convert_tool_call_to_json_mode=convert_tool_call_to_json_mode,
         )
         raise Exception(

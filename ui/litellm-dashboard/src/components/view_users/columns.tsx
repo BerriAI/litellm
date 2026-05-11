@@ -1,6 +1,6 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Badge, Grid, Icon } from "@tremor/react";
-import { Tooltip, Checkbox } from "antd";
+import { Tooltip, Checkbox, Tag } from "antd";
 import { UserInfo } from "./types";
 import { PencilAltIcon, TrashIcon, InformationCircleIcon, RefreshIcon } from "@heroicons/react/outline";
 import { CopyOutlined } from "@ant-design/icons";
@@ -53,6 +53,30 @@ export const columns = (
       accessorKey: "user_email",
       enableSorting: true,
       cell: ({ row }) => <span className="text-xs">{row.original.user_email || "-"}</span>,
+    },
+    {
+      id: "status",
+      header: "Status",
+      enableSorting: false,
+      cell: ({ row }) => {
+        const isScimInactive =
+          (row.original.metadata as Record<string, unknown> | null | undefined)
+            ?.scim_active === false;
+        if (isScimInactive) {
+          return (
+            <Tooltip title="Deactivated via SCIM (external identity provider). The user's virtual keys are blocked.">
+              <Tag color="red" data-testid={`user-status-${row.original.user_id}`}>
+                Inactive
+              </Tag>
+            </Tooltip>
+          );
+        }
+        return (
+          <Tag color="green" data-testid={`user-status-${row.original.user_id}`}>
+            Active
+          </Tag>
+        );
+      },
     },
     {
       header: "Global Proxy Role",

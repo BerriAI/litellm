@@ -141,7 +141,9 @@ test.describe("Add Model", () => {
     await page.waitForTimeout(1000);
 
     // Verify the model appears in the results count (not "Showing 0 results")
-    await expect(page.getByText(/Showing \d+ - \d+ of \d+ results/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("models-results-count")).toHaveText(/Showing \d+ - \d+ of \d+ results/, {
+      timeout: 15_000,
+    });
 
     // Verify the model name appears in the table body
     const tableBody = page.locator("table tbody");
@@ -181,7 +183,9 @@ test.describe("Add Model", () => {
     await page.waitForTimeout(1000);
 
     // Verify the model appears in the results count (not "Showing 0 results")
-    await expect(page.getByText(/Showing \d+ - \d+ of \d+ results/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("models-results-count")).toHaveText(/Showing \d+ - \d+ of \d+ results/, {
+      timeout: 15_000,
+    });
 
     // Verify the wildcard model appears in the table body (wildcard models show as "cohere/*")
     const tableBody = page.locator("table tbody");

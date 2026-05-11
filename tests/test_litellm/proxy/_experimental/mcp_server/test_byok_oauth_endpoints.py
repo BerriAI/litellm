@@ -1135,3 +1135,69 @@ def test_validate_loopback_redirect_uri_rejects_malformed_cleanly():
     with pytest.raises(HTTPException) as exc:
         validate_loopback_redirect_uri("http://[not-an-ip]/cb")
     assert exc.value.status_code == 400
+
+
+def _mock_request_with_base_url(base_url: str):
+    req = MagicMock()
+    req.base_url = base_url
+    req.headers = {}
+    return req
+
+
+def test_validate_trusted_redirect_uri_accepts_same_origin():
+    """UI OAuth flow: redirect_uri on the proxy's own origin is allowed."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    req = _mock_request_with_base_url("https://proxy.example.com/")
+    # Should not raise.
+    validate_trusted_redirect_uri(
+        req, "https://proxy.example.com/ui/mcp/oauth/callback"
+    )
+
+
+def test_validate_trusted_redirect_uri_accepts_loopback():
+    """Native MCP client flow: loopback is still allowed."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    req = _mock_request_with_base_url("https://proxy.example.com/")
+    validate_trusted_redirect_uri(req, "http://127.0.0.1:3000/cb")
+    validate_trusted_redirect_uri(req, "http://localhost:3000/cb")
+
+
+def test_validate_trusted_redirect_uri_rejects_external_origin():
+    """An attacker-controlled origin must still be rejected."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    req = _mock_request_with_base_url("https://proxy.example.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(req, "https://attacker.example.com/cb")
+    assert exc.value.status_code == 400
+
+
+def test_validate_trusted_redirect_uri_rejects_scheme_mismatch():
+    """https→http (or vice versa) on the same host is not same-origin."""
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    req = _mock_request_with_base_url("https://proxy.example.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(req, "http://proxy.example.com/ui/callback")
+    assert exc.value.status_code == 400
+
+
+def test_validate_trusted_redirect_uri_rejects_fragment():
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        validate_trusted_redirect_uri,
+    )
+
+    req = _mock_request_with_base_url("https://proxy.example.com/")
+    with pytest.raises(HTTPException) as exc:
+        validate_trusted_redirect_uri(req, "https://proxy.example.com/ui/cb#code=1")
+    assert exc.value.status_code == 400
