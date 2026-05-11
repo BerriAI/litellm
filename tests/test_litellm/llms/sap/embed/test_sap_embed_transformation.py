@@ -106,3 +106,104 @@ def test_embed_with_masking(fake_token_creator, fake_deployment_url):
             headers={},
         )
         assert body["config"]["modules"]["masking"] == masking_config
+
+
+def test_dimensions_forwarded_to_model_params(fake_token_creator, fake_deployment_url):
+    """Test that dimensions from optional_params is placed into model.params."""
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        body = GenAIHubEmbeddingConfig().transform_embedding_request(
+            model="text-embedding-3-large",
+            input="Hello",
+            optional_params={"dimensions": 2000},
+            headers={},
+        )
+        assert body["config"]["modules"]["embeddings"]["model"]["params"] == {
+            "dimensions": 2000
+        }
+
+
+def test_dimensions_merged_with_existing_parameters(
+    fake_token_creator, fake_deployment_url
+):
+    """Test that dimensions is merged with explicitly provided parameters."""
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        body = GenAIHubEmbeddingConfig().transform_embedding_request(
+            model="text-embedding-3-large",
+            input="Hello",
+            optional_params={"dimensions": 2000, "parameters": {"truncate": "END"}},
+            headers={},
+        )
+        assert body["config"]["modules"]["embeddings"]["model"]["params"] == {
+            "dimensions": 2000,
+            "truncate": "END",
+        }
+
+
+def test_map_openai_params_forwards_supported_params(
+    fake_token_creator, fake_deployment_url
+):
+    """Test that map_openai_params correctly maps non_default_params to optional_params."""
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        config = GenAIHubEmbeddingConfig()
+        result = config.map_openai_params(
+            non_default_params={"dimensions": 2000, "unsupported_param": "value"},
+            optional_params={},
+            model="text-embedding-3-large",
+            drop_params=False,
+        )
+        assert result == {"dimensions": 2000}
+
+
+def test_map_openai_params_no_dimensions_for_non_v3_model(
+    fake_token_creator, fake_deployment_url
+):
+    """Test that dimensions is not forwarded for models that don't support it."""
+    with (
+        patch(
+            "litellm.llms.sap.embed.transformation.GenAIHubEmbeddingConfig.deployment_url",
+            new_callable=PropertyMock,
+            return_value=fake_deployment_url,
+        ),
+        patch(
+            "litellm.llms.sap.embed.transformation.get_token_creator",
+            return_value=fake_token_creator,
+        ),
+    ):
+        config = GenAIHubEmbeddingConfig()
+        result = config.map_openai_params(
+            non_default_params={"dimensions": 2000},
+            optional_params={},
+            model="text-embedding-ada-002",
+            drop_params=False,
+        )
+        assert result == {}
