@@ -2817,6 +2817,128 @@ def test_generate_gcp_iam_access_token_import_error():
         assert "pip install google-cloud-iam" in str(exc_info.value)
 
 
+def test_generate_azure_ad_redis_token():
+    """Test _generate_azure_ad_redis_token with mocked Azure credential."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "azure-access-token-12345"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock()
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token()
+
+        assert result == expected_token
+        mock_credential.get_token.assert_called_once_with(
+            "https://redis.azure.com/.default"
+        )
+
+
+def test_generate_azure_ad_redis_token_service_principal():
+    """Test _generate_azure_ad_redis_token with service principal credentials."""
+    from unittest.mock import Mock, patch
+
+    expected_token = "sp-access-token-67890"
+
+    mock_token = Mock()
+    mock_token.token = expected_token
+
+    mock_credential = Mock()
+    mock_credential.get_token.return_value = mock_token
+
+    mock_client_secret_credential = Mock(return_value=mock_credential)
+
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock()
+    mock_azure_identity.ClientSecretCredential = mock_client_secret_credential
+    mock_azure_identity.ManagedIdentityCredential = Mock()
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _generate_azure_ad_redis_token
+
+        result = _generate_azure_ad_redis_token(
+            azure_client_id="test-client-id",
+            azure_tenant_id="test-tenant-id",
+            azure_client_secret="test-secret",
+        )
+
+        assert result == expected_token
+        mock_client_secret_credential.assert_called_once_with(
+            client_id="test-client-id",
+            tenant_id="test-tenant-id",
+            client_secret="test-secret",
+        )
+
+
+def test_generate_azure_ad_redis_token_import_error():
+    """Test that _generate_azure_ad_redis_token raises ImportError when azure-identity is missing."""
+    from unittest.mock import patch
+    from litellm._redis import _generate_azure_ad_redis_token
+
+    with patch.dict("sys.modules", {"azure.identity": None}):
+        with pytest.raises(ImportError) as exc_info:
+            _generate_azure_ad_redis_token()
+
+        assert "azure-identity is required" in str(exc_info.value)
+
+
+def test_redis_client_logic_azure_ad_auth():
+    """Test that _get_redis_client_logic sets up Azure AD auth when REDIS_AZURE_AD_TOKEN=true.
+
+    Mocks ``azure.identity`` via ``sys.modules`` so the test does not require
+    the real ``azure-identity`` package to be installed in the CI environment.
+    """
+    from unittest.mock import Mock, patch
+
+    mock_credential = Mock()
+    mock_azure_identity = Mock()
+    mock_azure_identity.DefaultAzureCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ClientSecretCredential = Mock(return_value=mock_credential)
+    mock_azure_identity.ManagedIdentityCredential = Mock(return_value=mock_credential)
+
+    with patch.dict(
+        "sys.modules", {"azure.identity": mock_azure_identity, "azure": Mock()}
+    ):
+        from litellm._redis import _get_redis_client_logic
+
+        redis_kwargs = _get_redis_client_logic(
+            host="myredis.redis.cache.windows.net",
+            port="6380",
+            azure_redis_ad_token="true",
+            ssl=True,
+        )
+
+        assert "redis_connect_func" in redis_kwargs
+        # Marker for async paths to detect Azure AD auth
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_redis_ad_token")
+        assert redis_kwargs["redis_connect_func"]._azure_redis_ad_token is True
+        # Live credential object (not raw secret) is exposed for async paths
+        assert hasattr(redis_kwargs["redis_connect_func"], "_azure_credential")
+        # Raw credentials must NOT be exposed on the function
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_secret")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_client_id")
+        assert not hasattr(redis_kwargs["redis_connect_func"], "_azure_tenant_id")
+
+        # Azure-specific kwargs should be removed from the dict passed to Redis
+        assert "azure_redis_ad_token" not in redis_kwargs
+        assert "azure_client_id" not in redis_kwargs
+
+
 if __name__ == "__main__":
     # Allow running this test file directly for debugging
     pytest.main([__file__, "-v"])
