@@ -90,21 +90,19 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
         end-of-response signal.
 
         We therefore only surface ``finish_reason`` when the chunk has
-        user-facing content (text or tool_calls). Otherwise downstream stream
-        handling closes the stream after the first inner action and the actual
-        response is dropped (see issue #19121).
+        user-facing text content. Function-call and thought-only chunks must
+        keep ``finish_reason=None`` so the downstream stream wrapper does not
+        close the stream after the first inner action and drop the actual
+        response (see issue #19121).
         """
         text, tool_calls = self._extract_parts_from_chunk(chunk)
 
         finish_reason: Optional[str] = None
         raw_finish_reason = chunk.get("finish_reason")
-        if raw_finish_reason:
-            if tool_calls:
-                finish_reason = "tool_calls"
-            elif text is not None:
-                finish_reason = (
-                    "stop" if raw_finish_reason == "STOP" else raw_finish_reason.lower()
-                )
+        if raw_finish_reason and text is not None:
+            finish_reason = (
+                "stop" if raw_finish_reason == "STOP" else raw_finish_reason.lower()
+            )
 
         usage = None
         usage_metadata = chunk.get("usage_metadata") or {}

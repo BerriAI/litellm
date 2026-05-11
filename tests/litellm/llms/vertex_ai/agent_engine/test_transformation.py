@@ -155,7 +155,7 @@ class TestVertexAgentEngineChunkParser:
 
         result = self._iterator().chunk_parser(chunk)
 
-        assert result.choices[0].finish_reason == "tool_calls"
+        assert result.choices[0].finish_reason is None
         tool_calls = result.choices[0].delta.tool_calls
         assert tool_calls is not None and len(tool_calls) == 1
         assert tool_calls[0]["function"]["name"] == "transfer_to_agent"
@@ -207,7 +207,7 @@ class TestVertexAgentEngineChunkParser:
 
         result = self._iterator().chunk_parser(chunk)
 
-        assert result.choices[0].finish_reason == "tool_calls"
+        assert result.choices[0].finish_reason is None
         tool_calls = result.choices[0].delta.tool_calls
         assert tool_calls is not None and len(tool_calls) == 1
         assert tool_calls[0]["function"]["name"] == "list_cases"
