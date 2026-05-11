@@ -805,7 +805,8 @@ def run_server(  # noqa: PLR0915
             )
 
         db_connection_pool_limit = 100
-        db_connection_timeout = 60
+        # Starts optional due to config fallback checks; guaranteed non-None before use.
+        db_connection_timeout: Optional[Union[int, float]] = 60
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
@@ -914,10 +915,15 @@ def run_server(  # noqa: PLR0915
                 "database_connection_pool_limit",
                 LiteLLMDatabaseConnectionPool.database_connection_pool_limit.value,
             )
-            db_connection_timeout = general_settings.get(
-                "database_connection_pool_timeout",
-                LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value,
-            )
+            db_connection_timeout = general_settings.get("database_connection_timeout")
+            if db_connection_timeout is None:
+                db_connection_timeout = general_settings.get(
+                    "database_connection_pool_timeout"
+                )
+            if db_connection_timeout is None:
+                db_connection_timeout = (
+                    LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
+                )
             if database_url and database_url.startswith("os.environ/"):
                 original_dir = os.getcwd()
                 # set the working directory to where this script is
