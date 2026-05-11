@@ -224,3 +224,73 @@ class TestProxyHookCategoryWiring:
             module, "ProxyRateLimitError"
         ), f"{module_path} must import ProxyRateLimitError"
         assert module.ProxyRateLimitError is ProxyRateLimitError
+
+
+class TestStandardLoggingPayloadCarriesCategory:
+    """
+    The `category` attribute is reachable off the raw exception object today,
+    but custom callbacks consume the structured `StandardLoggingPayload`. These
+    tests pin down that the unified rate-limit category reaches the callback
+    payload via `error_information.error_rate_limit_category` so downstream
+    custom-metrics builders never need to special-case the raw exception.
+    """
+
+    def test_should_propagate_category_for_proxy_rate_limit_error(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        e = ProxyRateLimitError(
+            detail="over limit",
+            category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
+        )
+        info = StandardLoggingPayloadSetup.get_error_information(e)
+        assert info["error_rate_limit_category"] == "litellm_rate_limit"
+        assert info["error_code"] == "429"
+
+    def test_should_propagate_vendor_category_for_plain_rate_limit_error(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        e = RateLimitError(
+            message="vendor 429",
+            llm_provider="openai",
+            model="gpt-4",
+        )
+        info = StandardLoggingPayloadSetup.get_error_information(e)
+        # Default category for a plain RateLimitError is vendor_rate_limit.
+        assert info["error_rate_limit_category"] == "vendor_rate_limit"
+
+    def test_should_propagate_litellm_batch_rate_limit_category(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        e = ProxyRateLimitError(
+            detail="batch over limit",
+            category=RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT,
+        )
+        info = StandardLoggingPayloadSetup.get_error_information(e)
+        assert info["error_rate_limit_category"] == "litellm_batch_rate_limit"
+
+    def test_should_be_none_for_non_rate_limit_errors(self):
+        # Non-rate-limit exceptions don't carry a `.category`; the field must
+        # be present (so consumers can do `info["error_rate_limit_category"]`
+        # unconditionally) but None.
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        info = StandardLoggingPayloadSetup.get_error_information(
+            ValueError("not a rate limit")
+        )
+        assert info["error_rate_limit_category"] is None
+
+    def test_should_be_none_when_no_exception(self):
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        info = StandardLoggingPayloadSetup.get_error_information(None)
+        assert info["error_rate_limit_category"] is None
