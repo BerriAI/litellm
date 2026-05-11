@@ -113,13 +113,13 @@ class ResetBudgetJob:
         counter_key_fn: Callable[[Any], str],
         log_subject: str,
         extra_where: Optional[dict] = None,
-        cache_key_fn: Optional[Callable[[Any], str]] = None,
+        cache_key_fn: Optional[Callable[[Any], Union[str, List[str]]]] = None,
     ):
         """
         Generic cascade: zero spend on rows whose budget_id is in the reset set.
 
         ``cache_key_fn`` is optional: when provided, after the DB update each
-        matching row's entry in ``user_api_key_cache`` is also dropped so
+        matching row's entry or entries in ``user_api_key_cache`` are dropped so
         cached spend cannot stay pinned above the zeroed DB row after a reset.
         """
         budget_ids = [b.budget_id for b in budgets_to_reset if b.budget_id is not None]
@@ -143,7 +143,11 @@ class ResetBudgetJob:
         for row in rows:
             await self._invalidate_spend_counter(counter_key_fn(row))
             if cache_key_fn is not None:
-                await self._invalidate_user_api_key_cache_entry(cache_key_fn(row))
+                cache_keys = cache_key_fn(row)
+                if isinstance(cache_keys, str):
+                    cache_keys = [cache_keys]
+                for cache_key in cache_keys:
+                    await self._invalidate_user_api_key_cache_entry(cache_key)
 
         return update_result
 
@@ -191,7 +195,10 @@ class ResetBudgetJob:
             counter_key_fn=lambda o: f"spend:org:{o.organization_id}",
             log_subject="orgs",
             extra_where={"spend": {"gt": 0}},
-            cache_key_fn=lambda o: f"org_id:{o.organization_id}",
+            cache_key_fn=lambda o: [
+                f"org_id:{o.organization_id}",
+                f"org_id:{o.organization_id}:with_budget",
+            ],
         )
 
     async def reset_budget_for_tags_linked_to_budgets(

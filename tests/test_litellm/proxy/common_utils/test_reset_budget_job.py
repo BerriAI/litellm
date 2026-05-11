@@ -1566,7 +1566,7 @@ def test_reset_budget_for_keys_linked_to_budgets_invalidates_management_cache(
 def test_reset_budget_for_orgs_linked_to_budgets_invalidates_management_cache(
     monkeypatch,
 ):
-    """Org rows use ``org_id:{id}`` in ``user_api_key_cache`` — evict on reset."""
+    """Org rows use both base and budget-table cache keys — evict both on reset."""
     counter_cache = _make_counter_invalidation_job(monkeypatch)
 
     expired_budget = type("B", (), {"budget_id": "budget-1"})
@@ -1583,9 +1583,14 @@ def test_reset_budget_for_orgs_linked_to_budgets_invalidates_management_cache(
     job = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=prisma_client)
     asyncio.run(job.reset_budget_for_orgs_linked_to_budgets([expired_budget]))
 
-    counter_cache.user_api_key_cache.async_delete_cache.assert_any_await(
-        key="org_id:org-acme"
-    )
+    deleted_keys = {
+        call.kwargs.get("key")
+        for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list
+    }
+    assert deleted_keys == {
+        "org_id:org-acme",
+        "org_id:org-acme:with_budget",
+    }
 
 
 def test_reset_budget_for_team_members_invalidates_management_cache(monkeypatch):
