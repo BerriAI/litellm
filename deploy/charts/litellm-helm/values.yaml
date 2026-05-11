@@ -90,7 +90,7 @@ service:
 
 # Probes for LiteLLM gateway container
 livenessProbe:
-  path: /health/liveliness
+  path: /health/liveness
   initialDelaySeconds: 0
   periodSeconds: 15
   timeoutSeconds: 5
