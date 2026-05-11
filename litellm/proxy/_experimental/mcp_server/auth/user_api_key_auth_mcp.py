@@ -757,10 +757,8 @@ class MCPRequestHandler:
                 _get_mcp_server_ids_from_access_groups,
             )
 
-            key_access_group_servers = (
-                await _get_mcp_server_ids_from_access_groups(
-                    user_api_key_auth.access_group_ids or []
-                )
+            key_access_group_servers = await _get_mcp_server_ids_from_access_groups(
+                user_api_key_auth.access_group_ids or []
             )
 
             # Get key object permission (already loaded in main auth flow, or fetch from DB)
@@ -847,8 +845,8 @@ class MCPRequestHandler:
             team_access_group_ids = await MCPRequestHandler._get_team_access_group_ids(
                 user_api_key_auth
             )
-            team_access_group_servers = (
-                await _get_mcp_server_ids_from_access_groups(team_access_group_ids)
+            team_access_group_servers = await _get_mcp_server_ids_from_access_groups(
+                team_access_group_ids
             )
 
             # Get team object permission (already loaded in main auth flow)
