@@ -28,6 +28,21 @@ export const FILTER_KEYS = {
 export type FilterKey = keyof typeof FILTER_KEYS;
 export type LogFilterState = Record<(typeof FILTER_KEYS)[FilterKey], string>;
 
+const BACKEND_FILTER_KEYS = [
+  FILTER_KEYS.KEY_ALIAS,
+  FILTER_KEYS.KEY_HASH,
+  FILTER_KEYS.REQUEST_ID,
+  FILTER_KEYS.USER_ID,
+  FILTER_KEYS.END_USER,
+  FILTER_KEYS.ERROR_CODE,
+  FILTER_KEYS.ERROR_MESSAGE,
+  FILTER_KEYS.MODEL,
+  FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL,
+] as const;
+
+const hasActiveBackendFilters = (filters: LogFilterState): boolean =>
+  BACKEND_FILTER_KEYS.some((filterKey) => !!filters[filterKey]);
+
 export function useLogFilterLogic({
   logs,
   accessToken,
@@ -74,6 +89,7 @@ export function useLogFilterLogic({
 
   const [filters, setFilters] = useState<LogFilterState>(defaultFilters);
   const [backendFilteredLogs, setBackendFilteredLogs] = useState<PaginatedResponse | null>(null);
+  const [isFilteringResults, setIsFilteringResults] = useState(false);
   const lastSearchTimestamp = useRef(0);
 
   // Refs that always hold the latest filters and hasBackendFilters values.
@@ -85,11 +101,15 @@ export function useLogFilterLogic({
   const hasBackendFiltersRef = useRef(false);
   const performSearch = useCallback(
     async (filters: LogFilterState, page = 1) => {
-      if (!accessToken) return;
+      if (!accessToken) {
+        setIsFilteringResults(false);
+        return;
+      }
 
       console.log("Filters being sent to API:", filters);
       const currentTimestamp = Date.now();
       lastSearchTimestamp.current = currentTimestamp;
+      setIsFilteringResults(true);
 
       const formattedStartTime = moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss");
       const formattedEndTime = isCustomDate
@@ -125,16 +145,20 @@ export function useLogFilterLogic({
             ...response,
             data: response.data ?? [],
           });
+          setIsFilteringResults(false);
         }
       } catch (error) {
         console.error("Error searching users:", error);
-        setBackendFilteredLogs({
-          data: [],
-          total: 0,
-          page: 1,
-          page_size: pageSize,
-          total_pages: 0,
-        });
+        if (currentTimestamp === lastSearchTimestamp.current) {
+          setBackendFilteredLogs({
+            data: [],
+            total: 0,
+            page: 1,
+            page_size: pageSize,
+            total_pages: 0,
+          });
+          setIsFilteringResults(false);
+        }
       }
     },
     [accessToken, startTime, endTime, isCustomDate, pageSize, sortBy, sortOrder],
@@ -151,18 +175,7 @@ export function useLogFilterLogic({
 
   // Determine when backend filters are active (server-side filtering)
   const hasBackendFilters = useMemo(
-    () =>
-      !!(
-        filters[FILTER_KEYS.KEY_ALIAS] ||
-        filters[FILTER_KEYS.KEY_HASH] ||
-        filters[FILTER_KEYS.REQUEST_ID] ||
-        filters[FILTER_KEYS.USER_ID] ||
-        filters[FILTER_KEYS.END_USER] ||
-        filters[FILTER_KEYS.ERROR_CODE] ||
-        filters[FILTER_KEYS.ERROR_MESSAGE] ||
-        filters[FILTER_KEYS.MODEL] ||
-        filters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL]
-      ),
+    () => hasActiveBackendFilters(filters),
     [filters],
   );
 
@@ -304,7 +317,13 @@ export function useLogFilterLogic({
       if (JSON.stringify(updatedFilters) !== JSON.stringify(prev)) {
         setCurrentPage(1);
         setBackendFilteredLogs(null);
-        debouncedSearch(updatedFilters, 1);
+        if (hasActiveBackendFilters(updatedFilters)) {
+          setIsFilteringResults(true);
+          debouncedSearch(updatedFilters, 1);
+        } else {
+          setIsFilteringResults(false);
+          debouncedSearch.cancel();
+        }
       }
 
       return updatedFilters as LogFilterState;
@@ -317,6 +336,7 @@ export function useLogFilterLogic({
 
     // Clear backend filtered logs to ensure fresh render
     setBackendFilteredLogs(null);
+    setIsFilteringResults(false);
 
     // Cancel any in-flight debounced search
     debouncedSearch.cancel();
@@ -342,6 +362,7 @@ export function useLogFilterLogic({
   return {
     filters,
     filteredLogs,
+    isFilteringResults,
     hasBackendFilters,
     allTeams,
     handleFilterChange,

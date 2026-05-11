@@ -237,6 +237,7 @@ export default function SpendLogsTable({
   const {
     filters,
     filteredLogs,
+    isFilteringResults,
     hasBackendFilters,
     allTeams,
     handleFilterChange,
@@ -306,6 +307,8 @@ export default function SpendLogsTable({
     // No need for additional filtering since we're now handling this in the API call
     return matchesSearch;
   });
+
+  const isLogsLoading = logs.isLoading || isFilteringResults;
 
   const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>((acc, log) => {
     if (!log.session_id) return acc;
@@ -594,12 +597,12 @@ export default function SpendLogsTable({
 
                           <Button
                             type="default"
-                            icon={<SyncOutlined spin={isButtonLoading} />}
+                            icon={<SyncOutlined spin={isButtonLoading || isFilteringResults} />}
                             onClick={handleRefresh}
-                            disabled={isButtonLoading}
+                            disabled={isButtonLoading || isFilteringResults}
                             title="Fetch data"
                           >
-                            {isButtonLoading ? "Fetching" : "Fetch"}
+                            {isButtonLoading || isFilteringResults ? "Fetching" : "Fetch"}
                           </Button>
                         </div>
 
@@ -634,29 +637,29 @@ export default function SpendLogsTable({
 
                       <div className="flex items-center space-x-4">
                         <span className="text-sm text-gray-700 whitespace-nowrap">
-                          Showing {logs.isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
-                          {logs.isLoading
+                          Showing {isLogsLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
+                          {isLogsLoading
                             ? "..."
                             : filteredLogs
                               ? Math.min(currentPage * pageSize, filteredLogs.total)
                               : 0}{" "}
-                          of {logs.isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
+                          of {isLogsLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
                         </span>
                         <div className="flex items-center space-x-2">
                           <span className="text-sm text-gray-700 min-w-[90px]">
-                            Page {logs.isLoading ? "..." : currentPage} of{" "}
-                            {logs.isLoading ? "..." : filteredLogs ? filteredLogs.total_pages : 1}
+                            Page {isLogsLoading ? "..." : currentPage} of{" "}
+                            {isLogsLoading ? "..." : filteredLogs ? filteredLogs.total_pages : 1}
                           </span>
                           <button
                             onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                            disabled={logs.isLoading || currentPage === 1}
+                            disabled={isLogsLoading || currentPage === 1}
                             className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Previous
                           </button>
                           <button
                             onClick={() => setCurrentPage((p) => Math.min(filteredLogs.total_pages || 1, p + 1))}
-                            disabled={logs.isLoading || currentPage === (filteredLogs.total_pages || 1)}
+                            disabled={isLogsLoading || currentPage === (filteredLogs.total_pages || 1)}
                             className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Next
@@ -690,7 +693,8 @@ export default function SpendLogsTable({
                     })}
                     data={filteredData}
                     onRowClick={handleRowClick}
-                    isLoading={logs.isLoading}
+                    isLoading={isLogsLoading}
+                    loadingMessage={isFilteringResults ? "Filtering logs..." : undefined}
                   />
                 </div>
               </>
