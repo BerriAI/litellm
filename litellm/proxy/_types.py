@@ -596,6 +596,7 @@ class LiteLLMRoutes(enum.Enum):
         "/spend/calculate",
         "/spend/logs",
         "/spend/logs/ui",
+        "/spend/logs/ui/{request_id}",
         "/spend/logs/session/ui",
         "/cost/estimate",
     ]
@@ -772,7 +773,6 @@ class LiteLLMRoutes(enum.Enum):
             "/customer/info",
             # UI Logs page detail drawer (single + session). The list endpoint
             # `/spend/logs/ui` is covered via spend_tracking_routes below.
-            "/spend/logs/ui/{logId}",
             "/spend/logs/session/ui",
             # Settings / observability read endpoints exposed in admin-only
             # sidebar groups (Logging & Alerts, Admin Settings, Budgets,
