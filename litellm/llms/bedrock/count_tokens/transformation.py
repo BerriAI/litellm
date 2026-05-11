@@ -32,8 +32,26 @@ class BedrockCountTokensConfig(BaseAWSLLM):
         Returns:
             'converse' or 'invokeModel'
         """
-        # If the request has messages in the expected Anthropic format, use converse
-        if "messages" in request_data and isinstance(request_data["messages"], list):
+        # When messages are present, distinguish Anthropic-shape from Converse-shape
+        # content blocks. Anthropic uses ``{"type": "text"|"tool_use"|"tool_result"|...}``;
+        # Converse uses ``{"text": ...}`` / ``{"toolUse": ...}`` / ``{"toolResult": ...}``.
+        # ``/v1/messages/count_tokens`` callers send Anthropic-shape content; previously
+        # the unconditional ``"converse"`` branch coerced those blocks into Bedrock
+        # Converse without translation, which Bedrock rejects with
+        # "messages.N.content: Field required" — falling back to local tokeniser
+        # and silently producing very different counts than billing. InvokeModel
+        # preserves the body verbatim, which is the right choice for any
+        # Anthropic-shape request.
+        messages = request_data.get("messages")
+        if isinstance(messages, list):
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and "type" in block:
+                            return "invokeModel"
             return "converse"
 
         # For raw text or other formats, use invokeModel
@@ -167,14 +185,29 @@ class BedrockCountTokensConfig(BaseAWSLLM):
     def _transform_to_invoke_model_format(
         self, request_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Transform to InvokeModel input format."""
+        """Transform to InvokeModel input format.
+
+        The Bedrock CountTokens API spec calls the ``invokeModel.body`` field
+        a "Base64-encoded blob". Sending it as a raw JSON string fails with
+        ``Unable to parse request body`` for any non-trivial payload.
+        """
+        import base64
         import json
 
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
         body_data = {k: v for k, v in request_data.items() if k != "model"}
 
-        return {"input": {"invokeModel": {"body": json.dumps(body_data)}}}
+        # Bedrock's Anthropic Messages contract requires anthropic_version and
+        # max_tokens fields on InvokeModel bodies; CountTokens via InvokeModel
+        # validates against the same schema. Synthesise sensible defaults when
+        # callers (e.g. ``/v1/messages/count_tokens``) omit them.
+        body_data.setdefault("anthropic_version", "bedrock-2023-05-31")
+        body_data.setdefault("max_tokens", 1024)
+
+        body_bytes = json.dumps(body_data, ensure_ascii=False).encode("utf-8")
+        body_b64 = base64.b64encode(body_bytes).decode("ascii")
+        return {"input": {"invokeModel": {"body": body_b64}}}
 
     def get_bedrock_count_tokens_endpoint(
         self,

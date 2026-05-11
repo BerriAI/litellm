@@ -11,13 +11,147 @@ def test_detect_input_type():
     """Test input type detection (converse vs invokeModel)"""
     config = BedrockCountTokensConfig()
 
-    # Test messages format -> converse
+    # String message content is Converse-compatible -> converse
     request_with_messages = {"messages": [{"role": "user", "content": "hi"}]}
     assert config._detect_input_type(request_with_messages) == "converse"
 
     # Test text format -> invokeModel
     request_with_text = {"inputText": "hello"}
     assert config._detect_input_type(request_with_text) == "invokeModel"
+
+
+def test_detect_input_type_anthropic_shape_routes_to_invoke_model():
+    """Anthropic-shape content blocks (``{"type": "text"}``) cannot be sent through
+    the Converse path because Converse expects ``{"text": ...}`` blocks. Detect
+    Anthropic-typed blocks and route to InvokeModel, which preserves the body
+    verbatim and lets Bedrock's tokeniser score it correctly.
+    """
+    config = BedrockCountTokensConfig()
+
+    # Single text block in Anthropic shape
+    req = {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+    }
+    assert config._detect_input_type(req) == "invokeModel"
+
+    # Tool-using turn with tool_use + tool_result blocks
+    req = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Reading the file."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_01ABC",
+                        "name": "read_file",
+                        "input": {"path": "main.py"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01ABC",
+                        "content": "def main(): pass",
+                    }
+                ],
+            },
+        ],
+    }
+    assert config._detect_input_type(req) == "invokeModel"
+
+
+def test_detect_input_type_converse_shape_blocks_stay_converse():
+    """Converse-shape blocks (``{"text": ...}``, no ``type`` key) should still
+    route to converse to preserve backwards-compatible behaviour for callers
+    already producing Bedrock-shape input.
+    """
+    config = BedrockCountTokensConfig()
+    req = {
+        "messages": [
+            {"role": "user", "content": [{"text": "hi"}]},
+        ],
+    }
+    assert config._detect_input_type(req) == "converse"
+
+
+def test_transform_to_invoke_model_format_base64_encodes_body():
+    """The Bedrock CountTokens API spec describes ``invokeModel.body`` as a
+    Base64-encoded blob. A raw JSON string fails with ``Unable to parse
+    request body`` for non-trivial payloads.
+    """
+    import base64
+    import json
+
+    config = BedrockCountTokensConfig()
+
+    request_data = {
+        "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        ],
+    }
+
+    result = config._transform_to_invoke_model_format(request_data)
+
+    # Top-level shape: {"input": {"invokeModel": {"body": "<base64>"}}}
+    assert "input" in result
+    assert "invokeModel" in result["input"]
+    body_value = result["input"]["invokeModel"]["body"]
+
+    # Must be Base64; decoding must round-trip to valid JSON
+    decoded = base64.b64decode(body_value).decode("utf-8")
+    parsed = json.loads(decoded)
+
+    # ``model`` is dropped (it's not part of the model input body)
+    assert "model" not in parsed
+
+    # Bedrock InvokeModel requires anthropic_version + max_tokens; transform
+    # supplies sensible defaults if the caller omitted them.
+    assert parsed["anthropic_version"] == "bedrock-2023-05-31"
+    assert "max_tokens" in parsed
+
+    # The original messages are preserved
+    assert parsed["messages"] == request_data["messages"]
+
+
+def test_transform_anthropic_shape_full_request_uses_invoke_model():
+    """End-to-end: a request with Anthropic-shape content blocks should land
+    in InvokeModel format, base64-encoded, with the original body preserved.
+    """
+    import base64
+    import json
+
+    config = BedrockCountTokensConfig()
+    req = {
+        "model": "anthropic.claude-3-sonnet-20240229-v1:0",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+        ],
+        "system": [{"type": "text", "text": "Be helpful"}],
+        "tools": [
+            {
+                "name": "search",
+                "description": "Search",
+                "input_schema": {"type": "object", "properties": {}},
+            },
+        ],
+    }
+
+    result = config.transform_anthropic_to_bedrock_count_tokens(req)
+
+    assert "invokeModel" in result["input"]
+    body = json.loads(
+        base64.b64decode(result["input"]["invokeModel"]["body"]).decode("utf-8")
+    )
+    assert body["messages"] == req["messages"]
+    assert body["system"] == req["system"]
+    assert body["tools"] == req["tools"]
 
 
 def test_transform_anthropic_to_bedrock_request():
