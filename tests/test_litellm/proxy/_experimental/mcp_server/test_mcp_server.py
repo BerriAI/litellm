@@ -1516,6 +1516,30 @@ async def test_stateful_mcp_auth_context_cleanup_respects_zero_now():
 
 
 @pytest.mark.asyncio
+async def test_stateful_mcp_cleanup_loop_survives_purge_errors():
+    """Cleanup loop should keep running after one purge attempt fails."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    purge = AsyncMock(
+        side_effect=[RuntimeError("terminate failed"), asyncio.CancelledError()]
+    )
+
+    with (
+        patch.object(mcp_server.asyncio, "sleep", AsyncMock(return_value=None)),
+        patch.object(
+            mcp_server, "_purge_expired_stateful_session_auth_contexts", purge
+        ),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await mcp_server._cleanup_expired_stateful_session_auth_contexts()
+
+    assert purge.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_owner_fingerprint_distinguishes_oauth_callers():
     """
     OAuth2 passthrough callers all share `UserAPIKeyAuth()` with no api_key

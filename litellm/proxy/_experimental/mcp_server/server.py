@@ -322,7 +322,12 @@ if MCP_AVAILABLE:
     async def _cleanup_expired_stateful_session_auth_contexts() -> None:
         while True:
             await asyncio.sleep(_STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS)
-            await _purge_expired_stateful_session_auth_contexts()
+            try:
+                await _purge_expired_stateful_session_auth_contexts()
+            except Exception as e:
+                verbose_logger.exception(
+                    f"Error cleaning up expired MCP stateful sessions: {e}"
+                )
 
     async def initialize_session_managers():
         """Initialize the session managers. Can be called from main app lifespan."""
