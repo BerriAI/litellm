@@ -268,6 +268,13 @@ if MCP_AVAILABLE:
     _stateful_session_locks: Dict[str, asyncio.Lock] = {}
     _stateful_session_active_request_counts: Dict[str, int] = {}
 
+    def _remove_stateful_session_tracking(session_id: str) -> None:
+        _stateful_session_auth_contexts.pop(session_id, None)
+        _stateful_session_auth_context_last_seen.pop(session_id, None)
+        _stateful_session_owners.pop(session_id, None)
+        _stateful_session_locks.pop(session_id, None)
+        _stateful_session_active_request_counts.pop(session_id, None)
+
     # Keep this alias so existing references to session_manager still work
     session_manager = session_manager_stateless
 
@@ -302,21 +309,14 @@ if MCP_AVAILABLE:
                 expired_session_ids.append(session_id)
 
         for session_id in expired_session_ids:
-            _stateful_session_auth_contexts.pop(session_id, None)
-            _stateful_session_auth_context_last_seen.pop(session_id, None)
-            _stateful_session_owners.pop(session_id, None)
-            _stateful_session_locks.pop(session_id, None)
-            _stateful_session_active_request_counts.pop(session_id, None)
+            _remove_stateful_session_tracking(session_id)
             transport = server_instances.pop(session_id, None)
             if transport is not None:
                 await transport.terminate()
 
         for session_id in list(_stateful_session_auth_context_last_seen):
             if session_id not in _stateful_session_auth_contexts:
-                _stateful_session_auth_context_last_seen.pop(session_id, None)
-                _stateful_session_owners.pop(session_id, None)
-                _stateful_session_locks.pop(session_id, None)
-                _stateful_session_active_request_counts.pop(session_id, None)
+                _remove_stateful_session_tracking(session_id)
 
     async def _cleanup_expired_stateful_session_auth_contexts() -> None:
         while True:
@@ -2821,6 +2821,7 @@ if MCP_AVAILABLE:
         method = scope.get("method", "").upper()
 
         if method == "DELETE":
+            _remove_stateful_session_tracking(_session_id)
             verbose_logger.info(
                 "DELETE request for non-existent MCP session '%s'. "
                 "Returning success (idempotent DELETE).",
@@ -3120,15 +3121,7 @@ if MCP_AVAILABLE:
                             and session_id
                             and scope.get("method") == "DELETE"
                         ):
-                            _stateful_session_auth_contexts.pop(session_id, None)
-                            _stateful_session_auth_context_last_seen.pop(
-                                session_id, None
-                            )
-                            _stateful_session_owners.pop(session_id, None)
-                            _stateful_session_locks.pop(session_id, None)
-                            _stateful_session_active_request_counts.pop(
-                                session_id, None
-                            )
+                            _remove_stateful_session_tracking(session_id)
 
             try:
                 if session_lock is not None:

@@ -53,32 +53,55 @@ class TestHandleStaleMcpSession:
         try:
             from litellm.proxy._experimental.mcp_server.server import (
                 _handle_stale_mcp_session,
+                _stateful_session_active_request_counts,
+                _stateful_session_auth_context_last_seen,
+                _stateful_session_auth_contexts,
+                _stateful_session_locks,
+                _stateful_session_owners,
             )
         except ImportError:
             pytest.skip("MCP server not available")
 
+        stale_session_id = "stale-id"
         scope = {
             "type": "http",
             "method": "DELETE",
             "headers": [
                 (b"content-type", b"application/json"),
-                (b"mcp-session-id", b"stale-id"),
+                (b"mcp-session-id", stale_session_id.encode()),
             ],
         }
         receive = AsyncMock()
         send = AsyncMock()
         mgr = MagicMock()
         mgr._server_instances = {}  # no active sessions
+        _stateful_session_auth_contexts[stale_session_id] = MagicMock()
+        _stateful_session_auth_context_last_seen[stale_session_id] = 1.0
+        _stateful_session_owners[stale_session_id] = "owner"
+        _stateful_session_locks[stale_session_id] = MagicMock()
+        _stateful_session_active_request_counts[stale_session_id] = 1
 
-        handled = await _handle_stale_mcp_session(scope, receive, send, mgr)
+        try:
+            handled = await _handle_stale_mcp_session(scope, receive, send, mgr)
 
-        # Should be fully handled (returns True)
-        assert handled is True
-        # Should have sent a success response
-        assert send.called
-        # Header should NOT be stripped (DELETE needs the session ID)
-        header_names = [k for k, _ in scope["headers"]]
-        assert b"mcp-session-id" in header_names
+            # Should be fully handled (returns True)
+            assert handled is True
+            # Should have sent a success response
+            assert send.called
+            # Header should NOT be stripped (DELETE needs the session ID)
+            header_names = [k for k, _ in scope["headers"]]
+            assert b"mcp-session-id" in header_names
+            assert stale_session_id not in _stateful_session_auth_contexts
+            assert stale_session_id not in _stateful_session_auth_context_last_seen
+            assert stale_session_id not in _stateful_session_owners
+            assert stale_session_id not in _stateful_session_locks
+            assert stale_session_id not in _stateful_session_active_request_counts
+        finally:
+            _stateful_session_auth_contexts.pop(stale_session_id, None)
+            _stateful_session_auth_context_last_seen.pop(stale_session_id, None)
+            _stateful_session_owners.pop(stale_session_id, None)
+            _stateful_session_locks.pop(stale_session_id, None)
+            _stateful_session_active_request_counts.pop(stale_session_id, None)
 
     @pytest.mark.asyncio
     async def test_preserves_valid_session_id(self):
