@@ -29,8 +29,10 @@ from litellm.batches.batch_utils import (
     _get_file_content_as_dictionary,
     _get_models_from_batch_input_file_content,
 )
+from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -105,7 +107,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         batch_usage: BatchFileUsage,
         limit_type: str,
     ) -> None:
-        """Raise HTTPException for rate limit exceeded."""
+        """Raise :class:`ProxyRateLimitError` (a 429) for batch rate limit exceeded."""
         from datetime import datetime
 
         # Find the descriptor for this status
@@ -148,14 +150,14 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 f"Limit resets at: {reset_time_formatted}"
             )
 
-        raise HTTPException(
-            status_code=429,
+        raise ProxyRateLimitError(
             detail=detail,
             headers={
                 "retry-after": str(window_size),
                 "rate_limit_type": limit_type,
                 "reset_at": reset_time_formatted,
             },
+            category=RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT,
         )
 
     async def _check_and_increment_batch_counters(
