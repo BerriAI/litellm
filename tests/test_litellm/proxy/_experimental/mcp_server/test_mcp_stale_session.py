@@ -7,6 +7,7 @@ they may send a stale `mcp-session-id` header. This test verifies that:
 2. For DELETE requests: idempotent behavior returns success even if session doesn't exist
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
@@ -373,6 +374,91 @@ async def test_delete_stale_mcp_session_returns_success():
 
     # Verify a success response was sent
     assert send.called, "A response should have been sent"
+
+
+@pytest.mark.asyncio
+async def test_failed_delete_preserves_stateful_session_tracking():
+    """
+    When the SDK fails to terminate an existing stateful session, keep the
+    owner/auth tracking so the session cannot be hijacked or hidden from cleanup.
+    """
+    try:
+        from litellm.proxy._experimental.mcp_server.server import (
+            _owner_fingerprint_for,
+            _stateful_session_auth_context_last_seen,
+            _stateful_session_auth_contexts,
+            _stateful_session_locks,
+            _stateful_session_owners,
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "delete-failure-session"
+    user_auth = MagicMock()
+    user_auth.api_key = "sk-test"
+    user_auth.user_id = "test-user"
+    auth_context = MagicMock()
+    session_lock = asyncio.Lock()
+    mock_instances = {session_id: MagicMock()}
+
+    scope = {
+        "type": "http",
+        "method": "DELETE",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"mcp-session-id", session_id.encode()),
+            (b"authorization", b"Bearer sk-test"),
+        ],
+    }
+    receive = AsyncMock()
+    send = AsyncMock()
+
+    _stateful_session_auth_contexts[session_id] = auth_context
+    _stateful_session_auth_context_last_seen[session_id] = 1.0
+    _stateful_session_owners[session_id] = _owner_fingerprint_for(user_auth)
+    _stateful_session_locks[session_id] = session_lock
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(user_auth, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                session_manager_stateful,
+                "handle_request",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("delete failed"),
+            ) as mock_handle_request,
+            patch.object(
+                session_manager_stateful,
+                "_server_instances",
+                mock_instances,
+            ),
+        ):
+            await handle_streamable_http_mcp(scope, receive, send)
+
+        assert mock_handle_request.await_count == 1
+        assert _stateful_session_auth_contexts[session_id] is auth_context
+        assert _stateful_session_auth_context_last_seen[session_id] == 1.0
+        assert _stateful_session_owners[session_id] == _owner_fingerprint_for(
+            user_auth
+        )
+        assert _stateful_session_locks[session_id] is session_lock
+        assert session_id in mock_instances
+    finally:
+        _stateful_session_auth_contexts.pop(session_id, None)
+        _stateful_session_auth_context_last_seen.pop(session_id, None)
+        _stateful_session_owners.pop(session_id, None)
+        _stateful_session_locks.pop(session_id, None)
 
 
 @pytest.mark.asyncio

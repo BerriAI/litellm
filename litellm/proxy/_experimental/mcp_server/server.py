@@ -3158,15 +3158,9 @@ if MCP_AVAILABLE:
                     mcp_servers,
                     _client_ip,
                 ):
-                    try:
-                        await target_manager.handle_request(scope, receive, local_send)
-                    finally:
-                        if (
-                            use_stateful
-                            and session_id
-                            and scope.get("method") == "DELETE"
-                        ):
-                            _remove_stateful_session_tracking(session_id)
+                    await target_manager.handle_request(scope, receive, local_send)
+                    if use_stateful and session_id and scope.get("method") == "DELETE":
+                        _remove_stateful_session_tracking(session_id)
 
             try:
                 if session_lock is not None:
