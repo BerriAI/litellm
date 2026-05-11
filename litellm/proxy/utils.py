@@ -2397,7 +2397,7 @@ def jsonify_object(data: dict) -> dict:
     db_data = copy.deepcopy(data)
 
     for k, v in db_data.items():
-        if isinstance(v, dict):
+        if isinstance(v, (dict, list)):
             try:
                 db_data[k] = json.dumps(v)
             except Exception:
@@ -2405,6 +2405,21 @@ def jsonify_object(data: dict) -> dict:
                 db_data[k] = "failed-to-serialize-json"
     return db_data
 
+
+# Prisma does not allow relation scalars (FK fields backing a @relation) or
+# relation objects in a direct update() call.  These must be stripped from the
+# payload to avoid "Field does not exist in enclosing type" errors when batch-
+# updating LiteLLM_VerificationToken rows.
+_VERIFICATION_TOKEN_RELATION_FIELDS: frozenset = frozenset(
+    {
+        "object_permission_id",
+        "object_permission",
+        "litellm_budget_table",
+        "litellm_organization_table",
+        "litellm_project_table",
+        "jwt_key_mappings",
+    }
+)
 
 # In-memory cache for deprecated key lookups: maps old_token_hash -> (active_token_id, expires_at_ts)
 # Avoids a DB query on every auth request for non-deprecated keys.
@@ -2757,7 +2772,7 @@ class PrismaClient:
         db_data = copy.deepcopy(data)
 
         for k, v in db_data.items():
-            if isinstance(v, dict):
+            if isinstance(v, (dict, list)):
                 try:
                     db_data[k] = json.dumps(v)
                 except Exception:
@@ -3704,6 +3719,9 @@ class PrismaClient:
                         )
                     except Exception:
                         data_json = self.jsonify_object(data=t.dict(exclude_none=True))
+                    # Remove relation fields that Prisma rejects in update()
+                    for field in _VERIFICATION_TOKEN_RELATION_FIELDS:
+                        data_json.pop(field, None)
                     batcher.litellm_verificationtoken.update(
                         where={"token": t.token},  # type: ignore
                         data={**data_json},  # type: ignore
