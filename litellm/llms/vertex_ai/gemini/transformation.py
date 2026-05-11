@@ -230,6 +230,11 @@ def _get_gcs_object_content_type(
 ) -> Optional[str]:
     """
     Resolve content type from GCS object metadata.
+
+    仅当调用方显式传入 Vertex 凭据时才附带 Bearer token，避免在 Gemini
+    API key（Google AI Studio）路径上自动使用服务端的默认 Google 凭据去
+    访问 GCS，防止被用作探测私有 GCS 对象的 oracle。
+    无显式凭据时只做匿名请求，仅对公开可读对象有效。
     """
     try:
         bucket, object_name = _parse_gs_uri(image_url)
@@ -242,14 +247,14 @@ def _get_gcs_object_content_type(
     explicit_vertex_auth_provided = (
         vertex_project is not None or vertex_credentials is not None
     )
-    try:
-        access_token, _ = _get_vertex_base().get_access_token(
-            credentials=vertex_credentials,
-            project_id=vertex_project,
-        )
-        headers["Authorization"] = f"Bearer {access_token}"
-    except Exception as e:
-        if explicit_vertex_auth_provided:
+    if explicit_vertex_auth_provided:
+        try:
+            access_token, _ = _get_vertex_base().get_access_token(
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+            )
+            headers["Authorization"] = f"Bearer {access_token}"
+        except Exception as e:
             raise litellm.BadRequestError(
                 message=(
                     "Unable to fetch GCS metadata with provided Vertex credentials/project. "
@@ -258,7 +263,6 @@ def _get_gcs_object_content_type(
                 model=None,
                 llm_provider="vertex_ai",
             )
-        # 未显式提供 Vertex 凭据时，metadata 对公开对象仍可能可读，继续无 token 尝试。
 
     # 通过 httpx.URL 固定 scheme/host，并对 bucket、object 都做 URL 编码，
     # 避免被 CodeQL 误判为可能拼接出任意主机 URL 的 SSRF。
@@ -538,12 +542,17 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             media_resolution_enum: Optional[Dict[str, str]] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
-                                format = (
-                                    img_element["image_url"].get("format")
-                                    or img_element["image_url"].get("mime_type")
-                                    or img_element["image_url"].get("content_type")
+                                # TypedDict 未声明 mime_type/content_type 键，这里按
+                                # 通用字典读取以兼容调用方显式传入的 MIME 字段。
+                                image_url_dict = cast(
+                                    Dict[str, Any], img_element["image_url"]
                                 )
-                                detail = img_element["image_url"].get("detail")
+                                format = (
+                                    image_url_dict.get("format")
+                                    or image_url_dict.get("mime_type")
+                                    or image_url_dict.get("content_type")
+                                )
+                                detail = image_url_dict.get("detail")
                                 media_resolution_enum = (
                                     _convert_detail_to_media_resolution_enum(detail)
                                 )
@@ -588,10 +597,13 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         elif element["type"] == "file":
                             file_element = cast(ChatCompletionFileObject, element)
                             file_id = file_element["file"].get("file_id")
+                            # TypedDict 未声明 mime_type/content_type 键，这里按
+                            # 通用字典读取以兼容调用方显式传入的 MIME 字段。
+                            file_dict = cast(Dict[str, Any], file_element["file"])
                             format = (
-                                file_element["file"].get("format")
-                                or file_element["file"].get("mime_type")
-                                or file_element["file"].get("content_type")
+                                file_dict.get("format")
+                                or file_dict.get("mime_type")
+                                or file_dict.get("content_type")
                             )
                             file_data = file_element["file"].get("file_data")
                             detail = file_element["file"].get("detail")
