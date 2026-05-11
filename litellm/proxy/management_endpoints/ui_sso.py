@@ -740,7 +740,7 @@ def generic_response_convertor(
 
     all_teams = []
     if sso_jwt_handler is not None:
-        team_ids = sso_jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+        team_ids = sso_jwt_handler.get_all_jwt_team_ids(cast(dict, response))
         all_teams.extend(team_ids)
 
     if team_mappings is not None and team_mappings.team_ids_jwt_field is not None:
@@ -755,7 +755,7 @@ def generic_response_convertor(
                 f"Loaded team_ids from DB team_mappings.team_ids_jwt_field='{team_mappings.team_ids_jwt_field}': {team_ids_from_db_mapping}"
             )
     else:
-        team_ids = jwt_handler.get_team_ids_from_jwt(cast(dict, response))
+        team_ids = jwt_handler.get_all_jwt_team_ids(cast(dict, response))
         all_teams.extend(team_ids)
 
     # Determine user role based on role_mappings if available

@@ -396,7 +396,7 @@ export default function KeyInfoView({
   };
 
   return (
-    <div className="w-full h-screen p-4">
+    <div className="w-full h-full overflow-y-auto p-4">
       <KeyInfoHeader
         data={{
           keyName: currentKeyData.key_alias || "Virtual Key",
@@ -614,7 +614,7 @@ export default function KeyInfoView({
 
           {/* Settings Panel */}
           <TabPanel>
-            <Card className="overflow-y-auto max-h-[65vh]">
+            <Card>
               <div className="flex justify-between items-center mb-4">
                 <Title>Key Settings</Title>
                 {!isEditing && canModifyKey && (

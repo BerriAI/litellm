@@ -5951,10 +5951,20 @@ class ProxyConfig:
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
+            db_guardrail_ids: set = set()
             for guardrail in guardrails_in_db:
+                guardrail_id = guardrail.get("guardrail_id")
+                if guardrail_id:
+                    db_guardrail_ids.add(guardrail_id)
                 IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                     guardrail=cast(Guardrail, guardrail),
                 )
+
+            # Drop in-memory DB-backed entries whose row was deleted on another
+            # pod. Config-loaded entries are never touched.
+            IN_MEMORY_GUARDRAIL_HANDLER.reconcile_db_guardrails(
+                db_guardrail_ids=db_guardrail_ids
+            )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - {}".format(
