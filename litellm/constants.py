@@ -1490,6 +1490,15 @@ MANAGED_OBJECT_STALENESS_CUTOFF_DAYS = max(
 STALE_OBJECT_CLEANUP_BATCH_SIZE = max(
     1, int(os.getenv("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000))
 )
+STALE_OBJECT_CLEANUP_MAX_BATCHES_PER_POLL_CYCLE = max(
+    1, int(os.getenv("STALE_OBJECT_CLEANUP_MAX_BATCHES_PER_POLL_CYCLE", 10))
+)
+RESPONSES_COST_POLL_RETRY_ATTEMPTS = max(
+    1, int(os.getenv("RESPONSES_COST_POLL_RETRY_ATTEMPTS", 3))
+)
+RESPONSES_COST_POLL_RETRY_DELAY_SECONDS = max(
+    0.0, float(os.getenv("RESPONSES_COST_POLL_RETRY_DELAY_SECONDS", 0.2))
+)
 # Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
 # CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
 # installations with large numbers of stale managed objects).
