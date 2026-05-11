@@ -8107,10 +8107,6 @@ class ProviderConfigManager:
             # Format: (factory_function, needs_model_parameter: bool)
             LlmProviders.OPENAI: (lambda: litellm.OpenAIGPTConfig(), False),
             LlmProviders.ANTHROPIC: (lambda: litellm.AnthropicConfig(), False),
-            LlmProviders.ANTHROPIC_AWS: (
-                lambda: litellm.AnthropicAWSConfig(),
-                False,
-            ),
             LlmProviders.AZURE: (
                 lambda model: ProviderConfigManager._get_azure_config(model),
                 True,

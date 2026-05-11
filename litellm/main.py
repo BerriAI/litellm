@@ -2954,25 +2954,6 @@ def completion(  # type: ignore # noqa: PLR0915
                     original_response=response,
                 )
             response = response
-        elif custom_llm_provider == "anthropic_aws":
-            response = base_llm_http_handler.completion(
-                model=model,
-                stream=stream,
-                messages=messages,
-                acompletion=acompletion,
-                api_base=api_base,
-                model_response=model_response,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                shared_session=shared_session,
-                custom_llm_provider=custom_llm_provider,
-                timeout=timeout,
-                headers=headers,
-                encoding=_get_encoding(),
-                api_key=api_key,
-                logging_obj=logging,
-                client=client,
-            )
         elif custom_llm_provider == "nlp_cloud":
             nlp_cloud_key = (
                 api_key
@@ -3866,13 +3847,14 @@ def completion(  # type: ignore # noqa: PLR0915
                     optional_params=optional_params,
                     litellm_params=litellm_params,
                     shared_session=shared_session,
-                    custom_llm_provider="anthropic_aws",
+                    custom_llm_provider="bedrock",
                     timeout=timeout,
                     headers=headers,
                     encoding=_get_encoding(),
                     api_key=api_key,
                     logging_obj=logging,
                     client=client,
+                    provider_config=litellm.AnthropicAWSConfig(),
                 )
                 return response
 

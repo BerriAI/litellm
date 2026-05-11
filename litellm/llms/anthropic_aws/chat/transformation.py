@@ -58,7 +58,7 @@ class AnthropicAWSMixin(BaseAWSLLM):
                     "Missing AWS region for Claude Platform on AWS. Pass "
                     "`aws_region_name` or set a standard AWS region environment value."
                 ),
-                llm_provider="anthropic_aws",
+                llm_provider="bedrock",
                 model="",
             )
         self._validate_aws_region_name(str(aws_region_name))
@@ -125,7 +125,7 @@ class AnthropicAWSConfig(AnthropicAWSMixin, AnthropicConfig):
 
     @property
     def custom_llm_provider(self) -> Optional[str]:
-        return "anthropic_aws"
+        return "bedrock"
 
     def validate_environment(
         self,
@@ -144,7 +144,7 @@ class AnthropicAWSConfig(AnthropicAWSMixin, AnthropicConfig):
                     "Missing workspace ID for Claude Platform on AWS. Pass "
                     "`workspace_id` or configure the provider workspace setting."
                 ),
-                llm_provider="anthropic_aws",
+                llm_provider="bedrock",
                 model=model,
             )
 
