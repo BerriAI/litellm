@@ -268,51 +268,63 @@ def test_aaparallel_function_call_with_anthropic_thinking(model):
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
 
+_PARALLEL_TOOL_HISTORY_MESSAGES = [
+    {
+        "role": "user",
+        "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+    },
+    Message(
+        content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
+        role="assistant",
+        tool_calls=[
+            ChatCompletionMessageToolCall(
+                index=1,
+                function=Function(
+                    arguments='{"location": "San Francisco, CA", "unit": "fahrenheit"}',
+                    name="get_current_weather",
+                ),
+                id="tooluse_Jj98qn6xQlOP_PiQr-w9iA",
+                type="function",
+            )
+        ],
+        function_call=None,
+    ),
+    {
+        "tool_call_id": "tooluse_Jj98qn6xQlOP_PiQr-w9iA",
+        "role": "tool",
+        "name": "get_current_weather",
+        "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+    },
+]
+
+
 @pytest.mark.parametrize(
-    "model, provider",
+    "model, messages, expect_unsupported_params_error",
     [
+        # Bedrock Converse still requires modify_params to inject the dummy tool.
         (
             "anthropic.claude-3-sonnet-20240229-v1:0",
-            "bedrock",
+            _PARALLEL_TOOL_HISTORY_MESSAGES,
+            True,
         ),
-        ("claude-haiku-4-5-20251001", "anthropic"),
-    ],
-)
-@pytest.mark.parametrize(
-    "messages, expected_error_msg",
-    [
+        # Anthropic Messages API: dummy tool is injected without modify_params.
         (
+            "claude-haiku-4-5-20251001",
+            _PARALLEL_TOOL_HISTORY_MESSAGES,
+            False,
+        ),
+        (
+            "anthropic.claude-3-sonnet-20240229-v1:0",
             [
                 {
                     "role": "user",
                     "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
-                },
-                Message(
-                    content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
-                    role="assistant",
-                    tool_calls=[
-                        ChatCompletionMessageToolCall(
-                            index=1,
-                            function=Function(
-                                arguments='{"location": "San Francisco, CA", "unit": "fahrenheit"}',
-                                name="get_current_weather",
-                            ),
-                            id="tooluse_Jj98qn6xQlOP_PiQr-w9iA",
-                            type="function",
-                        )
-                    ],
-                    function_call=None,
-                ),
-                {
-                    "tool_call_id": "tooluse_Jj98qn6xQlOP_PiQr-w9iA",
-                    "role": "tool",
-                    "name": "get_current_weather",
-                    "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
-                },
+                }
             ],
-            True,
+            False,
         ),
         (
+            "claude-haiku-4-5-20251001",
             [
                 {
                     "role": "user",
@@ -324,25 +336,26 @@ from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
     ],
 )
 def test_parallel_function_call_anthropic_error_msg(
-    model, provider, messages, expected_error_msg
+    model, messages, expect_unsupported_params_error
 ):
     """
-    Anthropic doesn't support tool calling without `tools=` param specified.
+    Tool history without an explicit ``tools`` param:
 
-    Ensure this error is thrown when `tools=` param is not specified. But tool call requests are made.
+    - Bedrock **Converse** still raises ``UnsupportedParamsError`` unless
+      ``litellm.modify_params`` is enabled (dummy tool is only added there).
+    - **Anthropic** (and Bedrock Invoke via ``AnthropicConfig.transform_request``)
+      always get a dummy tool so CLIs work with ``modify_params`` left off.
 
     Reference Issue: https://github.com/BerriAI/litellm/issues/5747, https://github.com/BerriAI/litellm/issues/5388
     """
-    # Ensure modify_params is False so UnsupportedParamsError is raised
+    # Ensure modify_params is False so Bedrock Converse path still raises.
     # (other tests in this file set it to True and don't reset it)
     original_modify_params = litellm.modify_params
     litellm.modify_params = False
     try:
         litellm.set_verbose = True
 
-        messages = messages
-
-        if expected_error_msg:
+        if expect_unsupported_params_error:
             with pytest.raises(litellm.UnsupportedParamsError) as e:
                 second_response = litellm.completion(
                     model=model,
