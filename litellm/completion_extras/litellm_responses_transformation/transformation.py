@@ -124,7 +124,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if not isinstance(tool_choice, dict) or tool_choice.get("type") != "function":
             return tool_choice
         if isinstance(tool_choice.get("name"), str) and tool_choice.get("name"):
-            return tool_choice
+            # Return only Responses shape so stray chat ``function`` key is not sent upstream.
+            return {"type": "function", "name": tool_choice["name"]}
         fn = tool_choice.get("function")
         if isinstance(fn, dict):
             fn_name = fn.get("name")
