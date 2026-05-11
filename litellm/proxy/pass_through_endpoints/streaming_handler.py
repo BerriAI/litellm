@@ -232,18 +232,20 @@ class PassThroughStreamingHandler:
     @staticmethod
     def _convert_raw_bytes_to_str_lines(raw_bytes: List[bytes]) -> List[str]:
         """
-        Converts a list of raw bytes into a list of string lines, similar to aiter_lines()
+        Converts a list of raw bytes into complete SSE event chunks.
 
         Args:
             raw_bytes: List of bytes chunks from aiter.bytes()
 
         Returns:
-            List of string lines, with each line being a complete data: {} chunk
+            List of SSE events, each preserving its event/data lines together
         """
         # Combine all bytes and decode to string
         combined_str = b"".join(raw_bytes).decode("utf-8")
 
-        # Split by newlines and filter out empty lines
-        lines = [line.strip() for line in combined_str.split("\n") if line.strip()]
+        # Keep complete SSE events together. Splitting by single newlines causes
+        # the logging parser to receive bare "event:" lines and try to parse
+        # them as JSON.
+        lines = [event.strip() for event in combined_str.split("\n\n") if event.strip()]
 
         return lines
