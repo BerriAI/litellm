@@ -326,16 +326,18 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         # And it must still be catchable as HTTPException for FastAPI's
         # default 429 dispatcher.
         assert isinstance(e, HTTPException)
-        # Regression: the detail must include the supplied additional_details
-        # and must not stringify a None placeholder.
-        assert "key-over-rpm" in e.detail
-        assert "None" not in e.detail
+        # The detail must include the additional_details suffix so operators
+        # can see why the limit was hit.
+        assert "key-over-rpm" in str(e.detail)
 
-    def test_parallel_request_limiter_v1_helper_detail_omits_none(self):
-        """Regression for the dead-variable / None-interpolation bug flagged
-        in code review: calling ``raise_rate_limit_error()`` without
-        ``additional_details`` must NOT produce a detail string ending in
-        ' None'."""
+    def test_parallel_request_limiter_v1_helper_no_additional_details(self):
+        """
+        Regression guard: when ``raise_rate_limit_error`` is called WITHOUT
+        ``additional_details``, the detail must NOT contain the literal
+        string ``"None"``. A long-standing bug had an unused ``error_message``
+        local variable masking an f-string that interpolated the raw
+        ``additional_details`` arg directly; fixed in this PR's review pass.
+        """
         from unittest.mock import MagicMock
 
         from litellm.proxy.hooks.parallel_request_limiter import (
@@ -344,9 +346,52 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
 
         handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=MagicMock())
         with pytest.raises(ProxyRateLimitError) as exc_info:
-            handler.raise_rate_limit_error()
-        assert exc_info.value.detail == "Max parallel request limit reached"
-        assert "None" not in exc_info.value.detail
+            handler.raise_rate_limit_error()  # no additional_details
+        detail_str = str(exc_info.value.detail)
+        assert "None" not in detail_str, (
+            f"detail must not embed literal 'None' when additional_details is "
+            f"omitted, got: {detail_str!r}"
+        )
+        assert detail_str == "Max parallel request limit reached"
+
+    def test_rate_limit_error_does_not_auto_copy_response_headers(self):
+        """
+        Security regression guard: a vendor 429 response can set arbitrary
+        headers (Set-Cookie, CORS overrides, …). RateLimitError must NOT
+        auto-promote those into ``self.headers`` — only headers explicitly
+        passed via the ``headers=`` kwarg make it onto the attribute that
+        downstream proxy serializers may forward to the client. Vendor
+        response headers stay reachable on ``e.response.headers`` for
+        callers that explicitly want them.
+        """
+        import httpx
+
+        vendor_response = httpx.Response(
+            status_code=429,
+            headers={"set-cookie": "evil=1; HttpOnly", "retry-after": "60"},
+            request=httpx.Request(method="POST", url="https://vendor.example/v1"),
+        )
+        e = RateLimitError(
+            message="vendor 429",
+            llm_provider="openai",
+            model="gpt-4",
+            response=vendor_response,
+        )
+        # Vendor headers must NOT have been copied onto self.headers.
+        assert e.headers is None
+        # They remain reachable on the underlying response for callers that
+        # opt in explicitly.
+        assert "set-cookie" in e.response.headers
+        # An explicit headers= kwarg, in contrast, IS surfaced on self.headers.
+        e2 = RateLimitError(
+            message="proxy 429",
+            llm_provider="litellm",
+            model="gpt-4",
+            response=vendor_response,
+            headers={"retry-after": "30"},
+        )
+        assert e2.headers == {"retry-after": "30"}
+        assert "set-cookie" not in (e2.headers or {})
 
     def test_parallel_request_limiter_v3_handle_rate_limit_error_raises(self):
         """v3 parallel_request_limiter's ``_handle_rate_limit_error`` must
