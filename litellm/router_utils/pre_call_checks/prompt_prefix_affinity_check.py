@@ -80,7 +80,7 @@ class PromptPrefixAffinityCheck(CustomLogger):
     ) -> Optional[str]:
         prompt_parts: List[Tuple[str, Any]] = []
 
-        for key in ("instructions", "tools"):
+        for key in ("system", "instructions", "tools"):
             value = request_kwargs.get(key)
             if value is not None:
                 prompt_parts.append((key, cls._json_safe(value)))
