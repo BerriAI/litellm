@@ -101,3 +101,4 @@ STABILIZATION_TODO.md
 **/*.storageState.json
 **/coverage
 test-config
+.vscode

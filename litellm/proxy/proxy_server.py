@@ -211,6 +211,7 @@ from litellm import Router
 from litellm._logging import verbose_proxy_logger, verbose_router_logger
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     _REALTIME_BODY_CACHE_SIZE,
@@ -403,6 +404,9 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     InFlightRequestsMiddleware,
 )
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
+from litellm.proxy.middleware.request_size_limit_middleware import (
+    RequestSizeLimitMiddleware,
+)
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -3834,6 +3838,11 @@ class ProxyConfig:
                         f"{blue_color_code} Initialized Failure Callbacks - {litellm.failure_callback} {reset_color_code}"
                     )  # noqa
                 elif key == "audit_log_callbacks":
+                    from litellm.proxy.management_helpers.audit_logs import (
+                        reset_audit_log_callback_cache,
+                    )
+
+                    reset_audit_log_callback_cache()
                     litellm.audit_log_callbacks = []
 
                     for callback in value:
@@ -3915,6 +3924,21 @@ class ProxyConfig:
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
                     )
                     setattr(litellm, key, value)
+                    if key in {"s3_audit_callback_params", "s3_callback_params"}:
+                        from litellm.proxy.management_helpers.audit_logs import (
+                            reset_audit_log_callback_cache,
+                        )
+                        from litellm.litellm_core_utils.litellm_logging import (
+                            _in_memory_loggers,
+                        )
+                        from litellm.integrations.s3_v2 import S3Logger as S3V2Logger
+
+                        reset_audit_log_callback_cache()
+                        _in_memory_loggers[:] = [
+                            cb
+                            for cb in _in_memory_loggers
+                            if not isinstance(cb, S3V2Logger)
+                        ]
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
         general_settings = config.get("general_settings", {})
@@ -6741,26 +6765,63 @@ class ProxyStartupEvent:
                 "budget_duration not set on Proxy. budget_duration is required to use max_budget."
             )
 
-        # add proxy budget to db in the user table
         asyncio.create_task(
-            generate_key_helper_fn(  # type: ignore
-                request_type="user",
-                table_name="user",
-                user_id=litellm_proxy_budget_name,
-                duration=None,
-                models=[],
-                aliases={},
-                config={},
-                spend=0,
-                max_budget=litellm.max_budget,
-                budget_duration=litellm.budget_duration,
-                query_type="update_data",
-                update_key_values={
-                    "max_budget": litellm.max_budget,
-                    "budget_duration": litellm.budget_duration,
-                },
-            )
+            cls._upsert_proxy_budget_with_reset_at_backfill(litellm_proxy_budget_name)
         )
+
+    @classmethod
+    async def _upsert_proxy_budget_with_reset_at_backfill(
+        cls, litellm_proxy_budget_name: str
+    ) -> None:
+        """
+        Upsert the proxy admin user row with the configured max_budget /
+        budget_duration, then backfill budget_reset_at if currently NULL.
+
+        The backfill uses `WHERE budget_reset_at IS NULL` so it only fires
+        when the row pre-existed without a reset schedule (e.g. row created
+        via a different path before the proxy budget was configured). On
+        subsequent restarts it no-ops, so an active reset window is never
+        slid forward.
+        """
+        await generate_key_helper_fn(  # type: ignore
+            request_type="user",
+            table_name="user",
+            user_id=litellm_proxy_budget_name,
+            duration=None,
+            models=[],
+            aliases={},
+            config={},
+            spend=0,
+            max_budget=litellm.max_budget,
+            budget_duration=litellm.budget_duration,
+            query_type="update_data",
+            update_key_values={
+                "max_budget": litellm.max_budget,
+                "budget_duration": litellm.budget_duration,
+            },
+        )
+
+        # Without this, the upsert leaves budget_reset_at=NULL on rows that
+        # took the UPDATE path, and reset_budget_for_litellm_users never
+        # matches them (NULL < now() is unknown in SQL) — so the proxy-wide
+        # spend cap blocks forever once it's hit.
+        if prisma_client is not None and litellm.budget_duration is not None:
+            try:
+                await prisma_client.db.litellm_usertable.update_many(
+                    where={
+                        "user_id": litellm_proxy_budget_name,
+                        "budget_reset_at": None,
+                    },
+                    data={
+                        "budget_reset_at": get_budget_reset_time(
+                            budget_duration=litellm.budget_duration
+                        )
+                    },
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Failed to backfill budget_reset_at on proxy admin row: %s", e
+                )
 
     @classmethod
     async def _warm_global_spend_cache(
@@ -8819,6 +8880,7 @@ def _realtime_query_params_template(
     return tuple(params)
 
 
+@app.websocket("/openai/v1/realtime")
 @app.websocket("/v1/realtime")
 @app.websocket("/realtime")
 async def realtime_websocket_endpoint(
@@ -14895,6 +14957,11 @@ app.include_router(ui_discovery_endpoints_router)
 app.include_router(google_router)
 
 attach_lazy_features(app)
+app.add_middleware(
+    RequestSizeLimitMiddleware,
+    get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
+    is_request_size_limit_enabled=lambda: premium_user is True,
+)
 
 
 async def _stream_mcp_asgi_response(

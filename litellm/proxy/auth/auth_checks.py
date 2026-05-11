@@ -2849,7 +2849,7 @@ def _can_object_call_model(
             object_type=object_type
         ),
         param="model",
-        code=status.HTTP_401_UNAUTHORIZED,
+        code=status.HTTP_403_FORBIDDEN,
     )
 
 
@@ -3082,7 +3082,7 @@ async def can_user_call_model(
             message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
             type=ProxyErrorTypes.key_model_access_denied,
             param="model",
-            code=status.HTTP_401_UNAUTHORIZED,
+            code=status.HTTP_403_FORBIDDEN,
         )
 
     return _can_object_call_model(
@@ -3516,7 +3516,6 @@ async def _check_team_member_budget(
     if (
         team_object is not None
         and team_object.team_id is not None
-        and user_object is not None
         and valid_token is not None
         and valid_token.user_id is not None
     ):
@@ -3619,13 +3618,14 @@ async def _check_team_member_model_access(
             llm_router=llm_router,
             models=member_allowed_models,
             object_type="team",
+            team_id=team_object.team_id,
         )
     except ProxyException:
         raise ProxyException(
             message=f"Team member not allowed to access model. User={valid_token.user_id}, Team={team_object.team_id}, Model={model}. Allowed member models = {member_allowed_models}",
             type=ProxyErrorTypes.team_model_access_denied,
             param="model",
-            code=status.HTTP_401_UNAUTHORIZED,
+            code=status.HTTP_403_FORBIDDEN,
         )
 
 

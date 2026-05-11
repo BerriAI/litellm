@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
-from typing import Any, List, Literal, Optional, Union
+from typing import Any, Callable, List, Literal, Optional, Union
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -83,41 +83,52 @@ class ResetBudgetJob:
                 "Failed to reset spend counter %s: %s", counter_key, e
             )
 
+    async def _cascade_reset_spend_for_budget_link(
+        self,
+        budgets_to_reset: List[LiteLLM_BudgetTableFull],
+        table: Any,
+        counter_key_fn: Callable[[Any], str],
+        log_subject: str,
+        extra_where: Optional[dict] = None,
+    ):
+        """
+        Generic cascade: zero spend on rows whose budget_id is in the reset set.
+        """
+        budget_ids = [b.budget_id for b in budgets_to_reset if b.budget_id is not None]
+        if not budget_ids:
+            return
+
+        where: dict = {"budget_id": {"in": budget_ids}}
+        if extra_where:
+            where.update(extra_where)
+
+        try:
+            rows = await table.find_many(where=where)
+        except Exception as e:
+            rows = []
+            verbose_proxy_logger.warning(
+                "Failed to fetch %s for counter invalidation: %s", log_subject, e
+            )
+
+        update_result = await table.update_many(where=where, data={"spend": 0})
+
+        for row in rows:
+            await self._invalidate_spend_counter(counter_key_fn(row))
+
+        return update_result
+
     async def reset_budget_for_litellm_team_members(
         self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
     ):
         """
         Resets the budget for all LiteLLM Team Members if their budget has expired
         """
-        budget_ids = [
-            budget.budget_id
-            for budget in budgets_to_reset
-            if budget.budget_id is not None
-        ]
-
-        try:
-            memberships = await self.prisma_client.db.litellm_teammembership.find_many(
-                where={"budget_id": {"in": budget_ids}}
-            )
-        except Exception as e:
-            memberships = []
-            verbose_proxy_logger.warning(
-                "Failed to fetch team memberships for counter invalidation: %s", e
-            )
-
-        update_result = await self.prisma_client.db.litellm_teammembership.update_many(
-            where={"budget_id": {"in": budget_ids}},
-            data={
-                "spend": 0,
-            },
+        return await self._cascade_reset_spend_for_budget_link(
+            budgets_to_reset=budgets_to_reset,
+            table=self.prisma_client.db.litellm_teammembership,
+            counter_key_fn=lambda m: f"spend:team_member:{m.user_id}:{m.team_id}",
+            log_subject="team memberships",
         )
-
-        for m in memberships:
-            await self._invalidate_spend_counter(
-                f"spend:team_member:{m.user_id}:{m.team_id}"
-            )
-
-        return update_result
 
     async def reset_budget_for_keys_linked_to_budgets(
         self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
@@ -125,51 +136,44 @@ class ResetBudgetJob:
         """
         Resets the spend for keys linked to budget tiers that are being reset.
 
-        This handles keys that have budget_id but no budget_duration set on the key
-        itself. Keys with budget_id rely on their linked budget tier's reset schedule
-        rather than having their own budget_duration.
-
-        Keys that have their own budget_duration are already handled by
-        reset_budget_for_litellm_keys() and are excluded here to avoid
-        double-resetting.
+        Excludes keys with their own budget_duration; those are reset by
+        reset_budget_for_litellm_keys() to avoid double-resetting.
         """
-        budget_ids = [
-            budget.budget_id
-            for budget in budgets_to_reset
-            if budget.budget_id is not None
-        ]
-        if not budget_ids:
-            return
-
-        where_clause: dict = {
-            "budget_id": {"in": budget_ids},
-            "budget_duration": None,  # only keys without their own reset schedule
-            "spend": {"gt": 0},  # only reset keys that have accumulated spend
-        }
-
-        try:
-            keys = await self.prisma_client.db.litellm_verificationtoken.find_many(
-                where=where_clause
-            )
-        except Exception as e:
-            keys = []
-            verbose_proxy_logger.warning(
-                "Failed to fetch keys for counter invalidation: %s", e
-            )
-
-        update_result = (
-            await self.prisma_client.db.litellm_verificationtoken.update_many(
-                where=where_clause,
-                data={
-                    "spend": 0,
-                },
-            )
+        return await self._cascade_reset_spend_for_budget_link(
+            budgets_to_reset=budgets_to_reset,
+            table=self.prisma_client.db.litellm_verificationtoken,
+            counter_key_fn=lambda k: f"spend:key:{k.token}",
+            log_subject="keys",
+            extra_where={"budget_duration": None, "spend": {"gt": 0}},
         )
 
-        for k in keys:
-            await self._invalidate_spend_counter(f"spend:key:{k.token}")
+    async def reset_budget_for_orgs_linked_to_budgets(
+        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
+    ):
+        """
+        Resets the spend for orgs linked to budget tiers that are being reset.
+        """
+        return await self._cascade_reset_spend_for_budget_link(
+            budgets_to_reset=budgets_to_reset,
+            table=self.prisma_client.db.litellm_organizationtable,
+            counter_key_fn=lambda o: f"spend:org:{o.organization_id}",
+            log_subject="orgs",
+            extra_where={"spend": {"gt": 0}},
+        )
 
-        return update_result
+    async def reset_budget_for_tags_linked_to_budgets(
+        self, budgets_to_reset: List[LiteLLM_BudgetTableFull]
+    ):
+        """
+        Resets the spend for tags linked to budget tiers that are being reset.
+        """
+        return await self._cascade_reset_spend_for_budget_link(
+            budgets_to_reset=budgets_to_reset,
+            table=self.prisma_client.db.litellm_tagtable,
+            counter_key_fn=lambda t: f"spend:tag:{t.tag_name}",
+            log_subject="tags",
+            extra_where={"spend": {"gt": 0}},
+        )
 
     async def reset_budget_for_litellm_budget_table(self):
         """
@@ -234,6 +238,14 @@ class ResetBudgetJob:
                 )
 
                 await self.reset_budget_for_keys_linked_to_budgets(
+                    budgets_to_reset=budgets_to_reset
+                )
+
+                await self.reset_budget_for_orgs_linked_to_budgets(
+                    budgets_to_reset=budgets_to_reset
+                )
+
+                await self.reset_budget_for_tags_linked_to_budgets(
                     budgets_to_reset=budgets_to_reset
                 )
 

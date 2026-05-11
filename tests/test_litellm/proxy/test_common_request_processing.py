@@ -3,8 +3,9 @@ import datetime
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
@@ -26,6 +27,48 @@ from litellm.proxy.utils import ProxyLogging
 
 
 class TestProxyBaseLLMRequestProcessing:
+    @pytest.mark.asyncio
+    async def test_base_passthrough_process_llm_request_preserves_litellm_headers_for_non_streaming_response(
+        self, monkeypatch
+    ):
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+
+        async def fake_base_process_llm_request(**kwargs):
+            passthrough_response = kwargs["fastapi_response"]
+            passthrough_response.headers["x-litellm-call-id"] = "test-call-id"
+            passthrough_response.headers["x-litellm-version"] = "test-version"
+            return httpx.Response(
+                status_code=200,
+                content=b'{"ok":true}',
+                headers={
+                    "content-type": "application/json",
+                    "x-amzn-requestid": "bedrock-request-id",
+                },
+            )
+
+        monkeypatch.setattr(
+            processing_obj,
+            "base_process_llm_request",
+            fake_base_process_llm_request,
+        )
+
+        result = await processing_obj.base_passthrough_process_llm_request(
+            request=MagicMock(spec=Request),
+            fastapi_response=Response(),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            proxy_logging_obj=MagicMock(spec=ProxyLogging),
+            general_settings={},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=MagicMock(),
+            model="bedrock-test-model",
+        )
+
+        assert result.status_code == 200
+        assert result.body == b'{"ok":true}'
+        assert result.headers["x-amzn-requestid"] == "bedrock-request-id"
+        assert result.headers["x-litellm-call-id"] == "test-call-id"
+        assert result.headers["x-litellm-version"] == "test-version"
+
     @pytest.mark.asyncio
     async def test_common_processing_pre_call_logic_pre_call_hook_receives_litellm_call_id(
         self, monkeypatch

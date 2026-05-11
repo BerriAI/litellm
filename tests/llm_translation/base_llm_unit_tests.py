@@ -853,7 +853,11 @@ class BaseLLMChatTest(ABC):
     @pytest.mark.parametrize(
         "image_url",
         [
-            "http://img1.etsystatic.com/260/0/7813604/il_fullxfull.4226713999_q86e.jpg",
+            # In-repo logo served via jsdelivr (sha-pinned, immutable).
+            # Bedrock fetches the URL and base64-embeds it in the
+            # Converse request body; using a multi-MB hosted product
+            # photo here previously bloated cassettes to ~60 MB each.
+            "https://cdn.jsdelivr.net/gh/BerriAI/litellm@d769e81c90d453240c61fc572cdb27fae06a89d0/ui/litellm-dashboard/public/assets/logos/litellm_logo.jpg",
             "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png",
         ],
     )

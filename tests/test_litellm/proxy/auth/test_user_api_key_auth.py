@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -9,6 +10,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import pytest
+from fastapi import status
 
 import litellm
 import litellm.proxy.proxy_server
@@ -176,6 +178,26 @@ async def test_custom_auth_does_not_enforce_key_model_access_by_default():
             parent_otel_span=None,
         )
         mock_can_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_custom_auth_expired_key_returns_unauthorized():
+    expired_token = UserAPIKeyAuth(
+        token="test_token",
+        expires=datetime.now() - timedelta(minutes=1),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_post_custom_auth_checks(
+            valid_token=expired_token,
+            request=MagicMock(),
+            request_data={},
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.expired_key
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
 
 
 @pytest.mark.asyncio
@@ -934,6 +956,7 @@ async def test_proxy_admin_expired_key_from_cache():
             assert (
                 exc_info.value.type == ProxyErrorTypes.expired_key
             ), f"Expected expired_key error type, got {exc_info.value.type}"
+            assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
             assert "Expired Key" in str(
                 exc_info.value.message
             ), f"Exception message should mention 'Expired Key', got: {exc_info.value.message}"

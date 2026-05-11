@@ -57,6 +57,17 @@ LITELLM_PROXY_REQUEST_SPAN_NAME = "Received Proxy Server Request"
 RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
+CAPTURE_MODE_NO_CONTENT = "NO_CONTENT"
+CAPTURE_MODE_SPAN_ONLY = "SPAN_ONLY"
+CAPTURE_MODE_EVENT_ONLY = "EVENT_ONLY"
+CAPTURE_MODE_SPAN_AND_EVENT = "SPAN_AND_EVENT"
+_VALID_CAPTURE_MODES = {
+    CAPTURE_MODE_NO_CONTENT,
+    CAPTURE_MODE_SPAN_ONLY,
+    CAPTURE_MODE_EVENT_ONLY,
+    CAPTURE_MODE_SPAN_AND_EVENT,
+}
+
 
 @dataclass
 class OpenTelemetryConfig:
@@ -71,6 +82,9 @@ class OpenTelemetryConfig:
     ignore_context_propagation: Optional[bool] = None
     # When True, create a private TracerProvider instead of reusing or setting the global one.
     skip_set_global: bool = False
+    # Programmatic override for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT.
+    # One of NO_CONTENT, SPAN_ONLY, EVENT_ONLY, SPAN_AND_EVENT (or "true" as legacy alias).
+    capture_message_content: Optional[str] = None
 
     def __post_init__(self) -> None:
         # If endpoint is specified but exporter is still the default "console",
@@ -182,6 +196,9 @@ class OpenTelemetry(CustomLogger):
         super().__init__(**kwargs)
         self._init_metrics(meter_provider)
         self._init_logs(logger_provider)
+        # Sample env-var / config / message_logging at init so subsequent
+        # _capture_in_span / _capture_in_event calls are deterministic.
+        self._capture_mode_cached = self._compute_capture_mode_from_init_state()
         self._init_otel_logger_on_litellm_proxy()
 
     @staticmethod
@@ -304,6 +321,62 @@ class OpenTelemetry(CustomLogger):
         # langfuse_otel relies on the Langfuse SDK's providers; don't overwrite them.
         return self.config.skip_set_global or (
             hasattr(self, "callback_name") and self.callback_name == "langfuse_otel"
+        )
+
+    def _compute_capture_mode_from_init_state(self) -> Optional[str]:
+        """Sample explicit settings at init. Returns the resolved mode or
+        None if nothing explicit is set (in which case the legacy
+        ``self.message_logging`` flag is consulted dynamically per request).
+
+        ``"true"``/``"1"`` map to ``EVENT_ONLY`` per the contrib convention.
+        ``"false"``/``"0"`` map to ``NO_CONTENT``.
+        Unknown values are ignored.
+        """
+        explicit = self.config.capture_message_content or os.getenv(
+            "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"
+        )
+        if not explicit:
+            return None
+        normalized = explicit.upper()
+        if normalized in ("TRUE", "1"):
+            return CAPTURE_MODE_EVENT_ONLY
+        if normalized in ("FALSE", "0"):
+            return CAPTURE_MODE_NO_CONTENT
+        if normalized in _VALID_CAPTURE_MODES:
+            return normalized
+        return None
+
+    def _resolve_capture_mode(self) -> str:
+        """Return the active capture mode for this request.
+
+        Precedence:
+          1. ``litellm.turn_off_message_logging=True`` forces ``NO_CONTENT``
+             (kill-switch checked dynamically).
+          2. Explicit setting sampled at init from
+             ``OpenTelemetryConfig.capture_message_content`` or
+             ``OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT``.
+          3. Legacy ``self.message_logging`` (checked dynamically).
+        """
+        if litellm.turn_off_message_logging:
+            return CAPTURE_MODE_NO_CONTENT
+        if self._capture_mode_cached is not None:
+            return self._capture_mode_cached
+        return (
+            CAPTURE_MODE_SPAN_AND_EVENT
+            if self.message_logging
+            else CAPTURE_MODE_NO_CONTENT
+        )
+
+    def _capture_in_span(self) -> bool:
+        return self._resolve_capture_mode() in (
+            CAPTURE_MODE_SPAN_ONLY,
+            CAPTURE_MODE_SPAN_AND_EVENT,
+        )
+
+    def _capture_in_event(self) -> bool:
+        return self._resolve_capture_mode() in (
+            CAPTURE_MODE_EVENT_ONLY,
+            CAPTURE_MODE_SPAN_AND_EVENT,
         )
 
     def _init_tracing(self, tracer_provider):
@@ -825,8 +898,7 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry import trace
         from opentelemetry.trace import Status, StatusCode
 
-        # only log raw LLM request/response if message_logging is on and not globally turned off
-        if litellm.turn_off_message_logging or not self.message_logging:
+        if not self._capture_in_span():
             return
 
         litellm_params = kwargs.get("litellm_params", {})
@@ -1117,8 +1189,13 @@ class OpenTelemetry(CustomLogger):
             }
             if role == "tool" and msg.get("id"):
                 attrs["id"] = msg["id"]
-            if self.message_logging and msg.get("content"):
+            capture_event_content = self._capture_in_event()
+            if capture_event_content and msg.get("content"):
                 attrs["gen_ai.prompt"] = msg["content"]
+
+            body = msg.copy()
+            if not capture_event_content:
+                body.pop("content", None)
 
             log_record = SdkLogRecord(
                 timestamp=self._to_ns(datetime.now()),
@@ -1127,7 +1204,7 @@ class OpenTelemetry(CustomLogger):
                 trace_flags=parent_ctx.trace_flags,
                 severity_number=SeverityNumber.INFO,
                 severity_text="INFO",
-                body=msg.copy(),
+                body=body,
                 attributes=attrs,
             )
             otel_logger.emit(log_record)
@@ -1141,14 +1218,15 @@ class OpenTelemetry(CustomLogger):
                 "finish_reason": choice.get("finish_reason"),
             }
             body_msg = choice.get("message", {})
-            if self.message_logging and body_msg.get("content"):
+            capture_event_content = self._capture_in_event()
+            if capture_event_content and body_msg.get("content"):
                 attrs["message.content"] = body_msg["content"]
             body = {
                 "index": idx,
                 "finish_reason": choice.get("finish_reason"),
                 "message": {"role": body_msg.get("role", "assistant")},
             }
-            if self.message_logging and body_msg.get("content"):
+            if capture_event_content and body_msg.get("content"):
                 body["message"]["content"] = body_msg["content"]
 
             log_record = SdkLogRecord(
@@ -1674,9 +1752,7 @@ class OpenTelemetry(CustomLogger):
             ########## LLM Request Medssages / tools / content Attributes ###########
             #########################################################################
 
-            if litellm.turn_off_message_logging is True:
-                return
-            if self.message_logging is not True:
+            if not self._capture_in_span():
                 return
 
             if optional_params.get("tools"):

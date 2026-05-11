@@ -1461,14 +1461,14 @@ def completion(  # type: ignore # noqa: PLR0915
             if eos_token:
                 custom_prompt_dict[model]["eos_token"] = eos_token
 
-        if kwargs.get("model_file_id_mapping"):
-            messages = update_messages_with_model_file_ids(
-                messages=messages,
-                model_id=kwargs.get("model_info", {}).get("id", None),
-                model_file_id_mapping=cast(
-                    Dict[str, Dict[str, str]], kwargs.get("model_file_id_mapping")
-                ),
-            )
+        messages = update_messages_with_model_file_ids(
+            messages=messages,
+            model_id=kwargs.get("model_info", {}).get("id", None),
+            model_file_id_mapping=cast(
+                Dict[str, Dict[str, str]],
+                kwargs.get("model_file_id_mapping") or {},
+            ),
+        )
 
         provider_config: Optional[BaseConfig] = None
         if custom_llm_provider is not None and custom_llm_provider in [

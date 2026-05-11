@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import atexit
 import hashlib
+import json
 import os
+import re
 import sys
 from typing import Iterable
 
@@ -74,6 +76,17 @@ FILTERED_RESPONSE_HEADERS = (
     "date",
 )
 
+# Tiny placeholder used to replace base64 image payloads in cassettes.
+# Decodes to b"test" — short, valid base64 so test code that decodes
+# the field still succeeds.
+VCR_IMAGE_B64_PLACEHOLDER = "dGVzdA=="
+
+# Fixed boundary substituted into multipart request bodies so the
+# ``safe_body`` matcher sees the same bytes across record and replay.
+# httpx generates a fresh random boundary per request via os.urandom,
+# which otherwise turns every multipart cassette into a permanent miss.
+VCR_FIXED_MULTIPART_BOUNDARY = "vcr-static-boundary"
+
 
 def _scrub_response(response):
     if not isinstance(response, dict):
@@ -86,8 +99,88 @@ def _scrub_response(response):
     return response
 
 
+def _replace_b64_json_in_place(obj) -> bool:
+    """Recursively replace ``b64_json`` string values in a JSON tree.
+
+    Returns ``True`` if any value was rewritten. The check on the
+    existing value's length keeps the function idempotent — once a
+    value has been swapped to the placeholder, subsequent invocations
+    are no-ops.
+    """
+    changed = False
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if (
+                key == "b64_json"
+                and isinstance(value, str)
+                and len(value) > len(VCR_IMAGE_B64_PLACEHOLDER)
+            ):
+                obj[key] = VCR_IMAGE_B64_PLACEHOLDER
+                changed = True
+            elif _replace_b64_json_in_place(value):
+                changed = True
+    elif isinstance(obj, list):
+        for item in obj:
+            if _replace_b64_json_in_place(item):
+                changed = True
+    return changed
+
+
+def _strip_image_b64_payloads(response):
+    """Replace ``b64_json`` payloads in image-gen responses before save.
+
+    Image-edit and image-generation responses carry the full base64
+    PNG/JPEG (1-10+ MB) in ``data[*].b64_json``. The image_gen tests
+    only assert response shape — the field decodes, schema validates —
+    they never inspect pixel content. Swapping to a 4-byte placeholder
+    preserves all those checks while shrinking cassettes by ~99%.
+    """
+    if not isinstance(response, dict):
+        return response
+    body = response.get("body")
+    if not isinstance(body, dict):
+        return response
+    raw = body.get("string")
+    if raw is None:
+        return response
+
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            text = bytes(raw).decode("utf-8")
+        except UnicodeDecodeError:
+            return response
+        was_bytes = True
+    elif isinstance(raw, str):
+        text = raw
+        was_bytes = False
+    else:
+        return response
+
+    try:
+        payload = json.loads(text)
+    except (ValueError, TypeError):
+        return response
+
+    if not _replace_b64_json_in_place(payload):
+        return response
+
+    new_text = json.dumps(payload, separators=(",", ":"))
+    body["string"] = new_text.encode("utf-8") if was_bytes else new_text
+
+    headers = response.get("headers")
+    if isinstance(headers, dict):
+        new_len_value = str(len(new_text.encode("utf-8")))
+        for key in list(headers):
+            if str(key).lower() == "content-length":
+                value = headers[key]
+                headers[key] = (
+                    [new_len_value] if isinstance(value, list) else new_len_value
+                )
+    return response
+
+
 def _before_record_response(response):
-    return filter_non_2xx_response(_scrub_response(response))
+    return filter_non_2xx_response(_scrub_response(_strip_image_b64_payloads(response)))
 
 
 def _safe_body_matcher(r1, r2) -> None:
@@ -172,8 +265,84 @@ def _strip_headers(headers, names: Iterable[str]) -> None:
                 pass
 
 
+def _normalize_multipart_boundary(request) -> None:
+    """Rewrite random multipart boundaries to a fixed string in-place.
+
+    httpx generates a fresh ``boundary=<random hex>`` for every
+    multipart request via ``os.urandom``. Without normalization, the
+    request body bytes differ across runs even when everything else is
+    identical, the ``safe_body`` matcher misses, and the persister
+    keeps appending new episodes until ``MAX_EPISODES_PER_CASSETTE``
+    refuses the save — leaving audio-transcription tests effectively
+    unmocked. Replacing the boundary in both the Content-Type header
+    and the body bytes makes the request deterministic.
+
+    Idempotent — vcrpy invokes this hook multiple times per request,
+    so the second invocation sees ``boundary=vcr-static-boundary``
+    already and short-circuits.
+    """
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return
+
+    content_type_key = None
+    content_type_value = None
+    try:
+        for key in list(headers.keys()):
+            if str(key).lower() == "content-type":
+                content_type_key = key
+                value = headers[key]
+                content_type_value = value if isinstance(value, str) else str(value)
+                break
+    except AttributeError:
+        return
+
+    if not content_type_value or "multipart/" not in content_type_value.lower():
+        return
+
+    fixed_param = f"boundary={VCR_FIXED_MULTIPART_BOUNDARY}"
+    if fixed_param in content_type_value:
+        return
+
+    match = re.search(r"boundary=([^\s;]+)", content_type_value)
+    if not match:
+        return
+    current_boundary = match.group(1).strip('"')
+    if current_boundary == VCR_FIXED_MULTIPART_BOUNDARY:
+        return
+
+    try:
+        headers[content_type_key] = content_type_value.replace(
+            match.group(0), fixed_param
+        )
+    except (TypeError, AttributeError):
+        return
+
+    body = getattr(request, "body", None)
+    if body is None:
+        return
+
+    if isinstance(body, (bytes, bytearray)):
+        try:
+            new_body = bytes(body).replace(
+                current_boundary.encode("utf-8"),
+                VCR_FIXED_MULTIPART_BOUNDARY.encode("utf-8"),
+            )
+        except (TypeError, ValueError):
+            return
+    elif isinstance(body, str):
+        new_body = body.replace(current_boundary, VCR_FIXED_MULTIPART_BOUNDARY)
+    else:
+        return
+
+    try:
+        request.body = new_body
+    except (AttributeError, TypeError):
+        pass
+
+
 def _before_record_request(request):
-    """Fingerprint API keys, then scrub them.
+    """Fingerprint API keys, scrub them, and normalize multipart boundaries.
 
     Order matters in two ways:
 
@@ -187,7 +356,8 @@ def _before_record_request(request):
        auth headers we already stripped, so re-hashing would yield
        ``"no-key"`` and the stored vs. incoming fingerprints would
        diverge. Skip the recompute when the header is already set so
-       this hook is idempotent.
+       this hook is idempotent. The boundary normalizer is also
+       idempotent for the same reason.
     """
     headers = getattr(request, "headers", None)
     if headers is None:
@@ -199,6 +369,7 @@ def _before_record_request(request):
         except (TypeError, AttributeError):
             pass
     _strip_headers(headers, FILTERED_REQUEST_HEADERS)
+    _normalize_multipart_boundary(request)
     return request
 
 

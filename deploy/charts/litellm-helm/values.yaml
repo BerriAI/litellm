@@ -88,12 +88,6 @@ service:
   # optionally specify loadBalancerClass
   # loadBalancerClass: tailscale
 
-# Separate health app configuration
-# When enabled, health checks will use a separate port and the application
-# will receive SEPARATE_HEALTH_APP=1 and SEPARATE_HEALTH_PORT from environment variables
-separateHealthApp: false
-separateHealthPort: 8081
-
 # Probes for LiteLLM gateway container
 livenessProbe:
   path: /health/liveliness
@@ -258,6 +252,26 @@ db:
     passwordKey: password
     # Optional: when set, DATABASE_HOST will be sourced from this secret key instead of db.endpoint
     endpointKey: ""
+    # Optional: when set, DATABASE_URL_READ_REPLICA will be sourced from this
+    # secret key instead of db.readReplicaUrl. Prefer this over the plain
+    # value: read-replica URLs typically embed credentials, and a value
+    # written to db.readReplicaUrl ends up visible in the rendered pod spec
+    # and the Helm release secret.
+    readReplicaUrlKey: ""
+
+  # Optional read-replica routing. When set, the proxy sends read-only
+  # queries (find_*, count, group_by, query_raw/_first) to this URL while
+  # writes continue to go to db.url. Useful for Aurora-style clusters with
+  # separate reader/writer endpoints. Leave empty to keep single-DB behavior.
+  # When IAM_TOKEN_DB_AUTH is enabled, the reader URL is auto-refreshed
+  # alongside the writer (host/port/user/db are parsed from this URL once
+  # at startup; only the IAM token rotates).
+  #
+  # If the URL embeds credentials, prefer db.secret.readReplicaUrlKey over
+  # this field — the plain value is rendered into the pod spec and the
+  # Helm release secret. This field is intended for credential-less URLs
+  # only (e.g. when IAM_TOKEN_DB_AUTH supplies the token at runtime).
+  readReplicaUrl: ""
 
   # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
   #  The Stackgres Operator must already be installed within the target
