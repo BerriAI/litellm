@@ -159,6 +159,100 @@ def init_rds_client(
     return client
 
 
+def _build_iam_db_url(
+    db_host: str,
+    db_port: str,
+    db_user: str,
+    db_name: str,
+    db_schema: Optional[str],
+) -> str:
+    token = generate_iam_auth_token(db_host=db_host, db_port=db_port, db_user=db_user)
+    url = f"postgresql://{db_user}:{token}@{db_host}:{db_port}/{db_name}"
+    if db_schema:
+        url += f"?schema={db_schema}"
+    return url
+
+
+def init_iam_db_url_from_env() -> bool:
+    """Assemble ``DATABASE_URL`` (+ ``DATABASE_URL_READ_REPLICA``) from RDS IAM
+    env vars before Prisma initializes.
+
+    The standard CLI flow (``litellm/proxy/proxy_cli.py``) does this just
+    before importing the FastAPI app. Componentized entrypoints
+    (``gateway/main.py``, ``backend/main.py``) bypass that CLI and uvicorn the
+    app directly, so they must call this themselves before importing
+    ``litellm.proxy.proxy_server`` — otherwise Prisma boots with the
+    placeholder URL and every DB-backed endpoint returns
+    "Database not connected".
+
+    Reads:
+        IAM_TOKEN_DB_AUTH (required to enable; case-insensitive truthy).
+        Writer: DATABASE_HOST, DATABASE_PORT (default 5432), DATABASE_USER,
+            DATABASE_NAME, DATABASE_SCHEMA (optional).
+        Reader (optional, only if DATABASE_HOST_READ_REPLICA is set):
+            DATABASE_HOST_READ_REPLICA, DATABASE_PORT_READ_REPLICA
+            (default 5432), DATABASE_USER_READ_REPLICA (defaults to
+            DATABASE_USER), DATABASE_NAME_READ_REPLICA (defaults to
+            DATABASE_NAME), DATABASE_SCHEMA_READ_REPLICA (defaults to
+            DATABASE_SCHEMA).
+
+    Sets:
+        DATABASE_URL and (when reader env vars are present)
+        DATABASE_URL_READ_REPLICA.
+
+    Returns:
+        True if IAM auth was enabled and at least the writer URL was
+        assembled, False if IAM auth was disabled.
+    """
+    from litellm.secret_managers.main import get_secret_bool
+
+    if not get_secret_bool("IAM_TOKEN_DB_AUTH"):
+        return False
+
+    # Writer — required.
+    db_host = os.getenv("DATABASE_HOST")
+    db_port = os.getenv("DATABASE_PORT", "5432")
+    db_user = os.getenv("DATABASE_USER")
+    db_name = os.getenv("DATABASE_NAME")
+    db_schema = os.getenv("DATABASE_SCHEMA")
+
+    if not (db_host and db_user and db_name):
+        raise RuntimeError(
+            "IAM_TOKEN_DB_AUTH is set but DATABASE_HOST / DATABASE_USER / "
+            "DATABASE_NAME are required to assemble DATABASE_URL."
+        )
+
+    os.environ["DATABASE_URL"] = _build_iam_db_url(
+        db_host=db_host,
+        db_port=db_port,
+        db_user=db_user,
+        db_name=db_name,
+        db_schema=db_schema,
+    )
+
+    # Reader — optional. Only assembled when a reader host is configured;
+    # remaining fields fall back to the writer's values so callers that share
+    # one DB user / DB name across writer + reader don't have to duplicate env
+    # vars. (Reader IAM-refresh at runtime is handled in
+    # ``litellm/proxy/utils.py`` via ``parse_iam_endpoint_from_url``.)
+    reader_host = os.getenv("DATABASE_HOST_READ_REPLICA")
+    if reader_host:
+        reader_port = os.getenv("DATABASE_PORT_READ_REPLICA", "5432")
+        reader_user = os.getenv("DATABASE_USER_READ_REPLICA", db_user)
+        reader_name = os.getenv("DATABASE_NAME_READ_REPLICA", db_name)
+        reader_schema = os.getenv("DATABASE_SCHEMA_READ_REPLICA", db_schema)
+
+        os.environ["DATABASE_URL_READ_REPLICA"] = _build_iam_db_url(
+            db_host=reader_host,
+            db_port=reader_port,
+            db_user=reader_user,
+            db_name=reader_name,
+            db_schema=reader_schema,
+        )
+
+    return True
+
+
 def generate_iam_auth_token(
     db_host, db_port, db_user, client: Optional[Any] = None
 ) -> str:

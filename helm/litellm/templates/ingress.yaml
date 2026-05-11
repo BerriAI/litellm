@@ -1,0 +1,115 @@
+{{- if .Values.ingress.enabled -}}
+{{- $gatewayName := include "litellm.gateway.fullname" . -}}
+{{- $backendName := include "litellm.backend.fullname" . -}}
+{{- $uiName := include "litellm.ui.fullname" . -}}
+{{- $gatewayPort := .Values.gateway.service.port -}}
+{{- $backendPort := .Values.backend.service.port -}}
+{{- $uiPort := .Values.ui.service.port -}}
+{{/*
+  Gateway data-plane prefixes — must mirror gateway/routes/allowlist.py.
+  Versioned paths are listed explicitly to avoid routing management routes
+  (e.g. /v1/access_group, /v2/key/info, /v1/tool/*, /v1/agents, /v1/workflows,
+  /v2/user/info, /v2/team/list, /v2/model/info, /v2/login, /v2/guardrails/*,
+  /v1/mcp/*) onto the gateway via a broad /v1 or /v2 prefix.
+*/}}
+{{- $gatewayPrefixes := list
+    "/v1/chat" "/chat" "/v1/completions" "/completions" "/v1/embeddings" "/embeddings"
+    "/v1/moderations" "/moderations" "/v1/audio" "/audio" "/v1/images" "/images"
+    "/v1/files" "/files" "/v1/batches" "/batches" "/v1/fine_tuning" "/fine_tuning"
+    "/v1/fine-tuning" "/fine-tuning" "/v1/responses" "/responses" "/v1/threads" "/threads"
+    "/v1/assistants" "/assistants" "/v1/vector_stores" "/vector_stores" "/v1/indexes"
+    "/v1/models" "/models" "/openai" "/engines"
+    "/v1/messages" "/messages" "/v1/skills" "/v1/a2a"
+    "/v1/rerank" "/v2/rerank" "/rerank" "/v1/ocr" "/ocr" "/v1/rag" "/rag"
+    "/v1/video" "/v1/videos" "/video" "/videos" "/v1/search" "/search"
+    "/v1/containers" "/containers" "/v1/evals" "/v1/memory" "/queue/chat"
+    "/v1beta" "/interactions"
+    "/anthropic" "/azure" "/azure_ai" "/aws" "/bedrock" "/cohere" "/gemini" "/google"
+    "/vertex_ai" "/vertex-ai" "/assemblyai" "/eu.assemblyai" "/langfuse" "/vllm"
+    "/mistral" "/groq" "/voyage" "/cursor" "/milvus" "/openai_passthrough"
+    "/toolset"
+    "/v1/realtime" "/realtime"
+    "/health" "/metrics" "/test"
+-}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - {{- with .Values.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
+      http:
+        paths:
+          # --- UI (Next.js static export) ---
+          - path: /
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          - path: /favicon.ico
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          - path: /litellm-asset-prefix
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          - path: /_next
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          # /ui/* is where the Next.js SPA serves its login + dashboard
+          # routes (e.g. /ui/login). Without this, /ui/* falls into the
+          # catch-all → backend → 404.
+          - path: /ui
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          # --- Gateway data plane ---
+          {{- range $gatewayPrefixes }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $gatewayName }}
+                port:
+                  number: {{ $gatewayPort }}
+          {{- end }}
+          # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $backendName }}
+                port:
+                  number: {{ $backendPort }}
+{{- end }}
