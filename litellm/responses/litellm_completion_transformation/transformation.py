@@ -1238,6 +1238,8 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_data"] = item["file_data"]
 
         new_item: Dict[str, Any] = {"type": "file", "file": file_dict}
+        if "cache_control" in item:
+            new_item["cache_control"] = item["cache_control"]
         return new_item
 
     @staticmethod
@@ -1282,13 +1284,14 @@ class LiteLLMCompletionResponsesConfig:
                             )
                         )
                     elif item.get("type") == "input_image":
-                        content_list.append(
-                            dict(
-                                LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
-                                    item
-                                )
+                        image_block = dict(
+                            LiteLLMCompletionResponsesConfig._transform_input_image_item_to_image_item(
+                                item
                             )
                         )
+                        if "cache_control" in item:
+                            image_block["cache_control"] = item["cache_control"]
+                        content_list.append(image_block)
                     else:
                         # Skip text blocks with None text to avoid downstream errors
                         text_value = item.get("text")

@@ -2223,3 +2223,33 @@ class TestCacheControlPreservation:
         )
         assert isinstance(msg_content, list)
         assert msg_content[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_control_preserved_for_input_file_block(self):
+        content = [
+            {
+                "type": "input_file",
+                "file_id": "file-abc123",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_control_preserved_for_input_image_block(self):
+        content = [
+            {
+                "type": "input_image",
+                "image_url": "https://example.com/img.png",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+            content
+        )
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert result[0]["cache_control"] == {"type": "ephemeral"}
