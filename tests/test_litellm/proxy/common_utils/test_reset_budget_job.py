@@ -399,12 +399,13 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
     # Check that all spends were reset to 0
     assert mock_prisma_client.updated_data["user"][0].spend == 0.0
     assert mock_prisma_client.updated_data["enduser"][0].spend == 0.0
-    assert mock_prisma_client.db.litellm_verificationtoken.update_calls[0]["data"][
-        "spend"
-    ] == 0.0
-    assert mock_prisma_client.db.litellm_teamtable.update_calls[0]["data"][
-        "spend"
-    ] == 0.0
+    assert (
+        mock_prisma_client.db.litellm_verificationtoken.update_calls[0]["data"]["spend"]
+        == 0.0
+    )
+    assert (
+        mock_prisma_client.db.litellm_teamtable.update_calls[0]["data"]["spend"] == 0.0
+    )
 
 
 def test_reset_budget_for_keys_linked_to_budgets(reset_budget_job, mock_prisma_client):
