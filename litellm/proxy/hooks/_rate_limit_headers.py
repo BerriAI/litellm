@@ -36,12 +36,18 @@ def apply_rate_limit_statuses_to_headers(
         rate_limit_type = status.get("rate_limit_type")
         if descriptor_key is None or rate_limit_type is None:
             continue
+        limit_remaining = status.get("limit_remaining")
+        current_limit = status.get("current_limit")
+        # Skip when numeric fields are absent so downstream HTTP encoding
+        # never stringifies `None` into header values.
+        if limit_remaining is None or current_limit is None:
+            continue
         prefix = f"x-ratelimit-{descriptor_key}"
         headers.setdefault(
             f"{prefix}-remaining-{rate_limit_type}",
-            status.get("limit_remaining"),
+            limit_remaining,
         )
         headers.setdefault(
             f"{prefix}-limit-{rate_limit_type}",
-            status.get("current_limit"),
+            current_limit,
         )

@@ -45,6 +45,9 @@ from litellm.proxy.common_utils.callback_utils import (
     get_remaining_tokens_and_requests_from_request_data,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
+from litellm.proxy.hooks._rate_limit_headers import (
+    apply_rate_limit_statuses_to_headers,
+)
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
@@ -1152,10 +1155,6 @@ class ProxyBaseLLMRequestProcessing:
             # in flight before the hook fires). Pulling from the stored response
             # here ensures both streaming and non-streaming paths receive the
             # same x-ratelimit-* headers.
-            from litellm.proxy.hooks._rate_limit_headers import (
-                apply_rate_limit_statuses_to_headers,
-            )
-
             apply_rate_limit_statuses_to_headers(
                 additional_headers,
                 self.data.get("litellm_proxy_rate_limit_response"),
@@ -1387,10 +1386,6 @@ class ProxyBaseLLMRequestProcessing:
         # returns a plain dict with no `_hidden_params` attribute, which makes
         # `hasattr(response, "_hidden_params")` False and short-circuits the
         # hook). setdefault preserves any values the hook successfully set.
-        from litellm.proxy.hooks._rate_limit_headers import (
-            apply_rate_limit_statuses_to_headers,
-        )
-
         apply_rate_limit_statuses_to_headers(
             additional_headers,
             self.data.get("litellm_proxy_rate_limit_response"),

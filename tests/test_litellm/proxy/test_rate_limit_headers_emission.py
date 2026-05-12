@@ -101,3 +101,40 @@ class TestApplyRateLimitStatusesToHeaders:
             "x-ratelimit-team-remaining-requests": 9,
             "x-ratelimit-team-limit-requests": 10,
         }
+
+    def test_skips_status_entries_with_missing_limit_fields(self):
+        headers: dict = {}
+        apply_rate_limit_statuses_to_headers(
+            headers,
+            {
+                "statuses": [
+                    # missing limit_remaining
+                    {
+                        "descriptor_key": "api_key",
+                        "rate_limit_type": "tokens",
+                        "current_limit": 100,
+                    },
+                    # missing current_limit
+                    {
+                        "descriptor_key": "api_key",
+                        "rate_limit_type": "requests",
+                        "limit_remaining": 9,
+                    },
+                    # valid one to confirm iteration continues
+                    {
+                        "descriptor_key": "team",
+                        "rate_limit_type": "tokens",
+                        "current_limit": 200,
+                        "limit_remaining": 195,
+                    },
+                ]
+            },
+        )
+        # Entries missing limit_remaining/current_limit are dropped — only the
+        # complete one is emitted, and no `None` values land in the headers.
+        assert headers == {
+            "x-ratelimit-team-remaining-tokens": 195,
+            "x-ratelimit-team-limit-tokens": 200,
+        }
+        for value in headers.values():
+            assert value is not None
