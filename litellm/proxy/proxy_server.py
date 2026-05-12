@@ -15136,34 +15136,15 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
 
 
 async def _mcp_forward_as_path(path_segment: str, request: Request):
-    """Rewrite path to /mcp/{path_segment} and buffer the response."""
+    """Rewrite path to /mcp/{path_segment} and stream the response."""
     from litellm.proxy._experimental.mcp_server.server import (
         handle_streamable_http_mcp,
     )
-    from starlette.responses import Response
 
     scope = dict(request.scope)
     scope["path"] = f"/mcp/{path_segment}"
-
-    response_body = b""
-    response_status = 200
-    response_headers: list = []
-
-    async def custom_send(message):
-        nonlocal response_body, response_status, response_headers
-        if message["type"] == "http.response.start":
-            response_status = message["status"]
-            response_headers = message.get("headers", [])
-        elif message["type"] == "http.response.body":
-            response_body += message.get("body", b"")
-
-    await handle_streamable_http_mcp(scope, receive=request.receive, send=custom_send)
-    headers_dict = {k.decode(): v.decode() for k, v in response_headers}
-    return Response(
-        content=response_body,
-        status_code=response_status,
-        headers=headers_dict,
-        media_type=headers_dict.get("content-type", "application/json"),
+    return await _stream_mcp_asgi_response(
+        handle_streamable_http_mcp, scope, request.receive
     )
 
 
