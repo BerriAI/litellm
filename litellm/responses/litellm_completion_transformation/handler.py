@@ -429,6 +429,25 @@ class LiteLLMCompletionTransformationHandler:
                             f"[DomesticFilter] msg[{i}] role={role}, has_tool_calls={has_tools}"
                         )
 
+                # 打印第一个有 tool_calls 的消息详情
+                for i, msg in enumerate(messages_debug):
+                    if isinstance(msg, dict) and msg.get("tool_calls"):
+                        tc = msg.get("tool_calls", [])
+                        if tc and isinstance(tc, list) and len(tc) > 0:
+                            first_tc = tc[0]
+                            func_name = (
+                                first_tc.get("function", {}).get("name", "unknown")
+                                if isinstance(first_tc, dict)
+                                else "unknown"
+                            )
+                            args_preview = str(
+                                first_tc.get("function", {}).get("arguments", "")
+                            )[:100]
+                            logger.info(
+                                f"[DomesticFilter] First tool_call msg[{i}] function={func_name}, args_preview={args_preview}"
+                            )
+                            break
+
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
         ] = await litellm.acompletion(
