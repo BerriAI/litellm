@@ -94,6 +94,12 @@ class ProxyHTTPRateLimitError(HTTPException, RateLimitError):
         # `message` is what RateLimitError.__str__ would print and what some
         # observability callbacks log. Keep it human-readable.
         self.message = detail if isinstance(detail, str) else str(detail)
+        # `RateLimitError.__str__` (resolved via MRO since Starlette's
+        # HTTPException doesn't define `__str__`) unconditionally reads
+        # these attributes. Set them so `str(exc)` doesn't raise
+        # AttributeError from logging/traceback paths.
+        self.num_retries: Optional[int] = None
+        self.max_retries: Optional[int] = None
 
 
 def convert_priority_to_percent(
