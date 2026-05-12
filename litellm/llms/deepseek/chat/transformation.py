@@ -72,19 +72,44 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         (returned by DeepSeek on a prior turn). If no message has it the request is not
         in thinking mode and we leave payloads untouched.
         """
-        thinking_active = any(
-            msg.get("role") == "assistant" and "reasoning_content" in msg
-            for msg in messages
-        )
+        thinking_active = False
+        out = []
+        for msg in messages:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                out.append(msg)
+                continue
+            if "reasoning_content" in msg:
+                thinking_active = True
+                out.append(msg)
+                continue
+            thinking_text = None
+            thinking_blocks = msg.get("thinking_blocks")
+            if isinstance(thinking_blocks, list) and thinking_blocks:
+                thinking_active = True
+                for block in thinking_blocks:
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "thinking"
+                        and isinstance(block.get("thinking"), str)
+                    ):
+                        thinking_text = block["thinking"]
+                        break
+            new_msg = dict(msg)
+            new_msg.pop("thinking_blocks", None)
+            if thinking_text is not None:
+                new_msg["reasoning_content"] = thinking_text
+            out.append(new_msg)
+        # Phase 2 — placeholder fallback on bare assistant turns.
         if not thinking_active:
-            return messages
-        for message in messages:
-            if (
-                message.get("role") == "assistant"
-                and "reasoning_content" not in message
-            ):
-                message["reasoning_content"] = ""  # type: ignore[typeddict-unknown-key]
-        return messages
+            return out
+        return [
+            {**m, "reasoning_content": ""}
+            if isinstance(m, dict)
+            and m.get("role") == "assistant"
+            and "reasoning_content" not in m
+            else m
+            for m in out
+        ]
 
     @overload
     def _transform_messages(
