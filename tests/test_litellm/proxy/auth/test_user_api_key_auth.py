@@ -2916,7 +2916,7 @@ async def test_centralized_common_checks_skips_passthrough_endpoint_with_auth_fa
     from starlette.datastructures import URL
 
     token = UserAPIKeyAuth()
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST"})
     request._url = URL(url="/api/public/ingestion")
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
@@ -2981,7 +2981,7 @@ async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth
     from starlette.datastructures import URL
 
     token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
-    request = Request(scope={"type": "http"})
+    request = Request(scope={"type": "http", "method": "POST"})
     request._url = URL(url="/api/public/ingestion")
 
     attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)

@@ -92,18 +92,37 @@ async def test_runtime_check_treats_missing_auth_key_as_authenticated():
     # auth) ships an unauthenticated forwarder.
     request = MagicMock()
     request.headers = {}
+    request.method = "POST"
     raw_endpoint_no_auth_key = {
         "path": "/forwarder",
         "target": "https://example.com",
         # ``auth`` deliberately omitted
     }
 
-    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
-        request=request,
-        route="/forwarder",
-        pass_through_endpoints=[raw_endpoint_no_auth_key],
-        api_key="sk-1234",
+    # The auth helper now consults a method-aware registry; register
+    # the forwarder so the gate is satisfied for /forwarder POST.
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _registered_pass_through_routes,
     )
+
+    _registered_pass_through_routes.clear()
+    _registered_pass_through_routes["test-fwd:exact:/forwarder:POST"] = {
+        "endpoint_id": "test-fwd",
+        "path": "/forwarder",
+        "type": "exact",
+        "methods": ["POST"],
+        "passthrough_params": {},
+    }
+
+    try:
+        result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
+            request=request,
+            route="/forwarder",
+            pass_through_endpoints=[raw_endpoint_no_auth_key],
+            api_key="sk-1234",
+        )
+    finally:
+        _registered_pass_through_routes.clear()
 
     # Result is the api_key string (auth is REQUIRED for this endpoint
     # — flow continues to normal key validation), NOT an empty
@@ -123,6 +142,7 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
 
     request = MagicMock()
     request.headers = {}
+    request.method = "POST"
     raw_endpoint_auth_false = {
         "path": "/public-webhook",
         "target": "https://example.com",

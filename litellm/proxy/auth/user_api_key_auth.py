@@ -549,15 +549,21 @@ async def check_api_key_for_custom_headers_or_pass_through_endpoints(
         if request.headers.get("litellm_user_api_key") is not None:
             api_key = request.headers.get("litellm_user_api_key") or ""
     if pass_through_endpoints is not None:
-        # If the forwarder didn't register (path collided with a built-in),
-        # the request is dispatching to that built-in and the config dict's
-        # ``auth`` flag must not apply to it.
+        # If no forwarder is registered for this (route, method), the
+        # request is dispatching to whatever else was already registered
+        # there (typically a built-in management endpoint) — the config
+        # dict's ``auth`` flag must not apply to it. The lookup is
+        # method-aware so a registered ``GET /customer/block`` does not
+        # carry its ``auth`` flag into an unauthenticated ``POST``.
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             InitPassThroughEndpointHelpers,
         )
 
-        if not InitPassThroughEndpointHelpers.is_registered_pass_through_route(
-            route=route
+        if (
+            InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                route=route, method=request.method
+            )
+            is None
         ):
             return api_key
 
@@ -1794,14 +1800,21 @@ async def _run_centralized_common_checks(
     # contract; honor it.
     pass_through_endpoints = general_settings.get("pass_through_endpoints", None)
     if pass_through_endpoints is not None:
-        # Same registration gate as ``check_api_key_for_custom_headers_or_pass_through_endpoints``:
-        # an entry that didn't register (collision with a built-in) must
-        # not skip common_checks against the shadowed built-in.
+        # Method-aware variant of the gate in
+        # ``check_api_key_for_custom_headers_or_pass_through_endpoints``:
+        # an entry that didn't register a forwarder for the request's
+        # (route, method) must not skip common_checks against the
+        # shadowed built-in.
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
             InitPassThroughEndpointHelpers,
         )
 
-        if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
+        if (
+            InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                route=route, method=request.method
+            )
+            is not None
+        ):
             for endpoint in pass_through_endpoints:
                 if (
                     isinstance(endpoint, dict)
