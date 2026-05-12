@@ -2920,7 +2920,7 @@ class ProxyConfig:
             credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
         return credential_list
 
-    def parse_search_tools(self, config: dict) -> Optional[List[SearchToolTypedDict]]:
+    def parse_search_tools(self, config: dict, print_initialization_message: bool = True) -> Optional[List[SearchToolTypedDict]]:
         """
         Parse and validate search tools from config.
         Loads environment variables and casts to SearchToolTypedDict.
@@ -2943,9 +2943,10 @@ class ProxyConfig:
 
         search_tools_parsed: List[SearchToolTypedDict] = []
 
-        print(  # noqa
-            "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
-        )  # noqa
+        if print_initialization_message:
+            print(  # noqa
+                "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m"
+            )  # noqa
 
         for search_tool in search_tools_raw:
             # Display loaded search tool
@@ -2953,7 +2954,8 @@ class ProxyConfig:
             search_provider = search_tool.get("litellm_params", {}).get(
                 "search_provider", ""
             )
-            print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
+            if print_initialization_message:
+                print(f"\033[32m    {search_tool_name} ({search_provider})\033[0m")  # noqa
 
             # Handle os.environ/ variables in litellm_params
             litellm_params = search_tool.get("litellm_params", {})
@@ -4104,7 +4106,7 @@ class ProxyConfig:
         search_tools = None
         try:
             config_data = await proxy_config.get_config()
-            search_tools = self.parse_search_tools(config_data)
+            search_tools = self.parse_search_tools(config_data, print_initialization_message=False)
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Failed to load config in _update_llm_router: %s. "
