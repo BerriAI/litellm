@@ -958,13 +958,23 @@ class ResponseAPILoggingUtils:
             response_api_usage, "output_tokens_details", None
         )
         if output_tokens_details:
-            completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=getattr(
-                    output_tokens_details, "reasoning_tokens", None
-                ),
-                image_tokens=getattr(output_tokens_details, "image_tokens", None),
-                text_tokens=getattr(output_tokens_details, "text_tokens", None),
-            )
+            if isinstance(output_tokens_details, dict):
+                completion_tokens_details = CompletionTokensDetailsWrapper(
+                    **output_tokens_details
+                )
+            else:
+                completion_tokens_details = CompletionTokensDetailsWrapper(
+                    reasoning_tokens=getattr(
+                        output_tokens_details, "reasoning_tokens", None
+                    ),
+                    image_tokens=getattr(
+                        output_tokens_details, "image_tokens", None
+                    ),
+                    text_tokens=getattr(output_tokens_details, "text_tokens", None),
+                    audio_tokens=getattr(
+                        output_tokens_details, "audio_tokens", None
+                    ),
+                )
 
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,

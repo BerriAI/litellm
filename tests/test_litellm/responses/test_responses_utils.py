@@ -327,7 +327,8 @@ class TestResponseAPILoggingUtils:
             "output_tokens_details": {
                 "reasoning_tokens": 30,
                 "image_tokens": 100,
-                "text_tokens": 70,
+                "text_tokens": 50,
+                "audio_tokens": 20,
             },
         }
 
@@ -346,7 +347,8 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.reasoning_tokens == 30
         assert result.completion_tokens_details.image_tokens == 100
-        assert result.completion_tokens_details.text_tokens == 70
+        assert result.completion_tokens_details.text_tokens == 50
+        assert result.completion_tokens_details.audio_tokens == 20
 
     def test_transform_response_api_usage_with_realtime_keys(self):
         """Realtime input_token_details / output_token_details normalize for Usage."""
@@ -375,6 +377,7 @@ class TestResponseAPILoggingUtils:
 
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.text_tokens == 12
+        assert result.completion_tokens_details.audio_tokens == 8
 
     def test_transform_response_api_usage_tokens_details_keep_values(self):
         """Keeps input_tokens_details / output_tokens_details when singular keys are also present."""
